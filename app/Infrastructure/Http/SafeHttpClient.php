@@ -7,9 +7,7 @@ use Illuminate\Support\Facades\Http;
 
 final class SafeHttpClient
 {
-    public function __construct(private readonly OutboundTargetPolicy $targets)
-    {
-    }
+    public function __construct(private readonly OutboundTargetPolicy $targets) {}
 
     /** @param array<string, string> $headers */
     public function get(string $url, array $headers = []): SafeHttpResponse

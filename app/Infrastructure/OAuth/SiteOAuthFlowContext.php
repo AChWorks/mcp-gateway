@@ -13,6 +13,5 @@ final readonly class SiteOAuthFlowContext
         public string $tokenUrl,
         public string $revocationUrl,
         public string $codeVerifier,
-    ) {
-    }
+    ) {}
 }

@@ -12,6 +12,5 @@ final readonly class SiteCredentialSecret
         public ?string $refreshToken,
         public ?DateTimeImmutable $accessExpiresAt,
         public array $scopes,
-    ) {
-    }
+    ) {}
 }

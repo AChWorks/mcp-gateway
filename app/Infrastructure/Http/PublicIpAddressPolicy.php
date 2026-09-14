@@ -85,7 +85,7 @@ final class PublicIpAddressPolicy
             return true;
         }
 
-        $mask = (0xff << (8 - $remainingBits)) & 0xff;
+        $mask = (0xFF << (8 - $remainingBits)) & 0xFF;
 
         return (ord($packedAddress[$wholeBytes]) & $mask) === (ord($packedNetwork[$wholeBytes]) & $mask);
     }

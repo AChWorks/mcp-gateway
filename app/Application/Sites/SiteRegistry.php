@@ -18,8 +18,7 @@ final class SiteRegistry
         private readonly WpAiBridgeDiscovery $discovery,
         private readonly OutboundTargetPolicy $targets,
         private readonly SiteConnectionService $connections,
-    ) {
-    }
+    ) {}
 
     public function create(string $siteId, string $displayName, string $baseUrl): Site
     {

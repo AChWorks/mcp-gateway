@@ -28,8 +28,7 @@ final class SiteConnectionService
         private readonly GatewayBridgeClientIdentity $identity,
         private readonly SiteCredentialVault $credentials,
         private readonly SiteOAuthFlowVault $flows,
-    ) {
-    }
+    ) {}
 
     public function begin(Site $site): string
     {

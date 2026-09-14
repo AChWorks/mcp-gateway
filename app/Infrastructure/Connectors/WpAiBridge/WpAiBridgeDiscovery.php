@@ -12,8 +12,7 @@ final class WpAiBridgeDiscovery
     public function __construct(
         private readonly OutboundTargetPolicy $targets,
         private readonly SafeHttpClient $http,
-    ) {
-    }
+    ) {}
 
     public function discover(string $baseUrl): BridgeDiscovery
     {

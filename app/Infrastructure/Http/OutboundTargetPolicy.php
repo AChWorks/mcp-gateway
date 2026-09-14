@@ -7,8 +7,7 @@ final class OutboundTargetPolicy
     public function __construct(
         private readonly DnsResolver $dns,
         private readonly PublicIpAddressPolicy $ipPolicy,
-    ) {
-    }
+    ) {}
 
     public function canonicalBaseUrl(string $url): string
     {

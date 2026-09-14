@@ -11,8 +11,7 @@ final readonly class SafeHttpResponse
         public int $status,
         public array $headers,
         public string $body,
-    ) {
-    }
+    ) {}
 
     /** @return array<string, mixed> */
     public function json(): array

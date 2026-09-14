@@ -11,6 +11,5 @@ final readonly class BridgeDiscovery
         public string $authorizationUrl,
         public string $tokenUrl,
         public string $revocationUrl,
-    ) {
-    }
+    ) {}
 }

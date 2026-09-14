@@ -10,8 +10,7 @@ final readonly class ValidatedOutboundUrl
         public string $host,
         public int $port,
         public array $addresses,
-    ) {
-    }
+    ) {}
 
     public function pinnedAddress(): string
     {
