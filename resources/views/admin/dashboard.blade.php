@@ -15,8 +15,10 @@
         </div>
         <div>
             <dt>{{ __('Gateway MCP endpoint') }}</dt>
-            <dd><code>{{ url('/mcp') }}</code></dd>
+            <dd><code>{{ config('oauth.resource') }}</code></dd>
         </div>
     </dl>
+
+    <p><a href="{{ route('admin.connection') }}">{{ __('View connection information') }}</a></p>
 </section>
 @endsection
