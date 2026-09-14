@@ -292,9 +292,9 @@ V1 is successful when all of the following are demonstrated against supported te
 
 Use these sources for different kinds of truth:
 
-- `MASTER-SPEC.md` — project purpose, durable requirements, constraints, non-goals, and V1 completion criteria.
+- `docs/MASTER-SPEC.md` — project purpose, durable requirements, constraints, non-goals, and V1 completion criteria.
 - `docs/ARCHITECTURE.md` — current technical architecture and component boundaries derived from this specification.
-- `README.md` — entry point and navigation, not a duplicate specification or live status ledger.
+- `README.md` — user-facing project overview, prerequisites, installation, usage, and release-level information; it is not an authoritative project-state, architecture, or recovery source.
 - GitHub Issues — active work, dependencies, acceptance criteria, risk, and current task state.
 - Pull requests/commits — implementation identity and review history.
 - CI/test evidence — validation truth for a specific commit.

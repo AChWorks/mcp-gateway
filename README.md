@@ -1,50 +1,62 @@
 # MCP Gateway
 
-MCP Gateway is a small self-hosted PHP gateway that exposes one remote MCP endpoint and routes explicitly selected operations to multiple connected backend systems, starting with WordPress sites running [WP AI Bridge](https://github.com/ach1992/wp-ai-bridge).
+MCP Gateway is a small self-hosted web application that provides one stable MCP endpoint for connecting AI clients to multiple backend systems.
 
-The V1 goal is simple: one ChatGPT custom MCP App, one Gateway endpoint, and many independently authorized WordPress sites.
+The first supported backend is [WP AI Bridge](https://github.com/ach1992/wp-ai-bridge). The goal is to let one ChatGPT custom MCP App work with many independently authorized WordPress sites instead of creating a separate ChatGPT App for every site.
 
-## Target deployment
+## What it does
 
-- aaPanel
-- OpenLiteSpeed
-- PHP 8.4
-- MySQL
-- HTTPS domain/subdomain
-- Composer deployment
+MCP Gateway is designed to provide:
 
-V1 is intentionally a single PHP web application. Redis, Docker, Node.js runtime, queues, message brokers, and microservices are not required.
+- one public MCP endpoint for many connected sites;
+- a small web panel for adding, connecting, testing, and removing sites;
+- independent authorization for each WordPress site;
+- explicit site selection for every routed operation;
+- secure credential storage without storing WordPress passwords;
+- compatibility with direct WP AI Bridge connections;
+- room for additional MCP clients and backend connector types in future versions.
 
-## Project map
+WP AI Bridge and WordPress remain responsible for WordPress permissions. The Gateway does not grant additional WordPress capabilities or bypass Bridge access controls.
 
-Use the nearest authoritative source instead of chat history:
+## Planned V1 environment
 
-- [`MASTER-SPEC.md`](./MASTER-SPEC.md) — canonical project purpose, scope, constraints, non-goals, security boundaries, and V1 success criteria.
-- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — current technical architecture, component boundaries, protocol flows, persistence, deployment, and testing direction.
-- [GitHub Issues](https://github.com/ach1992/mcp-gateway/issues) — active work, dependencies, acceptance criteria, risk, and task state.
-- Pull requests and commits — implementation/review identity.
-- CI — validation evidence for the exact candidate commit.
+MCP Gateway is intended to run as a conventional PHP web application on:
 
-Conversation history is not required to recover or continue this project.
+- PHP 8.4;
+- MySQL;
+- OpenLiteSpeed;
+- aaPanel or an equivalent PHP hosting environment;
+- HTTPS domain or subdomain;
+- Composer-based installation.
 
-## Core architecture
+V1 is intentionally lightweight. It does not require Redis, Docker, Node.js, queues, message brokers, or separate microservices for normal operation.
 
-```text
-ChatGPT / remote MCP client
-           |
-           v
-       MCP Gateway
-       /    |     \
-  Admin   Router   OAuth
-           |
-           v
-   WP AI Bridge connector
-      /      |      \
-   Site A  Site B  Site C
-```
+## Typical usage
 
-Every routed site operation uses an explicit site identifier. WP AI Bridge and WordPress remain authoritative for WordPress permissions; the Gateway does not create extra WordPress authority.
+The intended workflow is:
+
+1. Install MCP Gateway on an HTTPS domain or subdomain.
+2. Sign in to the Gateway administration panel.
+3. Add a WordPress site that has WP AI Bridge installed.
+4. Authorize the Gateway from that WordPress site.
+5. Repeat for additional WordPress sites.
+6. Connect one ChatGPT custom MCP App to the Gateway MCP endpoint.
+7. Select the desired site explicitly when inspecting or executing site operations.
+
+Each connected site keeps its own authorization and can be disconnected independently.
+
+## Installation
+
+MCP Gateway is currently under initial development and does not yet have a production-ready release or finalized installation procedure.
+
+Installation and upgrade commands will be documented here once the first usable release is available. Until then, the repository should not be treated as a deployable production package.
 
 ## Status
 
-The repository is in initial project bootstrap. Current implementation work is tracked in GitHub Issues; this README intentionally does not mirror live task status.
+Initial V1 development is in progress.
+
+The first release will focus on the PHP 8.4 + MySQL + OpenLiteSpeed deployment model and multi-site WP AI Bridge connectivity.
+
+## License
+
+A license has not yet been published for the project. Do not assume reuse or redistribution terms until a license file is added.

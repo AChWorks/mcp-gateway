@@ -1,6 +1,6 @@
 # MCP Gateway Architecture
 
-This document derives the current technical architecture from [`MASTER-SPEC.md`](../MASTER-SPEC.md). The specification owns product intent and durable constraints; this file owns the implementation shape. Active work and task state belong in GitHub Issues.
+This document derives the current technical architecture from [`MASTER-SPEC.md`](./MASTER-SPEC.md). The specification owns product intent and durable constraints; this file owns the implementation shape. Active work and task state belong in GitHub Issues.
 
 ## 1. Architecture summary
 

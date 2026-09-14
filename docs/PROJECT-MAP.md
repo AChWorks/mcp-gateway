@@ -6,7 +6,7 @@ This file is the maintainer/agent navigation entry point for recovering and cont
 
 Use the source that owns the kind of truth you need:
 
-- [`../MASTER-SPEC.md`](../MASTER-SPEC.md) — canonical project purpose, durable requirements, constraints, non-goals, security boundaries, and V1 completion criteria.
+- [`MASTER-SPEC.md`](./MASTER-SPEC.md) — canonical project purpose, durable requirements, constraints, non-goals, security boundaries, and V1 completion criteria.
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — current technical architecture, component boundaries, protocol flows, persistence, deployment shape, and testing direction.
 - [GitHub Issues](https://github.com/ach1992/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
 - [Program Issue #1](https://github.com/ach1992/mcp-gateway/issues/1) — V0.1 execution program and dependency graph.
@@ -32,7 +32,7 @@ If the Bridge-side contract changes materially, reconcile Issue #4 and its depen
 
 A replacement Master or developer should recover in this order:
 
-1. Read `MASTER-SPEC.md` only as needed to establish or verify project-level intent and completion criteria.
+1. Read `docs/MASTER-SPEC.md` only as needed to establish or verify project-level intent and completion criteria.
 2. Read `docs/ARCHITECTURE.md` for the current durable implementation boundaries.
 3. Open Program Issue #1 to locate the active workstream and dependency path.
 4. Read only the relevant current Issue/Task Contract and its dependencies.
@@ -46,7 +46,7 @@ Conversation history is not an authoritative project source and is not required 
 Keep information in its natural owner:
 
 - user-facing overview, installation, and usage -> `README.md`;
-- durable project intent -> `MASTER-SPEC.md`;
+- durable project intent -> `docs/MASTER-SPEC.md`;
 - architecture and engineering structure -> `docs/ARCHITECTURE.md` and other focused docs when genuinely needed;
 - navigation/recovery topology -> this file;
 - live work/status/dependencies -> GitHub Issues/PRs/CI;
