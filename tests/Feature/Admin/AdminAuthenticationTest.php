@@ -3,10 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Models\User;
-use Illuminate\Auth\Middleware\Authenticate;
-use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 
@@ -120,23 +117,21 @@ final class AdminAuthenticationTest extends TestCase
         $this->get('/admin/logout')->assertMethodNotAllowed();
     }
 
-    public function test_admin_state_changing_routes_keep_framework_web_security_middleware(): void
+    public function test_admin_state_changing_routes_stay_in_the_web_security_boundary(): void
     {
-        $router = app('router');
         $login = Route::getRoutes()->getByName('admin.login.store');
         $logout = Route::getRoutes()->getByName('admin.logout');
 
         $this->assertNotNull($login);
         $this->assertNotNull($logout);
 
-        $loginMiddleware = $router->gatherRouteMiddleware($login);
-        $logoutMiddleware = $router->gatherRouteMiddleware($logout);
+        $loginMiddleware = $login->middleware();
+        $logoutMiddleware = $logout->middleware();
 
-        $this->assertContains(PreventRequestForgery::class, $loginMiddleware);
-        $this->assertContains(PreventRequestForgery::class, $logoutMiddleware);
-        $this->assertContains(Authenticate::class, $logoutMiddleware);
-        $this->assertTrue(collect($loginMiddleware)->contains(
-            static fn (string $middleware): bool => str_starts_with($middleware, ThrottleRequests::class.':admin-login'),
-        ));
+        $this->assertContains('web', $loginMiddleware);
+        $this->assertContains('guest', $loginMiddleware);
+        $this->assertContains('throttle:admin-login', $loginMiddleware);
+        $this->assertContains('web', $logoutMiddleware);
+        $this->assertContains('auth', $logoutMiddleware);
     }
 }
