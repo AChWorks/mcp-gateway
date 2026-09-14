@@ -14,7 +14,7 @@ final class BootstrapMcpEndpoint
 {
     public function handle(Request $request): Response
     {
-        if (! config('mcp.bootstrap_fixture.enabled')) {
+        if (config('app.env') !== 'testing' || ! config('mcp.bootstrap_fixture.enabled')) {
             return new Response('Not Found', 404);
         }
 

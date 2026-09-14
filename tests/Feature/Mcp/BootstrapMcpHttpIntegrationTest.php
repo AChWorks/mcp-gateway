@@ -17,6 +17,17 @@ final class BootstrapMcpHttpIntegrationTest extends TestCase
             ->assertNotFound();
     }
 
+    public function test_fixture_cannot_be_enabled_outside_the_testing_environment(): void
+    {
+        config()->set('app.env', 'production');
+        config()->set('mcp.bootstrap_fixture.enabled', true);
+        config()->set('mcp.bootstrap_fixture.token', 'expected-token');
+
+        $this->withToken('expected-token')
+            ->postJson('/_internal/mcp-bootstrap', [])
+            ->assertNotFound();
+    }
+
     public function test_fixture_rejects_an_invalid_bearer_token(): void
     {
         config()->set('mcp.bootstrap_fixture.enabled', true);
