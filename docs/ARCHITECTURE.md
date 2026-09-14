@@ -61,13 +61,17 @@ Prefer the official `modelcontextprotocol/php-sdk` (`mcp/sdk`) for MCP server/cl
 
 The SDK is pre-1.0/experimental at the time this architecture is established. Implementation must therefore pin an exact compatible dependency through Composer, exercise the required server/client paths in tests, and review release notes before SDK upgrades.
 
+For handshake-era Streamable HTTP, an MCP session spans multiple HTTP requests. A PHP-FPM/LSAPI request lifecycle cannot use the SDK's default in-memory session store for this path because the next request may execute in a different process. The single-host V1 baseline uses the SDK file session store in private application storage with bounded TTL and garbage collection. Horizontal multi-host deployment would require a shared durable session store and is outside V1 unless explicitly introduced later.
+
 The official PHP SDK acts as an OAuth Resource Server and can delegate to an authorization server; it intentionally does not mint OAuth tokens itself. MCP Gateway therefore must not assume that `mcp/sdk` is its complete authorization server.
 
 ### OAuth implementation rule
 
-Use a maintained OAuth 2.x/OAuth 2.1-compatible authorization-server library or a proven framework integration for token issuance, authorization codes, refresh tokens, PKCE, revocation, and token lifecycle. `league/oauth2-server` is the initial preferred in-process candidate because V1 must remain a single self-hosted PHP application, but the first implementation task must verify that the selected version can satisfy the current ChatGPT MCP client contract without weakening required client authentication semantics.
+Use `league/oauth2-server` `9.4.1` for the in-process authorization-server lifecycle: authorization codes, S256 PKCE validation, access/refresh-token issuance, refresh rotation primitives, and repository-backed revocation state. Token issuance and authorization-code/refresh-token cryptography must remain library-owned rather than controller-owned.
 
-Do not hand-roll signing, authorization-code storage, refresh-token rotation, or bearer-token validation when a maintained component can own those semantics.
+The library does not natively implement the `private_key_jwt` client authentication used by the current ChatGPT/WP AI Bridge contract: its confidential-client path expects a client secret. Keep that responsibility in a narrow Gateway-owned OAuth client-authentication adapter that validates the exact client identity, Client ID Metadata/JWKS, signed client assertion, audience, expiry, and replay state at the League grant boundary. In `league/oauth2-server` `9.4.1`, `AbstractGrant::validateClient()` is a protected, non-final extension seam; the Gateway authorization-code and refresh grant adapters may override only that client-authentication step and delegate all token lifecycle behavior back to the library. Do not route requests through an unadapted grant or downgrade this boundary to a shared secret or unauthenticated public client merely to fit the default library behavior.
+
+The edge adapter is an authentication boundary, not a second token issuer. Persistence adapters implement the League repository contracts so authorization artifacts remain bound to the authenticated client and can be revoked durably.
 
 ### HTTP client
 
@@ -497,13 +501,18 @@ A future change must not casually violate these invariants:
 9. WP AI Bridge-specific behavior stays behind its connector boundary.
 10. Active task/status truth stays in GitHub Issues/PRs, not this document.
 
-## 15. Known implementation verification points
+## 15. Bootstrap decisions and remaining verification points
 
-The following are intentionally implementation tasks rather than assumptions baked into the architecture:
+The first implementation workstream established these dependency boundaries with executable/source evidence:
 
-- exact compatible `mcp/sdk` version and Laravel/PSR integration path on PHP 8.4;
-- exact OAuth authorization-server library integration needed for current ChatGPT client authentication, refresh and revocation behavior;
-- exact WP AI Bridge extension needed to approve the Gateway as an additional client while preserving existing ChatGPT behavior;
-- OpenLiteSpeed response buffering/Streamable HTTP behavior under the selected MCP protocol revision.
+- `mcp/sdk` `0.8.1` on PHP 8.4, isolated behind Gateway infrastructure adapters;
+- Laravel/Symfony HTTP Foundation to PSR HTTP conversion through `symfony/psr-http-message-bridge` `8.1.x`;
+- `league/oauth2-server` `9.4.1` for authorization-code/PKCE/token/refresh/revocation lifecycle primitives, preceded by a Gateway-owned `private_key_jwt` client-authentication adapter.
 
-The first implementation workstream must resolve these with executable evidence before downstream tasks rely on them.
+The following remain implementation/deployment verification points:
+
+- the complete ChatGPT-facing OAuth adapter and persistence implementation;
+- the exact WP AI Bridge extension needed to approve the Gateway as an additional client while preserving existing ChatGPT behavior;
+- OpenLiteSpeed/LSAPI buffering and Streamable HTTP behavior on the selected production stack.
+
+Downstream work must preserve the established boundaries and resolve the remaining points with executable evidence rather than assumptions.

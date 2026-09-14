@@ -53,3 +53,6 @@ Keep information in its natural owner:
 - release/deployment truth -> release/deployment systems.
 
 Do not mirror live task status into documentation files.
+## Development workflow
+
+Repeatable local setup, dependency boundaries, and repository validation commands are owned by [`DEVELOPMENT.md`](./DEVELOPMENT.md). Keep transient task progress in GitHub rather than that document.
