@@ -61,9 +61,11 @@ Prefer the official `modelcontextprotocol/php-sdk` (`mcp/sdk`) for MCP server/cl
 
 The SDK is pre-1.0/experimental at the time this architecture is established. Implementation must therefore pin an exact compatible dependency through Composer, exercise the required server/client paths in tests, and review release notes before SDK upgrades.
 
-For handshake-era Streamable HTTP, an MCP session spans multiple HTTP requests. A PHP-FPM/LSAPI request lifecycle cannot use the SDK's default in-memory session store for this path because the next request may execute in a different process. The single-host V1 baseline uses the SDK file session store in private application storage with bounded TTL and garbage collection. Horizontal multi-host deployment would require a shared durable session store and is outside V1 unless explicitly introduced later.
+The current MCP protocol revision used by V0.1 is `2026-07-28`. Its primary request path is stateless: request-level protocol/client metadata and capabilities travel in `_meta`, routing uses the required MCP headers such as `Mcp-Method`/`Mcp-Name`, and the modern path does not depend on `initialize` or `Mcp-Session-Id`. The official PHP SDK `0.8.1` supports this modern era and also retains the 2025-era handshake/session compatibility path.
 
-The SDK Streamable HTTP transport also applies DNS-rebinding protection with localhost-oriented defaults. The public `/mcp` implementation must explicitly allow the configured canonical Gateway host(s) while retaining that protection; do not disable host validation merely to make a deployed hostname work.
+Legacy 2025-era Streamable HTTP compatibility still spans multiple HTTP requests. A PHP-FPM/LSAPI request lifecycle cannot use the SDK's default in-memory session store for that legacy path because the next request may execute in a different process. The single-host V1 compatibility layer therefore uses the SDK file session store in private application storage with bounded TTL and garbage collection. Modern `2026-07-28` requests do not require that store. Horizontal multi-host support for legacy sessions remains outside V1 unless explicitly introduced later.
+
+The SDK Streamable HTTP transport also applies DNS-rebinding protection with localhost-oriented defaults. The public `/mcp` implementation explicitly allows the configured canonical Gateway host while retaining that protection; do not disable host validation merely to make a deployed hostname work.
 
 The official PHP SDK acts as an OAuth Resource Server and can delegate to an authorization server; it intentionally does not mint OAuth tokens itself. MCP Gateway therefore must not assume that `mcp/sdk` is its complete authorization server.
 
@@ -73,7 +75,7 @@ Use `league/oauth2-server` `9.4.1` for the in-process authorization-server lifec
 
 The library does not natively implement the `private_key_jwt` client authentication used by the current ChatGPT/WP AI Bridge contract: its confidential-client path expects a client secret. Keep that responsibility in a narrow Gateway-owned OAuth client-authentication adapter that validates the exact client identity, Client ID Metadata/JWKS, signed client assertion, audience, expiry, and replay state at the League grant boundary. In `league/oauth2-server` `9.4.1`, `AbstractGrant::validateClient()` is a protected, non-final extension seam; the Gateway authorization-code and refresh grant adapters may override only that client-authentication step and delegate all token lifecycle behavior back to the library. Do not route requests through an unadapted grant or downgrade this boundary to a shared secret or unauthenticated public client merely to fit the default library behavior.
 
-The edge adapter is an authentication boundary, not a second token issuer. Persistence adapters implement the League repository contracts so authorization artifacts remain bound to the authenticated client and can be revoked durably.
+The edge adapter is an authentication boundary, not a second token issuer. Persistence adapters implement the League repository contracts so authorization artifacts remain bound to the authenticated client and can be revoked durably. `firebase/php-jwt` `7.1.x` owns JWK parsing and RS256 signature verification; the Gateway owns claim/audience/lifetime/replay policy and persists only a hash of assertion `jti` values for replay prevention.
 
 ### HTTP client
 
@@ -205,10 +207,10 @@ MCP handlers call application services; they do not make raw downstream HTTP req
 
 Owns `remote MCP client -> Gateway` authorization.
 
-Expected public surfaces include the standards-required equivalents of:
+The V0.1 public surfaces are:
 
 ```text
-/.well-known/oauth-protected-resource
+/.well-known/oauth-protected-resource/mcp
 /.well-known/oauth-authorization-server
 /oauth/authorize
 /oauth/token
@@ -216,7 +218,7 @@ Expected public surfaces include the standards-required equivalents of:
 /mcp
 ```
 
-Exact paths must remain internally consistent and standards-compliant.
+The protected-resource metadata path follows RFC 9728 path insertion for the exact resource URI `/mcp`. The authorization-server metadata, authorization, token, revocation and MCP paths must remain stable and internally consistent.
 
 V1 ChatGPT requirements:
 
@@ -225,7 +227,9 @@ V1 ChatGPT requirements:
 - correct client authentication for the current ChatGPT MCP App contract;
 - exact redirect validation;
 - resource binding/audience validation;
-- `offline_access`/refresh token support when the current ChatGPT contract needs refreshable access;
+- `mcp` as the required resource scope;
+- optional `offline_access`; a refresh token is issued only when that scope was explicitly authorized, and refresh may narrow scope and lose further refresh authority;
+- RFC 9207 `iss` on authorization responses to reduce authorization-server mix-up risk;
 - revocation;
 - expiry and rotation semantics;
 - no authorization without a valid local Gateway administrator/operator identity and explicit consent/connection flow.
@@ -319,7 +323,7 @@ ChatGPT
   -> Gateway validates token/resource/scopes/current authorization
 ```
 
-The implementation must verify current OpenAI client metadata/client assertion behavior rather than assuming an old ChatGPT OAuth shape forever.
+The implementation must verify current OpenAI client metadata/client assertion behavior rather than assuming an old ChatGPT OAuth shape forever. As verified on 2026-09-14, the configured current client identity is `https://chatgpt.com/oauth/client.json`, with the exact ChatGPT connector redirect URI, `private_key_jwt`, RS256 assertions, authorization-code + refresh-token grants, and JWKS at the metadata-advertised same-origin URI. No signing key is hard-coded; the Gateway refreshes the bounded metadata/JWKS cache when assertion verification requires current keys.
 
 ### 6.2 Gateway -> WP AI Bridge
 
@@ -511,9 +515,11 @@ The first implementation workstream established these dependency boundaries with
 - Laravel/Symfony HTTP Foundation to PSR HTTP conversion through `symfony/psr-http-message-bridge` `8.1.x`;
 - `league/oauth2-server` `9.4.1` for authorization-code/PKCE/token/refresh/revocation lifecycle primitives, preceded by a Gateway-owned `private_key_jwt` client-authentication adapter.
 
+The ChatGPT-facing workstream adds the concrete RFC 9728 resource metadata, authorization-server metadata, authenticated operator consent boundary, League-backed authorization-code/S256 PKCE/token/refresh/revocation persistence, current ChatGPT CIMD/JWKS `private_key_jwt` verification, and bearer-protected `/mcp` endpoint with the stable four-tool registry. Administrator login UI remains owned by the administration-panel workstream rather than being duplicated in the OAuth layer.
+
 The following remain implementation/deployment verification points:
 
-- the complete ChatGPT-facing OAuth adapter and persistence implementation;
+- live ChatGPT workspace interoperability after the administrator login UI and production-like deployment path exist;
 - the exact WP AI Bridge extension needed to approve the Gateway as an additional client while preserving existing ChatGPT behavior;
 - OpenLiteSpeed/LSAPI buffering and Streamable HTTP behavior on the selected production stack.
 

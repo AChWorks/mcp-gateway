@@ -1,0 +1,685 @@
+<?php
+
+namespace Tests\Feature\OAuth;
+
+use App\Infrastructure\OAuth\ChatGptClientMetadata;
+use App\Models\User;
+use Firebase\JWT\JWT;
+use GuzzleHttp\Client;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Response;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
+use Tests\TestCase;
+
+final class ChatGptOAuthFlowTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private const CLIENT_ID = 'https://chatgpt.com/oauth/client.json';
+
+    private const REDIRECT_URI = 'https://chatgpt.com/connector_platform_oauth_redirect';
+
+    private const CLIENT_KID = 'test-chatgpt-key';
+
+    private string $clientPrivateKey;
+
+    /** @var array<string, mixed> */
+    private array $clientJwk;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Artisan::call('gateway:oauth-keygen', ['--force' => true]);
+        [$this->clientPrivateKey, $this->clientJwk] = $this->newClientKeypair();
+        $this->bindClientMetadataFixture();
+    }
+
+    public function test_discovery_metadata_and_unauthenticated_mcp_challenge_are_resource_bound(): void
+    {
+        $resource = (string) config('oauth.resource');
+        $issuer = (string) config('oauth.issuer');
+
+        $this->getJson('/.well-known/oauth-protected-resource/mcp')
+            ->assertOk()
+            ->assertJson([
+                'resource' => $resource,
+                'authorization_servers' => [$issuer],
+                'scopes_supported' => ['mcp', 'offline_access'],
+                'bearer_methods_supported' => ['header'],
+            ]);
+
+        $this->getJson('/.well-known/oauth-authorization-server')
+            ->assertOk()
+            ->assertJson([
+                'issuer' => $issuer,
+                'authorization_endpoint' => $issuer.'/oauth/authorize',
+                'token_endpoint' => $issuer.'/oauth/token',
+                'revocation_endpoint' => $issuer.'/oauth/revoke',
+                'grant_types_supported' => ['authorization_code', 'refresh_token'],
+                'code_challenge_methods_supported' => ['S256'],
+                'token_endpoint_auth_methods_supported' => ['private_key_jwt'],
+                'client_id_metadata_document_supported' => true,
+                'authorization_response_iss_parameter_supported' => true,
+                'protected_resources' => [$resource],
+            ]);
+
+        $this->postJson('/mcp', ['jsonrpc' => '2.0', 'id' => 1, 'method' => 'ping'])
+            ->assertUnauthorized()
+            ->assertHeader(
+                'WWW-Authenticate',
+                'Bearer resource_metadata="'.$issuer.'/.well-known/oauth-protected-resource/mcp", scope="mcp"',
+            );
+    }
+
+    public function test_authorization_requires_an_existing_operator_session(): void
+    {
+        $this->get('/oauth/authorize?'.http_build_query($this->authorizationParameters()))
+            ->assertStatus(401)
+            ->assertSee('Administrator sign-in required')
+            ->assertHeader('X-Frame-Options', 'DENY')
+            ->assertHeader('Referrer-Policy', 'no-referrer');
+    }
+
+    public function test_authorization_rejects_wrong_resource_redirect_and_non_s256_pkce(): void
+    {
+        $user = $this->operator();
+
+        $this->actingAs($user)
+            ->get('/oauth/authorize?'.http_build_query($this->authorizationParameters([
+                'resource' => 'https://wrong.example/mcp',
+            ])))
+            ->assertStatus(400);
+
+        $this->actingAs($user)
+            ->get('/oauth/authorize?'.http_build_query($this->authorizationParameters([
+                'redirect_uri' => 'https://attacker.example/callback',
+            ])))
+            ->assertUnauthorized();
+
+        $this->actingAs($user)
+            ->get('/oauth/authorize?'.http_build_query($this->authorizationParameters([
+                'code_challenge_method' => 'plain',
+            ])))
+            ->assertStatus(400);
+
+        $this->actingAs($user)
+            ->get('/oauth/authorize?'.http_build_query($this->authorizationParameters([
+                'scope' => 'offline_access',
+            ])))
+            ->assertStatus(400);
+    }
+
+    public function test_full_oauth_refresh_mcp_and_revocation_flow(): void
+    {
+        $user = $this->operator();
+        $verifier = str_repeat('v', 64);
+        $parameters = $this->authorizationParameters([
+            'code_challenge' => $this->s256($verifier),
+            'scope' => 'mcp offline_access',
+        ]);
+
+        $this->actingAs($user)
+            ->get('/oauth/authorize?'.http_build_query($parameters))
+            ->assertOk()
+            ->assertSee('Authorize ChatGPT')
+            ->assertSee(self::CLIENT_ID)
+            ->assertHeader('X-Frame-Options', 'DENY')
+            ->assertHeader('Referrer-Policy', 'no-referrer');
+
+        $authorization = $this->actingAs($user)->post('/oauth/authorize', [
+            ...$parameters,
+            'decision' => 'approve',
+        ]);
+        $authorization->assertRedirect();
+        $code = $this->authorizationCode((string) $authorization->headers->get('Location'));
+
+        $tokenResponse = $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $tokenResponse->assertOk()->assertJsonStructure([
+            'token_type', 'expires_in', 'access_token', 'refresh_token',
+        ]);
+
+        $accessToken = (string) $tokenResponse->json('access_token');
+        $refreshToken = (string) $tokenResponse->json('refresh_token');
+        self::assertNotSame('', $accessToken);
+        self::assertNotSame('', $refreshToken);
+        self::assertStringNotContainsString($accessToken, (string) $this->databaseDump('oauth_access_tokens'));
+        self::assertStringNotContainsString($refreshToken, (string) $this->databaseDump('oauth_refresh_tokens'));
+
+        $mcpHeaders = [
+            'Authorization' => 'Bearer '.$accessToken,
+            'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
+        ];
+
+        $modernMeta = [
+            'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities' => (object) [],
+            'io.modelcontextprotocol/clientInfo' => ['name' => 'oauth-flow-test', 'version' => '1.0.0'],
+        ];
+        $modernTools = $this->withHeaders([
+            ...$mcpHeaders,
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/list',
+        ])->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 10,
+            'method' => 'tools/list',
+            'params' => ['_meta' => $modernMeta],
+        ]);
+        $modernTools->assertOk();
+        self::assertFalse($modernTools->headers->has('Mcp-Session-Id'));
+        self::assertSame([
+            'sites-list',
+            'site-context',
+            'site-abilities-read',
+            'site-ability-execute',
+        ], array_column((array) $modernTools->json('result.tools'), 'name'));
+
+        $modernCall = $this->withHeaders([
+            ...$mcpHeaders,
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+            'Mcp-Name' => 'sites-list',
+        ])->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 11,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'sites-list',
+                'arguments' => (object) [],
+                '_meta' => $modernMeta,
+            ],
+        ]);
+        $modernCall->assertOk()->assertJsonPath('result.structuredContent.status', 'site_routing_not_configured');
+
+        $this->withHeaders([
+            ...$mcpHeaders,
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+        ])->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 12,
+            'method' => 'tools/list',
+            'params' => ['_meta' => $modernMeta],
+        ])->assertStatus(400);
+
+        // Legacy 2025-era clients remain supported on the same endpoint.
+        $this->withoutHeaders(['MCP-Protocol-Version', 'Mcp-Method', 'Mcp-Name']);
+        $initialize = $this->withHeaders($mcpHeaders)->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'initialize',
+            'params' => [
+                'protocolVersion' => '2025-11-25',
+                'capabilities' => (object) [],
+                'clientInfo' => ['name' => 'oauth-flow-test', 'version' => '1.0.0'],
+            ],
+        ]);
+        $initialize->assertOk()->assertJsonPath('result.protocolVersion', '2025-11-25');
+        $sessionId = (string) $initialize->headers->get('Mcp-Session-Id');
+        self::assertNotSame('', $sessionId);
+
+        $sessionHeaders = [
+            ...$mcpHeaders,
+            'Mcp-Session-Id' => $sessionId,
+            'Mcp-Protocol-Version' => '2025-11-25',
+        ];
+        $this->withHeaders($sessionHeaders)->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'method' => 'notifications/initialized',
+        ])->assertStatus(202);
+
+        $tools = $this->withHeaders($sessionHeaders)->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 2,
+            'method' => 'tools/list',
+        ]);
+        $tools->assertOk();
+        $toolNames = array_column((array) $tools->json('result.tools'), 'name');
+        self::assertSame([
+            'sites-list',
+            'site-context',
+            'site-abilities-read',
+            'site-ability-execute',
+        ], $toolNames);
+
+        $refreshResponse = $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $refreshResponse->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+        $refreshedAccessToken = (string) $refreshResponse->json('access_token');
+        $refreshedRefreshToken = (string) $refreshResponse->json('refresh_token');
+        self::assertNotSame($accessToken, $refreshedAccessToken);
+        self::assertNotSame($refreshToken, $refreshedRefreshToken);
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertStatus(400);
+
+        $this->post('/oauth/revoke', [
+            'client_id' => self::CLIENT_ID,
+            'token' => $refreshedRefreshToken,
+            'token_type_hint' => 'refresh_token',
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/revoke'),
+        ])->assertOk();
+
+        $this->withHeaders([
+            'Authorization' => 'Bearer '.$refreshedAccessToken,
+            'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
+        ])->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 3,
+            'method' => 'tools/list',
+        ])->assertUnauthorized();
+    }
+
+    public function test_mcp_only_authorization_does_not_issue_a_refresh_token(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+
+        $response = $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+
+        $response->assertOk()->assertJsonMissingPath('refresh_token');
+        self::assertSame(['mcp'], json_decode((string) \DB::table('oauth_access_tokens')->value('scopes'), true, flags: JSON_THROW_ON_ERROR));
+        self::assertSame(0, \DB::table('oauth_refresh_tokens')->count());
+    }
+
+    public function test_denied_authorization_response_is_issuer_stamped(): void
+    {
+        $user = $this->operator();
+        $response = $this->actingAs($user)->post('/oauth/authorize', [
+            ...$this->authorizationParameters(),
+            'decision' => 'deny',
+        ]);
+
+        $response->assertRedirect();
+        parse_str((string) parse_url((string) $response->headers->get('Location'), PHP_URL_QUERY), $query);
+        self::assertSame('access_denied', $query['error'] ?? null);
+        self::assertSame((string) config('oauth.issuer'), $query['iss'] ?? null);
+    }
+
+    public function test_client_assertion_audience_and_replay_are_rejected(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+
+        $wrongAudience = $this->clientAssertion('https://wrong.example/oauth/token');
+        $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $wrongAudience,
+        ])->assertUnauthorized();
+
+        $assertion = $this->clientAssertion((string) config('oauth.issuer').'/oauth/token');
+        $valid = $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $assertion,
+        ]);
+        $valid->assertOk();
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $assertion,
+        ])->assertUnauthorized();
+    }
+
+    public function test_client_assertion_rejects_wrong_client_key_algorithm_key_id_and_expiry(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+        $tokenRequest = [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        ];
+        $audience = (string) config('oauth.issuer').'/oauth/token';
+
+        $this->post('/oauth/token', [
+            ...$tokenRequest,
+            'client_id' => 'https://attacker.example/client.json',
+            'client_assertion' => $this->clientAssertion($audience),
+        ])->assertUnauthorized();
+
+        [$foreignPrivateKey] = $this->newClientKeypair();
+        $this->post('/oauth/token', [
+            ...$tokenRequest,
+            'client_assertion' => $this->clientAssertion($audience, privateKey: $foreignPrivateKey),
+        ])->assertUnauthorized();
+
+        $this->post('/oauth/token', [
+            ...$tokenRequest,
+            'client_assertion' => $this->clientAssertion(
+                $audience,
+                privateKey: 'test-hmac-secret-that-is-at-least-32-bytes-long',
+                algorithm: 'HS256',
+            ),
+        ])->assertUnauthorized();
+
+        $this->post('/oauth/token', [
+            ...$tokenRequest,
+            'client_assertion' => $this->clientAssertion($audience, keyId: 'unknown-key-id'),
+        ])->assertUnauthorized();
+
+        $now = time();
+        $this->post('/oauth/token', [
+            ...$tokenRequest,
+            'client_assertion' => $this->clientAssertion($audience, [
+                'iat' => $now - 180,
+                'exp' => $now - 60,
+            ]),
+        ])->assertUnauthorized();
+
+        $this->post('/oauth/token', [
+            ...$tokenRequest,
+            'client_assertion' => $this->clientAssertion($audience, [
+                'iat' => $now - 200,
+                'exp' => $now + 200,
+            ]),
+        ])->assertUnauthorized();
+
+        $this->post('/oauth/token', [
+            ...$tokenRequest,
+            'client_assertion' => $this->clientAssertion($audience),
+        ])->assertOk();
+    }
+
+    public function test_refresh_scope_can_narrow_and_drops_offline_refresh_authority(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
+        $token = $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $token->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+        $refreshToken = (string) $token->json('refresh_token');
+
+        $narrowed = $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'scope' => 'mcp',
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $narrowed->assertOk()->assertJsonMissingPath('refresh_token');
+
+        $accessTokenId = $this->accessTokenIdentifier((string) $narrowed->json('access_token'));
+        self::assertSame(
+            ['mcp'],
+            json_decode((string) \DB::table('oauth_access_tokens')->where('id', $accessTokenId)->value('scopes'), true, flags: JSON_THROW_ON_ERROR),
+        );
+        self::assertSame(1, \DB::table('oauth_refresh_tokens')->count());
+        self::assertNotNull(\DB::table('oauth_refresh_tokens')->value('revoked_at'));
+    }
+
+    public function test_expired_authorization_code_is_rejected(): void
+    {
+        config()->set('oauth.ttl.authorization_code_seconds', 1);
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+        sleep(2);
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertStatus(400);
+    }
+
+    public function test_code_exchange_rejects_wrong_resource_pkce_scope_and_code_reuse(): void
+    {
+        $user = $this->operator();
+
+        $this->actingAs($user)
+            ->get('/oauth/authorize?'.http_build_query($this->authorizationParameters(['scope' => 'admin'])))
+            ->assertStatus(400);
+
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+        $assertion = $this->clientAssertion((string) config('oauth.issuer').'/oauth/token');
+        $base = [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $assertion,
+        ];
+
+        $this->post('/oauth/token', [
+            ...$base,
+            'resource' => 'https://wrong.example/mcp',
+        ])->assertStatus(400);
+
+        $this->post('/oauth/token', [
+            ...$base,
+            'code_verifier' => str_repeat('x', 64),
+        ])->assertStatus(400);
+
+        $valid = $this->post('/oauth/token', [
+            ...$base,
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $valid->assertOk();
+
+        $this->post('/oauth/token', [
+            ...$base,
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertStatus(400);
+    }
+
+    /** @return array<string, string> */
+    private function authorizationParameters(array $overrides = []): array
+    {
+        $verifier = str_repeat('v', 64);
+
+        return array_replace([
+            'response_type' => 'code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'scope' => 'mcp',
+            'state' => 'state-'.Str::uuid(),
+            'code_challenge' => $this->s256($verifier),
+            'code_challenge_method' => 'S256',
+            'resource' => (string) config('oauth.resource'),
+        ], $overrides);
+    }
+
+    /** @return array{0: string, 1: string} */
+    private function approvedAuthorizationCode(User $user, string $scope = 'mcp'): array
+    {
+        $verifier = str_repeat('v', 64);
+        $parameters = $this->authorizationParameters([
+            'code_challenge' => $this->s256($verifier),
+            'scope' => $scope,
+        ]);
+        $response = $this->actingAs($user)->post('/oauth/authorize', [
+            ...$parameters,
+            'decision' => 'approve',
+        ]);
+        $response->assertRedirect();
+
+        return [$this->authorizationCode((string) $response->headers->get('Location')), $verifier];
+    }
+
+    private function authorizationCode(string $redirect): string
+    {
+        parse_str((string) parse_url($redirect, PHP_URL_QUERY), $query);
+        self::assertIsString($query['code'] ?? null);
+        self::assertSame((string) config('oauth.issuer'), $query['iss'] ?? null);
+
+        return $query['code'];
+    }
+
+    /** @param array<string, mixed> $claimOverrides */
+    private function clientAssertion(
+        string $audience,
+        array $claimOverrides = [],
+        ?string $privateKey = null,
+        string $algorithm = 'RS256',
+        ?string $keyId = self::CLIENT_KID,
+    ): string {
+        $now = time();
+        $claims = array_replace([
+            'iss' => self::CLIENT_ID,
+            'sub' => self::CLIENT_ID,
+            'aud' => $audience,
+            'iat' => $now,
+            'exp' => $now + 120,
+            'jti' => (string) Str::uuid(),
+        ], $claimOverrides);
+
+        return JWT::encode($claims, $privateKey ?? $this->clientPrivateKey, $algorithm, $keyId);
+    }
+
+    private function accessTokenIdentifier(string $token): string
+    {
+        $parts = explode('.', $token);
+        self::assertCount(3, $parts);
+        $payload = json_decode(JWT::urlsafeB64Decode($parts[1]), true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($payload);
+        self::assertIsString($payload['jti'] ?? null);
+
+        return $payload['jti'];
+    }
+
+    private function s256(string $verifier): string
+    {
+        return rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+    }
+
+    private function operator(): User
+    {
+        return User::query()->create([
+            'name' => 'Gateway Operator',
+            'email' => 'operator@example.test',
+            'password' => Hash::make('test-password-not-used-for-oauth'),
+        ]);
+    }
+
+    private function bindClientMetadataFixture(): void
+    {
+        $metadata = [
+            'client_id' => self::CLIENT_ID,
+            'client_uri' => 'https://chatgpt.com/',
+            'redirect_uris' => [self::REDIRECT_URI],
+            'token_endpoint_auth_method' => 'private_key_jwt',
+            'grant_types' => ['authorization_code', 'refresh_token'],
+            'response_types' => ['code'],
+            'client_name' => 'ChatGPT',
+            'token_endpoint_auth_signing_alg' => 'RS256',
+            'jwks_uri' => 'https://chatgpt.com/oauth/jwks.json',
+        ];
+        $jwks = ['keys' => [$this->clientJwk]];
+        $metadataJson = json_encode($metadata, JSON_THROW_ON_ERROR);
+        $jwksJson = json_encode($jwks, JSON_THROW_ON_ERROR);
+        $mock = new MockHandler([
+            new Response(200, ['Content-Type' => 'application/json'], $metadataJson),
+            new Response(200, ['Content-Type' => 'application/json'], $jwksJson),
+            new Response(200, ['Content-Type' => 'application/json'], $metadataJson),
+            new Response(200, ['Content-Type' => 'application/json'], $jwksJson),
+        ]);
+        $client = new Client(['handler' => HandlerStack::create($mock)]);
+
+        $this->app->instance(ChatGptClientMetadata::class, new ChatGptClientMetadata($client));
+    }
+
+    /** @return array{0: string, 1: array<string, mixed>} */
+    private function newClientKeypair(): array
+    {
+        $key = openssl_pkey_new([
+            'private_key_bits' => 2048,
+            'private_key_type' => OPENSSL_KEYTYPE_RSA,
+        ]);
+        self::assertNotFalse($key);
+
+        $privateKey = '';
+        self::assertTrue(openssl_pkey_export($key, $privateKey));
+        $details = openssl_pkey_get_details($key);
+        self::assertIsArray($details);
+        self::assertIsArray($details['rsa'] ?? null);
+
+        return [$privateKey, [
+            'kty' => 'RSA',
+            'use' => 'sig',
+            'alg' => 'RS256',
+            'kid' => self::CLIENT_KID,
+            'n' => JWT::urlsafeB64Encode($details['rsa']['n']),
+            'e' => JWT::urlsafeB64Encode($details['rsa']['e']),
+        ]];
+    }
+
+    private function databaseDump(string $table): string
+    {
+        return json_encode(\DB::table($table)->get()->all(), JSON_THROW_ON_ERROR);
+    }
+}
