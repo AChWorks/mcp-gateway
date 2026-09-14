@@ -426,6 +426,14 @@ final class ChatGptOAuthFlowTest extends TestCase
 
         $this->post('/oauth/token', [
             ...$tokenRequest,
+            'client_assertion' => $this->clientAssertion($audience, [
+                'iat' => $now - 200,
+                'exp' => $now + 200,
+            ]),
+        ])->assertUnauthorized();
+
+        $this->post('/oauth/token', [
+            ...$tokenRequest,
             'client_assertion' => $this->clientAssertion($audience),
         ])->assertOk();
     }

@@ -126,6 +126,7 @@ final readonly class PrivateKeyJwtClientAuthenticator
         $maxLifetime = max(60, (int) config('oauth.ttl.client_assertion_seconds'));
 
         if ($expiresAt <= $issuedAt
+            || ($expiresAt - $issuedAt) > $maxLifetime
             || $issuedAt < ($now - $maxLifetime)
             || $expiresAt > ($now + $maxLifetime)) {
             throw new \UnexpectedValueException('Invalid client assertion lifetime.');
