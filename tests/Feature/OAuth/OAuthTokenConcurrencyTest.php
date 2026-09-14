@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use PDO;
 use PHPUnit\Framework\Attributes\Group;
 use RuntimeException;
 use Tests\TestCase;
@@ -45,21 +46,12 @@ final class OAuthTokenConcurrencyTest extends TestCase
         $this->bindClientMetadataFixture();
     }
 
-    protected function tearDown(): void
-    {
-        if (DB::getDriverName() === 'mysql') {
-            DB::unprepared('DROP TRIGGER IF EXISTS oauth_access_token_insert_delay');
-            DB::unprepared('DROP TRIGGER IF EXISTS oauth_access_token_update_delay');
-        }
-
-        parent::tearDown();
-    }
-
     public function test_authorization_code_can_only_be_redeemed_once_under_concurrency(): void
     {
         $user = $this->operator();
         [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
-        $this->installAccessTokenInsertDelay();
+        $codeId = DB::table('oauth_auth_codes')->value('id');
+        self::assertIsString($codeId);
 
         $base = [
             'grant_type' => 'authorization_code',
@@ -74,6 +66,8 @@ final class OAuthTokenConcurrencyTest extends TestCase
         $responses = $this->runConcurrentTokenRequests(
             [...$base, 'client_assertion' => $this->clientAssertion()],
             [...$base, 'client_assertion' => $this->clientAssertion()],
+            'oauth_auth_codes',
+            $codeId,
         );
 
         self::assertSame([200, 400], $this->sortedStatuses($responses));
@@ -98,8 +92,9 @@ final class OAuthTokenConcurrencyTest extends TestCase
         ]);
         $initial->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
         $refreshToken = (string) $initial->json('refresh_token');
+        $refreshTokenId = DB::table('oauth_refresh_tokens')->whereNull('revoked_at')->value('id');
+        self::assertIsString($refreshTokenId);
 
-        $this->installAccessTokenUpdateDelay();
         $base = [
             'grant_type' => 'refresh_token',
             'client_id' => self::CLIENT_ID,
@@ -111,6 +106,8 @@ final class OAuthTokenConcurrencyTest extends TestCase
         $responses = $this->runConcurrentTokenRequests(
             [...$base, 'client_assertion' => $this->clientAssertion()],
             [...$base, 'client_assertion' => $this->clientAssertion()],
+            'oauth_refresh_tokens',
+            $refreshTokenId,
         );
 
         self::assertSame([200, 400], $this->sortedStatuses($responses));
@@ -120,36 +117,23 @@ final class OAuthTokenConcurrencyTest extends TestCase
         self::assertSame(1, DB::table('oauth_refresh_tokens')->whereNull('revoked_at')->count());
     }
 
-    private function installAccessTokenInsertDelay(): void
-    {
-        DB::unprepared('DROP TRIGGER IF EXISTS oauth_access_token_insert_delay');
-        DB::unprepared(
-            'CREATE TRIGGER oauth_access_token_insert_delay '
-            .'BEFORE INSERT ON oauth_access_tokens FOR EACH ROW DO SLEEP(0.5)',
-        );
-    }
-
-    private function installAccessTokenUpdateDelay(): void
-    {
-        DB::unprepared('DROP TRIGGER IF EXISTS oauth_access_token_update_delay');
-        DB::unprepared(
-            'CREATE TRIGGER oauth_access_token_update_delay '
-            .'BEFORE UPDATE ON oauth_access_tokens FOR EACH ROW DO SLEEP(0.5)',
-        );
-    }
-
     /**
      * @param  array<string, mixed>  $firstPayload
      * @param  array<string, mixed>  $secondPayload
      * @return array<int, array{status: int, body: mixed}>
      */
-    private function runConcurrentTokenRequests(array $firstPayload, array $secondPayload): array
-    {
+    private function runConcurrentTokenRequests(
+        array $firstPayload,
+        array $secondPayload,
+        string $lockedTable,
+        string $lockedId,
+    ): array {
         $directory = storage_path('framework/testing/oauth-concurrency-'.Str::uuid());
         if (! mkdir($directory, 0700, true) && ! is_dir($directory)) {
             throw new RuntimeException('Could not create OAuth concurrency fixture directory.');
         }
 
+        $blocker = $this->lockTokenRow($lockedTable, $lockedId);
         $barrier = $directory.'/go';
         $jwkPath = $directory.'/client-jwk.json';
         $payloadPaths = [$directory.'/payload-1.json', $directory.'/payload-2.json'];
@@ -199,6 +183,13 @@ final class OAuthTokenConcurrencyTest extends TestCase
                 throw new RuntimeException('Could not release OAuth concurrency start barrier.');
             }
 
+            // Keep the durable single-use row locked long enough for both independent
+            // requests to reach token processing. Correct code blocks at its FOR UPDATE
+            // check; a check-then-revoke implementation can pass validation in both
+            // workers and persist duplicate successors before it reaches revocation.
+            usleep(1_000_000);
+            $blocker->commit();
+
             $responses = [];
             foreach ($processes as $worker) {
                 $stdout = stream_get_contents($worker['pipes'][1]);
@@ -216,6 +207,10 @@ final class OAuthTokenConcurrencyTest extends TestCase
 
             return $responses;
         } finally {
+            if ($blocker->inTransaction()) {
+                $blocker->rollBack();
+            }
+
             foreach ($processes as $worker) {
                 if (is_resource($worker['process'])) {
                     proc_terminate($worker['process']);
@@ -231,6 +226,43 @@ final class OAuthTokenConcurrencyTest extends TestCase
                 rmdir($directory);
             }
         }
+    }
+
+    private function lockTokenRow(string $table, string $id): PDO
+    {
+        if (! in_array($table, ['oauth_auth_codes', 'oauth_refresh_tokens'], true)) {
+            throw new RuntimeException('Unsupported OAuth concurrency lock target.');
+        }
+
+        $connection = config('database.connections.mysql');
+        if (! is_array($connection)) {
+            throw new RuntimeException('MySQL test connection is unavailable.');
+        }
+
+        $pdo = new PDO(
+            sprintf(
+                'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
+                (string) ($connection['host'] ?? '127.0.0.1'),
+                (string) ($connection['port'] ?? '3306'),
+                (string) ($connection['database'] ?? ''),
+            ),
+            (string) ($connection['username'] ?? ''),
+            (string) ($connection['password'] ?? ''),
+            [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ],
+        );
+        $pdo->beginTransaction();
+        $statement = $pdo->prepare("SELECT id FROM {$table} WHERE id = ? FOR UPDATE");
+        $statement->execute([$id]);
+
+        if ($statement->fetchColumn() === false) {
+            $pdo->rollBack();
+            throw new RuntimeException('OAuth concurrency lock target no longer exists.');
+        }
+
+        return $pdo;
     }
 
     /** @param array<int, array{status: int, body: mixed}> $responses
