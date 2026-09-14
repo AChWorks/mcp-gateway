@@ -4,7 +4,7 @@ namespace Tests\Feature\Admin;
 
 use App\Models\User;
 use Illuminate\Auth\Middleware\Authenticate;
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Route;
@@ -117,8 +117,8 @@ final class AdminAuthenticationTest extends TestCase
         $loginMiddleware = $router->gatherRouteMiddleware($login);
         $logoutMiddleware = $router->gatherRouteMiddleware($logout);
 
-        $this->assertContains(ValidateCsrfToken::class, $loginMiddleware);
-        $this->assertContains(ValidateCsrfToken::class, $logoutMiddleware);
+        $this->assertContains(PreventRequestForgery::class, $loginMiddleware);
+        $this->assertContains(PreventRequestForgery::class, $logoutMiddleware);
         $this->assertContains(Authenticate::class, $logoutMiddleware);
         $this->assertTrue(collect($loginMiddleware)->contains(
             static fn (string $middleware): bool => str_starts_with($middleware, ThrottleRequests::class.':admin-login'),
