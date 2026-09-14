@@ -139,8 +139,8 @@ final class OAuthTokenConcurrencyTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $firstPayload
-     * @param array<string, mixed> $secondPayload
+     * @param  array<string, mixed>  $firstPayload
+     * @param  array<string, mixed>  $secondPayload
      * @return array<int, array{status: int, body: mixed}>
      */
     private function runConcurrentTokenRequests(array $firstPayload, array $secondPayload): array

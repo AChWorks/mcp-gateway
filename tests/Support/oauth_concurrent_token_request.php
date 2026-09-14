@@ -19,6 +19,8 @@ if ($argc !== 5) {
 
 [, $payloadPath, $jwkPath, $barrierPath, $readyPath] = $argv;
 $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
+$kernel = $app->make(Kernel::class);
+$kernel->bootstrap();
 
 try {
     $payload = json_decode((string) file_get_contents($payloadPath), true, flags: JSON_THROW_ON_ERROR);
@@ -75,7 +77,6 @@ try {
     }
 
     $request = Request::create('/oauth/token', 'POST', $payload, [], [], $server);
-    $kernel = $app->make(Kernel::class);
     $response = $kernel->handle($request);
     $kernel->terminate($request, $response);
 

@@ -55,11 +55,8 @@ jobs:
       - name: Audit dependencies
         run: composer audit --locked
 
-      - name: Diagnose code style
-        run: |
-          vendor/bin/pint tests/Feature/OAuth/OAuthTokenConcurrencyTest.php -v
-          git diff -- tests/Feature/OAuth/OAuthTokenConcurrencyTest.php
-          exit 1
+      - name: Run code style check
+        run: composer lint
 
       - name: Run static analysis
         run: composer analyse
