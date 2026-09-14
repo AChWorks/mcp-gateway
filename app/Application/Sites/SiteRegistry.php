@@ -44,6 +44,17 @@ final class SiteRegistry
         $targetChanged = ! hash_equals($site->base_url, $canonicalBase);
         $discovery = $this->discover($canonicalBase);
 
+        if ($targetChanged) {
+            $targetHash = hash('sha256', $discovery->baseUrl);
+            $conflict = Site::query()
+                ->where('base_url_hash', $targetHash)
+                ->where($site->getKeyName(), '!=', $site->getKey())
+                ->exists();
+            if ($conflict) {
+                throw new InvalidArgumentException('The canonical target is already registered to another site.');
+            }
+        }
+
         if ($targetChanged && $site->credential()->exists()) {
             $this->connections->disconnect($site);
         }
