@@ -89,6 +89,21 @@ final class AdminAuthenticationTest extends TestCase
         ])->assertTooManyRequests();
     }
 
+    public function test_login_has_an_ip_wide_bound_across_distinct_identities(): void
+    {
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $this->post('/admin/login', [
+                'email' => sprintf('missing-%d@example.test', $attempt),
+                'password' => 'wrong-password',
+            ])->assertSessionHasErrors('email');
+        }
+
+        $this->post('/admin/login', [
+            'email' => 'another-missing@example.test',
+            'password' => 'wrong-password',
+        ])->assertTooManyRequests();
+    }
+
     public function test_logout_is_post_only_and_ends_the_authenticated_session(): void
     {
         $user = User::query()->create([
