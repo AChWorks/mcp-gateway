@@ -15,6 +15,7 @@ Route::post('/admin/login', [AuthenticatedSessionController::class, 'store'])
 
 Route::middleware('auth')->prefix('admin')->group(function (): void {
     Route::view('/', 'admin.dashboard')->name('admin.dashboard');
+    Route::view('/connection', 'admin.connection')->name('admin.connection');
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])
         ->name('admin.logout');
 });

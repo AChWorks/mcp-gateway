@@ -18,5 +18,7 @@
             <dd><code>{{ url('/mcp') }}</code></dd>
         </div>
     </dl>
+
+    <p><a href="{{ route('admin.connection') }}">{{ __('View connection information') }}</a></p>
 </section>
 @endsection
