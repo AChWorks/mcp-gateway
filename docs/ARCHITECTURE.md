@@ -63,6 +63,8 @@ The SDK is pre-1.0/experimental at the time this architecture is established. Im
 
 For handshake-era Streamable HTTP, an MCP session spans multiple HTTP requests. A PHP-FPM/LSAPI request lifecycle cannot use the SDK's default in-memory session store for this path because the next request may execute in a different process. The single-host V1 baseline uses the SDK file session store in private application storage with bounded TTL and garbage collection. Horizontal multi-host deployment would require a shared durable session store and is outside V1 unless explicitly introduced later.
 
+The SDK Streamable HTTP transport also applies DNS-rebinding protection with localhost-oriented defaults. The public `/mcp` implementation must explicitly allow the configured canonical Gateway host(s) while retaining that protection; do not disable host validation merely to make a deployed hostname work.
+
 The official PHP SDK acts as an OAuth Resource Server and can delegate to an authorization server; it intentionally does not mint OAuth tokens itself. MCP Gateway therefore must not assume that `mcp/sdk` is its complete authorization server.
 
 ### OAuth implementation rule

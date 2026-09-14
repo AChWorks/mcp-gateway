@@ -81,6 +81,8 @@ The production MCP endpoint is implemented by the ChatGPT-facing workstream, not
 
 Handshake-era Streamable HTTP clients use an MCP session ID across multiple HTTP requests. In a normal PHP request lifecycle, the SDK's in-memory session store is not durable across workers/requests. The bootstrap therefore uses the SDK `FileSessionStore` under `storage/framework/mcp-sessions` with a bounded TTL (`MCP_SESSION_TTL_SECONDS`, default `3600`). That directory is private application state and is ignored by Git. A future multi-host deployment would need a shared durable store before horizontal scaling, but V1 is a single-host deployment.
 
+For the production endpoint, preserve the SDK's DNS-rebinding/Host protection and configure the exact canonical Gateway hostname(s). Localhost-oriented defaults are appropriate for the bootstrap fixture but are not a reason to disable host validation in #3.
+
 ## Locked protocol dependencies
 
 The bootstrap deliberately isolates protocol packages behind `app/Infrastructure` adapters.
