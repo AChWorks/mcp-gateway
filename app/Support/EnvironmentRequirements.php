@@ -12,6 +12,7 @@ final class EnvironmentRequirements
         return [
             'PHP >= 8.4.1' => version_compare((string) phpversion(), '8.4.1', '>='),
             'PDO MySQL extension' => extension_loaded('pdo_mysql'),
+            'cURL extension with DNS pinning support' => extension_loaded('curl') && defined('CURLOPT_RESOLVE'),
             'OpenSSL extension' => extension_loaded('openssl'),
             'Sodium extension' => extension_loaded('sodium'),
             'Valid Laravel encryption key' => $this->validEncryptionKey($applicationKey, $cipher),
@@ -25,6 +26,8 @@ final class EnvironmentRequirements
         string $applicationUrl,
         string $oauthPrivateKeyPath,
         string $oauthPublicKeyPath,
+        string $bridgePrivateKeyPath,
+        string $bridgePublicKeyPath,
         string $publicRoot,
         bool $privateFilesystemServed,
         bool $sessionEncrypted,
@@ -40,6 +43,12 @@ final class EnvironmentRequirements
                 && $this->outsidePublicRoot($oauthPublicKeyPath, $publicRoot),
             'OAuth signing key file permissions are restricted' => $this->safeKeyPermissions($oauthPrivateKeyPath)
                 && $this->safeKeyPermissions($oauthPublicKeyPath),
+            'Bridge client signing keypair is valid and matched' => $this->validKeypair($bridgePrivateKeyPath, $bridgePublicKeyPath),
+            'Bridge client signing keypair is distinct from Gateway OAuth signing keys' => $this->distinctKeypairs($oauthPrivateKeyPath, $bridgePrivateKeyPath),
+            'Bridge client signing keys are outside the public web root' => $this->outsidePublicRoot($bridgePrivateKeyPath, $publicRoot)
+                && $this->outsidePublicRoot($bridgePublicKeyPath, $publicRoot),
+            'Bridge client signing key file permissions are restricted' => $this->safeKeyPermissions($bridgePrivateKeyPath)
+                && $this->safeKeyPermissions($bridgePublicKeyPath),
             'Private filesystem is not web-served' => ! $privateFilesystemServed,
             'Administrator sessions are encrypted' => $sessionEncrypted,
             'Production session cookie is HTTPS-only' => ! $production || $sessionSecure,
@@ -112,6 +121,34 @@ final class EnvironmentRequirements
             && is_array($publicDetails)
             && isset($privateDetails['key'], $publicDetails['key'])
             && hash_equals(trim((string) $privateDetails['key']), trim((string) $publicDetails['key']));
+    }
+
+    private function distinctKeypairs(string $firstPrivatePath, string $secondPrivatePath): bool
+    {
+        if (! is_readable($firstPrivatePath) || ! is_readable($secondPrivatePath)) {
+            return false;
+        }
+
+        $firstContents = file_get_contents($firstPrivatePath);
+        $secondContents = file_get_contents($secondPrivatePath);
+        if ($firstContents === false || $secondContents === false) {
+            return false;
+        }
+
+        $first = openssl_pkey_get_private($firstContents);
+        $second = openssl_pkey_get_private($secondContents);
+        if ($first === false || $second === false) {
+            return false;
+        }
+
+        $firstDetails = openssl_pkey_get_details($first);
+        $secondDetails = openssl_pkey_get_details($second);
+
+        return is_array($firstDetails)
+            && is_array($secondDetails)
+            && is_string($firstDetails['key'] ?? null)
+            && is_string($secondDetails['key'] ?? null)
+            && ! hash_equals(trim($firstDetails['key']), trim($secondDetails['key']));
     }
 
     private function outsidePublicRoot(string $path, string $publicRoot): bool

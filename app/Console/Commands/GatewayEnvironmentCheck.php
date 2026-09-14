@@ -24,6 +24,8 @@ final class GatewayEnvironmentCheck extends Command
                 applicationUrl: (string) config('app.url'),
                 oauthPrivateKeyPath: (string) config('oauth.keys.private'),
                 oauthPublicKeyPath: (string) config('oauth.keys.public'),
+                bridgePrivateKeyPath: (string) config('bridge.keys.private'),
+                bridgePublicKeyPath: (string) config('bridge.keys.public'),
                 publicRoot: public_path(),
                 privateFilesystemServed: (bool) config('filesystems.disks.local.serve', false),
                 sessionEncrypted: (bool) config('session.encrypt'),
