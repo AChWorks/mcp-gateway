@@ -23,15 +23,17 @@ final class GatewayConnectionInformationTest extends TestCase
             'email' => 'admin@example.test',
             'password' => 'CorrectHorse!234',
         ]);
+        $issuer = rtrim((string) config('oauth.issuer'), '/');
 
         $this->actingAs($user)
             ->get('/admin/connection')
             ->assertOk()
             ->assertSee('Connection information')
-            ->assertSee(url('/mcp'))
-            ->assertSee(url('/.well-known/oauth-protected-resource/mcp'))
-            ->assertSee(url('/.well-known/oauth-authorization-server'))
-            ->assertSee('mcp')
+            ->assertSee((string) config('oauth.resource'))
+            ->assertSee($issuer.'/.well-known/oauth-protected-resource/mcp')
+            ->assertSee($issuer.'/.well-known/oauth-authorization-server')
+            ->assertSee('Required MCP scope')
+            ->assertSee('<code>mcp</code>', false)
             ->assertDontSee('OAUTH_PRIVATE_KEY_PATH')
             ->assertDontSee('storage/app/private/oauth/private.key')
             ->assertDontSee('APP_KEY')
@@ -52,6 +54,7 @@ final class GatewayConnectionInformationTest extends TestCase
             ->get('/admin')
             ->assertOk()
             ->assertSee(route('admin.connection'), false)
+            ->assertSee((string) config('oauth.resource'))
             ->assertSee('View connection information');
     }
 }

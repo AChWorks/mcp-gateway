@@ -15,7 +15,7 @@
         </div>
         <div>
             <dt>{{ __('Gateway MCP endpoint') }}</dt>
-            <dd><code>{{ url('/mcp') }}</code></dd>
+            <dd><code>{{ config('oauth.resource') }}</code></dd>
         </div>
     </dl>
 

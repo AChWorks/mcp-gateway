@@ -11,15 +11,15 @@
     <dl class="summary-list">
         <div>
             <dt>{{ __('Gateway MCP endpoint') }}</dt>
-            <dd><code>{{ url('/mcp') }}</code></dd>
+            <dd><code>{{ config('oauth.resource') }}</code></dd>
         </div>
         <div>
             <dt>{{ __('Protected resource metadata') }}</dt>
-            <dd><code>{{ url('/.well-known/oauth-protected-resource/mcp') }}</code></dd>
+            <dd><code>{{ rtrim((string) config('oauth.issuer'), '/').'/.well-known/oauth-protected-resource/mcp' }}</code></dd>
         </div>
         <div>
             <dt>{{ __('Authorization server metadata') }}</dt>
-            <dd><code>{{ url('/.well-known/oauth-authorization-server') }}</code></dd>
+            <dd><code>{{ rtrim((string) config('oauth.issuer'), '/').'/.well-known/oauth-authorization-server' }}</code></dd>
         </div>
         <div>
             <dt>{{ __('Required MCP scope') }}</dt>
