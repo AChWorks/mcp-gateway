@@ -52,6 +52,24 @@ composer dev
 
 The health endpoint is `/up`.
 
+## Administrator bootstrap
+
+After migrations, create an administrator from the application host:
+
+```bash
+php artisan gateway:admin:create
+```
+
+Name and email may be supplied as non-secret options when useful:
+
+```bash
+php artisan gateway:admin:create --name="Gateway Admin" --email="admin@example.test"
+```
+
+The password is always requested interactively through a hidden prompt and is never accepted as a command-line option. It must contain at least 12 characters with mixed case, a number, and a symbol. The command normalizes the email address and relies on the `User` model's framework hashing cast; there is no committed/default administrator password, public registration route, or password-reset flow in V0.1.
+
+Once the application is running, administrator sign-in is available at `/admin/login`. The admin routes use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
+
 ## Deterministic validation
 
 The normal repository checks are:

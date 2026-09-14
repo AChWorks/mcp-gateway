@@ -6,6 +6,7 @@ use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Str;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -24,6 +25,16 @@ class AppServiceProvider extends ServiceProvider
             $actor = $request->user()?->getAuthIdentifier() ?? $request->ip();
 
             return Limit::perMinute(30)->by('oauth-browser:'.$actor);
+        });
+
+        RateLimiter::for('admin-login', static function (Request $request) {
+            $email = Str::lower(trim((string) $request->input('email', '')));
+            $identity = hash('sha256', (string) $request->ip()."\0".$email);
+
+            return [
+                Limit::perMinute(20)->by('admin-login-ip:'.$request->ip()),
+                Limit::perMinute(5)->by('admin-login-identity:'.$identity),
+            ];
         });
 
         RateLimiter::for('mcp-edge', static function (Request $request): Limit {
