@@ -29,10 +29,11 @@ class AppServiceProvider extends ServiceProvider
 
         RateLimiter::for('admin-login', static function (Request $request) {
             $email = Str::lower(trim((string) $request->input('email', '')));
+            $identity = hash('sha256', (string) $request->ip()."\0".$email);
 
             return [
                 Limit::perMinute(20)->by('admin-login-ip:'.$request->ip()),
-                Limit::perMinute(5)->by('admin-login-identity:'.$request->ip().':'.$email),
+                Limit::perMinute(5)->by('admin-login-identity:'.$identity),
             ];
         });
 
