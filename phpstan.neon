@@ -1,0 +1,11 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 6
+    paths:
+        - app
+        - routes
+    bootstrapFiles:
+        - vendor/larastan/larastan/bootstrap.php
+    tmpDir: storage/framework/cache/phpstan
