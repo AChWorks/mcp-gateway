@@ -24,11 +24,11 @@ Before placing application code on the server, prepare:
 
 1. An aaPanel site for the intended Gateway hostname or subdomain.
 2. OpenLiteSpeed as the site's web server.
-3. PHP 8.4 for both the site and deployment CLI. Verify the CLI used for Artisan/Composer is the intended PHP 8.4 runtime:
+3. PHP 8.4 for both the site and deployment CLI. Verify the CLI used for Artisan/Composer is the intended PHP 8.4 runtime and that the explicitly required application extensions are loaded:
 
    ```bash
    php -v
-   php -m | grep -E 'curl|mbstring|openssl|PDO|pdo_mysql|sodium'
+   php -r 'foreach (["curl", "mbstring", "openssl", "pdo_mysql", "sodium"] as $extension) { if (! extension_loaded($extension)) { fwrite(STDERR, "Missing PHP extension: {$extension}\n"); exit(1); } } echo "Required PHP extensions: OK\n";'
    composer --version
    ```
 
@@ -94,12 +94,13 @@ git clone https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 git checkout <reviewed-commit-or-release-tag>
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+composer check-platform-reqs --no-dev
 cp .env.example .env
 ```
 
-Do not run `composer update` on the server. Production/staging installation must consume the committed lockfile through `composer install`.
+`composer check-platform-reqs --no-dev` must succeed for the exact PHP CLI that will run Artisan. Do not run `composer update` on the server. Production/staging installation must consume the committed lockfile through `composer install`.
 
-This repository currently contains Closure-backed web routes, so this baseline does not assume route caching or prescribe `php artisan optimize` as a deployment requirement. Add framework caches only after they are proven compatible with the exact release.
+This baseline has not validated route/config optimization caches against every current route and deployment condition, so it does not prescribe `php artisan optimize` as a deployment requirement. Add framework caches only after they are proven compatible with the exact release.
 
 ## 5. Configure production-shaped `.env`
 
@@ -272,6 +273,8 @@ For an authorized staging/release upgrade:
 
    ```bash
    composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+   composer check-platform-reqs --no-dev
+   php artisan optimize:clear
    ```
 
 5. Apply migrations:
