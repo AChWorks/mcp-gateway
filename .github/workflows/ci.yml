@@ -76,6 +76,11 @@ jobs:
           DB_PASSWORD: test-password
         run: php artisan migrate:fresh --force
 
+      - name: Generate ephemeral OAuth signing keys
+        env:
+          APP_ENV: testing
+        run: php artisan gateway:oauth-keygen --env=testing --force
+
       - name: Validate runtime requirements
         env:
           APP_ENV: testing

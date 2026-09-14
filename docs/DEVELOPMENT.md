@@ -79,9 +79,11 @@ Do not enable this fixture in production. The integration test starts an isolate
 
 The production MCP endpoint is implemented by the ChatGPT-facing workstream, not by promoting this fixture.
 
-Handshake-era Streamable HTTP clients use an MCP session ID across multiple HTTP requests. In a normal PHP request lifecycle, the SDK's in-memory session store is not durable across workers/requests. The bootstrap therefore uses the SDK `FileSessionStore` under `storage/framework/mcp-sessions` with a bounded TTL (`MCP_SESSION_TTL_SECONDS`, default `3600`). That directory is private application state and is ignored by Git. A future multi-host deployment would need a shared durable store before horizontal scaling, but V1 is a single-host deployment.
+The production `/mcp` path is modern-first on MCP `2026-07-28`. Modern requests are stateless, carry request metadata/capabilities in `_meta`, and use the required MCP routing headers (`Mcp-Method` and `Mcp-Name` where applicable); they do not rely on `initialize` or `Mcp-Session-Id`. Integration tests exercise modern `tools/list` and `tools/call` and verify that no session ID is returned.
 
-For the production endpoint, preserve the SDK's DNS-rebinding/Host protection and configure the exact canonical Gateway hostname(s). Localhost-oriented defaults are appropriate for the bootstrap fixture but are not a reason to disable host validation in #3.
+The same endpoint intentionally retains SDK compatibility with 2025-era handshake clients. Only that legacy path needs cross-request session continuity. Because the SDK in-memory store does not survive ordinary PHP worker/request boundaries, legacy compatibility uses `FileSessionStore` under `storage/framework/mcp-sessions` with bounded TTL (`MCP_SESSION_TTL_SECONDS`, default `3600`). That directory is private application state and ignored by Git. A future multi-host deployment would need shared durable storage only if legacy session compatibility is retained across hosts.
+
+For the production endpoint, preserve the SDK's DNS-rebinding/Host protection and configure the exact canonical Gateway hostname. Localhost-oriented defaults are appropriate for the bootstrap fixture but are not a reason to disable host validation.
 
 ## Locked protocol dependencies
 
@@ -89,7 +91,8 @@ The bootstrap deliberately isolates protocol packages behind `app/Infrastructure
 
 - `mcp/sdk` `0.8.1` — official PHP MCP SDK; owns MCP server/client framing and Streamable HTTP behavior.
 - `symfony/psr-http-message-bridge` `8.1.x` — converts Laravel/Symfony HTTP Foundation requests and responses at the SDK boundary.
-- `league/oauth2-server` `9.4.1` — selected for authorization-code, PKCE, access/refresh-token issuance, rotation primitives, and token/code revocation state.
+- `league/oauth2-server` `9.4.1` — owns authorization-code, PKCE, access/refresh-token issuance, rotation primitives, signed access tokens, and token/code revocation semantics.
+- `firebase/php-jwt` `7.1.x` — owns JWK parsing and RS256 client-assertion signature verification; Gateway policy still validates exact client/claims/audience/lifetime/replay.
 
 Composer's lockfile is authoritative for transitive versions. Dependency upgrades require release-note review plus the focused MCP/OAuth compatibility tests; do not widen these constraints casually while the MCP SDK remains pre-1.0.
 
@@ -105,7 +108,56 @@ Therefore the Gateway authorization server uses this split:
 4. Gateway persistence adapters implement League repository interfaces and durable revocation state;
 5. token issuance, authorization-code cryptography, and refresh-token generation are not reimplemented by application controllers.
 
-The complete ChatGPT-facing OAuth implementation is a later workstream. This bootstrap decision prevents that workstream from incorrectly treating League as a native `private_key_jwt` implementation or weakening the client-authentication contract to a shared secret.
+The ChatGPT-facing implementation preserves that split: only adapted authorization-code/refresh grants are exposed, raw token/code/assertion values are not stored as application records, and revocation invalidates the durable authorization that all related token records reference.
+
+## ChatGPT-facing OAuth/MCP development
+
+Generate a local/test signing pair outside the public web root before running runtime readiness checks:
+
+```bash
+php artisan gateway:oauth-keygen --env=testing --force
+php artisan gateway:check --env=testing
+```
+
+Production must use its own generated keypair and must not reuse test keys. `gateway:check` verifies a matched readable keypair, restricted key-file permissions, location outside `public/`, private filesystem non-serving, encrypted administrator sessions, HTTPS `APP_URL` and HTTPS-only session cookies when `APP_ENV=production`.
+
+The stable public protocol paths are:
+
+```text
+/.well-known/oauth-protected-resource/mcp
+/.well-known/oauth-authorization-server
+/oauth/authorize
+/oauth/token
+/oauth/revoke
+/mcp
+```
+
+`/oauth/authorize` assumes an already authenticated Gateway operator session and performs explicit consent. The login/logout UI remains owned by the administration-panel workstream; do not add a second authentication stack to the OAuth controller. Authorization responses include RFC 9207 `iss` and the authorization-server metadata advertises that behavior.
+
+The required OAuth resource scope is `mcp`. `offline_access` is optional and is the only condition under which the Gateway issues a refresh token. A refresh request may narrow from `mcp offline_access` to `mcp`; the replacement access token remains valid but no new refresh token is issued, so refresh authority cannot survive a deliberate scope reduction.
+
+The V0.1 MCP tool registry is stable even before site routing is implemented:
+
+```text
+sites-list
+site-context
+site-abilities-read
+site-ability-execute
+```
+
+The site-routing workstream replaces the application handlers behind those names; it does not add one MCP tool or endpoint per WordPress site.
+
+To verify the currently configured public ChatGPT CIMD/JWKS contract without printing key material:
+
+```bash
+php artisan gateway:oauth-client-check --refresh
+```
+
+As verified on 2026-09-14, the current ChatGPT client metadata advertises the Client ID `https://chatgpt.com/oauth/client.json`, one connector redirect URI, `private_key_jwt`, RS256 and same-origin JWKS. The command intentionally reports only safe compatibility metadata and usable-key counts, never JWK values or assertions.
+
+OAuth integration tests use generated controlled RSA keys and a mocked ChatGPT CIMD/JWKS fixture. They cover resource/scope/redirect binding, S256 PKCE, wrong client/signing key/algorithm/key ID, assertion audience/expiry/`jti` replay rejection, authorization-code expiry/single use, refresh rotation/reuse/scope narrowing, RFC 9207 issuer stamping, modern MCP `2026-07-28` stateless routing, legacy 2025-era compatibility, MCP bearer validation/tool discovery/calls and revocation without requiring owner credentials.
+
+The Laravel `local` filesystem points at `storage/app/private` and **must keep `serve=false`**. Enabling Laravel's local-disk serving would expose private application storage through generated routes and is prohibited.
 
 ## OpenLiteSpeed note
 

@@ -1,0 +1,143 @@
+<?php
+
+namespace App\Http\Controllers\OAuth;
+
+use App\Infrastructure\OAuth\League\Entities\UserEntity;
+use App\Infrastructure\OAuth\OAuthAuthorizationStore;
+use App\Infrastructure\OAuth\OAuthHttpBridge;
+use App\Infrastructure\OAuth\OAuthScopePolicy;
+use App\Infrastructure\OAuth\OAuthServerManager;
+use Illuminate\Http\Request;
+use League\OAuth2\Server\Exception\OAuthServerException;
+use Symfony\Component\HttpFoundation\Response;
+
+final readonly class AuthorizationController
+{
+    public function __construct(
+        private OAuthServerManager $servers,
+        private OAuthAuthorizationStore $authorizations,
+        private OAuthHttpBridge $bridge,
+        private OAuthScopePolicy $scopePolicy,
+    ) {}
+
+    public function show(Request $request): Response
+    {
+        if ($request->user() === null) {
+            return $this->browserResponse(response()->view('oauth.authentication-required', status: 401));
+        }
+
+        try {
+            $parameters = $this->authorizationParameters($request->query());
+            $this->assertAuthorizationBoundary($parameters);
+            $psrRequest = $this->bridge->request($request)->withQueryParams($parameters);
+            $authorization = $this->servers->authorizationServer()->validateAuthorizationRequest($psrRequest);
+
+            return $this->browserResponse(response()->view('oauth.consent', [
+                'parameters' => $parameters,
+                'clientName' => $authorization->getClient()->getName(),
+                'clientId' => $authorization->getClient()->getIdentifier(),
+                'redirectUri' => $authorization->getRedirectUri(),
+                'scope' => implode(' ', array_map(
+                    static fn ($scope): string => $scope->getIdentifier(),
+                    $authorization->getScopes(),
+                )),
+            ]));
+        } catch (OAuthServerException $exception) {
+            return $this->bridge->error($exception);
+        }
+    }
+
+    public function complete(Request $request): Response
+    {
+        $user = $request->user();
+        if ($user === null) {
+            return $this->browserResponse(response()->view('oauth.authentication-required', status: 401));
+        }
+
+        try {
+            $parameters = $this->authorizationParameters($request->all());
+            $this->assertAuthorizationBoundary($parameters);
+            $psrRequest = $this->bridge->request($request)->withQueryParams($parameters);
+            $authorization = $this->servers->authorizationServer()->validateAuthorizationRequest($psrRequest);
+            $authorization->setUser(new UserEntity((string) $user->getAuthIdentifier()));
+
+            $approved = hash_equals('approve', (string) $request->input('decision'));
+            $authorization->setAuthorizationApproved($approved);
+
+            if ($approved) {
+                $scopes = array_map(
+                    static fn ($scope): string => $scope->getIdentifier(),
+                    $authorization->getScopes(),
+                );
+                $this->authorizations->approve(
+                    (int) $user->getAuthIdentifier(),
+                    $authorization->getClient()->getIdentifier(),
+                    (string) config('oauth.resource'),
+                    $scopes,
+                );
+            }
+
+            $psrResponse = $this->servers->authorizationServer()->completeAuthorizationRequest(
+                $authorization,
+                $this->bridge->response(),
+            )->withHeader('Cache-Control', 'no-store');
+
+            return $this->bridge->laravel($this->bridge->authorizationResponse($psrResponse));
+        } catch (OAuthServerException $exception) {
+            return $this->bridge->error($exception);
+        }
+    }
+
+    private function browserResponse(Response $response): Response
+    {
+        $response->headers->set('Cache-Control', 'no-store');
+        $response->headers->set('Pragma', 'no-cache');
+        $response->headers->set('Referrer-Policy', 'no-referrer');
+        $response->headers->set('X-Frame-Options', 'DENY');
+        $response->headers->set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+
+        return $response;
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, string>
+     */
+    private function authorizationParameters(array $input): array
+    {
+        $limits = [
+            'response_type' => 32,
+            'client_id' => 1024,
+            'redirect_uri' => 2048,
+            'scope' => 256,
+            'state' => 4096,
+            'code_challenge' => 128,
+            'code_challenge_method' => 32,
+            'resource' => 2048,
+        ];
+
+        $parameters = [];
+        foreach ($limits as $key => $maxLength) {
+            if (! array_key_exists($key, $input)) {
+                continue;
+            }
+            $value = $input[$key];
+            if (! is_string($value) || strlen($value) > $maxLength) {
+                throw OAuthServerException::invalidRequest($key);
+            }
+            $parameters[$key] = $value;
+        }
+
+        return $parameters;
+    }
+
+    /** @param array<string, string> $parameters */
+    private function assertAuthorizationBoundary(array $parameters): void
+    {
+        if (($parameters['resource'] ?? null) !== (string) config('oauth.resource')) {
+            throw OAuthServerException::invalidRequest('resource', 'The MCP resource must match the canonical Gateway MCP URI.');
+        }
+
+        $this->scopePolicy->assertAllowed($parameters['scope'] ?? null);
+    }
+}
