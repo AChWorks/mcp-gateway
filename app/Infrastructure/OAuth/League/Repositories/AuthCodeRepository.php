@@ -78,6 +78,7 @@ final readonly class AuthCodeRepository implements AuthCodeRepositoryInterface
                 'codes.revoked_at',
                 'authorizations.revoked_at as authorization_revoked_at',
             ])
+            ->lockForUpdate()
             ->first();
 
         return $row === null

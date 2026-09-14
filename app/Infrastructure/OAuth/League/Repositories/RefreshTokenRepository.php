@@ -67,6 +67,7 @@ final class RefreshTokenRepository implements RefreshTokenRepositoryInterface
                 'tokens.revoked_at',
                 'authorizations.revoked_at as authorization_revoked_at',
             ])
+            ->lockForUpdate()
             ->first();
 
         return $row === null
