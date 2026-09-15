@@ -2,10 +2,10 @@
 
 namespace App\Infrastructure\Activity;
 
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Throwable;
 
 final class ActivityRecorder
@@ -25,20 +25,30 @@ final class ActivityRecorder
         [$actorType, $actorId, $clientHash] = $this->actor();
 
         try {
-            DB::table('activity_events')->insert([
-                'id' => (string) Str::ulid(),
-                'correlation_id' => $correlationId,
-                'actor_type' => $actorType,
-                'actor_id' => $actorId,
-                'client_id_hash' => $clientHash,
-                'site_id' => $siteId,
-                'operation' => $operation,
-                'outcome' => $outcome,
-                'error_code' => $errorCode,
-                'created_at' => now(),
-            ]);
+            DB::transaction(function () use ($correlationId, $operation, $outcome, $siteId, $errorCode, $actorType, $actorId, $clientHash): void {
+                $lock = DB::table('activity_retention_state')
+                    ->where('id', 1)
+                    ->lockForUpdate()
+                    ->first();
+                if ($lock === null) {
+                    throw new RuntimeException('Activity retention state is unavailable.');
+                }
 
-            $this->prune();
+                DB::table('activity_events')->insert([
+                    'id' => (string) Str::ulid(),
+                    'correlation_id' => $correlationId,
+                    'actor_type' => $actorType,
+                    'actor_id' => $actorId,
+                    'client_id_hash' => $clientHash,
+                    'site_id' => $siteId,
+                    'operation' => $operation,
+                    'outcome' => $outcome,
+                    'error_code' => $errorCode,
+                    'created_at' => now(),
+                ]);
+
+                $this->prune();
+            });
         } catch (Throwable) {
             // Activity persistence must never change the authoritative outcome of a
             // routed operation, especially after a remote mutation may have executed.
@@ -60,10 +70,6 @@ final class ActivityRecorder
         }
 
         $request = app('request');
-        if (! $request instanceof Request) {
-            return ['system', null, null];
-        }
-
         $clientId = $request->attributes->get('oauth_client_id');
         $clientHash = is_string($clientId) && $clientId !== ''
             ? hash('sha256', $clientId)

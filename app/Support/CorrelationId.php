@@ -2,7 +2,6 @@
 
 namespace App\Support;
 
-use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 final class CorrelationId
@@ -15,11 +14,9 @@ final class CorrelationId
     {
         if (app()->bound('request')) {
             $request = app('request');
-            if ($request instanceof Request) {
-                $value = $request->attributes->get(self::ATTRIBUTE);
-                if (is_string($value) && Str::isUuid($value)) {
-                    return $value;
-                }
+            $value = $request->attributes->get(self::ATTRIBUTE);
+            if (is_string($value) && Str::isUuid($value)) {
+                return $value;
             }
         }
 

@@ -10,7 +10,7 @@ use App\Domain\Sites\SiteCredential;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
-use Throwable;
+use App\Infrastructure\OAuth\SiteCredentialVaultException;
 
 final readonly class WpAiBridgeMcpClient
 {
@@ -93,7 +93,7 @@ final readonly class WpAiBridgeMcpClient
                 $accessToken = $this->connections->accessToken($lockedSite);
             } catch (SiteConnectionException $exception) {
                 throw $exception;
-            } catch (Throwable $exception) {
+            } catch (SiteCredentialVaultException $exception) {
                 throw new WpAiBridgeMcpException(
                     'credential_unavailable',
                     'The selected site credential could not be opened safely.',
