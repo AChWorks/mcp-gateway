@@ -15,7 +15,9 @@ use Throwable;
 final readonly class WpAiBridgeMcpClient
 {
     private const PROTOCOL_VERSION = '2025-11-25';
+
     private const EXECUTE_TOOL = 'mcp-adapter-execute-ability';
+
     private const CATALOG_ABILITY = 'wp-native-builder/abilities-read';
 
     public function __construct(
