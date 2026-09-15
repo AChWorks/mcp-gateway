@@ -1,0 +1,74 @@
+name: WP AI Bridge Contract
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/Application/Sites/**'
+      - 'app/Domain/Sites/**'
+      - 'app/Infrastructure/Connectors/WpAiBridge/**'
+      - 'app/Infrastructure/Http/**'
+      - 'app/Infrastructure/OAuth/**'
+      - 'config/bridge.php'
+      - 'database/migrations/**'
+      - 'routes/**'
+      - 'tests/Feature/Sites/**'
+      - 'tests/Contract/**'
+      - 'bin/check-wp-ai-bridge-contract.sh'
+      - 'composer.json'
+      - 'composer.lock'
+      - '.github/workflows/wp-ai-bridge-contract.yml'
+  pull_request:
+    paths:
+      - 'app/Application/Sites/**'
+      - 'app/Domain/Sites/**'
+      - 'app/Infrastructure/Connectors/WpAiBridge/**'
+      - 'app/Infrastructure/Http/**'
+      - 'app/Infrastructure/OAuth/**'
+      - 'config/bridge.php'
+      - 'database/migrations/**'
+      - 'routes/**'
+      - 'tests/Feature/Sites/**'
+      - 'tests/Contract/**'
+      - 'bin/check-wp-ai-bridge-contract.sh'
+      - 'composer.json'
+      - 'composer.lock'
+      - '.github/workflows/wp-ai-bridge-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-contract-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-bridge-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out MCP Gateway
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check out exact WP AI Bridge contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ach1992/wp-ai-bridge
+          ref: 37d1b39b8f53f4667d67c4effc00e01f7aa193a8
+          path: .contract/wp-ai-bridge
+          persist-credentials: false
+
+      - name: Set up PHP for exact Bridge package build
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: zip
+          coverage: none
+
+      - name: Execute exact WP AI Bridge OAuth contract
+        run: >-
+          bash bin/check-wp-ai-bridge-contract.sh
+          .contract/wp-ai-bridge
+          37d1b39b8f53f4667d67c4effc00e01f7aa193a8
