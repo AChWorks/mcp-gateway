@@ -339,8 +339,8 @@ final class MultiSiteRoutingTest extends TestCase
 
         $payload = $request->data();
         if (($payload['method'] ?? null) === 'initialize') {
-            self::assertSame('Bearer '.$siteId.'-access', $request->header('Authorization'));
-            self::assertStringContainsString('application/json', (string) $request->header('Accept'));
+            self::assertSame('Bearer '.$siteId.'-access', $this->requestHeader($request, 'Authorization'));
+            self::assertStringContainsString('application/json', $this->requestHeader($request, 'Accept'));
 
             return Http::response([
                 'jsonrpc' => '2.0',
@@ -361,8 +361,8 @@ final class MultiSiteRoutingTest extends TestCase
             ], 200);
         }
 
-        self::assertSame('session-'.$siteId, $request->header('Mcp-Session-Id'));
-        self::assertSame('Bearer '.$siteId.'-access', $request->header('Authorization'));
+        self::assertSame('session-'.$siteId, $this->requestHeader($request, 'Mcp-Session-Id'));
+        self::assertSame('Bearer '.$siteId.'-access', $this->requestHeader($request, 'Authorization'));
         self::assertSame('mcp-adapter-execute-ability', $payload['params']['name'] ?? null);
 
         $arguments = $payload['params']['arguments'] ?? [];
@@ -370,7 +370,7 @@ final class MultiSiteRoutingTest extends TestCase
         $this->toolCalls[] = [
             'host' => $host,
             'ability' => $ability,
-            'authorization' => (string) $request->header('Authorization'),
+            'authorization' => $this->requestHeader($request, 'Authorization'),
         ];
 
         if ($ability === 'demo/denied') {
@@ -418,6 +418,11 @@ final class MultiSiteRoutingTest extends TestCase
         }
 
         return $this->toolSuccess(['site' => $siteId, 'kind' => 'read']);
+    }
+
+    private function requestHeader(Request $request, string $name): string
+    {
+        return (string) ($request->header($name)[0] ?? '');
     }
 
     private function toolSuccess(mixed $data)
