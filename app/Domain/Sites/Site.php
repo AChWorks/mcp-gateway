@@ -39,6 +39,12 @@ final class Site extends Model
         ];
     }
 
+    /** @return HasOne<SiteTargetReservation, $this> */
+    public function targetReservation(): HasOne
+    {
+        return $this->hasOne(SiteTargetReservation::class, 'site_record_id');
+    }
+
     /** @return HasOne<SiteCredential, $this> */
     public function credential(): HasOne
     {

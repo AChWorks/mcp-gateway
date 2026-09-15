@@ -9,6 +9,7 @@ use App\Domain\Sites\Site;
 use App\Infrastructure\Http\DnsResolver;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
@@ -135,11 +136,44 @@ try {
         }
 
         if ($path === '/wp-json/wp-ai-bridge/v1/oauth/revoke') {
+            $token = (string) ($request->data()['token'] ?? '');
             $revokeLog = is_string($payload['revoke_log'] ?? null) ? $payload['revoke_log'] : null;
+            $revokeNumber = 0;
             if ($revokeLog !== null) {
-                $token = (string) ($request->data()['token'] ?? '');
-                file_put_contents($revokeLog, $token."\n", FILE_APPEND | LOCK_EX);
+                $handle = fopen($revokeLog, 'c+');
+                if ($handle === false || ! flock($handle, LOCK_EX)) {
+                    throw new RuntimeException('Could not lock revocation concurrency log.');
+                }
+                $contents = stream_get_contents($handle);
+                $revokeNumber = $contents === '' ? 1 : count(array_filter(explode("\n", trim((string) $contents)))) + 1;
+                fseek($handle, 0, SEEK_END);
+                fwrite($handle, $token."\n");
+                fflush($handle);
+                flock($handle, LOCK_UN);
+                fclose($handle);
             }
+
+            if (($payload['signal_revoke_started'] ?? false) === true) {
+                $signal = is_string($payload['revoke_started_path'] ?? null) ? $payload['revoke_started_path'] : null;
+                if ($signal !== null && ! is_file($signal) && ! touch($signal)) {
+                    throw new RuntimeException('Could not signal remote revocation start.');
+                }
+            }
+
+            $killOnRevoke = max(0, (int) ($payload['kill_database_on_revoke_number'] ?? 0));
+            if ($killOnRevoke > 0 && $revokeNumber === $killOnRevoke) {
+                $row = DB::selectOne('SELECT CONNECTION_ID() AS connection_id');
+                $connectionId = is_object($row) ? (int) ($row->connection_id ?? 0) : 0;
+                if ($connectionId <= 0) {
+                    throw new RuntimeException('Could not resolve the active MySQL connection id.');
+                }
+                killMysqlConnection($connectionId);
+                $killLog = is_string($payload['kill_log'] ?? null) ? $payload['kill_log'] : null;
+                if ($killLog !== null) {
+                    file_put_contents($killLog, $connectionId."\n", FILE_APPEND | LOCK_EX);
+                }
+            }
+
             $delay = max(0, (int) ($payload['revoke_delay_us'] ?? 0));
             if ($delay > 0) {
                 usleep($delay);
@@ -161,6 +195,20 @@ try {
             throw new RuntimeException('Concurrency worker timed out waiting for the start barrier.');
         }
         usleep(1000);
+    }
+
+    if (($payload['wait_for_revoke_started'] ?? false) === true) {
+        $signal = is_string($payload['revoke_started_path'] ?? null) ? $payload['revoke_started_path'] : null;
+        if ($signal === null) {
+            throw new RuntimeException('Missing revocation-start signal path.');
+        }
+        $signalDeadline = microtime(true) + 10;
+        while (! is_file($signal)) {
+            if (microtime(true) >= $signalDeadline) {
+                throw new RuntimeException('Timed out waiting for remote revocation to start.');
+            }
+            usleep(1000);
+        }
     }
 
     $action = (string) ($payload['action'] ?? '');
@@ -229,6 +277,17 @@ try {
             'site_id' => $site?->site_id,
             'reason' => 'target_conflict',
         ];
+    } catch (Throwable $exception) {
+        if (($payload['capture_throwable'] ?? false) !== true) {
+            throw $exception;
+        }
+        $result = [
+            'ok' => false,
+            'action' => $action,
+            'site_id' => $site?->site_id,
+            'reason' => 'unexpected_exception',
+            'exception_class' => $exception::class,
+        ];
     }
 
     echo json_encode($result, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
@@ -241,4 +300,28 @@ try {
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception::class.': '.$exception->getMessage()."\n");
     exit(1);
+}
+
+function killMysqlConnection(int $connectionId): void
+{
+    $connection = config('database.connections.mysql');
+    if (! is_array($connection)) {
+        throw new RuntimeException('MySQL test connection is unavailable.');
+    }
+
+    $pdo = new PDO(
+        sprintf(
+            'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
+            (string) ($connection['host'] ?? '127.0.0.1'),
+            (string) ($connection['port'] ?? '3306'),
+            (string) ($connection['database'] ?? ''),
+        ),
+        (string) ($connection['username'] ?? ''),
+        (string) ($connection['password'] ?? ''),
+        [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ],
+    );
+    $pdo->exec('KILL CONNECTION '.(int) $connectionId);
 }

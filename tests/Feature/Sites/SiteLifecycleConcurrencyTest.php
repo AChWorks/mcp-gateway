@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Sites;
 
+use App\Application\Sites\SiteConnectionException;
+use App\Application\Sites\SiteConnectionService;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Domain\Sites\SiteCredential;
@@ -119,7 +121,7 @@ final class SiteLifecycleConcurrencyTest extends TestCase
         $failures = array_values(array_filter($responses, static fn (array $response): bool => ! $response['ok']));
         self::assertCount(1, $successes);
         self::assertCount(1, $failures);
-        self::assertSame('target_conflict', $failures[0]['reason'] ?? null);
+        self::assertContains($failures[0]['reason'] ?? null, ['target_busy', 'target_conflict']);
 
         $winnerId = (string) ($successes[0]['site_id'] ?? '');
         self::assertContains($winnerId, ['alpha', 'beta']);
@@ -168,7 +170,7 @@ final class SiteLifecycleConcurrencyTest extends TestCase
         $update = $this->responseFor($responses, 'update');
         $create = $this->responseFor($responses, 'create');
         self::assertNotSame($update['ok'], $create['ok']);
-        self::assertSame('target_conflict', ($update['ok'] ? $create : $update)['reason'] ?? null);
+        self::assertContains(($update['ok'] ? $create : $update)['reason'] ?? null, ['target_busy', 'target_conflict']);
         self::assertSame(1, Site::query()->where('base_url_hash', hash('sha256', $target))->count());
 
         $alpha->refresh();
@@ -187,6 +189,72 @@ final class SiteLifecycleConcurrencyTest extends TestCase
         self::assertTrue($alpha->credential()->exists());
         self::assertNotNull(Site::query()->where('site_id', 'gamma')->where('base_url', $target)->first());
         self::assertSame([], $logs['revoke']);
+    }
+
+    public function test_durable_target_reservation_survives_database_session_loss_during_remote_revocation(): void
+    {
+        $alpha = $this->connectedSiteWithCredential('alpha', 'https://alpha.example.test');
+        $target = 'https://shared.example.test';
+
+        [$responses, $logs] = $this->runConcurrentActions($alpha, [
+            [
+                'action' => 'update',
+                'site_record_id' => (string) $alpha->getKey(),
+                'display_name' => 'Alpha',
+                'target_base_url' => $target,
+                'signal_revoke_started' => true,
+                'kill_database_on_revoke_number' => 2,
+                'revoke_delay_us' => 250_000,
+                'capture_throwable' => true,
+            ],
+            [
+                'action' => 'create',
+                'new_site_id' => 'gamma',
+                'display_name' => 'Gamma',
+                'target_base_url' => $target,
+                'wait_for_revoke_started' => true,
+            ],
+        ], false);
+
+        $update = $this->responseFor($responses, 'update');
+        $create = $this->responseFor($responses, 'create');
+        self::assertFalse($update['ok']);
+        self::assertSame('unexpected_exception', $update['reason'] ?? null);
+        self::assertFalse($create['ok']);
+        self::assertSame('target_busy', $create['reason'] ?? null);
+        self::assertCount(1, $logs['killed']);
+        self::assertEqualsCanonicalizing(['alpha-refresh', 'alpha-access'], $logs['revoke']);
+
+        $alpha->refresh();
+        self::assertSame('https://alpha.example.test', $alpha->base_url);
+        self::assertSame(SiteConnectionState::Reassigning, $alpha->connection_state);
+        self::assertTrue($alpha->credential()->exists());
+        self::assertTrue($alpha->targetReservation()->where('target_hash', hash('sha256', $target))->exists());
+        self::assertNull(Site::query()->where('site_id', 'gamma')->first());
+
+        try {
+            app(SiteConnectionService::class)->accessToken($alpha);
+            self::fail('A credential remained usable while durable target reassignment was unresolved.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('target_reassignment_pending', $exception->reason);
+        }
+
+        [$resumeResponses, $resumeLogs] = $this->runConcurrentActions($alpha, [[
+            'action' => 'update',
+            'site_record_id' => (string) $alpha->getKey(),
+            'display_name' => 'Alpha',
+            'target_base_url' => $target,
+        ]], false);
+        $resume = $this->responseFor($resumeResponses, 'update');
+        self::assertTrue($resume['ok']);
+        self::assertEqualsCanonicalizing(['alpha-refresh', 'alpha-access'], $resumeLogs['revoke']);
+
+        $alpha->refresh();
+        self::assertSame($target, $alpha->base_url);
+        self::assertSame(SiteConnectionState::Disconnected, $alpha->connection_state);
+        self::assertFalse($alpha->credential()->exists());
+        self::assertFalse($alpha->targetReservation()->exists());
+        self::assertSame(1, Site::query()->where('base_url_hash', hash('sha256', $target))->count());
     }
 
     public function test_concurrent_begin_and_callback_have_one_serial_authoritative_outcome(): void
@@ -347,7 +415,7 @@ final class SiteLifecycleConcurrencyTest extends TestCase
 
     /**
      * @param  list<array<string, mixed>>  $actions
-     * @return array{0:list<array<string, mixed>>,1:array{refresh:list<string>,issue:list<string>,revoke:list<string>}}
+     * @return array{0:list<array<string, mixed>>,1:array{refresh:list<string>,issue:list<string>,revoke:list<string>,killed:list<string>}}
      */
     private function runConcurrentActions(Site $site, array $actions, bool $blockSiteRow = true): array
     {
@@ -361,7 +429,9 @@ final class SiteLifecycleConcurrencyTest extends TestCase
             'refresh' => $directory.'/refresh.log',
             'issue' => $directory.'/issued.log',
             'revoke' => $directory.'/revoked.log',
+            'killed' => $directory.'/killed.log',
         ];
+        $revokeStartedPath = $directory.'/revoke-started';
         $payloadPaths = [];
         $readyPaths = [];
         $processes = [];
@@ -379,6 +449,8 @@ final class SiteLifecycleConcurrencyTest extends TestCase
                     'refresh_log' => $logs['refresh'],
                     'issue_log' => $logs['issue'],
                     'revoke_log' => $logs['revoke'],
+                    'kill_log' => $logs['killed'],
+                    'revoke_started_path' => $revokeStartedPath,
                 ];
                 $this->writePrivateFixture($payloadPath, json_encode($payload, JSON_THROW_ON_ERROR));
 
@@ -434,6 +506,7 @@ final class SiteLifecycleConcurrencyTest extends TestCase
                 'refresh' => $this->readLines($logs['refresh']),
                 'issue' => $this->readLines($logs['issue']),
                 'revoke' => $this->readLines($logs['revoke']),
+                'killed' => $this->readLines($logs['killed']),
             ]];
         } finally {
             if ($blocker instanceof PDO && $blocker->inTransaction()) {
@@ -444,7 +517,7 @@ final class SiteLifecycleConcurrencyTest extends TestCase
                     proc_terminate($worker['process']);
                 }
             }
-            foreach ([$barrier, ...$payloadPaths, ...$readyPaths, ...array_values($logs)] as $path) {
+            foreach ([$barrier, $revokeStartedPath, ...$payloadPaths, ...$readyPaths, ...array_values($logs)] as $path) {
                 if (is_file($path)) {
                     unlink($path);
                 }
@@ -502,7 +575,7 @@ final class SiteLifecycleConcurrencyTest extends TestCase
         self::fail('Missing concurrency response for action '.$action.'.');
     }
 
-    /** @param array{refresh:list<string>,issue:list<string>,revoke:list<string>} $logs */
+    /** @param array{refresh:list<string>,issue:list<string>,revoke:list<string>,killed:list<string>} $logs */
     private function assertEveryIssuedTokenWasRevoked(array $logs): void
     {
         if ($logs['issue'] === []) {

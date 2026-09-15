@@ -62,6 +62,10 @@ final class SiteConnectionService
     public function accessToken(Site $site): string
     {
         return $this->lifecycle->run($site, function (Site $lockedSite): string {
+            if ($lockedSite->targetReservation()->exists()) {
+                throw new SiteConnectionException('target_reassignment_pending', 'This site cannot authenticate while its target reassignment is incomplete.');
+            }
+
             $credential = $lockedSite->credential()->first();
             if (! $credential instanceof SiteCredential) {
                 if ($lockedSite->connection_state !== SiteConnectionState::Disconnected) {
@@ -88,6 +92,10 @@ final class SiteConnectionService
 
     private function beginLocked(Site $site): string
     {
+        if ($site->targetReservation()->exists()) {
+            throw new SiteConnectionException('target_reassignment_pending', 'Complete the pending target reassignment before starting a new authorization.');
+        }
+
         if ($site->credential()->exists()) {
             throw new SiteConnectionException('already_connected', 'Disconnect the current site credential before starting a new authorization.');
         }
@@ -242,20 +250,14 @@ final class SiteConnectionService
                         'client_assertion' => $this->identity->assertion($site->oauth_revocation_url),
                     ]);
                 } catch (OutboundRequestException $exception) {
-                    $site->forceFill([
-                        'connection_state' => SiteConnectionState::Error,
-                        'last_error_code' => $exception->reason,
-                    ])->save();
+                    $this->markDisconnectFailure($site, $exception->reason);
                     throw new SiteConnectionException($exception->reason, 'The remote credential could not be revoked safely.');
                 }
 
                 // The pinned Bridge can emit invalid_client before revocation is attempted
                 // when additional-client metadata/JWKS resolution is temporarily unavailable.
                 if ($response->status !== 200) {
-                    $site->forceFill([
-                        'connection_state' => SiteConnectionState::Error,
-                        'last_error_code' => 'revocation_failed',
-                    ])->save();
+                    $this->markDisconnectFailure($site, 'revocation_failed');
                     throw new SiteConnectionException('revocation_failed', 'WP AI Bridge did not confirm credential revocation.');
                 }
             }
@@ -265,8 +267,23 @@ final class SiteConnectionService
 
         SiteOAuthFlow::query()->where('site_record_id', $site->getKey())->delete();
         $site->forceFill([
-            'connection_state' => SiteConnectionState::Disconnected,
+            'connection_state' => $site->targetReservation()->exists()
+                ? SiteConnectionState::Reassigning
+                : SiteConnectionState::Disconnected,
             'last_error_code' => null,
+            'connected_at' => null,
+        ])->save();
+    }
+
+    private function markDisconnectFailure(Site $site, string $reason): void
+    {
+        $state = $site->targetReservation()->exists()
+            ? SiteConnectionState::Reassigning
+            : SiteConnectionState::Error;
+
+        $site->forceFill([
+            'connection_state' => $state,
+            'last_error_code' => $reason,
             'connected_at' => null,
         ])->save();
     }

@@ -4,12 +4,14 @@ namespace App\Application\Sites;
 
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
+use App\Domain\Sites\SiteTargetReservation;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 final class SiteRegistry
@@ -19,7 +21,6 @@ final class SiteRegistry
         private readonly OutboundTargetPolicy $targets,
         private readonly SiteConnectionService $connections,
         private readonly SiteLifecycleLock $lifecycle,
-        private readonly SiteTargetOwnershipLock $targetOwnership,
     ) {}
 
     public function create(string $siteId, string $displayName, string $baseUrl): Site
@@ -29,16 +30,34 @@ final class SiteRegistry
         $discovery = $this->discover($baseUrl);
         $targetHash = hash('sha256', $discovery->baseUrl);
 
-        return $this->targetOwnership->runForHash($targetHash, function () use ($siteId, $displayName, $discovery): Site {
-            try {
-                return Site::query()->create([
+        try {
+            return DB::transaction(function () use ($siteId, $displayName, $discovery, $targetHash): Site {
+                $reservation = SiteTargetReservation::query()->create([
+                    'target_hash' => $targetHash,
+                    'target_url' => $discovery->baseUrl,
+                    'owner_site_id' => $siteId,
+                    'site_record_id' => null,
+                ]);
+
+                if (Site::query()->where('base_url_hash', $targetHash)->lockForUpdate()->first() instanceof Site) {
+                    throw new InvalidArgumentException('The canonical target is already registered to another site.');
+                }
+
+                $site = Site::query()->create([
                     ...$this->attributes($siteId, $displayName, $discovery),
                     'connection_state' => SiteConnectionState::Disconnected,
                 ]);
-            } catch (UniqueConstraintViolationException $exception) {
-                throw new InvalidArgumentException('The site identifier or canonical target is already registered.');
+                $reservation->delete();
+
+                return $site;
+            });
+        } catch (UniqueConstraintViolationException $exception) {
+            if (SiteTargetReservation::query()->whereKey($targetHash)->exists()) {
+                throw new SiteConnectionException('target_busy', 'The canonical target is currently reserved by another site operation.');
             }
-        });
+
+            throw new InvalidArgumentException('The site identifier or canonical target is already registered.');
+        }
     }
 
     public function update(Site $site, string $displayName, string $baseUrl): Site
@@ -48,45 +67,92 @@ final class SiteRegistry
         $discovery = $this->discover($canonicalBase);
         $targetHash = hash('sha256', $discovery->baseUrl);
 
-        return $this->targetOwnership->runForHash($targetHash, function () use ($site, $displayName, $discovery, $targetHash): Site {
-            return $this->lifecycle->run($site, function (Site $lockedSite) use ($displayName, $discovery, $targetHash): Site {
-                $targetChanged = ! hash_equals($lockedSite->base_url, $discovery->baseUrl);
+        $targetChanged = $this->lifecycle->run($site, function (Site $lockedSite) use ($displayName, $discovery, $targetHash): bool {
+            $reservation = $lockedSite->targetReservation()->first();
+            $targetChanged = ! hash_equals($lockedSite->base_url, $discovery->baseUrl);
 
-                if ($targetChanged) {
-                    $conflict = Site::query()
-                        ->where('base_url_hash', $targetHash)
-                        ->where($lockedSite->getKeyName(), '!=', $lockedSite->getKey())
-                        ->exists();
-                    if ($conflict) {
-                        throw new InvalidArgumentException('The canonical target is already registered to another site.');
-                    }
-                }
-
-                if ($targetChanged && $lockedSite->credential()->exists()) {
-                    $this->connections->disconnect($lockedSite);
-                    $lockedSite->refresh();
-                }
-                if ($targetChanged) {
-                    $lockedSite->oauthFlows()->delete();
+            if (! $targetChanged) {
+                if ($reservation instanceof SiteTargetReservation) {
+                    throw new SiteConnectionException('target_reassignment_pending', 'Complete the pending target reassignment before changing this site.');
                 }
 
                 $lockedSite->forceFill($this->attributes($lockedSite->site_id, $displayName, $discovery))->save();
 
-                if ($targetChanged) {
-                    $lockedSite->forceFill([
-                        'connection_state' => SiteConnectionState::Disconnected,
-                        'connected_at' => null,
-                    ])->save();
+                return false;
+            }
+
+            if ($reservation instanceof SiteTargetReservation) {
+                if (! $this->reservationMatches($reservation, $lockedSite, $targetHash, $discovery->baseUrl)) {
+                    throw new SiteConnectionException('target_reassignment_pending', 'Complete the existing target reassignment before choosing another target.');
+                }
+            } else {
+                try {
+                    $reservation = SiteTargetReservation::query()->create([
+                        'target_hash' => $targetHash,
+                        'target_url' => $discovery->baseUrl,
+                        'owner_site_id' => $lockedSite->site_id,
+                        'site_record_id' => (string) $lockedSite->getKey(),
+                    ]);
+                } catch (UniqueConstraintViolationException $exception) {
+                    throw new SiteConnectionException('target_busy', 'The canonical target is currently reserved by another site operation.');
                 }
 
-                return $lockedSite->refresh();
-            });
+                if ($this->targetOwnedByAnotherSite($lockedSite, $targetHash)) {
+                    throw new InvalidArgumentException('The canonical target is already registered to another site.');
+                }
+            }
+
+            $lockedSite->oauthFlows()->delete();
+            $lockedSite->forceFill([
+                'connection_state' => SiteConnectionState::Reassigning,
+                'last_error_code' => null,
+                'connected_at' => null,
+            ])->save();
+
+            return true;
+        });
+
+        if (! $targetChanged) {
+            return $site->refresh();
+        }
+
+        $this->connections->disconnect($site->refresh());
+
+        return $this->lifecycle->run($site, function (Site $lockedSite) use ($displayName, $discovery, $targetHash): Site {
+            $reservation = $lockedSite->targetReservation()->first();
+            if (! $reservation instanceof SiteTargetReservation || ! $this->reservationMatches($reservation, $lockedSite, $targetHash, $discovery->baseUrl)) {
+                throw new SiteConnectionException('target_reassignment_lost', 'The target reassignment reservation is no longer authoritative.');
+            }
+
+            if ($this->targetOwnedByAnotherSite($lockedSite, $targetHash)) {
+                $reservation->delete();
+                $lockedSite->forceFill([
+                    'connection_state' => SiteConnectionState::Disconnected,
+                    'last_error_code' => 'target_conflict',
+                    'connected_at' => null,
+                ])->save();
+                throw new SiteConnectionException('target_conflict', 'The canonical target became owned by another site.');
+            }
+
+            $lockedSite->oauthFlows()->delete();
+            $lockedSite->forceFill([
+                ...$this->attributes($lockedSite->site_id, $displayName, $discovery),
+                'connection_state' => SiteConnectionState::Disconnected,
+                'connected_at' => null,
+            ])->save();
+            $reservation->delete();
+
+            return $lockedSite->refresh();
         });
     }
 
     public function test(Site $site): BridgeDiscovery
     {
         return $this->lifecycle->run($site, function (Site $lockedSite): BridgeDiscovery {
+            if ($lockedSite->targetReservation()->exists()) {
+                throw new SiteConnectionException('target_reassignment_pending', 'Complete the pending target reassignment before testing this site.');
+            }
+
             try {
                 $discovery = $this->discovery->discover($lockedSite->base_url);
             } catch (BridgeDiscoveryException $exception) {
@@ -121,6 +187,23 @@ final class SiteRegistry
             $lockedSite->oauthFlows()->delete();
             $lockedSite->delete();
         });
+    }
+
+    private function targetOwnedByAnotherSite(Site $site, string $targetHash): bool
+    {
+        return Site::query()
+            ->where('base_url_hash', $targetHash)
+            ->where($site->getKeyName(), '!=', $site->getKey())
+            ->lockForUpdate()
+            ->first() instanceof Site;
+    }
+
+    private function reservationMatches(SiteTargetReservation $reservation, Site $site, string $targetHash, string $targetUrl): bool
+    {
+        return hash_equals($reservation->target_hash, $targetHash)
+            && hash_equals($reservation->target_url, $targetUrl)
+            && hash_equals($reservation->owner_site_id, $site->site_id)
+            && hash_equals((string) $reservation->site_record_id, (string) $site->getKey());
     }
 
     private function discover(string $baseUrl): BridgeDiscovery
