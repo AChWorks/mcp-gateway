@@ -285,6 +285,26 @@ final class SiteRegistryAndPairingTest extends TestCase
         self::assertTrue($updated->credential()->exists());
     }
 
+    public function test_disconnected_site_without_credential_stays_disconnected_when_access_is_requested(): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+
+        try {
+            $connections->accessToken($site);
+            self::fail('Disconnected site unexpectedly returned an access token.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('missing_credential', $exception->reason);
+        }
+
+        $site->refresh();
+        self::assertSame(SiteConnectionState::Disconnected, $site->connection_state);
+        self::assertNull($site->last_error_code);
+    }
+
     public function test_refresh_remote_failure_preserves_existing_credential_for_later_retry(): void
     {
         /** @var SiteRegistry $registry */

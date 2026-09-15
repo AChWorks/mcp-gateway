@@ -64,7 +64,9 @@ final class SiteConnectionService
         return $this->lifecycle->run($site, function (Site $lockedSite): string {
             $credential = $lockedSite->credential()->first();
             if (! $credential instanceof SiteCredential) {
-                $this->requireReconnect($lockedSite, 'missing_credential');
+                if ($lockedSite->connection_state !== SiteConnectionState::Disconnected) {
+                    $this->requireReconnect($lockedSite, 'missing_credential');
+                }
                 throw new SiteConnectionException('missing_credential', 'This site does not have an active OAuth credential.');
             }
 
