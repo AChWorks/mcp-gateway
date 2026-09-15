@@ -4,9 +4,12 @@ namespace App\Application\Mcp;
 
 use App\Application\Sites\SiteConnectionException;
 use App\Domain\Sites\Site;
+use App\Domain\Sites\SiteConnectionState;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
+use DateTimeInterface;
 use Illuminate\Support\Str;
+use LogicException;
 
 final class PendingGatewayToolHandlers
 {
@@ -23,20 +26,25 @@ final class PendingGatewayToolHandlers
             ->limit(self::SITE_LIST_LIMIT + 1)
             ->get();
         $truncated = $sites->count() > self::SITE_LIST_LIMIT;
+        $serializedSites = [];
+
+        foreach ($sites as $index => $site) {
+            if ($index >= self::SITE_LIST_LIMIT) {
+                break;
+            }
+
+            $serializedSites[] = [
+                'site_id' => $site->site_id,
+                'display_name' => $site->display_name,
+                'connector_type' => $site->connector_type,
+                'connection_state' => $this->connectionState($site),
+            ];
+        }
 
         return [
             'ok' => true,
             'correlation_id' => $correlationId,
-            'sites' => $sites
-                ->take(self::SITE_LIST_LIMIT)
-                ->map(static fn (Site $site): array => [
-                    'site_id' => $site->site_id,
-                    'display_name' => $site->display_name,
-                    'connector_type' => $site->connector_type,
-                    'connection_state' => $site->connection_state->value,
-                ])
-                ->values()
-                ->all(),
+            'sites' => $serializedSites,
             'truncated' => $truncated,
         ];
     }
@@ -59,9 +67,9 @@ final class PendingGatewayToolHandlers
                 'connector_type' => $site->connector_type,
                 'base_url' => $site->base_url,
                 'mcp_resource_url' => $site->mcp_resource_url,
-                'connection_state' => $site->connection_state->value,
+                'connection_state' => $this->connectionState($site),
                 'last_error_code' => $site->last_error_code,
-                'connected_at' => $site->connected_at?->toIso8601String(),
+                'connected_at' => $this->connectedAt($site),
             ],
         ];
     }
@@ -161,6 +169,29 @@ final class PendingGatewayToolHandlers
         }
 
         return Site::query()->where('site_id', $siteId)->first();
+    }
+
+    private function connectionState(Site $site): string
+    {
+        $state = $site->getAttribute('connection_state');
+        if (! $state instanceof SiteConnectionState) {
+            throw new LogicException('Site connection_state cast is invalid.');
+        }
+
+        return $state->value;
+    }
+
+    private function connectedAt(Site $site): ?string
+    {
+        $connectedAt = $site->getAttribute('connected_at');
+        if ($connectedAt === null) {
+            return null;
+        }
+        if (! $connectedAt instanceof DateTimeInterface) {
+            throw new LogicException('Site connected_at cast is invalid.');
+        }
+
+        return $connectedAt->format(DATE_ATOM);
     }
 
     private function nullableTrim(?string $value): ?string
