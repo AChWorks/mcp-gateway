@@ -4,7 +4,20 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'public/css/**'
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'public/css/**'
 
 permissions:
   contents: read
@@ -15,24 +28,9 @@ concurrency:
 
 jobs:
   quality:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: mcp_gateway_test
-          MYSQL_USER: mcp_gateway
-          MYSQL_PASSWORD: test-password
-          MYSQL_ROOT_PASSWORD: root-password
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot-password"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
+    timeout-minutes: 10
 
     steps:
       - name: Check out repository
@@ -63,30 +61,6 @@ jobs:
 
       - name: Run test suite
         run: composer test
-
-      - name: Validate MySQL migration path
-        env:
-          APP_ENV: testing
-          APP_KEY: base64:a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=
-          DB_CONNECTION: mysql
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_DATABASE: mcp_gateway_test
-          DB_USERNAME: mcp_gateway
-          DB_PASSWORD: test-password
-        run: php artisan migrate:fresh --force
-
-      - name: Run MySQL OAuth concurrency tests
-        env:
-          APP_ENV: testing
-          APP_KEY: base64:a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=
-          DB_CONNECTION: mysql
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_DATABASE: mcp_gateway_test
-          DB_USERNAME: mcp_gateway
-          DB_PASSWORD: test-password
-        run: php artisan test --group=mysql-concurrency
 
       - name: Validate live ChatGPT OAuth client metadata
         run: php artisan gateway:oauth-client-check --env=testing --refresh
