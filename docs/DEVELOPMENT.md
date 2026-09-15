@@ -13,7 +13,7 @@ The current bootstrap is intentionally a conventional PHP application:
 - Blade/server-rendered frontend;
 - no required Node.js build, Redis, queue worker, Docker, broker, or separate MCP daemon.
 
-CI uses MySQL 8.4 to exercise a clean migration path. Application tests may use SQLite in memory when the test does not depend on MySQL-specific behavior.
+CI uses MySQL 8.4 only in the dedicated path-filtered MySQL validation workflow. Application tests may use SQLite in memory when the test does not depend on MySQL-specific behavior.
 
 ## Install a development checkout
 
@@ -70,6 +70,40 @@ The password is always requested interactively through a hidden prompt and is ne
 
 Once the application is running, administrator sign-in is available at `/admin/login`. The admin routes use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
+## Proportional validation and review cadence
+
+Optimize for finished, verified changes rather than repeated ceremony.
+
+During implementation:
+
+- run the narrowest tests or static checks that can detect regressions in the surface being changed;
+- do not rerun an already-green broad suite after every small edit when that edit cannot invalidate its evidence;
+- keep the pull request closed until the implementation is functionally complete and self-review is clean, unless PR-based evidence is specifically needed earlier;
+- avoid independent review while the implementation is still moving materially.
+
+At candidate freeze:
+
+- inspect the full effective diff and acceptance criteria;
+- run one full repository CI for the frozen candidate when the Issue/contract requires broad exact-candidate evidence;
+- run the exact WP AI Bridge contract only when the effective change can affect Bridge/OAuth/MCP/site-routing/connector/HTTP compatibility; presentation-only, documentation-only, CSS-only, or unrelated administration changes do not justify a manual Bridge-contract rerun;
+- request independent review only after the candidate identity and required validation are stable.
+
+After a review finding or late change:
+
+- validate only the remediation delta first;
+- rerun broader checks only when the delta can invalidate their prior evidence or when exact-candidate policy requires a final full run;
+- a fresh review should focus on the changed delta and closure of prior findings unless scope, assumptions, risk, or target identity changed materially;
+- reuse unaffected green evidence when the later delta does not touch or invalidate what that evidence proved; do not replay identical checks just because the commit SHA changed;
+- if the Issue explicitly requires exact-final-candidate broad CI, complete expected edits before that final run instead of repeatedly refreezing after cosmetic cleanup.
+
+After integration:
+
+- verify the integrated commit/tree and intended effective change;
+- when a squash merge onto the unchanged target produces the same tree as the reviewed and validated candidate, do not manually repeat the same full validation solely for ceremony;
+- repository-triggered `main` CI may still run as a safety net, but do not rerun successful jobs or repeatedly inspect full logs unless a failure, drift, or new evidence requires it.
+
+If a validation layer fails, diagnose the smallest root cause and run the discriminating check first. Do not bounce between full CI and broad review while implementation is still incomplete.
+
 ## Deterministic validation
 
 The normal repository checks are:
@@ -82,7 +116,7 @@ composer analyse
 composer test
 ```
 
-`composer check` runs style, static analysis, and tests together. CI additionally runs `migrate:fresh` against MySQL and executes `gateway:check` with MySQL selected.
+`composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting MySQL. The dedicated path-filtered `MySQL Concurrency` workflow owns MySQL 8.4 `migrate:fresh` and the `mysql-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate. Draft pull requests skip these heavy jobs until they are marked ready for review.
 
 ## MCP bootstrap compatibility fixture
 
