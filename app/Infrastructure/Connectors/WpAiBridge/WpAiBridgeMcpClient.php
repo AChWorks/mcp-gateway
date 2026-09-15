@@ -2,8 +2,11 @@
 
 namespace App\Infrastructure\Connectors\WpAiBridge;
 
+use App\Application\Sites\SiteConnectionException;
 use App\Application\Sites\SiteConnectionService;
+use App\Application\Sites\SiteLifecycleLock;
 use App\Domain\Sites\Site;
+use App\Domain\Sites\SiteCredential;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
@@ -18,6 +21,7 @@ final readonly class WpAiBridgeMcpClient
 
     public function __construct(
         private SiteConnectionService $connections,
+        private SiteLifecycleLock $lifecycle,
         private SafeHttpClient $http,
     ) {}
 
@@ -72,33 +76,63 @@ final readonly class WpAiBridgeMcpClient
         bool $mutationRisk,
         string $correlationId,
     ): mixed {
-        if ($site->connector_type !== (string) config('bridge.connector_type', 'wp_ai_bridge')) {
-            throw new WpAiBridgeMcpException('unsupported_connector', 'The selected site does not use the WP AI Bridge connector.');
-        }
-
-        $accessToken = $this->connections->accessToken($site);
+        $routing = $this->routingContext($site);
         $headers = [
-            'Authorization' => 'Bearer '.$accessToken,
+            'Authorization' => 'Bearer '.$routing['access_token'],
             'Accept' => 'application/json, text/event-stream',
             'MCP-Protocol-Version' => self::PROTOCOL_VERSION,
             'X-MCP-Gateway-Correlation-ID' => $correlationId,
         ];
 
-        $sessionId = $this->initialize($site, $headers);
+        $sessionId = $this->initialize($routing['resource_url'], $headers);
         $headers['Mcp-Session-Id'] = $sessionId;
 
         try {
-            return $this->callTool($site, $headers, $ability, $input, $mutationRisk);
+            return $this->callTool($routing['resource_url'], $headers, $ability, $input, $mutationRisk);
         } finally {
-            $this->closeSession($site, $headers);
+            $this->closeSession($routing['resource_url'], $headers);
         }
     }
 
+    /** @return array{resource_url:string,access_token:string} */
+    private function routingContext(Site $site): array
+    {
+        return $this->lifecycle->run($site, function (Site $lockedSite): array {
+            if ($lockedSite->connector_type !== (string) config('bridge.connector_type', 'wp_ai_bridge')) {
+                throw new WpAiBridgeMcpException('unsupported_connector', 'The selected site does not use the WP AI Bridge connector.');
+            }
+
+            // accessToken() re-enters the same lifecycle boundary using the locked
+            // record identity. The outer lock keeps the persisted target stable while
+            // credential selection/refresh completes, but is released before any MCP
+            // network execution below.
+            $accessToken = $this->connections->accessToken($lockedSite);
+            $credential = $lockedSite->credential()->first();
+            $resourceUrl = $lockedSite->mcp_resource_url;
+
+            if (! $credential instanceof SiteCredential
+                || ! is_string($resourceUrl)
+                || $resourceUrl === ''
+                || ! is_string($credential->resource_url)
+                || ! hash_equals($resourceUrl, $credential->resource_url)) {
+                throw new SiteConnectionException(
+                    'credential_target_mismatch',
+                    'The selected site credential is not bound to its current MCP resource.',
+                );
+            }
+
+            return [
+                'resource_url' => $resourceUrl,
+                'access_token' => $accessToken,
+            ];
+        });
+    }
+
     /** @param array<string, string> $headers */
-    private function initialize(Site $site, array $headers): string
+    private function initialize(string $resourceUrl, array $headers): string
     {
         try {
-            $response = $this->http->postJson($site->mcp_resource_url, [
+            $response = $this->http->postJson($resourceUrl, [
                 'jsonrpc' => '2.0',
                 'id' => 1,
                 'method' => 'initialize',
@@ -144,14 +178,14 @@ final readonly class WpAiBridgeMcpClient
      * @param  array<string, mixed>  $input
      */
     private function callTool(
-        Site $site,
+        string $resourceUrl,
         array $headers,
         string $ability,
         array $input,
         bool $mutationRisk,
     ): mixed {
         try {
-            $response = $this->http->postJson($site->mcp_resource_url, [
+            $response = $this->http->postJson($resourceUrl, [
                 'jsonrpc' => '2.0',
                 'id' => 2,
                 'method' => 'tools/call',
@@ -231,10 +265,10 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @param array<string, string> $headers */
-    private function closeSession(Site $site, array $headers): void
+    private function closeSession(string $resourceUrl, array $headers): void
     {
         try {
-            $this->http->delete($site->mcp_resource_url, $headers);
+            $this->http->delete($resourceUrl, $headers);
         } catch (OutboundRequestException) {
             // Session cleanup is best-effort and never retries or masks the authoritative tool result.
         }
