@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Executable compatibility contract for the exact pinned WP AI Bridge OAuth client-auth path.
  *
