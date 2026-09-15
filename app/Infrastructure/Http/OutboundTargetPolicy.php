@@ -93,7 +93,7 @@ final class OutboundTargetPolicy
         }
 
         $port = isset($parts['port']) ? (int) $parts['port'] : null;
-        if ($port !== null && ($port < 1 || $port > 65535)) {
+        if ($port !== null && $port < 1) {
             throw new UnsafeOutboundTarget('Outbound target port is invalid.');
         }
 

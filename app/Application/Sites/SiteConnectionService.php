@@ -273,8 +273,10 @@ final class SiteConnectionService
             $token = $this->parseTokenResponse($response->json());
         } catch (SiteConnectionException|OutboundRequestException $exception) {
             $reason = $exception->reason;
-            $credential->delete();
-            $this->requireReconnect($site, $reason);
+            $site->forceFill([
+                'connection_state' => SiteConnectionState::Error,
+                'last_error_code' => Str::limit($this->safeErrorCode($reason), 64, ''),
+            ])->save();
             throw new SiteConnectionException($reason, 'WP AI Bridge returned an unusable refresh response.');
         }
         $context = new SiteOAuthFlowContext(
@@ -325,7 +327,7 @@ final class SiteConnectionService
     }
 
     /**
-     * @param array<string, mixed> $document
+     * @param  array<string, mixed>  $document
      * @return array{access_token:string,refresh_token:?string,expires_at:?DateTimeImmutable,scopes:list<string>}
      */
     private function parseTokenResponse(array $document): array

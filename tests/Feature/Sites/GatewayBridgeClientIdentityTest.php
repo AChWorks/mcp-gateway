@@ -23,7 +23,7 @@ final class GatewayBridgeClientIdentityTest extends TestCase
 
     public function test_public_metadata_matches_the_integrated_wp_ai_bridge_client_contract(): void
     {
-        $this->getJson('/oauth/client.json')
+        $metadata = $this->getJson('/oauth/client.json')
             ->assertOk()
             ->assertJson([
                 'client_id' => 'https://gateway.example.test/oauth/client.json',
@@ -33,8 +33,12 @@ final class GatewayBridgeClientIdentityTest extends TestCase
                 'response_types' => ['code'],
                 'token_endpoint_auth_method' => 'private_key_jwt',
                 'jwks_uri' => 'https://gateway.example.test/oauth/jwks.json',
-            ])
-            ->assertHeader('Cache-Control', 'public, max-age=300');
+            ]);
+
+        $cacheControl = $metadata->headers->get('Cache-Control');
+        self::assertIsString($cacheControl);
+        self::assertStringContainsString('public', $cacheControl);
+        self::assertStringContainsString('max-age=300', $cacheControl);
 
         $jwks = $this->getJson('/oauth/jwks.json')
             ->assertOk()

@@ -10,6 +10,7 @@ use App\Domain\Sites\SiteConnectionState;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\SiteCredentialVault;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -180,6 +181,8 @@ final class SiteRegistryAndPairingTest extends TestCase
         /** @var SiteRegistry $registry */
         $registry = app(SiteRegistry::class);
 
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
         Http::fake(fn (Request $request) => Http::response(['error' => 'not_found'], 404));
         try {
             $registry->create('missing', 'Missing', 'https://missing.example.test');
@@ -188,6 +191,8 @@ final class SiteRegistryAndPairingTest extends TestCase
             self::assertSame('missing_bridge', $exception->reason);
         }
 
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
         Http::fake(function (Request $request) {
             if ((string) parse_url($request->url(), PHP_URL_PATH) === '/.well-known/oauth-protected-resource') {
                 return Http::response([
@@ -235,6 +240,8 @@ final class SiteRegistryAndPairingTest extends TestCase
         $this->pair($connections, $site);
         $before = $site->credential()->firstOrFail()->encrypted_payload;
 
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
         Http::fake(function (Request $request) {
             if ((string) parse_url($request->url(), PHP_URL_PATH) === '/wp-json/wp-ai-bridge/v1/oauth/token'
                 && (string) ($request->data()['grant_type'] ?? '') === 'refresh_token') {
@@ -250,6 +257,46 @@ final class SiteRegistryAndPairingTest extends TestCase
             self::fail('Temporary refresh failure was treated as success.');
         } catch (SiteConnectionException $exception) {
             self::assertSame('remote_failure', $exception->reason);
+        }
+
+        $site->refresh();
+        self::assertSame(SiteConnectionState::Error, $site->connection_state);
+        self::assertTrue($site->credential()->exists());
+        self::assertSame($before, $site->credential()->firstOrFail()->encrypted_payload);
+    }
+
+    public function test_malformed_refresh_success_preserves_existing_credential_for_recovery(): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $this->pair($connections, $site);
+        $before = $site->credential()->firstOrFail()->encrypted_payload;
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) {
+            if ((string) parse_url($request->url(), PHP_URL_PATH) === '/wp-json/wp-ai-bridge/v1/oauth/token'
+                && (string) ($request->data()['grant_type'] ?? '') === 'refresh_token') {
+                return Http::response([
+                    'access_token' => 'unexpected-access',
+                    'token_type' => 'Bearer',
+                    'expires_in' => 3600,
+                    'scope' => 'mcp:use offline_access',
+                ], 200);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $this->travel(2)->seconds();
+        try {
+            $connections->accessToken($site);
+            self::fail('Malformed refresh response was treated as success.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('invalid_token_response', $exception->reason);
         }
 
         $site->refresh();

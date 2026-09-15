@@ -67,7 +67,8 @@ final class OutboundTargetPolicyTest extends TestCase
     /** @param array<string, list<string>> $answers */
     private function policy(array $answers): OutboundTargetPolicy
     {
-        $dns = new class($answers) implements DnsResolver {
+        $dns = new class($answers) implements DnsResolver
+        {
             /** @param array<string, list<string>> $answers */
             public function __construct(private readonly array $answers) {}
 

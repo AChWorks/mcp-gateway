@@ -15,15 +15,18 @@ final class SafeHttpClient
         return $this->send('GET', $url, $headers, []);
     }
 
-    /** @param array<string, scalar|null> $form @param array<string, string> $headers */
+    /**
+     * @param  array<string, scalar|null>  $form
+     * @param  array<string, string>  $headers
+     */
     public function postForm(string $url, array $form, array $headers = []): SafeHttpResponse
     {
         return $this->send('POST', $url, $headers, $form);
     }
 
     /**
-     * @param array<string, string> $headers
-     * @param array<string, scalar|null> $form
+     * @param  array<string, string>  $headers
+     * @param  array<string, scalar|null>  $form
      */
     private function send(string $method, string $url, array $headers, array $form): SafeHttpResponse
     {

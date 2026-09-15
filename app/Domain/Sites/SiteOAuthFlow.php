@@ -2,13 +2,23 @@
 
 namespace App\Domain\Sites;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * @property string $site_record_id
+ * @property string $state_hash
+ * @property string $encrypted_context
+ * @property CarbonImmutable $expires_at
+ * @property CarbonImmutable|null $consumed_at
+ */
 final class SiteOAuthFlow extends Model
 {
     use HasUlids;
+
+    protected $table = 'site_oauth_flows';
 
     /** @var list<string> */
     protected $fillable = [
