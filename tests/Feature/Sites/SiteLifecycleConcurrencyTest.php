@@ -8,6 +8,7 @@ use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Domain\Sites\SiteCredential;
 use App\Domain\Sites\SiteOAuthFlow;
+use App\Domain\Sites\SiteRevocationIntent;
 use App\Infrastructure\OAuth\SiteCredentialVault;
 use App\Infrastructure\OAuth\SiteOAuthFlowVault;
 use DateTimeImmutable;
@@ -255,6 +256,48 @@ final class SiteLifecycleConcurrencyTest extends TestCase
         self::assertFalse($alpha->credential()->exists());
         self::assertFalse($alpha->targetReservation()->exists());
         self::assertSame(1, Site::query()->where('base_url_hash', hash('sha256', $target))->count());
+    }
+
+    public function test_durable_disconnect_intent_survives_database_session_loss_after_remote_revocation(): void
+    {
+        $site = $this->connectedSiteWithCredential('alpha', 'https://alpha.example.test');
+
+        [$responses, $logs] = $this->runConcurrentActions($site, [[
+            'action' => 'disconnect',
+            'kill_database_on_revoke_number' => 2,
+            'capture_throwable' => true,
+        ]], false);
+
+        $disconnect = $this->responseFor($responses, 'disconnect');
+        self::assertFalse($disconnect['ok']);
+        self::assertSame('unexpected_exception', $disconnect['reason'] ?? null);
+        self::assertCount(1, $logs['killed']);
+        self::assertEqualsCanonicalizing(['alpha-refresh', 'alpha-access'], $logs['revoke']);
+
+        $site->refresh();
+        self::assertSame(SiteConnectionState::Error, $site->connection_state);
+        self::assertSame('disconnect_pending', $site->last_error_code);
+        self::assertTrue($site->credential()->exists());
+        self::assertTrue($site->revocationIntent()->where('kind', SiteRevocationIntent::KIND_DISCONNECT)->exists());
+
+        try {
+            app(SiteConnectionService::class)->accessToken($site);
+            self::fail('A credential remained usable while durable disconnect finalization was unresolved.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('revocation_pending', $exception->reason);
+        }
+
+        [$resumeResponses, $resumeLogs] = $this->runConcurrentActions($site, [[
+            'action' => 'disconnect',
+        ]], false);
+        $resume = $this->responseFor($resumeResponses, 'disconnect');
+        self::assertTrue($resume['ok']);
+        self::assertEqualsCanonicalizing(['alpha-refresh', 'alpha-access'], $resumeLogs['revoke']);
+
+        $site->refresh();
+        self::assertSame(SiteConnectionState::Disconnected, $site->connection_state);
+        self::assertFalse($site->credential()->exists());
+        self::assertFalse($site->revocationIntent()->exists());
     }
 
     public function test_concurrent_begin_and_callback_have_one_serial_authoritative_outcome(): void

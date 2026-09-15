@@ -45,6 +45,12 @@ final class Site extends Model
         return $this->hasOne(SiteTargetReservation::class, 'site_record_id');
     }
 
+    /** @return HasOne<SiteRevocationIntent, $this> */
+    public function revocationIntent(): HasOne
+    {
+        return $this->hasOne(SiteRevocationIntent::class, 'site_record_id');
+    }
+
     /** @return HasOne<SiteCredential, $this> */
     public function credential(): HasOne
     {

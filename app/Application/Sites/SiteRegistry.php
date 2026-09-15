@@ -4,6 +4,7 @@ namespace App\Application\Sites;
 
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
+use App\Domain\Sites\SiteRevocationIntent;
 use App\Domain\Sites\SiteTargetReservation;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
@@ -68,6 +69,10 @@ final class SiteRegistry
         $targetHash = hash('sha256', $discovery->baseUrl);
 
         $targetChanged = $this->lifecycle->run($site, function (Site $lockedSite) use ($displayName, $discovery, $targetHash): bool {
+            if ($lockedSite->revocationIntent()->exists()) {
+                throw new SiteConnectionException('revocation_pending', 'Complete the pending credential revocation before changing this site.');
+            }
+
             $reservation = $lockedSite->targetReservation()->first();
             $targetChanged = ! hash_equals($lockedSite->base_url, $discovery->baseUrl);
 
@@ -119,6 +124,10 @@ final class SiteRegistry
         $this->connections->disconnect($site->refresh());
 
         return $this->lifecycle->run($site, function (Site $lockedSite) use ($displayName, $discovery, $targetHash): Site {
+            if ($lockedSite->revocationIntent()->exists()) {
+                throw new SiteConnectionException('revocation_pending', 'Target reassignment cannot finalize while credential revocation is pending.');
+            }
+
             $reservation = $lockedSite->targetReservation()->first();
             if (! $reservation instanceof SiteTargetReservation || ! $this->reservationMatches($reservation, $lockedSite, $targetHash, $discovery->baseUrl)) {
                 throw new SiteConnectionException('target_reassignment_lost', 'The target reassignment reservation is no longer authoritative.');
@@ -149,6 +158,9 @@ final class SiteRegistry
     public function test(Site $site): BridgeDiscovery
     {
         return $this->lifecycle->run($site, function (Site $lockedSite): BridgeDiscovery {
+            if ($lockedSite->revocationIntent()->exists()) {
+                throw new SiteConnectionException('revocation_pending', 'Complete the pending credential revocation before testing this site.');
+            }
             if ($lockedSite->targetReservation()->exists()) {
                 throw new SiteConnectionException('target_reassignment_pending', 'Complete the pending target reassignment before testing this site.');
             }
@@ -179,11 +191,17 @@ final class SiteRegistry
 
     public function remove(Site $site): void
     {
+        $this->connections->revokeForRemoval($site);
+
         $this->lifecycle->run($site, function (Site $lockedSite): void {
-            if ($lockedSite->credential()->exists()) {
-                $this->connections->disconnect($lockedSite);
-                $lockedSite->refresh();
+            $intent = $lockedSite->revocationIntent()->first();
+            if (! $intent instanceof SiteRevocationIntent || $intent->kind !== SiteRevocationIntent::KIND_REMOVE) {
+                throw new SiteConnectionException('revocation_intent_lost', 'The durable site-removal intent is no longer authoritative.');
             }
+            if ($lockedSite->credential()->exists()) {
+                throw new SiteConnectionException('credential_still_present', 'The site cannot be removed before its remote credential is finalized locally.');
+            }
+
             $lockedSite->oauthFlows()->delete();
             $lockedSite->delete();
         });

@@ -37,6 +37,13 @@ return new class extends Migration
             $table->timestamps();
         });
 
+        Schema::create('site_revocation_intents', function (Blueprint $table): void {
+            $table->ulid('id')->primary();
+            $table->foreignUlid('site_record_id')->unique()->constrained('sites')->cascadeOnDelete();
+            $table->string('kind', 16)->index();
+            $table->timestamps();
+        });
+
         Schema::create('site_credentials', function (Blueprint $table): void {
             $table->ulid('id')->primary();
             $table->foreignUlid('site_record_id')->unique()->constrained('sites')->cascadeOnDelete();
@@ -67,6 +74,7 @@ return new class extends Migration
     {
         Schema::dropIfExists('site_oauth_flows');
         Schema::dropIfExists('site_credentials');
+        Schema::dropIfExists('site_revocation_intents');
         Schema::dropIfExists('site_target_reservations');
         Schema::dropIfExists('sites');
     }

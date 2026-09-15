@@ -6,6 +6,7 @@ use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Domain\Sites\SiteCredential;
 use App\Domain\Sites\SiteOAuthFlow;
+use App\Domain\Sites\SiteRevocationIntent;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
@@ -17,7 +18,9 @@ use App\Infrastructure\OAuth\SiteCredentialVault;
 use App\Infrastructure\OAuth\SiteOAuthFlowContext;
 use App\Infrastructure\OAuth\SiteOAuthFlowVault;
 use DateTimeImmutable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use RuntimeException;
 
 final class SiteConnectionService
 {
@@ -62,6 +65,9 @@ final class SiteConnectionService
     public function accessToken(Site $site): string
     {
         return $this->lifecycle->run($site, function (Site $lockedSite): string {
+            if ($lockedSite->revocationIntent()->exists()) {
+                throw new SiteConnectionException('revocation_pending', 'This site cannot authenticate while credential revocation is incomplete.');
+            }
             if ($lockedSite->targetReservation()->exists()) {
                 throw new SiteConnectionException('target_reassignment_pending', 'This site cannot authenticate while its target reassignment is incomplete.');
             }
@@ -85,13 +91,19 @@ final class SiteConnectionService
 
     public function disconnect(Site $site): void
     {
-        $this->lifecycle->run($site, function (Site $lockedSite): void {
-            $this->disconnectLocked($lockedSite);
-        });
+        $this->revokeCredential($site, false);
+    }
+
+    public function revokeForRemoval(Site $site): void
+    {
+        $this->revokeCredential($site, true);
     }
 
     private function beginLocked(Site $site): string
     {
+        if ($site->revocationIntent()->exists()) {
+            throw new SiteConnectionException('revocation_pending', 'Complete the pending credential revocation before starting a new authorization.');
+        }
         if ($site->targetReservation()->exists()) {
             throw new SiteConnectionException('target_reassignment_pending', 'Complete the pending target reassignment before starting a new authorization.');
         }
@@ -156,6 +168,13 @@ final class SiteConnectionService
         ?string $issuer,
         ?string $error,
     ): Site {
+        if ($site->revocationIntent()->exists()) {
+            throw new SiteConnectionException('revocation_pending', 'This callback cannot complete while credential revocation is pending.');
+        }
+        if ($site->targetReservation()->exists()) {
+            throw new SiteConnectionException('target_reassignment_pending', 'This callback cannot complete while target reassignment is pending.');
+        }
+
         $flow = SiteOAuthFlow::query()
             ->where('site_record_id', $site->getKey())
             ->where('state_hash', $stateHash)
@@ -235,57 +254,201 @@ final class SiteConnectionService
         return $site->refresh();
     }
 
-    private function disconnectLocked(Site $site): void
+    private function revokeCredential(Site $site, bool $forRemoval): void
     {
-        $credential = $site->credential()->first();
-        if ($credential instanceof SiteCredential) {
-            $secret = $this->credentials->open($credential);
-            $tokens = array_values(array_filter([$secret->refreshToken, $secret->accessToken], static fn (?string $token): bool => is_string($token) && $token !== ''));
+        $plan = $this->prepareRevocation($site, $forRemoval);
 
-            foreach ($tokens as $token) {
-                try {
-                    $response = $this->http->postForm($site->oauth_revocation_url, [
-                        'token' => $token,
-                        'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
-                        'client_assertion' => $this->identity->assertion($site->oauth_revocation_url),
+        foreach ($plan['tokens'] as $token) {
+            try {
+                $response = $this->http->postForm($plan['revocation_url'], [
+                    'token' => $token,
+                    'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
+                    'client_assertion' => $this->identity->assertion($plan['revocation_url']),
+                ]);
+            } catch (OutboundRequestException $exception) {
+                $this->markRevocationFailure($plan['site_record_id'], $exception->reason);
+                throw new SiteConnectionException($exception->reason, 'The remote credential could not be revoked safely.');
+            }
+
+            // The pinned Bridge can emit invalid_client before revocation is attempted
+            // when additional-client metadata/JWKS resolution is temporarily unavailable.
+            if ($response->status !== 200) {
+                $this->markRevocationFailure($plan['site_record_id'], 'revocation_failed');
+                throw new SiteConnectionException('revocation_failed', 'WP AI Bridge did not confirm credential revocation.');
+            }
+        }
+
+        if ($plan['tokens'] !== []) {
+            $this->assertDatabaseSessionContinuity($plan['database_session_id']);
+        }
+        $this->finalizeRevocation($plan['site_record_id'], $forRemoval);
+    }
+
+    /** @return array{site_record_id:string,revocation_url:string,tokens:list<string>,database_session_id:?int} */
+    private function prepareRevocation(Site $site, bool $forRemoval): array
+    {
+        return $this->lifecycle->run($site, function (Site $lockedSite) use ($forRemoval): array {
+            $targetReassignment = $lockedSite->targetReservation()->exists();
+            $intent = $lockedSite->revocationIntent()->first();
+
+            if ($forRemoval) {
+                if (! $intent instanceof SiteRevocationIntent) {
+                    $intent = SiteRevocationIntent::query()->create([
+                        'site_record_id' => (string) $lockedSite->getKey(),
+                        'kind' => SiteRevocationIntent::KIND_REMOVE,
                     ]);
-                } catch (OutboundRequestException $exception) {
-                    $this->markDisconnectFailure($site, $exception->reason);
-                    throw new SiteConnectionException($exception->reason, 'The remote credential could not be revoked safely.');
+                } elseif ($intent->kind !== SiteRevocationIntent::KIND_REMOVE) {
+                    $intent->forceFill(['kind' => SiteRevocationIntent::KIND_REMOVE])->save();
                 }
-
-                // The pinned Bridge can emit invalid_client before revocation is attempted
-                // when additional-client metadata/JWKS resolution is temporarily unavailable.
-                if ($response->status !== 200) {
-                    $this->markDisconnectFailure($site, 'revocation_failed');
-                    throw new SiteConnectionException('revocation_failed', 'WP AI Bridge did not confirm credential revocation.');
+            } elseif ($targetReassignment) {
+                if ($intent instanceof SiteRevocationIntent) {
+                    throw new SiteConnectionException('revocation_pending', 'A separate credential revocation operation already owns this site.');
+                }
+            } else {
+                if ($intent instanceof SiteRevocationIntent && $intent->kind === SiteRevocationIntent::KIND_REMOVE) {
+                    throw new SiteConnectionException('removal_pending', 'This site is already pending removal.');
+                }
+                if (! $intent instanceof SiteRevocationIntent) {
+                    $intent = SiteRevocationIntent::query()->create([
+                        'site_record_id' => (string) $lockedSite->getKey(),
+                        'kind' => SiteRevocationIntent::KIND_DISCONNECT,
+                    ]);
                 }
             }
 
-            $credential->delete();
-        }
+            SiteOAuthFlow::query()->where('site_record_id', $lockedSite->getKey())->delete();
+            $lockedSite->forceFill([
+                'connection_state' => $targetReassignment && ! $forRemoval
+                    ? SiteConnectionState::Reassigning
+                    : SiteConnectionState::Error,
+                'last_error_code' => $targetReassignment && ! $forRemoval
+                    ? null
+                    : ($forRemoval ? 'removal_pending' : 'disconnect_pending'),
+                'connected_at' => null,
+            ])->save();
 
-        SiteOAuthFlow::query()->where('site_record_id', $site->getKey())->delete();
-        $site->forceFill([
-            'connection_state' => $site->targetReservation()->exists()
-                ? SiteConnectionState::Reassigning
-                : SiteConnectionState::Disconnected,
-            'last_error_code' => null,
-            'connected_at' => null,
-        ])->save();
+            $tokens = [];
+            $credential = $lockedSite->credential()->first();
+            if ($credential instanceof SiteCredential) {
+                $secret = $this->credentials->open($credential);
+                $tokens = array_values(array_filter(
+                    [$secret->refreshToken, $secret->accessToken],
+                    static fn (?string $token): bool => is_string($token) && $token !== '',
+                ));
+            }
+
+            return [
+                'site_record_id' => (string) $lockedSite->getKey(),
+                'revocation_url' => $lockedSite->oauth_revocation_url,
+                'tokens' => $tokens,
+                'database_session_id' => $tokens === [] ? null : $this->currentDatabaseSessionId(),
+            ];
+        });
     }
 
-    private function markDisconnectFailure(Site $site, string $reason): void
+    private function finalizeRevocation(string $siteRecordId, bool $forRemoval): void
     {
-        $state = $site->targetReservation()->exists()
-            ? SiteConnectionState::Reassigning
-            : SiteConnectionState::Error;
+        $this->lifecycle->runForId($siteRecordId, function (Site $lockedSite) use ($forRemoval): void {
+            $intent = $lockedSite->revocationIntent()->first();
+            $targetReassignment = $lockedSite->targetReservation()->exists();
+            $credential = $lockedSite->credential()->first();
 
-        $site->forceFill([
-            'connection_state' => $state,
-            'last_error_code' => $reason,
-            'connected_at' => null,
-        ])->save();
+            if ($forRemoval) {
+                if (! $intent instanceof SiteRevocationIntent || $intent->kind !== SiteRevocationIntent::KIND_REMOVE) {
+                    throw new SiteConnectionException('revocation_intent_lost', 'The durable site-removal revocation intent is no longer authoritative.');
+                }
+            } elseif ($intent instanceof SiteRevocationIntent && $intent->kind === SiteRevocationIntent::KIND_REMOVE) {
+                // Removal took ownership while an ordinary/target disconnect was remotely executing.
+            } elseif ($targetReassignment) {
+                if ($intent instanceof SiteRevocationIntent) {
+                    throw new SiteConnectionException('revocation_intent_conflict', 'Target reassignment cannot finalize while another revocation intent exists.');
+                }
+            } elseif (! $intent instanceof SiteRevocationIntent) {
+                $alreadyDisconnected = ! SiteCredential::query()
+                    ->where('site_record_id', $lockedSite->getKey())
+                    ->exists()
+                    && (string) $lockedSite->getRawOriginal('connection_state') === SiteConnectionState::Disconnected->value;
+                if ($alreadyDisconnected) {
+                    return;
+                }
+                throw new SiteConnectionException('revocation_intent_lost', 'The durable disconnect intent is no longer authoritative.');
+            } elseif ($intent->kind !== SiteRevocationIntent::KIND_DISCONNECT) {
+                throw new SiteConnectionException('revocation_intent_conflict', 'The durable disconnect intent changed unexpectedly.');
+            }
+
+            if ($credential instanceof SiteCredential) {
+                $credential->delete();
+            }
+            SiteOAuthFlow::query()->where('site_record_id', $lockedSite->getKey())->delete();
+
+            if ($intent instanceof SiteRevocationIntent && $intent->kind === SiteRevocationIntent::KIND_REMOVE) {
+                $lockedSite->forceFill([
+                    'connection_state' => SiteConnectionState::Error,
+                    'last_error_code' => 'removal_pending',
+                    'connected_at' => null,
+                ])->save();
+
+                return;
+            }
+
+            if ($targetReassignment) {
+                $lockedSite->forceFill([
+                    'connection_state' => SiteConnectionState::Reassigning,
+                    'last_error_code' => null,
+                    'connected_at' => null,
+                ])->save();
+
+                return;
+            }
+
+            $intent?->delete();
+            $lockedSite->forceFill([
+                'connection_state' => SiteConnectionState::Disconnected,
+                'last_error_code' => null,
+                'connected_at' => null,
+            ])->save();
+        });
+    }
+
+    private function markRevocationFailure(string $siteRecordId, string $reason): void
+    {
+        $this->lifecycle->runForId($siteRecordId, function (Site $lockedSite) use ($reason): void {
+            $hasIntent = $lockedSite->revocationIntent()->exists();
+            $lockedSite->forceFill([
+                'connection_state' => ! $hasIntent && $lockedSite->targetReservation()->exists()
+                    ? SiteConnectionState::Reassigning
+                    : SiteConnectionState::Error,
+                'last_error_code' => Str::limit($this->safeErrorCode($reason), 64, ''),
+                'connected_at' => null,
+            ])->save();
+        });
+    }
+
+    private function currentDatabaseSessionId(): ?int
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            return null;
+        }
+
+        $row = DB::selectOne('SELECT CONNECTION_ID() AS connection_id');
+        $connectionId = is_object($row) ? (int) ($row->connection_id ?? 0) : 0;
+        if ($connectionId <= 0) {
+            throw new RuntimeException('Could not resolve the active MySQL session for durable revocation fencing.');
+        }
+
+        return $connectionId;
+    }
+
+    private function assertDatabaseSessionContinuity(?int $expectedSessionId): void
+    {
+        if ($expectedSessionId === null) {
+            return;
+        }
+
+        $currentSessionId = $this->currentDatabaseSessionId();
+        if ($currentSessionId !== $expectedSessionId) {
+            throw new RuntimeException('The MySQL session changed after remote revocation; durable local finalization requires an explicit retry.');
+        }
     }
 
     private function refresh(Site $site, SiteCredential $credential, SiteCredentialSecret $secret): string
