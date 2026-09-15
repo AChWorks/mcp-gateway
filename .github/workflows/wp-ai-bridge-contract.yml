@@ -14,13 +14,19 @@ on:
       - 'app/Infrastructure/OAuth/**'
       - 'config/bridge.php'
       - 'database/migrations/**'
-      - 'routes/**'
+      - 'routes/mcp.php'
+      - 'routes/web.php'
       - 'tests/Feature/Mcp/**'
       - 'tests/Feature/Sites/**'
       - 'tests/Contract/**'
       - 'bin/check-wp-ai-bridge-contract.sh'
       - '.github/workflows/wp-ai-bridge-contract.yml'
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
     paths:
       - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
@@ -31,7 +37,8 @@ on:
       - 'app/Infrastructure/OAuth/**'
       - 'config/bridge.php'
       - 'database/migrations/**'
-      - 'routes/**'
+      - 'routes/mcp.php'
+      - 'routes/web.php'
       - 'tests/Feature/Mcp/**'
       - 'tests/Feature/Sites/**'
       - 'tests/Contract/**'
@@ -47,6 +54,7 @@ concurrency:
 
 jobs:
   exact-bridge-contract:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
