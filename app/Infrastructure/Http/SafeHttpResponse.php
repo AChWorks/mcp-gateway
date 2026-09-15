@@ -13,6 +13,19 @@ final readonly class SafeHttpResponse
         public string $body,
     ) {}
 
+    public function header(string $name): ?string
+    {
+        foreach ($this->headers as $header => $values) {
+            if (strcasecmp($header, $name) === 0) {
+                $value = $values[0] ?? null;
+
+                return is_string($value) && $value !== '' ? $value : null;
+            }
+        }
+
+        return null;
+    }
+
     /** @return array<string, mixed> */
     public function json(): array
     {

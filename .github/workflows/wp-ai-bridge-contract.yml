@@ -5,28 +5,34 @@ on:
     branches:
       - main
     paths:
+      - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
       - 'app/Domain/Sites/**'
       - 'app/Infrastructure/Connectors/WpAiBridge/**'
       - 'app/Infrastructure/Http/**'
+      - 'app/Infrastructure/Mcp/**'
       - 'app/Infrastructure/OAuth/**'
       - 'config/bridge.php'
       - 'database/migrations/**'
       - 'routes/**'
+      - 'tests/Feature/Mcp/**'
       - 'tests/Feature/Sites/**'
       - 'tests/Contract/**'
       - 'bin/check-wp-ai-bridge-contract.sh'
       - '.github/workflows/wp-ai-bridge-contract.yml'
   pull_request:
     paths:
+      - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
       - 'app/Domain/Sites/**'
       - 'app/Infrastructure/Connectors/WpAiBridge/**'
       - 'app/Infrastructure/Http/**'
+      - 'app/Infrastructure/Mcp/**'
       - 'app/Infrastructure/OAuth/**'
       - 'config/bridge.php'
       - 'database/migrations/**'
       - 'routes/**'
+      - 'tests/Feature/Mcp/**'
       - 'tests/Feature/Sites/**'
       - 'tests/Contract/**'
       - 'bin/check-wp-ai-bridge-contract.sh'
@@ -63,7 +69,7 @@ jobs:
           extensions: zip
           coverage: none
 
-      - name: Execute exact WP AI Bridge OAuth contract
+      - name: Execute exact WP AI Bridge OAuth and MCP routing contract
         run: >-
           bash bin/check-wp-ai-bridge-contract.sh
           .contract/wp-ai-bridge
