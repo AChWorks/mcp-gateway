@@ -4,6 +4,7 @@ use App\Http\Controllers\OAuth\AuthorizationServerMetadataController;
 use App\Http\Controllers\OAuth\ProtectedResourceMetadataController;
 use App\Http\Controllers\OAuth\RevocationController;
 use App\Http\Controllers\OAuth\TokenController;
+use App\Http\Middleware\EnsureCorrelationId;
 use App\Http\Middleware\RequireMcpAccessToken;
 use App\Infrastructure\Mcp\BootstrapMcpEndpoint;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
@@ -16,7 +17,7 @@ Route::post('/oauth/token', TokenController::class)->middleware('throttle:oauth-
 Route::post('/oauth/revoke', RevocationController::class)->middleware('throttle:oauth-token');
 
 Route::match(['POST', 'DELETE', 'OPTIONS'], '/mcp', [GatewayMcpEndpoint::class, 'handle'])
-    ->middleware(['throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
+    ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
 
 Route::match(
     ['POST', 'DELETE', 'OPTIONS'],
