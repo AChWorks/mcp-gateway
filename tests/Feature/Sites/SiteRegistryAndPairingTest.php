@@ -382,6 +382,70 @@ final class SiteRegistryAndPairingTest extends TestCase
         self::assertSame(SiteConnectionState::Connected, $site->refresh()->connection_state);
     }
 
+    public function test_refresh_preserves_credential_when_pinned_bridge_maps_metadata_http_503_to_invalid_client(): void
+    {
+        $this->assertAmbiguousInvalidClientRefreshIsRecoverable('client_metadata_http_503');
+    }
+
+    public function test_refresh_preserves_credential_when_pinned_bridge_maps_jwks_http_503_to_invalid_client(): void
+    {
+        $this->assertAmbiguousInvalidClientRefreshIsRecoverable('jwks_http_503');
+    }
+
+    public function test_disconnect_preserves_credential_when_pinned_bridge_maps_metadata_http_503_to_invalid_client(): void
+    {
+        $this->assertAmbiguousInvalidClientRevocationIsRecoverable('client_metadata_http_503');
+    }
+
+    public function test_disconnect_preserves_credential_when_pinned_bridge_maps_jwks_http_503_to_invalid_client(): void
+    {
+        $this->assertAmbiguousInvalidClientRevocationIsRecoverable('jwks_http_503');
+    }
+
+    public function test_remove_preserves_site_when_pinned_bridge_maps_metadata_http_503_to_invalid_client(): void
+    {
+        $this->assertAmbiguousInvalidClientRemoveIsRecoverable('client_metadata_http_503');
+    }
+
+    public function test_remove_preserves_site_when_pinned_bridge_maps_jwks_http_503_to_invalid_client(): void
+    {
+        $this->assertAmbiguousInvalidClientRemoveIsRecoverable('jwks_http_503');
+    }
+
+    public function test_refresh_invalid_grant_is_terminal(): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $this->pair($connections, $site);
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) {
+            if ((string) parse_url($request->url(), PHP_URL_PATH) === '/wp-json/wp-ai-bridge/v1/oauth/token'
+                && (string) ($request->data()['grant_type'] ?? '') === 'refresh_token') {
+                return Http::response(['error' => 'invalid_grant'], 400);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $this->travel(2)->seconds();
+        try {
+            $connections->accessToken($site);
+            self::fail('Terminal invalid_grant refresh response was accepted.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('refresh_failed', $exception->reason);
+        }
+
+        $site->refresh();
+        self::assertSame(SiteConnectionState::ReconnectRequired, $site->connection_state);
+        self::assertSame('invalid_grant', $site->last_error_code);
+        self::assertFalse($site->credential()->exists());
+    }
+
     public function test_malformed_refresh_success_preserves_existing_credential_for_recovery(): void
     {
         /** @var SiteRegistry $registry */
@@ -443,6 +507,147 @@ final class SiteRegistryAndPairingTest extends TestCase
             self::assertSame('invalid_state', $exception->reason);
         }
         self::assertSame(SiteConnectionState::ReconnectRequired, $site->refresh()->connection_state);
+    }
+
+    private function assertAmbiguousInvalidClientRefreshIsRecoverable(string $source): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $this->pair($connections, $site);
+        $before = $site->credential()->firstOrFail()->encrypted_payload;
+        $failureServed = false;
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) use (&$failureServed, $source) {
+            if (! $failureServed
+                && (string) parse_url($request->url(), PHP_URL_PATH) === '/wp-json/wp-ai-bridge/v1/oauth/token'
+                && (string) ($request->data()['grant_type'] ?? '') === 'refresh_token') {
+                $failureServed = true;
+
+                return $this->pinnedBridgeAmbiguousInvalidClient($source);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $this->travel(2)->seconds();
+        try {
+            $connections->accessToken($site);
+            self::fail('Ambiguous invalid_client refresh response was treated as terminal.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('invalid_client', $exception->reason);
+        }
+
+        $site->refresh();
+        self::assertTrue($failureServed);
+        self::assertSame(SiteConnectionState::Error, $site->connection_state);
+        self::assertSame('invalid_client', $site->last_error_code);
+        self::assertTrue($site->credential()->exists());
+        self::assertSame($before, $site->credential()->firstOrFail()->encrypted_payload);
+
+        self::assertSame('alpha-refreshed-access', $connections->accessToken($site));
+        self::assertSame(SiteConnectionState::Connected, $site->refresh()->connection_state);
+    }
+
+    private function assertAmbiguousInvalidClientRevocationIsRecoverable(string $source): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $this->pair($connections, $site);
+        $before = $site->credential()->firstOrFail()->encrypted_payload;
+        $failureServed = false;
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) use (&$failureServed, $source) {
+            if (! $failureServed
+                && (string) parse_url($request->url(), PHP_URL_PATH) === '/wp-json/wp-ai-bridge/v1/oauth/revoke') {
+                $failureServed = true;
+
+                return $this->pinnedBridgeAmbiguousInvalidClient($source);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        try {
+            $connections->disconnect($site);
+            self::fail('Ambiguous invalid_client revocation response was treated as successful revocation.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('revocation_failed', $exception->reason);
+        }
+
+        $site->refresh();
+        self::assertTrue($failureServed);
+        self::assertSame(SiteConnectionState::Error, $site->connection_state);
+        self::assertSame('revocation_failed', $site->last_error_code);
+        self::assertTrue($site->credential()->exists());
+        self::assertSame($before, $site->credential()->firstOrFail()->encrypted_payload);
+
+        $connections->disconnect($site);
+        self::assertFalse($site->credential()->exists());
+        self::assertSame(SiteConnectionState::Disconnected, $site->refresh()->connection_state);
+    }
+
+    private function assertAmbiguousInvalidClientRemoveIsRecoverable(string $source): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $this->pair($connections, $site);
+        $siteKey = (string) $site->getKey();
+        $before = $site->credential()->firstOrFail()->encrypted_payload;
+        $failureServed = false;
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) use (&$failureServed, $source) {
+            if (! $failureServed
+                && (string) parse_url($request->url(), PHP_URL_PATH) === '/wp-json/wp-ai-bridge/v1/oauth/revoke') {
+                $failureServed = true;
+
+                return $this->pinnedBridgeAmbiguousInvalidClient($source);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        try {
+            $registry->remove($site);
+            self::fail('Site was removed after ambiguous invalid_client revocation response.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('revocation_failed', $exception->reason);
+        }
+
+        $preserved = Site::query()->findOrFail($siteKey);
+        self::assertTrue($failureServed);
+        self::assertSame(SiteConnectionState::Error, $preserved->connection_state);
+        self::assertTrue($preserved->credential()->exists());
+        self::assertSame($before, $preserved->credential()->firstOrFail()->encrypted_payload);
+
+        $registry->remove($preserved);
+        self::assertFalse(Site::query()->whereKey($siteKey)->exists());
+    }
+
+    private function pinnedBridgeAmbiguousInvalidClient(string $source)
+    {
+        self::assertContains($source, ['client_metadata_http_503', 'jwks_http_503']);
+
+        // The pinned WP AI Bridge contract maps these additional-client dependency
+        // failures to OAuth invalid_client before refresh/revocation is attempted.
+        return Http::response([
+            'error' => 'invalid_client',
+            'error_description' => 'Pinned Bridge client-auth dependency unavailable: '.$source,
+        ], 400);
     }
 
     private function pair(SiteConnectionService $connections, Site $site): void

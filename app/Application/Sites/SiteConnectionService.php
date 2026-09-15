@@ -249,7 +249,9 @@ final class SiteConnectionService
                     throw new SiteConnectionException($exception->reason, 'The remote credential could not be revoked safely.');
                 }
 
-                if ($response->status !== 200 && ! $this->isAlreadyInvalidClient($response->status, $response->body)) {
+                // The pinned Bridge can emit invalid_client before revocation is attempted
+                // when additional-client metadata/JWKS resolution is temporarily unavailable.
+                if ($response->status !== 200) {
                     $site->forceFill([
                         'connection_state' => SiteConnectionState::Error,
                         'last_error_code' => 'revocation_failed',
@@ -458,16 +460,9 @@ final class SiteConnectionService
 
     private function isTerminalRefreshFailure(string $oauthError): bool
     {
-        return in_array($oauthError, ['invalid_grant', 'invalid_client'], true);
-    }
-
-    private function isAlreadyInvalidClient(int $status, string $body): bool
-    {
-        if ($status < 400 || $status >= 500) {
-            return false;
-        }
-
-        return $this->oauthFailureCode($body) === 'invalid_client';
+        // invalid_client is ambiguous in the pinned Bridge contract because transient
+        // additional-client metadata/JWKS failures are normalized to that OAuth code.
+        return $oauthError === 'invalid_grant';
     }
 
     private function safeErrorCode(string $value): string
