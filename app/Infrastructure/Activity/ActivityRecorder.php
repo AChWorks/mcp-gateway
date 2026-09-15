@@ -22,9 +22,10 @@ final class ActivityRecorder
         $outcome = $this->safeIdentifier($outcome, 32) ?? 'unknown';
         $siteId = $this->safeIdentifier($siteId, 128);
         $errorCode = $this->safeIdentifier($errorCode, 64);
-        [$actorType, $actorId, $clientHash] = $this->actor();
 
         try {
+            [$actorType, $actorId, $clientHash] = $this->actor();
+
             DB::transaction(function () use ($correlationId, $operation, $outcome, $siteId, $errorCode, $actorType, $actorId, $clientHash): void {
                 $lock = DB::table('activity_retention_state')
                     ->where('id', 1)
@@ -52,13 +53,17 @@ final class ActivityRecorder
         } catch (Throwable) {
             // Activity persistence must never change the authoritative outcome of a
             // routed operation, especially after a remote mutation may have executed.
-            Log::warning('Gateway activity persistence failed.', [
-                'correlation_id' => $correlationId,
-                'operation' => $operation,
-                'site_id' => $siteId,
-                'outcome' => $outcome,
-                'error_code' => $errorCode,
-            ]);
+            try {
+                Log::warning('Gateway activity persistence failed.', [
+                    'correlation_id' => $correlationId,
+                    'operation' => $operation,
+                    'site_id' => $siteId,
+                    'outcome' => $outcome,
+                    'error_code' => $errorCode,
+                ]);
+            } catch (Throwable) {
+                // Diagnostics are best-effort and must not change the routed result.
+            }
         }
     }
 
