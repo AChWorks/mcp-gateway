@@ -150,7 +150,9 @@ final class SiteController extends Controller
     /** @return array{0:string,1:string} */
     private function status(Site $site): array
     {
-        if ($site->connection_state === SiteConnectionState::Error) {
+        $state = (string) $site->getRawOriginal('connection_state');
+
+        if ($state === SiteConnectionState::Error->value) {
             return match ($site->last_error_code) {
                 'network_failure', 'tls_failure' => [(string) __('Unreachable'), 'danger'],
                 'missing_bridge', 'incompatible_metadata' => [(string) __('Incompatible'), 'danger'],
@@ -158,13 +160,13 @@ final class SiteController extends Controller
             };
         }
 
-        return match ($site->connection_state) {
-            SiteConnectionState::Connected => [(string) __('Connected'), 'success'],
-            SiteConnectionState::Pending => [(string) __('Authorization pending'), 'warning'],
-            SiteConnectionState::ReconnectRequired => [(string) __('Reconnect required'), 'warning'],
-            SiteConnectionState::Reassigning => [(string) __('Updating target'), 'warning'],
-            SiteConnectionState::Disconnected => [(string) __('Configured'), 'neutral'],
-            SiteConnectionState::Error => [(string) __('Needs attention'), 'danger'],
+        return match ($state) {
+            SiteConnectionState::Connected->value => [(string) __('Connected'), 'success'],
+            SiteConnectionState::Pending->value => [(string) __('Authorization pending'), 'warning'],
+            SiteConnectionState::ReconnectRequired->value => [(string) __('Reconnect required'), 'warning'],
+            SiteConnectionState::Reassigning->value => [(string) __('Updating target'), 'warning'],
+            SiteConnectionState::Disconnected->value => [(string) __('Configured'), 'neutral'],
+            default => [(string) __('Needs attention'), 'danger'],
         };
     }
 }
