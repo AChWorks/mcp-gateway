@@ -93,7 +93,8 @@ After a review finding or late change:
 - validate only the remediation delta first;
 - rerun broader checks only when the delta can invalidate their prior evidence or when exact-candidate policy requires a final full run;
 - a fresh review should focus on the changed delta and closure of prior findings unless scope, assumptions, risk, or target identity changed materially;
-- purely non-behavioral edits may reuse unaffected green evidence with a targeted check rather than restarting the whole validation stack.
+- reuse unaffected green evidence when the later delta does not touch or invalidate what that evidence proved; do not replay identical checks just because the commit SHA changed;
+- if the Issue explicitly requires exact-final-candidate broad CI, complete expected edits before that final run instead of repeatedly refreezing after cosmetic cleanup.
 
 After integration:
 
