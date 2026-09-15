@@ -111,9 +111,7 @@ final readonly class WpAiBridgeMcpClient
             $resourceUrl = $lockedSite->mcp_resource_url;
 
             if (! $credential instanceof SiteCredential
-                || ! is_string($resourceUrl)
                 || $resourceUrl === ''
-                || ! is_string($credential->resource_url)
                 || ! hash_equals($resourceUrl, $credential->resource_url)) {
                 throw new SiteConnectionException(
                     'credential_target_mismatch',
