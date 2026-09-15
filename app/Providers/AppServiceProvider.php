@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Infrastructure\Http\DnsResolver;
+use App\Infrastructure\Http\SystemDnsResolver;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -12,7 +14,7 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        // Concrete OAuth/MCP services are constructor-injected and autowired.
+        $this->app->bind(DnsResolver::class, SystemDnsResolver::class);
     }
 
     public function boot(): void

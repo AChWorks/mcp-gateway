@@ -19,23 +19,28 @@ final class EnvironmentRequirementsTest extends TestCase
         self::assertFalse($requirements->checks('mysql', 'not-a-valid-key', 'AES-256-CBC')['Valid Laravel encryption key']);
     }
 
-    public function test_deployment_security_checks_require_https_and_secure_sessions_in_production(): void
+    public function test_deployment_security_checks_require_https_secure_sessions_and_distinct_signing_keys(): void
     {
         $directory = sys_get_temp_dir().'/mcp-gateway-env-'.bin2hex(random_bytes(8));
         $publicRoot = $directory.'/public';
-        $keyRoot = $directory.'/private';
+        $oauthRoot = $directory.'/oauth';
+        $bridgeRoot = $directory.'/bridge';
         self::assertTrue(mkdir($publicRoot, 0700, true));
-        self::assertTrue(mkdir($keyRoot, 0700, true));
+        self::assertTrue(mkdir($oauthRoot, 0700, true));
+        self::assertTrue(mkdir($bridgeRoot, 0700, true));
 
         try {
-            [$privatePath, $publicPath] = $this->createKeypair($keyRoot);
+            [$oauthPrivate, $oauthPublic] = $this->createKeypair($oauthRoot);
+            [$bridgePrivate, $bridgePublic] = $this->createKeypair($bridgeRoot);
             $requirements = new EnvironmentRequirements;
 
             $secure = $requirements->deploymentSecurityChecks(
                 environment: 'production',
                 applicationUrl: 'https://gateway.example.test',
-                oauthPrivateKeyPath: $privatePath,
-                oauthPublicKeyPath: $publicPath,
+                oauthPrivateKeyPath: $oauthPrivate,
+                oauthPublicKeyPath: $oauthPublic,
+                bridgePrivateKeyPath: $bridgePrivate,
+                bridgePublicKeyPath: $bridgePublic,
                 publicRoot: $publicRoot,
                 privateFilesystemServed: false,
                 sessionEncrypted: true,
@@ -43,11 +48,27 @@ final class EnvironmentRequirementsTest extends TestCase
             );
             self::assertNotContains(false, $secure, true);
 
+            $reusedKey = $requirements->deploymentSecurityChecks(
+                environment: 'production',
+                applicationUrl: 'https://gateway.example.test',
+                oauthPrivateKeyPath: $oauthPrivate,
+                oauthPublicKeyPath: $oauthPublic,
+                bridgePrivateKeyPath: $oauthPrivate,
+                bridgePublicKeyPath: $oauthPublic,
+                publicRoot: $publicRoot,
+                privateFilesystemServed: false,
+                sessionEncrypted: true,
+                sessionSecure: true,
+            );
+            self::assertFalse($reusedKey['Bridge client signing keypair is distinct from Gateway OAuth signing keys']);
+
             $insecure = $requirements->deploymentSecurityChecks(
                 environment: 'production',
                 applicationUrl: 'http://gateway.example.test',
-                oauthPrivateKeyPath: $privatePath,
-                oauthPublicKeyPath: $publicPath,
+                oauthPrivateKeyPath: $oauthPrivate,
+                oauthPublicKeyPath: $oauthPublic,
+                bridgePrivateKeyPath: $bridgePrivate,
+                bridgePublicKeyPath: $bridgePublic,
                 publicRoot: $publicRoot,
                 privateFilesystemServed: true,
                 sessionEncrypted: false,
@@ -57,8 +78,10 @@ final class EnvironmentRequirementsTest extends TestCase
             self::assertFalse($requirements->deploymentSecurityChecks(
                 environment: 'production',
                 applicationUrl: 'https://gateway.example.test/subpath?bad=1',
-                oauthPrivateKeyPath: $privatePath,
-                oauthPublicKeyPath: $publicPath,
+                oauthPrivateKeyPath: $oauthPrivate,
+                oauthPublicKeyPath: $oauthPublic,
+                bridgePrivateKeyPath: $bridgePrivate,
+                bridgePublicKeyPath: $bridgePublic,
                 publicRoot: $publicRoot,
                 privateFilesystemServed: false,
                 sessionEncrypted: true,
@@ -68,9 +91,11 @@ final class EnvironmentRequirementsTest extends TestCase
             self::assertFalse($insecure['Administrator sessions are encrypted']);
             self::assertFalse($insecure['Production session cookie is HTTPS-only']);
         } finally {
-            @unlink($keyRoot.'/private.key');
-            @unlink($keyRoot.'/public.key');
-            @rmdir($keyRoot);
+            foreach ([$oauthRoot, $bridgeRoot] as $root) {
+                @unlink($root.'/private.key');
+                @unlink($root.'/public.key');
+                @rmdir($root);
+            }
             @rmdir($publicRoot);
             @rmdir($directory);
         }

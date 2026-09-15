@@ -91,10 +91,15 @@ jobs:
       - name: Validate live ChatGPT OAuth client metadata
         run: php artisan gateway:oauth-client-check --env=testing --refresh
 
-      - name: Generate ephemeral OAuth signing keys
+      - name: Generate ephemeral Gateway OAuth signing keys
         env:
           APP_ENV: testing
         run: php artisan gateway:oauth-keygen --env=testing --force
+
+      - name: Generate ephemeral Bridge client signing keys
+        env:
+          APP_ENV: testing
+        run: php artisan gateway:bridge-client-keygen --env=testing --force
 
       - name: Validate runtime requirements
         env:

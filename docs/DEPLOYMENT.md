@@ -16,7 +16,11 @@ The current repository supports a conventional single-host PHP deployment with:
 - file-backed cache and administrator sessions by default;
 - no required Redis, queue worker, broker, Docker runtime, or separate MCP daemon.
 
-Production/runtime checks require PDO MySQL, OpenSSL, Sodium, a valid Laravel encryption key, MySQL as the configured database, a valid OAuth signing keypair, private storage that is not web-served, encrypted administrator sessions, and HTTPS-only sessions in production. CI also provisions `curl` and `mbstring`; keep those extensions enabled for the deployed PHP 8.4 runtime. `pdo_sqlite` is used by tests and is not a production database requirement.
+Production/runtime checks require PDO MySQL, cURL with `CURLOPT_RESOLVE` DNS pinning support, OpenSSL, Sodium, a valid Laravel encryption key, MySQL as the configured database, two valid and distinct RSA signing keypairs, private storage that is not web-served, encrypted administrator sessions, and HTTPS-only sessions in production. The first signing pair owns the ChatGPT-facing Gateway OAuth server; the second owns the Gateway's `private_key_jwt` client identity when connecting to WP AI Bridge. CI also provisions `mbstring`; keep it enabled for the deployed PHP 8.4 runtime. `pdo_sqlite` is used by tests and is not a production database requirement.
+
+Policy-controlled Gateway-to-Bridge HTTP requests are intentionally direct: the application explicitly disables Guzzle proxy use for those requests before applying the validated `CURLOPT_RESOLVE` target pin. Ambient `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and equivalent process settings must not become part of the Bridge transport path. Future proxy support would require a separate proxy-aware validation/pinning design; it must not be enabled by removing the direct-request invariant.
+
+Under the pinned WP AI Bridge compatibility contract, OAuth `invalid_client` is not sufficient proof that an existing site authorization is terminal: temporary non-200 responses while resolving an approved additional client's metadata or JWKS can surface as `invalid_client` before refresh or revocation is attempted. The Gateway therefore preserves the encrypted site credential on generic `invalid_client` refresh/revocation failures and fails closed for later retry. A refresh `invalid_grant` remains terminal. Site removal must not proceed until remote revocation is actually confirmed.
 
 ## 1. Prerequisites
 
@@ -28,7 +32,7 @@ Before placing application code on the server, prepare:
 
    ```bash
    php -v
-   php -r 'foreach (["curl", "mbstring", "openssl", "pdo_mysql", "sodium"] as $extension) { if (! extension_loaded($extension)) { fwrite(STDERR, "Missing PHP extension: {$extension}\n"); exit(1); } } echo "Required PHP extensions: OK\n";'
+   php -r 'foreach (["curl", "mbstring", "openssl", "pdo_mysql", "sodium"] as $extension) { if (! extension_loaded($extension)) { fwrite(STDERR, "Missing PHP extension: {$extension}\n"); exit(1); } } if (! defined("CURLOPT_RESOLVE")) { fwrite(STDERR, "Missing cURL CURLOPT_RESOLVE support\n"); exit(1); } echo "Required PHP extensions: OK\n";'
    composer --version
    ```
 
@@ -70,7 +74,7 @@ Do not copy nginx configuration into OpenLiteSpeed. LSAPI/SSE buffering and long
 
 Run Composer and Artisan as the application deployment/PHP owner whenever practical, not as an unrelated privileged account.
 
-This matters especially for OAuth signing keys: `gateway:oauth-keygen` creates the key directory with mode `0700` and both key files with mode `0600`. The PHP process must therefore run as the owning account or have ownership deliberately aligned without weakening those permissions.
+This matters especially for signing keys: `gateway:oauth-keygen` and `gateway:bridge-client-keygen` create private key directories with mode `0700` and key files with mode `0600`. The PHP process must therefore run as the owning account or have ownership deliberately aligned without weakening those permissions.
 
 Required filesystem behavior:
 
@@ -78,9 +82,10 @@ Required filesystem behavior:
 - `storage/`: writable by the PHP process;
 - `bootstrap/cache/`: writable by the PHP process;
 - `storage/app/private/`: never served by the web server;
-- OAuth private/public key files: outside `public/`, owned for the PHP runtime, mode `0600` on Unix-like systems.
+- both OAuth signing keypairs: outside `public/`, owned for the PHP runtime, mode `0600` on Unix-like systems;
+- the Bridge client signing pair must be distinct from the ChatGPT-facing Gateway OAuth signing pair.
 
-Do **not** fix a key ownership mistake by making the private key world/group readable.
+Do **not** fix a key ownership mistake by making a private key world/group readable.
 
 ## 4. Install an exact reviewed revision
 
@@ -139,6 +144,8 @@ MCP_BOOTSTRAP_FIXTURE_TOKEN=
 
 OAUTH_PRIVATE_KEY_PATH=storage/app/private/oauth/private.key
 OAUTH_PUBLIC_KEY_PATH=storage/app/private/oauth/public.key
+BRIDGE_CLIENT_PRIVATE_KEY_PATH=storage/app/private/bridge-client/private.key
+BRIDGE_CLIENT_PUBLIC_KEY_PATH=storage/app/private/bridge-client/public.key
 ```
 
 Important boundaries:
@@ -149,27 +156,30 @@ Important boundaries:
 - Keep `SESSION_ENCRYPT=true`; production cookies must remain HTTPS-only.
 - Do not enable the MCP bootstrap fixture in production.
 - Keep Laravel's `local` filesystem private/non-served.
-- The default OAuth key paths are intentionally below `storage/app/private/`, outside the public web root.
+- Both signing-key directories are intentionally below `storage/app/private/`, outside the public web root.
+- The Bridge client keypair is a separate trust identity. Do not point its paths at the ChatGPT-facing OAuth keypair.
 
 The rest of `.env.example` provides the current bounded timeout/size defaults. Change them only from evidence, not as a workaround for an unverified proxy/web-server problem.
 
-## 6. Generate OAuth signing keys
+## 6. Generate signing keys
 
-After application ownership and `.env` are correct, generate the Gateway signing pair as the deployment/PHP owner:
+After application ownership and `.env` are correct, generate both signing pairs as the deployment/PHP owner:
 
 ```bash
 php artisan gateway:oauth-keygen
+php artisan gateway:bridge-client-keygen
 ```
 
-Expected result:
+Expected results include:
 
 ```text
 OAuth signing keypair generated.
+Bridge OAuth client signing keypair generated.
 ```
 
-The command refuses to overwrite an existing pair unless `--force` is supplied. Do not use `--force` during a normal deploy or upgrade; replacing signing keys is an explicit key-rotation event and may invalidate continuity assumptions for issued tokens.
+Both commands refuse to overwrite an existing pair unless `--force` is supplied. Do not use `--force` during a normal deploy or upgrade. Replacing the Gateway OAuth pair is an explicit server-key rotation event. Replacing the Bridge client pair changes the public JWKS used by approved WP AI Bridge clients and can require deliberate approval/reconnection handling; it is not a routine deployment step.
 
-Never print, copy into Git, or place the private key below `public/`.
+Never print, copy into Git, or place either private key below `public/`.
 
 ## 7. Initialize the database and administrator
 
@@ -198,12 +208,13 @@ php artisan gateway:check
 Every reported item must be `[OK]`. In the current application this validates, among other things:
 
 - PHP `>= 8.4.1`;
-- PDO MySQL, OpenSSL and Sodium;
+- PDO MySQL, cURL with DNS pinning support, OpenSSL and Sodium;
 - a valid Laravel encryption key;
 - MySQL as the configured database driver;
 - canonical `APP_URL` and HTTPS in production;
-- a valid/matched OAuth signing keypair;
-- signing keys outside `public/` with restricted permissions;
+- a valid/matched ChatGPT-facing Gateway OAuth signing keypair;
+- a valid/matched and distinct Bridge client signing keypair;
+- both signing pairs outside `public/` with restricted permissions;
 - private application storage not exposed through Laravel file serving;
 - encrypted administrator sessions;
 - HTTPS-only production session cookies.
@@ -218,13 +229,16 @@ Use only non-secret public/health endpoints for basic verification.
 curl --fail --silent --show-error https://gateway.example.com/up
 curl --fail --silent --show-error https://gateway.example.com/.well-known/oauth-protected-resource/mcp
 curl --fail --silent --show-error https://gateway.example.com/.well-known/oauth-authorization-server
+curl --fail --silent --show-error --output /dev/null https://gateway.example.com/oauth/client.json
+curl --fail --silent --show-error --output /dev/null https://gateway.example.com/oauth/jwks.json
 ```
 
 Expected behavior:
 
 - `/up` succeeds without contacting every downstream WordPress site;
 - protected-resource metadata identifies the configured Gateway MCP resource;
-- authorization-server metadata identifies the same canonical issuer and the current OAuth endpoints.
+- authorization-server metadata identifies the same canonical issuer and the current OAuth endpoints;
+- the Bridge client metadata and JWKS endpoints are publicly reachable over the same canonical HTTPS origin.
 
 Then verify the configured ChatGPT client metadata contract without printing JWK values or assertions:
 
@@ -234,7 +248,7 @@ php artisan gateway:oauth-client-check --refresh
 
 Finally, sign in at `/admin/login` and confirm the authenticated Gateway connection-information page shows the canonical public MCP/discovery information without token/private-key values.
 
-Do not include access tokens, refresh tokens, authorization codes, client assertions, passwords, `APP_KEY`, `.env` contents, or OAuth private-key contents in deployment logs/screenshots used as evidence.
+Do not include access tokens, refresh tokens, authorization codes, client assertions, passwords, `APP_KEY`, `.env` contents, or private-key contents in deployment logs/screenshots used as evidence.
 
 ## 10. OpenLiteSpeed validation still required by Issue #8
 
@@ -253,14 +267,15 @@ If no adjustment is required, document that evidence. If an adjustment is requir
 
 Before every migration-bearing upgrade, preserve a recoverable set containing:
 
-- a consistent MySQL database backup;
+- a consistent MySQL database backup, including site registry, encrypted site credentials and OAuth-flow state owned by the deployed revision;
 - the deployment `.env` / Laravel `APP_KEY` through the site's approved secret-backup mechanism;
 - `OAUTH_PRIVATE_KEY_PATH` and `OAUTH_PUBLIC_KEY_PATH` with permissions preserved;
+- `BRIDGE_CLIENT_PRIVATE_KEY_PATH` and `BRIDGE_CLIENT_PUBLIC_KEY_PATH` with permissions preserved;
 - the exact deployed Git commit/tag and Composer lockfile identity.
 
-Treat the database, `APP_KEY`, and signing keypair as related recovery material. Losing signing/encryption material can invalidate or make security-sensitive persisted state unrecoverable.
+Treat the database, `APP_KEY`, and both signing keypairs as one recovery set. Site access/refresh tokens are encrypted with the application encryption boundary, so restoring the database without the matching `APP_KEY` makes those credentials unusable. Restoring a different Bridge client keypair changes the `private_key_jwt` identity material advertised through the Gateway JWKS endpoint and can break approved site connections even when the database is intact.
 
-Issue #4 has not yet integrated the final site-credential persistence contract. Therefore this baseline intentionally does **not** claim that the list above is the complete future backup set for connected WordPress sites. Final Issue #8 recovery validation must add every key/material required by the integrated #4 design and prove recovery with controlled credentials.
+Final Issue #8 recovery validation must prove this set on a controlled two-site installation before production delivery. Do not claim recovery readiness from backup presence alone.
 
 ## 12. Upgrade and rollback outline
 
