@@ -15,8 +15,10 @@ final class ActivityFeed
         ?string $siteId = null,
         ?string $operation = null,
     ): array {
-        $page = max(1, $page);
         $perPage = max(1, min((int) config('activity.page_size_max', 100), $perPage));
+        $maxRows = max(1, (int) config('activity.max_rows', 5000));
+        $maxPage = intdiv($maxRows + $perPage - 1, $perPage) + 1;
+        $page = max(1, min($maxPage, $page));
         $siteId = $this->filter($siteId, 128);
         $operation = $this->filter($operation, 128);
 

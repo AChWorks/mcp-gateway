@@ -10,6 +10,7 @@ use App\Domain\Sites\SiteCredential;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
+use Throwable;
 
 final readonly class WpAiBridgeMcpClient
 {
@@ -86,7 +87,18 @@ final readonly class WpAiBridgeMcpClient
                 throw new WpAiBridgeMcpException('unsupported_connector', 'The selected site does not use the WP AI Bridge connector.');
             }
 
-            $accessToken = $this->connections->accessToken($lockedSite);
+            try {
+                $accessToken = $this->connections->accessToken($lockedSite);
+            } catch (SiteConnectionException $exception) {
+                throw $exception;
+            } catch (Throwable $exception) {
+                throw new WpAiBridgeMcpException(
+                    'credential_unavailable',
+                    'The selected site credential could not be opened safely.',
+                    $exception,
+                );
+            }
+
             $credential = $lockedSite->credential()->first();
             $resourceUrl = $lockedSite->mcp_resource_url;
 

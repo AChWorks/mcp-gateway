@@ -27,7 +27,6 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 use Tests\TestCase;
-use Throwable;
 
 final class IntegratedSafeguardsTest extends TestCase
 {
@@ -122,21 +121,25 @@ final class IntegratedSafeguardsTest extends TestCase
 
         $originalEncrypter = app('encrypter');
         Crypt::swap(new Encrypter(random_bytes(32), 'AES-256-CBC'));
+        Http::preventStrayRequests();
 
-        $failure = null;
         try {
-            $credential->refresh();
-            $vault->open($credential);
-            self::fail('Credential encrypted with a different APP_KEY was accepted.');
-        } catch (Throwable $exception) {
-            $failure = $exception;
+            $result = app(PendingGatewayToolHandlers::class)
+                ->siteAbilityExecute('recovery', 'demo/read', []);
         } finally {
             Crypt::swap($originalEncrypter);
         }
 
-        self::assertNotNull($failure);
-        self::assertStringNotContainsString($secretAccess, $failure->getMessage());
-        self::assertStringNotContainsString($secretRefresh, $failure->getMessage());
+        self::assertFalse($result['ok']);
+        self::assertSame('credential_unavailable', $result['error']['code']);
+        self::assertStringNotContainsString($secretAccess, $result['error']['message']);
+        self::assertStringNotContainsString($secretRefresh, $result['error']['message']);
+        self::assertDatabaseHas('activity_events', [
+            'site_id' => 'recovery',
+            'operation' => 'site-ability-execute',
+            'outcome' => 'failure',
+            'error_code' => 'credential_unavailable',
+        ]);
         self::assertDatabaseHas('site_credentials', [
             'id' => $credential->id,
             'site_record_id' => $site->id,
