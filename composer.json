@@ -51,7 +51,7 @@
             "@php artisan config:clear --ansi @no_additional_args",
             "@php artisan test"
         ],
-        "lint": "@php vendor/bin/pint --test",
+        "lint": "@php vendor/bin/pint --test -v",
         "analyse": "@php vendor/bin/phpstan analyse --memory-limit=1G",
         "check": [
             "@lint",

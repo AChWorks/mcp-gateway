@@ -16,8 +16,6 @@ on:
       - 'tests/Feature/Sites/**'
       - 'tests/Contract/**'
       - 'bin/check-wp-ai-bridge-contract.sh'
-      - 'composer.json'
-      - 'composer.lock'
       - '.github/workflows/wp-ai-bridge-contract.yml'
   pull_request:
     paths:
@@ -32,8 +30,6 @@ on:
       - 'tests/Feature/Sites/**'
       - 'tests/Contract/**'
       - 'bin/check-wp-ai-bridge-contract.sh'
-      - 'composer.json'
-      - 'composer.lock'
       - '.github/workflows/wp-ai-bridge-contract.yml'
 
 permissions:
