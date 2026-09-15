@@ -58,9 +58,7 @@ final class PendingGatewayToolHandlers
         $correlationId = CorrelationId::current();
         $site = $this->findSite($site_id);
         if (! $site instanceof Site) {
-            $this->activity->record($correlationId, 'site-context', 'failure', $site_id, 'site_not_found');
-
-            return $this->error($correlationId, 'site_not_found', 'The requested site_id is not configured.');
+            return $this->siteNotFound($correlationId, 'site-context');
         }
 
         $this->activity->record($correlationId, 'site-context', 'success', $site->site_id);
@@ -93,9 +91,7 @@ final class PendingGatewayToolHandlers
         $correlationId = CorrelationId::current();
         $site = $this->findSite($site_id);
         if (! $site instanceof Site) {
-            $this->activity->record($correlationId, 'site-abilities-read', 'failure', $site_id, 'site_not_found');
-
-            return $this->error($correlationId, 'site_not_found', 'The requested site_id is not configured.');
+            return $this->siteNotFound($correlationId, 'site-abilities-read');
         }
 
         $ability = $this->nullableTrim($ability);
@@ -143,9 +139,7 @@ final class PendingGatewayToolHandlers
         $correlationId = CorrelationId::current();
         $site = $this->findSite($site_id);
         if (! $site instanceof Site) {
-            $this->activity->record($correlationId, 'site-ability-execute', 'failure', $site_id, 'site_not_found');
-
-            return $this->error($correlationId, 'site_not_found', 'The requested site_id is not configured.');
+            return $this->siteNotFound($correlationId, 'site-ability-execute');
         }
 
         $ability = trim($ability);
@@ -223,6 +217,14 @@ final class PendingGatewayToolHandlers
     private function tooLong(?string $value, int $max): bool
     {
         return $value !== null && mb_strlen($value) > $max;
+    }
+
+    /** @return array<string, mixed> */
+    private function siteNotFound(string $correlationId, string $operation): array
+    {
+        $this->activity->record($correlationId, $operation, 'failure', null, 'site_not_found');
+
+        return $this->error($correlationId, 'site_not_found', 'The requested site_id is not configured.');
     }
 
     /** @return array<string, mixed> */

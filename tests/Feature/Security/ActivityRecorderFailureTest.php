@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Security;
 
+use App\Application\Mcp\PendingGatewayToolHandlers;
 use App\Infrastructure\Activity\ActivityRecorder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -28,5 +29,61 @@ final class ActivityRecorderFailureTest extends TestCase
 
         self::assertSame(0, DB::table('activity_events')->count());
         Log::shouldHaveReceived('warning')->once();
+    }
+
+    public function test_secret_shaped_unknown_site_id_is_not_retained_or_returned(): void
+    {
+        $secretSiteId = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.signature';
+        $handlers = app(PendingGatewayToolHandlers::class);
+
+        $results = [
+            $handlers->siteContext($secretSiteId),
+            $handlers->siteAbilitiesRead($secretSiteId),
+            $handlers->siteAbilityExecute($secretSiteId, 'demo/read', []),
+        ];
+
+        foreach ($results as $result) {
+            self::assertFalse($result['ok']);
+            self::assertSame('site_not_found', $result['error']['code']);
+            self::assertStringNotContainsString($secretSiteId, json_encode($result, JSON_THROW_ON_ERROR));
+        }
+
+        $events = DB::table('activity_events')->orderBy('created_at')->orderBy('id')->get();
+        self::assertCount(3, $events);
+        self::assertSame(
+            ['site-context', 'site-abilities-read', 'site-ability-execute'],
+            $events->pluck('operation')->all(),
+        );
+
+        foreach ($events as $event) {
+            self::assertNull($event->site_id);
+            self::assertSame('failure', $event->outcome);
+            self::assertSame('site_not_found', $event->error_code);
+        }
+
+        self::assertStringNotContainsString($secretSiteId, json_encode($events->all(), JSON_THROW_ON_ERROR));
+    }
+
+    public function test_secret_shaped_unknown_site_id_is_not_written_to_fallback_log_context(): void
+    {
+        $secretSiteId = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.signature';
+        Log::spy();
+        Schema::drop('activity_retention_state');
+
+        $result = app(PendingGatewayToolHandlers::class)
+            ->siteAbilityExecute($secretSiteId, 'demo/read', []);
+
+        self::assertFalse($result['ok']);
+        self::assertSame('site_not_found', $result['error']['code']);
+        self::assertStringNotContainsString($secretSiteId, json_encode($result, JSON_THROW_ON_ERROR));
+
+        Log::shouldHaveReceived('warning')
+            ->once()
+            ->withArgs(function (string $message, array $context) use ($secretSiteId): bool {
+                return $message === 'Gateway activity persistence failed.'
+                    && array_key_exists('site_id', $context)
+                    && $context['site_id'] === null
+                    && ! str_contains(json_encode($context, JSON_THROW_ON_ERROR), $secretSiteId);
+            });
     }
 }
