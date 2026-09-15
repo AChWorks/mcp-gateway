@@ -5,6 +5,9 @@ namespace Tests\Feature\Sites;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
+use GuzzleHttp\RequestOptions;
+use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -88,5 +91,62 @@ final class SafeHttpClientTest extends TestCase
         } catch (OutboundRequestException $exception) {
             self::assertSame('response_too_large', $exception->reason);
         }
+    }
+
+    public function test_policy_requests_disable_ambient_proxy_while_retaining_dns_pin(): void
+    {
+        $factory = new CapturingHttpFactory;
+        Http::swap($factory);
+        $factory->preventStrayRequests();
+        $factory->fake(fn (Request $request) => Factory::response(['ok' => true], 200));
+
+        $previousHttpsProxy = getenv('HTTPS_PROXY');
+        $previousLowerHttpsProxy = getenv('https_proxy');
+        putenv('HTTPS_PROXY=http://proxy.example.test:8080');
+        putenv('https_proxy=http://proxy.example.test:8080');
+
+        try {
+            /** @var SafeHttpClient $client */
+            $client = app(SafeHttpClient::class);
+            $response = $client->get('https://wp.example.test/.well-known/oauth-protected-resource');
+            self::assertSame(200, $response->status);
+        } finally {
+            $this->restoreEnvironmentVariable('HTTPS_PROXY', $previousHttpsProxy);
+            $this->restoreEnvironmentVariable('https_proxy', $previousLowerHttpsProxy);
+        }
+
+        self::assertSame('', $factory->lastOptions[RequestOptions::PROXY] ?? null);
+        self::assertArrayHasKey('curl', $factory->lastOptions);
+        self::assertSame(
+            ['wp.example.test:443:1.1.1.1'],
+            $factory->lastOptions['curl'][CURLOPT_RESOLVE] ?? null,
+        );
+    }
+
+    private function restoreEnvironmentVariable(string $name, string|false $value): void
+    {
+        if ($value === false) {
+            putenv($name);
+
+            return;
+        }
+
+        putenv($name.'='.$value);
+    }
+}
+
+final class CapturingHttpFactory extends Factory
+{
+    /** @var array<string, mixed> */
+    public array $lastOptions = [];
+
+    protected function newPendingRequest(): PendingRequest
+    {
+        $request = parent::newPendingRequest();
+        $request->beforeSending(function (Request $request, array $options): void {
+            $this->lastOptions = $options;
+        });
+
+        return $request;
     }
 }

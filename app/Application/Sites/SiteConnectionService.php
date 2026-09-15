@@ -17,7 +17,6 @@ use App\Infrastructure\OAuth\SiteCredentialVault;
 use App\Infrastructure\OAuth\SiteOAuthFlowContext;
 use App\Infrastructure\OAuth\SiteOAuthFlowVault;
 use DateTimeImmutable;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 final class SiteConnectionService
@@ -28,9 +27,64 @@ final class SiteConnectionService
         private readonly GatewayBridgeClientIdentity $identity,
         private readonly SiteCredentialVault $credentials,
         private readonly SiteOAuthFlowVault $flows,
+        private readonly SiteLifecycleLock $lifecycle,
     ) {}
 
     public function begin(Site $site): string
+    {
+        return $this->lifecycle->run($site, fn (Site $lockedSite): string => $this->beginLocked($lockedSite));
+    }
+
+    public function completeCallback(string $state, ?string $code, ?string $issuer, ?string $error): Site
+    {
+        if ($state === '' || strlen($state) > 512 || preg_match('/^[A-Za-z0-9_-]+$/', $state) !== 1) {
+            throw new SiteConnectionException('invalid_state', 'The site OAuth callback state is invalid.');
+        }
+
+        $stateHash = hash('sha256', $state);
+        $flow = SiteOAuthFlow::query()->where('state_hash', $stateHash)->first();
+        if (! $flow instanceof SiteOAuthFlow || $flow->consumed_at !== null || $flow->expires_at->isPast()) {
+            throw new SiteConnectionException('invalid_state', 'The site OAuth callback state is expired or already used.');
+        }
+
+        return $this->lifecycle->runForId(
+            $flow->site_record_id,
+            fn (Site $lockedSite): Site => $this->completeCallbackLocked(
+                $lockedSite,
+                $stateHash,
+                $code,
+                $issuer,
+                $error,
+            ),
+        );
+    }
+
+    public function accessToken(Site $site): string
+    {
+        return $this->lifecycle->run($site, function (Site $lockedSite): string {
+            $credential = $lockedSite->credential()->first();
+            if (! $credential instanceof SiteCredential) {
+                $this->requireReconnect($lockedSite, 'missing_credential');
+                throw new SiteConnectionException('missing_credential', 'This site does not have an active OAuth credential.');
+            }
+
+            $secret = $this->credentials->open($credential);
+            if ($secret->accessExpiresAt === null || $secret->accessExpiresAt->getTimestamp() > time() + 30) {
+                return $secret->accessToken;
+            }
+
+            return $this->refresh($lockedSite, $credential, $secret);
+        });
+    }
+
+    public function disconnect(Site $site): void
+    {
+        $this->lifecycle->run($site, function (Site $lockedSite): void {
+            $this->disconnectLocked($lockedSite);
+        });
+    }
+
+    private function beginLocked(Site $site): string
     {
         if ($site->credential()->exists()) {
             throw new SiteConnectionException('already_connected', 'Disconnect the current site credential before starting a new authorization.');
@@ -85,50 +139,50 @@ final class SiteConnectionService
         return $discovery->authorizationUrl.'?'.$query;
     }
 
-    public function completeCallback(string $state, ?string $code, ?string $issuer, ?string $error): Site
-    {
-        if ($state === '' || strlen($state) > 512 || preg_match('/^[A-Za-z0-9_-]+$/', $state) !== 1) {
-            throw new SiteConnectionException('invalid_state', 'The site OAuth callback state is invalid.');
+    private function completeCallbackLocked(
+        Site $site,
+        string $stateHash,
+        ?string $code,
+        ?string $issuer,
+        ?string $error,
+    ): Site {
+        $flow = SiteOAuthFlow::query()
+            ->where('site_record_id', $site->getKey())
+            ->where('state_hash', $stateHash)
+            ->lockForUpdate()
+            ->first();
+        if (! $flow instanceof SiteOAuthFlow || $flow->consumed_at !== null || $flow->expires_at->isPast()) {
+            throw new SiteConnectionException('invalid_state', 'The site OAuth callback state is expired or already used.');
         }
 
-        $stateHash = hash('sha256', $state);
-        $flow = DB::transaction(function () use ($stateHash): SiteOAuthFlow {
-            $flow = SiteOAuthFlow::query()->where('state_hash', $stateHash)->lockForUpdate()->first();
-            if (! $flow instanceof SiteOAuthFlow || $flow->consumed_at !== null || $flow->expires_at->isPast()) {
-                throw new SiteConnectionException('invalid_state', 'The site OAuth callback state is expired or already used.');
-            }
-
-            $flow->forceFill(['consumed_at' => now()])->save();
-
-            return $flow;
-        });
-
-        $site = $flow->site;
-        if (! $site instanceof Site) {
-            throw new SiteConnectionException('invalid_state', 'The site OAuth callback no longer has a target site.');
-        }
         try {
             $context = $this->flows->open($flow);
         } catch (\Throwable $exception) {
+            $flow->delete();
             $this->requireReconnect($site, 'invalid_state');
             throw new SiteConnectionException('invalid_state', 'The site OAuth callback state binding is invalid.');
         }
 
+        if ($issuer === null || ! hash_equals($context->issuerUrl, rtrim($issuer, '/'))) {
+            throw new SiteConnectionException('issuer_mismatch', 'The site OAuth callback issuer does not match the paired site.');
+        }
+
+        $flow->forceFill(['consumed_at' => now()])->save();
+
         if ($error !== null && $error !== '') {
+            $flow->delete();
             $site->forceFill([
                 'connection_state' => SiteConnectionState::Disconnected,
                 'last_error_code' => 'oauth_'.$this->safeErrorCode($error),
+                'connected_at' => null,
             ])->save();
 
             throw new SiteConnectionException('authorization_denied', 'The WordPress authorization was not completed.');
         }
         if ($code === null || $code === '' || strlen($code) > 1024) {
+            $flow->delete();
             $this->requireReconnect($site, 'invalid_callback');
             throw new SiteConnectionException('invalid_callback', 'The site OAuth callback did not include a valid authorization code.');
-        }
-        if ($issuer === null || ! hash_equals($context->issuerUrl, rtrim($issuer, '/'))) {
-            $this->requireReconnect($site, 'issuer_mismatch');
-            throw new SiteConnectionException('issuer_mismatch', 'The site OAuth callback issuer does not match the paired site.');
         }
 
         try {
@@ -161,7 +215,6 @@ final class SiteConnectionService
         }
         $this->persistCredential($site, $context, $token);
         $flow->delete();
-        SiteOAuthFlow::query()->where('site_record_id', $site->getKey())->delete();
 
         $site->forceFill([
             'connection_state' => SiteConnectionState::Connected,
@@ -172,23 +225,7 @@ final class SiteConnectionService
         return $site->refresh();
     }
 
-    public function accessToken(Site $site): string
-    {
-        $credential = $site->credential()->first();
-        if (! $credential instanceof SiteCredential) {
-            $this->requireReconnect($site, 'missing_credential');
-            throw new SiteConnectionException('missing_credential', 'This site does not have an active OAuth credential.');
-        }
-
-        $secret = $this->credentials->open($credential);
-        if ($secret->accessExpiresAt === null || $secret->accessExpiresAt->getTimestamp() > time() + 30) {
-            return $secret->accessToken;
-        }
-
-        return $this->refresh($site, $credential, $secret);
-    }
-
-    public function disconnect(Site $site): void
+    private function disconnectLocked(Site $site): void
     {
         $credential = $site->credential()->first();
         if ($credential instanceof SiteCredential) {
@@ -248,24 +285,24 @@ final class SiteConnectionService
                 'client_assertion' => $this->identity->assertion($site->oauth_token_url),
             ]);
         } catch (OutboundRequestException $exception) {
-            $site->forceFill([
-                'connection_state' => SiteConnectionState::Error,
-                'last_error_code' => $exception->reason,
-            ])->save();
+            $this->markRecoverableError($site, $exception->reason);
             throw new SiteConnectionException($exception->reason, 'The WP AI Bridge refresh endpoint could not be reached safely.');
         }
 
         if ($response->status !== 200) {
             if ($response->status >= 500) {
-                $site->forceFill([
-                    'connection_state' => SiteConnectionState::Error,
-                    'last_error_code' => 'remote_failure',
-                ])->save();
+                $this->markRecoverableError($site, 'remote_failure');
                 throw new SiteConnectionException('remote_failure', 'WP AI Bridge refresh is temporarily unavailable.');
             }
 
+            $oauthError = $this->oauthFailureCode($response->body);
+            if (! $this->isTerminalRefreshFailure($oauthError)) {
+                $this->markRecoverableError($site, $oauthError);
+                throw new SiteConnectionException($oauthError, 'WP AI Bridge refresh failed without proving that the stored authorization is terminal.');
+            }
+
             $credential->delete();
-            $this->requireReconnect($site, $this->oauthFailureCode($response->body));
+            $this->requireReconnect($site, $oauthError);
             throw new SiteConnectionException('refresh_failed', 'The site OAuth refresh was rejected and requires reconnection.');
         }
 
@@ -273,10 +310,7 @@ final class SiteConnectionService
             $token = $this->parseTokenResponse($response->json());
         } catch (SiteConnectionException|OutboundRequestException $exception) {
             $reason = $exception->reason;
-            $site->forceFill([
-                'connection_state' => SiteConnectionState::Error,
-                'last_error_code' => Str::limit($this->safeErrorCode($reason), 64, ''),
-            ])->save();
+            $this->markRecoverableError($site, $reason);
             throw new SiteConnectionException($reason, 'WP AI Bridge returned an unusable refresh response.');
         }
         $context = new SiteOAuthFlowContext(
@@ -390,6 +424,14 @@ final class SiteConnectionService
         );
     }
 
+    private function markRecoverableError(Site $site, string $code): void
+    {
+        $site->forceFill([
+            'connection_state' => SiteConnectionState::Error,
+            'last_error_code' => Str::limit($this->safeErrorCode($code), 64, ''),
+        ])->save();
+    }
+
     private function requireReconnect(Site $site, string $code): void
     {
         $site->forceFill([
@@ -410,6 +452,11 @@ final class SiteConnectionService
         $error = is_array($document) && is_string($document['error'] ?? null) ? $document['error'] : 'oauth_rejected';
 
         return $this->safeErrorCode($error);
+    }
+
+    private function isTerminalRefreshFailure(string $oauthError): bool
+    {
+        return in_array($oauthError, ['invalid_grant', 'invalid_client'], true);
     }
 
     private function isAlreadyInvalidClient(int $status, string $body): bool

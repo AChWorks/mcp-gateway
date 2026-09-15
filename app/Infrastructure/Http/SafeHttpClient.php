@@ -50,6 +50,7 @@ final class SafeHttpClient
         $request = Http::withOptions([
             'allow_redirects' => false,
             'verify' => true,
+            'proxy' => '',
             'stream' => true,
             ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),
         ])

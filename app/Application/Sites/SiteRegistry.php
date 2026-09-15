@@ -18,6 +18,7 @@ final class SiteRegistry
         private readonly WpAiBridgeDiscovery $discovery,
         private readonly OutboundTargetPolicy $targets,
         private readonly SiteConnectionService $connections,
+        private readonly SiteLifecycleLock $lifecycle,
     ) {}
 
     public function create(string $siteId, string $displayName, string $baseUrl): Site
@@ -40,71 +41,80 @@ final class SiteRegistry
     {
         $displayName = $this->validateDisplayName($displayName);
         $canonicalBase = $this->canonicalBase($baseUrl);
-        $targetChanged = ! hash_equals($site->base_url, $canonicalBase);
         $discovery = $this->discover($canonicalBase);
 
-        if ($targetChanged) {
-            $targetHash = hash('sha256', $discovery->baseUrl);
-            $conflict = Site::query()
-                ->where('base_url_hash', $targetHash)
-                ->where($site->getKeyName(), '!=', $site->getKey())
-                ->exists();
-            if ($conflict) {
-                throw new InvalidArgumentException('The canonical target is already registered to another site.');
+        return $this->lifecycle->run($site, function (Site $lockedSite) use ($displayName, $discovery): Site {
+            $targetChanged = ! hash_equals($lockedSite->base_url, $discovery->baseUrl);
+
+            if ($targetChanged) {
+                $targetHash = hash('sha256', $discovery->baseUrl);
+                $conflict = Site::query()
+                    ->where('base_url_hash', $targetHash)
+                    ->where($lockedSite->getKeyName(), '!=', $lockedSite->getKey())
+                    ->exists();
+                if ($conflict) {
+                    throw new InvalidArgumentException('The canonical target is already registered to another site.');
+                }
             }
-        }
 
-        if ($targetChanged && $site->credential()->exists()) {
-            $this->connections->disconnect($site);
-        }
-        if ($targetChanged) {
-            $site->oauthFlows()->delete();
-        }
+            if ($targetChanged && $lockedSite->credential()->exists()) {
+                $this->connections->disconnect($lockedSite);
+                $lockedSite->refresh();
+            }
+            if ($targetChanged) {
+                $lockedSite->oauthFlows()->delete();
+            }
 
-        $site->forceFill($this->attributes($site->site_id, $displayName, $discovery))->save();
+            $lockedSite->forceFill($this->attributes($lockedSite->site_id, $displayName, $discovery))->save();
 
-        if ($targetChanged) {
-            $site->forceFill([
-                'connection_state' => SiteConnectionState::Disconnected,
-                'connected_at' => null,
-            ])->save();
-        }
+            if ($targetChanged) {
+                $lockedSite->forceFill([
+                    'connection_state' => SiteConnectionState::Disconnected,
+                    'connected_at' => null,
+                ])->save();
+            }
 
-        return $site->refresh();
+            return $lockedSite->refresh();
+        });
     }
 
     public function test(Site $site): BridgeDiscovery
     {
-        try {
-            $discovery = $this->discovery->discover($site->base_url);
-        } catch (BridgeDiscoveryException $exception) {
-            $site->forceFill([
-                'last_error_code' => $exception->reason,
+        return $this->lifecycle->run($site, function (Site $lockedSite): BridgeDiscovery {
+            try {
+                $discovery = $this->discovery->discover($lockedSite->base_url);
+            } catch (BridgeDiscoveryException $exception) {
+                $lockedSite->forceFill([
+                    'last_error_code' => $exception->reason,
+                    'last_tested_at' => now(),
+                ])->save();
+                throw new SiteConnectionException($exception->reason, $exception->getMessage());
+            }
+
+            $lockedSite->forceFill([
+                'mcp_resource_url' => $discovery->resourceUrl,
+                'oauth_issuer_url' => $discovery->issuerUrl,
+                'oauth_authorization_url' => $discovery->authorizationUrl,
+                'oauth_token_url' => $discovery->tokenUrl,
+                'oauth_revocation_url' => $discovery->revocationUrl,
+                'last_error_code' => null,
                 'last_tested_at' => now(),
             ])->save();
-            throw new SiteConnectionException($exception->reason, $exception->getMessage());
-        }
 
-        $site->forceFill([
-            'mcp_resource_url' => $discovery->resourceUrl,
-            'oauth_issuer_url' => $discovery->issuerUrl,
-            'oauth_authorization_url' => $discovery->authorizationUrl,
-            'oauth_token_url' => $discovery->tokenUrl,
-            'oauth_revocation_url' => $discovery->revocationUrl,
-            'last_error_code' => null,
-            'last_tested_at' => now(),
-        ])->save();
-
-        return $discovery;
+            return $discovery;
+        });
     }
 
     public function remove(Site $site): void
     {
-        if ($site->credential()->exists()) {
-            $this->connections->disconnect($site);
-        }
-        $site->oauthFlows()->delete();
-        $site->delete();
+        $this->lifecycle->run($site, function (Site $lockedSite): void {
+            if ($lockedSite->credential()->exists()) {
+                $this->connections->disconnect($lockedSite);
+                $lockedSite->refresh();
+            }
+            $lockedSite->oauthFlows()->delete();
+            $lockedSite->delete();
+        });
     }
 
     private function discover(string $baseUrl): BridgeDiscovery

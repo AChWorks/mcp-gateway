@@ -115,7 +115,7 @@ final class SiteRegistryAndPairingTest extends TestCase
         self::assertSame(SiteConnectionState::Connected, $beta->refresh()->connection_state);
     }
 
-    public function test_oauth_callback_state_is_one_time_and_wrong_issuer_fails_closed(): void
+    public function test_wrong_issuer_does_not_consume_callback_state_and_valid_callback_remains_usable(): void
     {
         /** @var SiteRegistry $registry */
         $registry = app(SiteRegistry::class);
@@ -132,14 +132,69 @@ final class SiteRegistryAndPairingTest extends TestCase
         } catch (SiteConnectionException $exception) {
             self::assertSame('issuer_mismatch', $exception->reason);
         }
-        self::assertSame(SiteConnectionState::ReconnectRequired, $site->refresh()->connection_state);
+        self::assertSame(SiteConnectionState::Pending, $site->refresh()->connection_state);
+        self::assertSame(1, $site->oauthFlows()->count());
+
+        $connections->completeCallback($state, 'alpha-code', 'https://alpha.example.test', null);
+        self::assertSame(SiteConnectionState::Connected, $site->refresh()->connection_state);
 
         try {
             $connections->completeCallback($state, 'alpha-code', 'https://alpha.example.test', null);
-            self::fail('Consumed callback state was replayed.');
+            self::fail('Completed callback state was replayed.');
         } catch (SiteConnectionException $exception) {
             self::assertSame('invalid_state', $exception->reason);
         }
+    }
+
+    public function test_oauth_error_callback_with_missing_issuer_is_not_authoritative(): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $state = $this->queryValue($connections->begin($site), 'state');
+
+        try {
+            $connections->completeCallback($state, null, null, 'access_denied');
+            self::fail('OAuth error without an issuer was accepted.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('issuer_mismatch', $exception->reason);
+        }
+
+        self::assertSame(SiteConnectionState::Pending, $site->refresh()->connection_state);
+        self::assertSame(1, $site->oauthFlows()->count());
+    }
+
+    public function test_oauth_error_callback_with_wrong_issuer_is_not_authoritative(): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $state = $this->queryValue($connections->begin($site), 'state');
+
+        try {
+            $connections->completeCallback($state, null, 'https://attacker.example.test', 'access_denied');
+            self::fail('OAuth error from a mismatched issuer was accepted.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('issuer_mismatch', $exception->reason);
+        }
+
+        self::assertSame(SiteConnectionState::Pending, $site->refresh()->connection_state);
+        self::assertSame(1, $site->oauthFlows()->count());
+
+        try {
+            $connections->completeCallback($state, null, 'https://alpha.example.test', 'access_denied');
+            self::fail('Authoritative OAuth denial was treated as success.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('authorization_denied', $exception->reason);
+        }
+
+        self::assertSame(SiteConnectionState::Disconnected, $site->refresh()->connection_state);
+        self::assertSame('oauth_access_denied', $site->last_error_code);
+        self::assertSame(0, $site->oauthFlows()->count());
     }
 
     public function test_private_dns_answer_is_rejected_before_any_outbound_request(): void
@@ -263,6 +318,48 @@ final class SiteRegistryAndPairingTest extends TestCase
         self::assertSame(SiteConnectionState::Error, $site->connection_state);
         self::assertTrue($site->credential()->exists());
         self::assertSame($before, $site->credential()->firstOrFail()->encrypted_payload);
+    }
+
+    public function test_refresh_oauth_temporarily_unavailable_preserves_credential_and_later_retry_succeeds(): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $this->pair($connections, $site);
+        $before = $site->credential()->firstOrFail()->encrypted_payload;
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) {
+            if ((string) parse_url($request->url(), PHP_URL_PATH) === '/wp-json/wp-ai-bridge/v1/oauth/token'
+                && (string) ($request->data()['grant_type'] ?? '') === 'refresh_token') {
+                return Http::response(['error' => 'temporarily_unavailable'], 400);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $this->travel(2)->seconds();
+        try {
+            $connections->accessToken($site);
+            self::fail('Transient OAuth refresh error was treated as success.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('temporarily_unavailable', $exception->reason);
+        }
+
+        $site->refresh();
+        self::assertSame(SiteConnectionState::Error, $site->connection_state);
+        self::assertTrue($site->credential()->exists());
+        self::assertSame($before, $site->credential()->firstOrFail()->encrypted_payload);
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => $this->bridgeResponse($request));
+
+        self::assertSame('alpha-refreshed-access', $connections->accessToken($site->refresh()));
+        self::assertSame(SiteConnectionState::Connected, $site->refresh()->connection_state);
     }
 
     public function test_malformed_refresh_success_preserves_existing_credential_for_recovery(): void

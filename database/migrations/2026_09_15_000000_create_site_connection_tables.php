@@ -44,14 +44,14 @@ return new class extends Migration
 
         Schema::create('site_oauth_flows', function (Blueprint $table): void {
             $table->ulid('id')->primary();
-            $table->foreignUlid('site_record_id')->constrained('sites')->cascadeOnDelete();
+            $table->foreignUlid('site_record_id')->unique()->constrained('sites')->cascadeOnDelete();
             $table->char('state_hash', 64)->unique();
             $table->longText('encrypted_context');
             $table->timestamp('expires_at');
             $table->timestamp('consumed_at')->nullable();
             $table->timestamps();
 
-            $table->index(['site_record_id', 'expires_at']);
+            $table->index('expires_at');
         });
     }
 
