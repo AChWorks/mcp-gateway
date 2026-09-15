@@ -19,6 +19,7 @@ final class SiteRegistry
         private readonly OutboundTargetPolicy $targets,
         private readonly SiteConnectionService $connections,
         private readonly SiteLifecycleLock $lifecycle,
+        private readonly SiteTargetOwnershipLock $targetOwnership,
     ) {}
 
     public function create(string $siteId, string $displayName, string $baseUrl): Site
@@ -26,15 +27,18 @@ final class SiteRegistry
         $siteId = $this->validateSiteId($siteId);
         $displayName = $this->validateDisplayName($displayName);
         $discovery = $this->discover($baseUrl);
+        $targetHash = hash('sha256', $discovery->baseUrl);
 
-        try {
-            return Site::query()->create([
-                ...$this->attributes($siteId, $displayName, $discovery),
-                'connection_state' => SiteConnectionState::Disconnected,
-            ]);
-        } catch (UniqueConstraintViolationException $exception) {
-            throw new InvalidArgumentException('The site identifier or canonical target is already registered.');
-        }
+        return $this->targetOwnership->runForHash($targetHash, function () use ($siteId, $displayName, $discovery): Site {
+            try {
+                return Site::query()->create([
+                    ...$this->attributes($siteId, $displayName, $discovery),
+                    'connection_state' => SiteConnectionState::Disconnected,
+                ]);
+            } catch (UniqueConstraintViolationException $exception) {
+                throw new InvalidArgumentException('The site identifier or canonical target is already registered.');
+            }
+        });
     }
 
     public function update(Site $site, string $displayName, string $baseUrl): Site
@@ -42,39 +46,41 @@ final class SiteRegistry
         $displayName = $this->validateDisplayName($displayName);
         $canonicalBase = $this->canonicalBase($baseUrl);
         $discovery = $this->discover($canonicalBase);
+        $targetHash = hash('sha256', $discovery->baseUrl);
 
-        return $this->lifecycle->run($site, function (Site $lockedSite) use ($displayName, $discovery): Site {
-            $targetChanged = ! hash_equals($lockedSite->base_url, $discovery->baseUrl);
+        return $this->targetOwnership->runForHash($targetHash, function () use ($site, $displayName, $discovery, $targetHash): Site {
+            return $this->lifecycle->run($site, function (Site $lockedSite) use ($displayName, $discovery, $targetHash): Site {
+                $targetChanged = ! hash_equals($lockedSite->base_url, $discovery->baseUrl);
 
-            if ($targetChanged) {
-                $targetHash = hash('sha256', $discovery->baseUrl);
-                $conflict = Site::query()
-                    ->where('base_url_hash', $targetHash)
-                    ->where($lockedSite->getKeyName(), '!=', $lockedSite->getKey())
-                    ->exists();
-                if ($conflict) {
-                    throw new InvalidArgumentException('The canonical target is already registered to another site.');
+                if ($targetChanged) {
+                    $conflict = Site::query()
+                        ->where('base_url_hash', $targetHash)
+                        ->where($lockedSite->getKeyName(), '!=', $lockedSite->getKey())
+                        ->exists();
+                    if ($conflict) {
+                        throw new InvalidArgumentException('The canonical target is already registered to another site.');
+                    }
                 }
-            }
 
-            if ($targetChanged && $lockedSite->credential()->exists()) {
-                $this->connections->disconnect($lockedSite);
-                $lockedSite->refresh();
-            }
-            if ($targetChanged) {
-                $lockedSite->oauthFlows()->delete();
-            }
+                if ($targetChanged && $lockedSite->credential()->exists()) {
+                    $this->connections->disconnect($lockedSite);
+                    $lockedSite->refresh();
+                }
+                if ($targetChanged) {
+                    $lockedSite->oauthFlows()->delete();
+                }
 
-            $lockedSite->forceFill($this->attributes($lockedSite->site_id, $displayName, $discovery))->save();
+                $lockedSite->forceFill($this->attributes($lockedSite->site_id, $displayName, $discovery))->save();
 
-            if ($targetChanged) {
-                $lockedSite->forceFill([
-                    'connection_state' => SiteConnectionState::Disconnected,
-                    'connected_at' => null,
-                ])->save();
-            }
+                if ($targetChanged) {
+                    $lockedSite->forceFill([
+                        'connection_state' => SiteConnectionState::Disconnected,
+                        'connected_at' => null,
+                    ])->save();
+                }
 
-            return $lockedSite->refresh();
+                return $lockedSite->refresh();
+            });
         });
     }
 

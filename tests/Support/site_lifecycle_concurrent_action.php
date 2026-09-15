@@ -60,6 +60,11 @@ try {
         }
 
         if ($path === '/.well-known/oauth-authorization-server') {
+            $delay = max(0, (int) ($payload['discovery_delay_us'] ?? 0));
+            if ($delay > 0) {
+                usleep($delay);
+            }
+
             return Http::response([
                 'issuer' => $base,
                 'authorization_endpoint' => $base.'/wp-ai-bridge/oauth/authorize',
@@ -135,6 +140,10 @@ try {
                 $token = (string) ($request->data()['token'] ?? '');
                 file_put_contents($revokeLog, $token."\n", FILE_APPEND | LOCK_EX);
             }
+            $delay = max(0, (int) ($payload['revoke_delay_us'] ?? 0));
+            if ($delay > 0) {
+                usleep($delay);
+            }
 
             return Http::response('', 200);
         }
@@ -154,14 +163,21 @@ try {
         usleep(1000);
     }
 
-    $siteId = (string) ($payload['site_record_id'] ?? '');
-    $site = Site::query()->find($siteId);
-    if (! $site instanceof Site) {
-        throw new SiteConnectionException('site_not_found', 'The site no longer exists.');
+    $action = (string) ($payload['action'] ?? '');
+    $site = null;
+    if ($action !== 'create') {
+        $siteId = (string) ($payload['site_record_id'] ?? '');
+        $site = Site::query()->find($siteId);
+        if (! $site instanceof Site) {
+            throw new SiteConnectionException('site_not_found', 'The site no longer exists.');
+        }
     }
 
-    $action = (string) ($payload['action'] ?? '');
-    $result = ['ok' => true, 'action' => $action];
+    $result = [
+        'ok' => true,
+        'action' => $action,
+        'site_id' => $site?->site_id,
+    ];
 
     try {
         if ($action === 'access') {
@@ -181,6 +197,21 @@ try {
                 $site->base_url,
                 null,
             );
+        } elseif ($action === 'update') {
+            $updated = app(SiteRegistry::class)->update(
+                $site,
+                (string) ($payload['display_name'] ?? $site->display_name),
+                (string) ($payload['target_base_url'] ?? ''),
+            );
+            $result['base_url'] = $updated->base_url;
+        } elseif ($action === 'create') {
+            $created = app(SiteRegistry::class)->create(
+                (string) ($payload['new_site_id'] ?? ''),
+                (string) ($payload['display_name'] ?? ''),
+                (string) ($payload['target_base_url'] ?? ''),
+            );
+            $result['site_id'] = $created->site_id;
+            $result['base_url'] = $created->base_url;
         } else {
             throw new RuntimeException('Unsupported site lifecycle concurrency action.');
         }
@@ -188,7 +219,15 @@ try {
         $result = [
             'ok' => false,
             'action' => $action,
+            'site_id' => $site?->site_id,
             'reason' => $exception->reason,
+        ];
+    } catch (InvalidArgumentException $exception) {
+        $result = [
+            'ok' => false,
+            'action' => $action,
+            'site_id' => $site?->site_id,
+            'reason' => 'target_conflict',
         ];
     }
 
