@@ -58,11 +58,13 @@ final readonly class WpAiBridgeMcpClient
         return $result;
     }
 
+    /** @param array<string, mixed> $input */
     public function executeAbility(Site $site, string $ability, array $input, string $correlationId): mixed
     {
         return $this->callAbility($site, $ability, $input, true, $correlationId);
     }
 
+    /** @param array<string, mixed> $input */
     private function callAbility(
         Site $site,
         string $ability,
@@ -137,7 +139,10 @@ final readonly class WpAiBridgeMcpClient
         return $sessionId;
     }
 
-    /** @param array<string, string> $headers */
+    /**
+     * @param  array<string, string>  $headers
+     * @param  array<string, mixed>  $input
+     */
     private function callTool(
         Site $site,
         array $headers,
