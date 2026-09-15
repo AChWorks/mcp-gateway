@@ -5,26 +5,27 @@ namespace App\Application\Mcp;
 use App\Application\Sites\SiteConnectionException;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
+use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
+use App\Support\CorrelationId;
 use DateTimeInterface;
-use Illuminate\Support\Str;
 use LogicException;
 
 final class PendingGatewayToolHandlers
 {
     private const SITE_LIST_LIMIT = 100;
 
-    public function __construct(private readonly WpAiBridgeMcpClient $bridge) {}
+    public function __construct(
+        private readonly WpAiBridgeMcpClient $bridge,
+        private readonly ActivityRecorder $activity,
+    ) {}
 
     /** @return array<string, mixed> */
     public function sitesList(): array
     {
-        $correlationId = (string) Str::uuid();
-        $sites = Site::query()
-            ->orderBy('site_id')
-            ->limit(self::SITE_LIST_LIMIT + 1)
-            ->get();
+        $correlationId = CorrelationId::current();
+        $sites = Site::query()->orderBy('site_id')->limit(self::SITE_LIST_LIMIT + 1)->get();
         $truncated = $sites->count() > self::SITE_LIST_LIMIT;
         $serializedSites = [];
 
@@ -41,6 +42,8 @@ final class PendingGatewayToolHandlers
             ];
         }
 
+        $this->activity->record($correlationId, 'sites-list', 'success');
+
         return [
             'ok' => true,
             'correlation_id' => $correlationId,
@@ -52,11 +55,13 @@ final class PendingGatewayToolHandlers
     /** @return array<string, mixed> */
     public function siteContext(string $site_id): array
     {
-        $correlationId = (string) Str::uuid();
+        $correlationId = CorrelationId::current();
         $site = $this->findSite($site_id);
         if (! $site instanceof Site) {
-            return $this->error($correlationId, 'site_not_found', 'The requested site_id is not configured.');
+            return $this->siteNotFound($correlationId, 'site-context');
         }
+
+        $this->activity->record($correlationId, 'site-context', 'success', $site->site_id);
 
         return [
             'ok' => true,
@@ -83,10 +88,10 @@ final class PendingGatewayToolHandlers
         ?string $namespace = null,
         ?string $search = null,
     ): array {
-        $correlationId = (string) Str::uuid();
+        $correlationId = CorrelationId::current();
         $site = $this->findSite($site_id);
         if (! $site instanceof Site) {
-            return $this->error($correlationId, 'site_not_found', 'The requested site_id is not configured.');
+            return $this->siteNotFound($correlationId, 'site-abilities-read');
         }
 
         $ability = $this->nullableTrim($ability);
@@ -94,30 +99,28 @@ final class PendingGatewayToolHandlers
         $search = $this->nullableTrim($search);
 
         if ($page < 1 || $per_page < 1 || $per_page > 100) {
-            return $this->error($correlationId, 'invalid_input', 'page must be at least 1 and per_page must be between 1 and 100.');
+            return $this->recordedError($correlationId, 'site-abilities-read', $site->site_id, 'invalid_input', 'page must be at least 1 and per_page must be between 1 and 100.');
         }
         if ($this->tooLong($ability, 255) || $this->tooLong($namespace, 255) || $this->tooLong($search, 255)) {
-            return $this->error($correlationId, 'invalid_input', 'Ability catalog filters exceed the supported length.');
+            return $this->recordedError($correlationId, 'site-abilities-read', $site->site_id, 'invalid_input', 'Ability catalog filters exceed the supported length.');
         }
         if ($ability !== null && ($namespace !== null || $search !== null || $page !== 1 || $per_page !== 25)) {
-            return $this->error($correlationId, 'invalid_input', 'Exact ability inspection cannot be combined with list pagination or filters.');
+            return $this->recordedError($correlationId, 'site-abilities-read', $site->site_id, 'invalid_input', 'Exact ability inspection cannot be combined with list pagination or filters.');
         }
 
         try {
-            $catalog = $this->bridge->readAbilities(
-                $site,
-                $correlationId,
-                $ability,
-                $page,
-                $per_page,
-                $namespace,
-                $search,
-            );
+            $catalog = $this->bridge->readAbilities($site, $correlationId, $ability, $page, $per_page, $namespace, $search);
         } catch (SiteConnectionException $exception) {
+            $this->recordFailure($correlationId, 'site-abilities-read', $site->site_id, $exception->reason);
+
             return $this->connectionError($correlationId, $exception);
         } catch (WpAiBridgeMcpException $exception) {
+            $this->recordFailure($correlationId, 'site-abilities-read', $site->site_id, $exception->reason);
+
             return $this->error($correlationId, $exception->reason, $exception->getMessage());
         }
+
+        $this->activity->record($correlationId, 'site-abilities-read', 'success', $site->site_id);
 
         return [
             'ok' => true,
@@ -133,24 +136,30 @@ final class PendingGatewayToolHandlers
      */
     public function siteAbilityExecute(string $site_id, string $ability, array $input): array
     {
-        $correlationId = (string) Str::uuid();
+        $correlationId = CorrelationId::current();
         $site = $this->findSite($site_id);
         if (! $site instanceof Site) {
-            return $this->error($correlationId, 'site_not_found', 'The requested site_id is not configured.');
+            return $this->siteNotFound($correlationId, 'site-ability-execute');
         }
 
         $ability = trim($ability);
         if ($ability === '' || mb_strlen($ability) > 255) {
-            return $this->error($correlationId, 'invalid_input', 'ability must be a non-empty string of at most 255 characters.');
+            return $this->recordedError($correlationId, 'site-ability-execute', $site->site_id, 'invalid_input', 'ability must be a non-empty string of at most 255 characters.');
         }
 
         try {
             $result = $this->bridge->executeAbility($site, $ability, $input, $correlationId);
         } catch (SiteConnectionException $exception) {
+            $this->recordFailure($correlationId, 'site-ability-execute', $site->site_id, $exception->reason);
+
             return $this->connectionError($correlationId, $exception);
         } catch (WpAiBridgeMcpException $exception) {
+            $this->recordFailure($correlationId, 'site-ability-execute', $site->site_id, $exception->reason);
+
             return $this->error($correlationId, $exception->reason, $exception->getMessage());
         }
+
+        $this->activity->record($correlationId, 'site-ability-execute', 'success', $site->site_id);
 
         return [
             'ok' => true,
@@ -211,6 +220,14 @@ final class PendingGatewayToolHandlers
     }
 
     /** @return array<string, mixed> */
+    private function siteNotFound(string $correlationId, string $operation): array
+    {
+        $this->activity->record($correlationId, $operation, 'failure', null, 'site_not_found');
+
+        return $this->error($correlationId, 'site_not_found', 'The requested site_id is not configured.');
+    }
+
+    /** @return array<string, mixed> */
     private function connectionError(string $correlationId, SiteConnectionException $exception): array
     {
         $message = match ($exception->reason) {
@@ -225,15 +242,26 @@ final class PendingGatewayToolHandlers
     }
 
     /** @return array<string, mixed> */
+    private function recordedError(string $correlationId, string $operation, ?string $siteId, string $code, string $message): array
+    {
+        $this->recordFailure($correlationId, $operation, $siteId, $code);
+
+        return $this->error($correlationId, $code, $message);
+    }
+
+    private function recordFailure(string $correlationId, string $operation, ?string $siteId, string $code): void
+    {
+        $outcome = $code === 'outcome_unknown' ? 'unknown' : 'failure';
+        $this->activity->record($correlationId, $operation, $outcome, $siteId, $code);
+    }
+
+    /** @return array<string, mixed> */
     private function error(string $correlationId, string $code, string $message): array
     {
         return [
             'ok' => false,
             'correlation_id' => $correlationId,
-            'error' => [
-                'code' => $code,
-                'message' => $message,
-            ],
+            'error' => ['code' => $code, 'message' => $message],
         ];
     }
 }

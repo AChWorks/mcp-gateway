@@ -10,6 +10,7 @@ use App\Domain\Sites\SiteCredential;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
+use App\Infrastructure\OAuth\SiteCredentialVaultException;
 
 final readonly class WpAiBridgeMcpClient
 {
@@ -25,9 +26,7 @@ final readonly class WpAiBridgeMcpClient
         private SafeHttpClient $http,
     ) {}
 
-    /**
-     * @return array<string, mixed>
-     */
+    /** @return array<string, mixed> */
     public function readAbilities(
         Site $site,
         string $correlationId,
@@ -47,14 +46,7 @@ final readonly class WpAiBridgeMcpClient
                 'search' => $search,
             ], static fn (mixed $value): bool => $value !== null);
 
-        $result = $this->callAbility(
-            $site,
-            self::CATALOG_ABILITY,
-            $parameters,
-            false,
-            $correlationId,
-        );
-
+        $result = $this->callAbility($site, self::CATALOG_ABILITY, $parameters, false, $correlationId);
         if (! is_array($result)) {
             throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an invalid ability catalog result.');
         }
@@ -69,13 +61,8 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @param array<string, mixed> $input */
-    private function callAbility(
-        Site $site,
-        string $ability,
-        array $input,
-        bool $mutationRisk,
-        string $correlationId,
-    ): mixed {
+    private function callAbility(Site $site, string $ability, array $input, bool $mutationRisk, string $correlationId): mixed
+    {
         $routing = $this->routingContext($site);
         $headers = [
             'Authorization' => 'Bearer '.$routing['access_token'],
@@ -102,27 +89,26 @@ final readonly class WpAiBridgeMcpClient
                 throw new WpAiBridgeMcpException('unsupported_connector', 'The selected site does not use the WP AI Bridge connector.');
             }
 
-            // accessToken() re-enters the same lifecycle boundary using the locked
-            // record identity. The outer lock keeps the persisted target stable while
-            // credential selection/refresh completes, but is released before any MCP
-            // network execution below.
-            $accessToken = $this->connections->accessToken($lockedSite);
-            $credential = $lockedSite->credential()->first();
-            $resourceUrl = $lockedSite->mcp_resource_url;
-
-            if (! $credential instanceof SiteCredential
-                || $resourceUrl === ''
-                || ! hash_equals($resourceUrl, $credential->resource_url)) {
-                throw new SiteConnectionException(
-                    'credential_target_mismatch',
-                    'The selected site credential is not bound to its current MCP resource.',
+            try {
+                $accessToken = $this->connections->accessToken($lockedSite);
+            } catch (SiteConnectionException $exception) {
+                throw $exception;
+            } catch (SiteCredentialVaultException $exception) {
+                throw new WpAiBridgeMcpException(
+                    'credential_unavailable',
+                    'The selected site credential could not be opened safely.',
+                    $exception,
                 );
             }
 
-            return [
-                'resource_url' => $resourceUrl,
-                'access_token' => $accessToken,
-            ];
+            $credential = $lockedSite->credential()->first();
+            $resourceUrl = $lockedSite->mcp_resource_url;
+
+            if (! $credential instanceof SiteCredential || $resourceUrl === '' || ! hash_equals($resourceUrl, $credential->resource_url)) {
+                throw new SiteConnectionException('credential_target_mismatch', 'The selected site credential is not bound to its current MCP resource.');
+            }
+
+            return ['resource_url' => $resourceUrl, 'access_token' => $accessToken];
         });
     }
 
@@ -136,10 +122,7 @@ final readonly class WpAiBridgeMcpClient
                 'method' => 'initialize',
                 'params' => [
                     'protocolVersion' => self::PROTOCOL_VERSION,
-                    'clientInfo' => [
-                        'name' => 'mcp-gateway',
-                        'version' => '0.1.0',
-                    ],
+                    'clientInfo' => ['name' => 'mcp-gateway', 'version' => '0.1.0'],
                 ],
             ], $headers);
         } catch (OutboundRequestException $exception) {
@@ -157,9 +140,7 @@ final readonly class WpAiBridgeMcpClient
             throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an invalid MCP initialization response.', $exception);
         }
 
-        if (($payload['jsonrpc'] ?? null) !== '2.0'
-            || ($payload['id'] ?? null) !== 1
-            || ! is_array($payload['result'] ?? null)) {
+        if (($payload['jsonrpc'] ?? null) !== '2.0' || ($payload['id'] ?? null) !== 1 || ! is_array($payload['result'] ?? null)) {
             throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an incompatible MCP initialization response.');
         }
 
@@ -175,13 +156,8 @@ final readonly class WpAiBridgeMcpClient
      * @param  array<string, string>  $headers
      * @param  array<string, mixed>  $input
      */
-    private function callTool(
-        string $resourceUrl,
-        array $headers,
-        string $ability,
-        array $input,
-        bool $mutationRisk,
-    ): mixed {
+    private function callTool(string $resourceUrl, array $headers, string $ability, array $input, bool $mutationRisk): mixed
+    {
         try {
             $response = $this->http->postJson($resourceUrl, [
                 'jsonrpc' => '2.0',
@@ -189,10 +165,7 @@ final readonly class WpAiBridgeMcpClient
                 'method' => 'tools/call',
                 'params' => [
                     'name' => self::EXECUTE_TOOL,
-                    'arguments' => [
-                        'ability_name' => $ability,
-                        'parameters' => $input,
-                    ],
+                    'arguments' => ['ability_name' => $ability, 'parameters' => $input],
                 ],
             ], $headers);
         } catch (OutboundRequestException $exception) {
@@ -200,17 +173,14 @@ final readonly class WpAiBridgeMcpClient
             $message = $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'
                 : 'WP AI Bridge could not complete the downstream read.';
-
             throw new WpAiBridgeMcpException($reason, $message, $exception);
         }
 
         $this->assertAuthenticationStatus($response);
-
         if ($response->status !== 200) {
             if ($mutationRisk && ($response->status === 408 || $response->status === 429 || $response->status >= 500)) {
                 throw new WpAiBridgeMcpException('outcome_unknown', 'The downstream mutation result is unknown and was not retried.');
             }
-
             throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an unexpected MCP HTTP status.');
         }
 
@@ -221,7 +191,6 @@ final readonly class WpAiBridgeMcpClient
             $message = $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'
                 : 'WP AI Bridge returned invalid MCP JSON.';
-
             throw new WpAiBridgeMcpException($reason, $message, $exception);
         }
 
@@ -247,8 +216,9 @@ final readonly class WpAiBridgeMcpClient
                 : 'WP AI Bridge returned an invalid MCP tool result.');
         }
 
+        $authorization = $headers['Authorization'] ?? null;
         if (($result['isError'] ?? false) === true) {
-            throw new WpAiBridgeMcpException('downstream_rejected', $this->boundedToolErrorMessage($result));
+            throw new WpAiBridgeMcpException('downstream_rejected', $this->boundedToolErrorMessage($result, $authorization));
         }
 
         $structured = $result['structuredContent'] ?? null;
@@ -259,7 +229,7 @@ final readonly class WpAiBridgeMcpClient
                 : 'WP AI Bridge returned an incompatible Ability execution result.');
         }
 
-        return $structured['data'];
+        return $this->redactBearerCredential($structured['data'], $authorization);
     }
 
     /** @param array<string, string> $headers */
@@ -280,7 +250,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @param array<string, mixed> $result */
-    private function boundedToolErrorMessage(array $result): string
+    private function boundedToolErrorMessage(array $result, ?string $authorization): string
     {
         $content = $result['content'] ?? null;
         if (! is_array($content)) {
@@ -297,9 +267,44 @@ final readonly class WpAiBridgeMcpClient
                 continue;
             }
 
+            $message = $this->redactBearerCredential($message, $authorization);
+            if (! is_string($message)) {
+                return 'WP AI Bridge rejected the Ability request.';
+            }
+
             return mb_substr($message, 0, 512);
         }
 
         return 'WP AI Bridge rejected the Ability request.';
+    }
+
+    private function redactBearerCredential(mixed $value, ?string $authorization): mixed
+    {
+        if (! is_string($authorization) || ! str_starts_with($authorization, 'Bearer ')) {
+            return $value;
+        }
+
+        $token = substr($authorization, 7);
+        if ($token === '') {
+            return $value;
+        }
+
+        if (is_string($value)) {
+            return str_replace([$authorization, $token], '[redacted]', $value);
+        }
+
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $redacted = [];
+        foreach ($value as $key => $item) {
+            $safeKey = is_string($key)
+                ? str_replace([$authorization, $token], '[redacted]', $key)
+                : $key;
+            $redacted[$safeKey] = $this->redactBearerCredential($item, $authorization);
+        }
+
+        return $redacted;
     }
 }
