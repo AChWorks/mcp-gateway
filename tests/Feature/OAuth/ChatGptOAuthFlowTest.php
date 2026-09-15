@@ -203,7 +203,11 @@ final class ChatGptOAuthFlowTest extends TestCase
                 '_meta' => $modernMeta,
             ],
         ]);
-        $modernCall->assertOk()->assertJsonPath('result.structuredContent.status', 'site_routing_not_configured');
+        $modernCall->assertOk()
+            ->assertJsonPath('result.structuredContent.ok', true)
+            ->assertJsonPath('result.structuredContent.sites', [])
+            ->assertJsonPath('result.structuredContent.truncated', false);
+        self::assertIsString($modernCall->json('result.structuredContent.correlation_id'));
 
         $this->withHeaders([
             ...$mcpHeaders,

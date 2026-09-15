@@ -12,7 +12,7 @@ final class SafeHttpClient
     /** @param array<string, string> $headers */
     public function get(string $url, array $headers = []): SafeHttpResponse
     {
-        return $this->send('GET', $url, $headers, []);
+        return $this->send('GET', $url, $headers, [], 'none');
     }
 
     /**
@@ -21,14 +21,30 @@ final class SafeHttpClient
      */
     public function postForm(string $url, array $form, array $headers = []): SafeHttpResponse
     {
-        return $this->send('POST', $url, $headers, $form);
+        return $this->send('POST', $url, $headers, $form, 'form');
+    }
+
+    /**
+     * @param  array<string, mixed>  $json
+     * @param  array<string, string>  $headers
+     */
+    public function postJson(string $url, array $json, array $headers = []): SafeHttpResponse
+    {
+        return $this->send('POST', $url, $headers, $json, 'json');
+    }
+
+    /** @param array<string, string> $headers */
+    public function delete(string $url, array $headers = []): SafeHttpResponse
+    {
+        return $this->send('DELETE', $url, $headers, [], 'none');
     }
 
     /**
      * @param  array<string, string>  $headers
-     * @param  array<string, scalar|null>  $form
+     * @param  array<string, mixed>  $payload
+     * @param  'none'|'form'|'json'  $format
      */
-    private function send(string $method, string $url, array $headers, array $form): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array $payload, string $format): SafeHttpResponse
     {
         $target = $this->targets->validate($url);
         $curlOptions = [];
@@ -60,9 +76,13 @@ final class SafeHttpClient
             ->withHeaders($headers);
 
         try {
-            $response = $method === 'POST'
-                ? $request->asForm()->post($target->url, $form)
-                : $request->get($target->url);
+            $response = match ($method) {
+                'POST' => $format === 'json'
+                    ? $request->asJson()->post($target->url, $payload)
+                    : $request->asForm()->post($target->url, $payload),
+                'DELETE' => $request->delete($target->url),
+                default => $request->get($target->url),
+            };
         } catch (ConnectionException $exception) {
             $message = $exception->getMessage();
             $reason = preg_match('/(?:SSL|TLS|certificate|cURL error 60)/i', $message) === 1 ? 'tls_failure' : 'network_failure';

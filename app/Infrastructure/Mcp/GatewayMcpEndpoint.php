@@ -56,12 +56,16 @@ final readonly class GatewayMcpEndpoint
             ->addTool(
                 handler: [$this->handlers, 'siteAbilitiesRead'],
                 name: 'site-abilities-read',
-                description: 'List or inspect WP AI Bridge Ability contracts for one explicit site.',
+                description: 'List or inspect current WP AI Bridge Ability contracts for one explicit site.',
                 inputSchema: [
                     'type' => 'object',
                     'properties' => [
                         'site_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
                         'ability' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
+                        'page' => ['type' => 'integer', 'minimum' => 1, 'default' => 1],
+                        'per_page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 25],
+                        'namespace' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
+                        'search' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
                     ],
                     'required' => ['site_id'],
                     'additionalProperties' => false,

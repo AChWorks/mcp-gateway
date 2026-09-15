@@ -50,10 +50,27 @@ wp=("${compose[@]}" run --rm cli)
     --admin_email=admin@example.invalid \
     --skip-email \
     --allow-root
+
+mcp_adapter_url="${MCP_ADAPTER_URL:-https://github.com/WordPress/mcp-adapter/releases/download/v0.6.1/mcp-adapter.zip}"
+"${wp[@]}" plugin install "$mcp_adapter_url" --activate --allow-root
 "${wp[@]}" plugin install /var/www/html/wp-ai-bridge.zip --activate --allow-root
 "${compose[@]}" exec -T wordpress rm -f /var/www/html/wp-ai-bridge.zip
 
+adapter_version="$("${wp[@]}" plugin get mcp-adapter --field=version --allow-root | tail -n 1)"
+if [[ "$adapter_version" != "0.6.1" ]]; then
+    echo "ERROR: pinned Bridge MCP Adapter drifted: expected 0.6.1, got $adapter_version" >&2
+    exit 1
+fi
+
 actual_wp="$("${wp[@]}" core version --allow-root | tail -n 1)"
 actual_php="$("${wp[@]}" eval 'echo PHP_VERSION;' --allow-root | tail -n 1)"
-echo "Exact Bridge contract baseline: $expected_sha; WordPress $actual_wp; PHP $actual_php"
+echo "Exact Bridge contract baseline: $expected_sha; MCP Adapter $adapter_version; WordPress $actual_wp; PHP $actual_php"
+
 "${wp[@]}" eval-file /var/www/html/wp-ai-bridge-contract.php --user=1 --allow-root
+
+# Exercise the exact pinned Bridge through the exact MCP Adapter tool surface consumed by
+# Issue #5. The disposable environment covers current catalog pagination/schema reads,
+# authorized reads/writes and a real downstream permission denial without touching live data.
+bash "$bridge_root/bin/run-mcp-stdio-smoke.sh"
+
+echo "PASS: exact pinned WP AI Bridge OAuth and MCP routing contracts."
