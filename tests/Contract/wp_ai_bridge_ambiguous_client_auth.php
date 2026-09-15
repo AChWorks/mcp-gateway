@@ -103,8 +103,8 @@ function gateway_bridge_contract_http_response(int $status, array $body = []): a
 gateway_bridge_contract_assert(get_current_user_id() > 0, 'Run the contract smoke as an authenticated WordPress user.');
 gateway_bridge_contract_assert(function_exists('openssl_pkey_new'), 'OpenSSL is required for the contract smoke.');
 
-$registry = new Approved_OAuth_Clients();
-$store = new OAuth_Store();
+$registry = new Approved_OAuth_Clients;
+$store = new OAuth_Store;
 $oauth = new OAuth_Server($store, $registry);
 $userId = get_current_user_id();
 $resource = $oauth->mcp_endpoint_url();
