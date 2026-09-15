@@ -13,7 +13,7 @@ The current bootstrap is intentionally a conventional PHP application:
 - Blade/server-rendered frontend;
 - no required Node.js build, Redis, queue worker, Docker, broker, or separate MCP daemon.
 
-CI uses MySQL 8.4 to exercise a clean migration path. Application tests may use SQLite in memory when the test does not depend on MySQL-specific behavior.
+CI uses MySQL 8.4 only in the dedicated path-filtered MySQL validation workflow. Application tests may use SQLite in memory when the test does not depend on MySQL-specific behavior.
 
 ## Install a development checkout
 
@@ -116,7 +116,7 @@ composer analyse
 composer test
 ```
 
-`composer check` runs style, static analysis, and tests together. CI additionally runs `migrate:fresh` against MySQL and executes `gateway:check` with MySQL selected. These are the broad candidate checks, not the required inner loop for every edit.
+`composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting MySQL. The dedicated path-filtered `MySQL Concurrency` workflow owns MySQL 8.4 `migrate:fresh` and the `mysql-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate. Draft pull requests skip these heavy jobs until they are marked ready for review.
 
 ## MCP bootstrap compatibility fixture
 
