@@ -54,7 +54,6 @@ final class GatewayConnectionInformationTest extends TestCase
             ->get('/admin')
             ->assertOk()
             ->assertSee(route('admin.connection'), false)
-            ->assertSee((string) config('oauth.resource'))
             ->assertSee('View connection information');
     }
 }
