@@ -37,7 +37,7 @@ function gateway_bridge_contract_key(string $kid): array
         'private_key_bits' => 2048,
         'private_key_type' => OPENSSL_KEYTYPE_RSA,
     ]);
-    gateway_bridge_contract_assert(false !== $private, 'Could not generate the contract RSA key.');
+    gateway_bridge_contract_assert($private !== false, 'Could not generate the contract RSA key.');
 
     $details = openssl_pkey_get_details($private);
     gateway_bridge_contract_assert(
@@ -94,7 +94,7 @@ function gateway_bridge_contract_http_response(int $status, array $body = []): a
     return [
         'headers' => ['content-type' => 'application/json'],
         'body' => wp_json_encode($body),
-        'response' => ['code' => $status, 'message' => 200 === $status ? 'OK' : 'Service Unavailable'],
+        'response' => ['code' => $status, 'message' => $status === 200 ? 'OK' : 'Service Unavailable'],
         'cookies' => [],
         'filename' => null,
     ];
@@ -138,7 +138,7 @@ gateway_bridge_contract_assert(count($approved) === count($clients), 'Pinned Bri
 $httpMock = static function ($preempt, $args, $url) use (&$clients) {
     foreach ($clients as $client) {
         if ($url === $client['client_id']) {
-            if ('metadata_503' === $client['mode']) {
+            if ($client['mode'] === 'metadata_503') {
                 return gateway_bridge_contract_http_response(503, ['error' => 'fixture_metadata_unavailable']);
             }
 
@@ -154,7 +154,7 @@ $httpMock = static function ($preempt, $args, $url) use (&$clients) {
         }
 
         if ($url === $client['jwks_uri']) {
-            if ('jwks_503' === $client['mode']) {
+            if ($client['mode'] === 'jwks_503') {
                 return gateway_bridge_contract_http_response(503, ['error' => 'fixture_jwks_unavailable']);
             }
 
@@ -168,7 +168,7 @@ add_filter('pre_http_request', $httpMock, 10, 3);
 
 try {
     foreach ($scenarios as $name => $scenario) {
-        $client =& $clients[$name];
+        $client = &$clients[$name];
         $claims = [
             'user_id' => $userId,
             'client_id' => $client['client_id'],
@@ -177,7 +177,7 @@ try {
             'scope' => OAuth_Server::SCOPE_MCP.' '.OAuth_Server::SCOPE_OFFLINE,
         ];
 
-        if ('refresh' === $scenario['operation']) {
+        if ($scenario['operation'] === 'refresh') {
             $refresh = $store->issue(OAuth_Store::TYPE_REFRESH, $claims, OAuth_Server::REFRESH_TTL);
             $request = new WP_REST_Request('POST', '/wp-ai-bridge/v1/oauth/token');
             $request->set_param('grant_type', 'refresh_token');
@@ -191,8 +191,8 @@ try {
 
             $failed = $oauth->handle_token_request($request);
             $failedData = gateway_bridge_contract_data($failed);
-            gateway_bridge_contract_assert(400 === $failed->get_status(), $name.': dependency failure did not fail OAuth client authentication.');
-            gateway_bridge_contract_assert('invalid_client' === ($failedData['error'] ?? ''), $name.': dependency HTTP 503 did not map to invalid_client.');
+            gateway_bridge_contract_assert($failed->get_status() === 400, $name.': dependency failure did not fail OAuth client authentication.');
+            gateway_bridge_contract_assert(($failedData['error'] ?? '') === 'invalid_client', $name.': dependency HTTP 503 did not map to invalid_client.');
             gateway_bridge_contract_assert(is_array($store->read(OAuth_Store::TYPE_REFRESH, $refresh)), $name.': failed client authentication consumed the refresh token.');
 
             $client['mode'] = 'normal';
@@ -206,8 +206,8 @@ try {
                 gateway_bridge_contract_assertion($client['client_id'], $oauth->token_endpoint_url(), $client['key'])
             );
             $recovered = $oauth->handle_token_request($retry);
-            gateway_bridge_contract_assert(200 === $recovered->get_status(), $name.': the same refresh token did not recover after dependency restoration.');
-            gateway_bridge_contract_assert(false === $store->read(OAuth_Store::TYPE_REFRESH, $refresh), $name.': successful retry did not rotate the original refresh token.');
+            gateway_bridge_contract_assert($recovered->get_status() === 200, $name.': the same refresh token did not recover after dependency restoration.');
+            gateway_bridge_contract_assert($store->read(OAuth_Store::TYPE_REFRESH, $refresh) === false, $name.': successful retry did not rotate the original refresh token.');
         } else {
             $access = $store->issue(OAuth_Store::TYPE_ACCESS, $claims, OAuth_Server::ACCESS_TTL);
             $request = new WP_REST_Request('POST', '/wp-ai-bridge/v1/oauth/revoke');
@@ -219,8 +219,8 @@ try {
 
             $failed = $oauth->handle_revoke_request($request);
             $failedData = gateway_bridge_contract_data($failed);
-            gateway_bridge_contract_assert(400 === $failed->get_status(), $name.': dependency failure did not fail revocation client authentication.');
-            gateway_bridge_contract_assert('invalid_client' === ($failedData['error'] ?? ''), $name.': dependency HTTP 503 did not map to invalid_client.');
+            gateway_bridge_contract_assert($failed->get_status() === 400, $name.': dependency failure did not fail revocation client authentication.');
+            gateway_bridge_contract_assert(($failedData['error'] ?? '') === 'invalid_client', $name.': dependency HTTP 503 did not map to invalid_client.');
             gateway_bridge_contract_assert(is_array($store->read(OAuth_Store::TYPE_ACCESS, $access)), $name.': failed client authentication revoked the access token.');
 
             $client['mode'] = 'normal';
@@ -231,19 +231,19 @@ try {
                 gateway_bridge_contract_assertion($client['client_id'], $oauth->revocation_endpoint_url(), $client['key'])
             );
             $recovered = $oauth->handle_revoke_request($retry);
-            gateway_bridge_contract_assert(200 === $recovered->get_status(), $name.': revocation did not recover after dependency restoration.');
-            gateway_bridge_contract_assert(false === $store->read(OAuth_Store::TYPE_ACCESS, $access), $name.': successful retry did not revoke the access token.');
+            gateway_bridge_contract_assert($recovered->get_status() === 200, $name.': revocation did not recover after dependency restoration.');
+            gateway_bridge_contract_assert($store->read(OAuth_Store::TYPE_ACCESS, $access) === false, $name.': successful retry did not revoke the access token.');
         }
         unset($client);
     }
 } finally {
     remove_filter('pre_http_request', $httpMock, 10);
-    if (null === $originalClients) {
+    if ($originalClients === null) {
         delete_option(Approved_OAuth_Clients::OPTION_NAME);
     } else {
         update_option(Approved_OAuth_Clients::OPTION_NAME, $originalClients, false);
     }
-    if (null === $originalRevision) {
+    if ($originalRevision === null) {
         delete_option(Approved_OAuth_Clients::REVISION_OPTION);
     } else {
         update_option(Approved_OAuth_Clients::REVISION_OPTION, $originalRevision, false);
