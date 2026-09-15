@@ -15,6 +15,13 @@
         </a>
 
         @auth
+            <nav class="admin-nav" aria-label="{{ __('Administration') }}">
+                <a @class(['nav-link', 'is-active' => request()->routeIs('admin.dashboard')]) href="{{ route('admin.dashboard') }}">{{ __('Dashboard') }}</a>
+                <a @class(['nav-link', 'is-active' => request()->routeIs('admin.sites.*')]) href="{{ route('admin.sites.index') }}">{{ __('Sites') }}</a>
+                <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>
+                <a @class(['nav-link', 'is-active' => request()->routeIs('admin.connection')]) href="{{ route('admin.connection') }}">{{ __('Connection') }}</a>
+            </nav>
+
             <form method="post" action="{{ route('admin.logout') }}">
                 @csrf
                 <button class="button button-secondary" type="submit">{{ __('Sign out') }}</button>
@@ -24,6 +31,22 @@
 </header>
 
 <main class="shell main-content">
+    @if (session('status'))
+        <div class="alert alert-success" role="status">{{ session('status') }}</div>
+    @endif
+
+    @if (session('site_connection_status'))
+        @if (str_starts_with((string) session('site_connection_status'), 'connected:'))
+            <div class="alert alert-success" role="status">{{ __('WordPress authorization completed successfully.') }}</div>
+        @else
+            <div class="alert alert-error" role="alert">{{ __('WordPress authorization did not complete. Open the site details and retry when ready.') }}</div>
+        @endif
+    @endif
+
+    @if ($errors->has('site'))
+        <div class="alert alert-error" role="alert">{{ $errors->first('site') }}</div>
+    @endif
+
     @yield('content')
 </main>
 </body>
