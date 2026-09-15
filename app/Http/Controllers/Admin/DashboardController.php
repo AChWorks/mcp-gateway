@@ -12,19 +12,17 @@ final class DashboardController extends Controller
 {
     public function __invoke(ActivityFeed $activity): View
     {
-        $sites = Site::query()->get();
-
         return view('admin.dashboard', [
-            'siteCount' => $sites->count(),
-            'connectedCount' => $sites
-                ->filter(static fn (Site $site): bool => $site->connection_state === SiteConnectionState::Connected)
+            'siteCount' => Site::query()->count(),
+            'connectedCount' => Site::query()
+                ->where('connection_state', SiteConnectionState::Connected->value)
                 ->count(),
-            'attentionCount' => $sites
-                ->filter(static fn (Site $site): bool => in_array(
-                    $site->connection_state,
-                    [SiteConnectionState::ReconnectRequired, SiteConnectionState::Error, SiteConnectionState::Reassigning],
-                    true,
-                ))
+            'attentionCount' => Site::query()
+                ->whereIn('connection_state', [
+                    SiteConnectionState::ReconnectRequired->value,
+                    SiteConnectionState::Error->value,
+                    SiteConnectionState::Reassigning->value,
+                ])
                 ->count(),
             'recentActivity' => $activity->page(1, 5)['items'],
         ]);
