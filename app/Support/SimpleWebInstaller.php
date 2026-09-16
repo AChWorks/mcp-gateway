@@ -100,7 +100,7 @@ final class SimpleWebInstaller
         }
 
         $dbHost = trim((string) ($input['db_host'] ?? ''));
-        if ($dbHost === '' || strlen($dbHost) > 255 || str_contains($dbHost, "\0")) {
+        if ($dbHost === '' || strlen($dbHost) > 255 || preg_match('/^[A-Za-z0-9._:-]+$/', $dbHost) !== 1) {
             $errors['db_host'] = 'Enter a valid MySQL host.';
         }
 
