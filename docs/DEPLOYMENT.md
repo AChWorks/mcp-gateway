@@ -1,8 +1,8 @@
 # MCP Gateway Deployment Baseline
 
-This document defines the current **pre-release deployment-validation baseline** for MCP Gateway on aaPanel + OpenLiteSpeed + PHP 8.4 + MySQL.
+This document defines the supported **V1 deployment and validation baseline** for MCP Gateway on aaPanel + OpenLiteSpeed + PHP 8.4 + MySQL.
 
-It is not a production release announcement and does not authorize deployment. Until a production-ready release exists, deploy only to an explicitly authorized test/staging environment and pin the exact reviewed commit. `README.md` remains the user-facing source for release availability.
+GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. For stable installations, prefer an immutable release tag over a moving branch. `README.md` remains the user-facing installation and usage guide.
 
 ## What this baseline proves
 
@@ -87,9 +87,9 @@ Required filesystem behavior:
 
 Do **not** fix a key ownership mistake by making a private key world/group readable.
 
-## 4. Install an exact reviewed revision
+## 4. Install an immutable release
 
-For pre-release staging, use an exact reviewed commit. Once releases exist, prefer the immutable release tag/artifact rather than a moving branch.
+For stable V1 installations, use the immutable release tag rather than a moving branch. For development or controlled validation, an exact reviewed commit is also acceptable.
 
 Example:
 
@@ -97,7 +97,7 @@ Example:
 cd /www/wwwroot
 git clone https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
-git checkout <reviewed-commit-or-release-tag>
+git checkout v1.0.0
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
 cp .env.example .env
@@ -250,18 +250,11 @@ Finally, sign in at `/admin/login` and confirm the authenticated Gateway connect
 
 Do not include access tokens, refresh tokens, authorization codes, client assertions, passwords, `APP_KEY`, `.env` contents, or private-key contents in deployment logs/screenshots used as evidence.
 
-## 10. OpenLiteSpeed validation still required by Issue #8
+## 10. OpenLiteSpeed V1 validation result
 
-The official MCP SDK emits Streamable HTTP/SSE-compatible responses and already sets transport headers intended to discourage buffering. The repository has not yet proven the exact aaPanel/OpenLiteSpeed/LSAPI behavior on the target production-like stack.
+V1 validation completed the production-like aaPanel/OpenLiteSpeed/LSAPI proof on OpenLiteSpeed 1.8.4 with PHP 8.4 and MySQL 8.4. Modern MCP requests and the retained legacy compatibility flow worked through HTTPS/OpenLiteSpeed without an evidence-based need for custom buffering or timeout overrides beyond the normal Laravel `public/` document-root/rewrite configuration.
 
-Before production delivery, Issue #8 must still verify from executable evidence:
-
-1. modern MCP requests through HTTPS/OpenLiteSpeed;
-2. any retained legacy streaming/session compatibility path;
-3. proxy/LSAPI buffering and timeout behavior under representative responses;
-4. whether any OpenLiteSpeed setting actually needs adjustment.
-
-If no adjustment is required, document that evidence. If an adjustment is required, record the smallest OpenLiteSpeed-specific setting proven by the test. Do not pre-apply nginx directives or generic buffering tweaks.
+Do not pre-apply nginx directives or generic buffering tweaks. If a future release introduces materially different long-lived server-to-client streaming/SSE behavior, revalidate OpenLiteSpeed/LSAPI buffering and timeout behavior for that release before prescribing a new setting.
 
 ## 11. Backup and recovery baseline
 
@@ -275,7 +268,7 @@ Before every migration-bearing upgrade, preserve a recoverable set containing:
 
 Treat the database, `APP_KEY`, and both signing keypairs as one recovery set. Site access/refresh tokens are encrypted with the application encryption boundary, so restoring the database without the matching `APP_KEY` makes those credentials unusable. Restoring a different Bridge client keypair changes the `private_key_jwt` identity material advertised through the Gateway JWKS endpoint and can break approved site connections even when the database is intact.
 
-Final Issue #8 recovery validation must prove this set on a controlled two-site installation before production delivery. Do not claim recovery readiness from backup presence alone.
+V1 recovery validation proved this set on a controlled two-site installation: the database, matching `APP_KEY`, both signing keypairs, and exact code/lock identity were restored together and the encrypted site credentials remained usable. Preserve the same recovery-set invariant for future releases; backup presence alone is not sufficient unless restore assumptions remain valid.
 
 ## 12. Upgrade and rollback outline
 
@@ -320,4 +313,4 @@ These external references were checked while establishing this baseline. Reposit
 - aaPanel PHP Project/site configuration: https://www.aapanel.com/docs/Function/php.html
 - aaPanel site deployment notes: https://www.aapanel.com/docs/faq/Site_Related.html
 
-Final production readiness still belongs to Issue #8 and requires production-like OpenLiteSpeed/PHP validation plus the completed #4/#5/#6/#7 application paths.
+V1 production-like readiness evidence was completed under Issue #8 and is preserved in the repository/GitHub history. Future releases must revalidate only the deployment assumptions materially changed by that release.
