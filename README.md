@@ -45,12 +45,12 @@ This is the easiest installation method for aaPanel and compatible shared hostin
 
 1. Create a dedicated HTTPS domain/subdomain, for example `gateway.example.com`.
 2. Create a dedicated **empty** MySQL database and database user.
-3. Download `mcp-gateway-v1.1.1.zip` from the [v1.1.1 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.1).
+3. Download `mcp-gateway-v1.1.2.zip` from the [v1.1.2 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.2).
 4. Upload and extract the ZIP on the host. The archive contains only deployment/runtime files and already includes production Composer dependencies in `vendor/`.
 5. Point the domain document root / aaPanel running directory to the extracted package's `public/` directory. Example:
 
    ```text
-   /www/wwwroot/mcp-gateway-v1.1.1/public
+   /www/wwwroot/mcp-gateway-v1.1.2/public
    ```
 
 6. Make sure the PHP process can write to:
@@ -73,6 +73,8 @@ This is the easiest installation method for aaPanel and compatible shared hostin
    - the first administrator name/email/password.
 10. Select **Install MCP Gateway**.
 
+The named deployment ZIP is assembled in a clean staging tree from the committed dependency lockfile. Its bundled `vendor/` contains production dependencies and required runtime/license material only; repository metadata, development tools/dependencies, package docs/examples/tests, generated test keys, sessions, caches, logs, and other transient state are excluded. Writable runtime directories are shipped empty.
+
 The installer automatically:
 
 - checks PHP/extensions, HTTPS, bundled dependencies, and writable paths;
@@ -92,7 +94,7 @@ https://gateway.example.com/admin/login
 
 The installer never displays the MySQL password, `APP_KEY`, private keys, access tokens, or other generated secret material.
 
-> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include `vendor/`. Use the named `mcp-gateway-v1.1.1.zip` Release asset.
+> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-v1.1.2.zip` Release asset.
 
 ### aaPanel quick setup
 
@@ -102,9 +104,9 @@ A typical aaPanel setup is:
 Domain:          gateway.example.com
 PHP:             8.4
 Database:        dedicated MySQL database/user
-Application:     /www/wwwroot/mcp-gateway-v1.1.1
+Application:     /www/wwwroot/mcp-gateway-v1.1.2
 Running directory/document root:
-                 /www/wwwroot/mcp-gateway-v1.1.1/public
+                 /www/wwwroot/mcp-gateway-v1.1.2/public
 SSL:             enabled before /install
 ```
 
@@ -130,7 +132,7 @@ Operators who prefer source-based deployment can continue to use the existing CL
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.1 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.1.2 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
@@ -181,7 +183,7 @@ php artisan gateway:admin:create
 php artisan gateway:check
 ```
 
-Do not run `composer update` on the server. Production installation must consume the committed lockfile through `composer install`.
+Do not run `composer update` on the server. Production source installation must consume the committed lockfile through `composer install`.
 
 ## Verify the installation
 
@@ -296,7 +298,7 @@ Before every migration-bearing upgrade, preserve one recovery set containing:
 - the matching `.env` / `APP_KEY` through your approved secret-backup mechanism;
 - the Gateway OAuth signing keypair;
 - the Gateway-to-Bridge signing keypair;
-- the currently deployed release tag/commit and `composer.lock` identity.
+- the currently deployed release tag/commit and the corresponding repository `composer.lock` identity.
 
 For an existing source/CLI deployment, move to the intended release and run:
 
@@ -344,7 +346,7 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 
 ## Release status
 
-Current stable release: `v1.1.1`.
+Current stable release: `v1.1.2`.
 
 Recommended installations should use the named deployment ZIP attached to the GitHub Release rather than the generic source archive or moving `main` branch.
 
