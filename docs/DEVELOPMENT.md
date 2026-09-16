@@ -66,7 +66,7 @@ Name and email may be supplied as non-secret options when useful:
 php artisan gateway:admin:create --name="Gateway Admin" --email="admin@example.test"
 ```
 
-The password is always requested interactively through a hidden prompt and is never accepted as a command-line option. It must contain at least 12 characters with mixed case, a number, and a symbol. The command normalizes the email address and relies on the `User` model's framework hashing cast; there is no committed/default administrator password, public registration route, or password-reset flow in V0.1.
+The password is always requested interactively through a hidden prompt and is never accepted as a command-line option. It must contain at least 12 characters with mixed case, a number, and a symbol. The command normalizes the email address and relies on the `User` model's framework hashing cast; there is no committed/default administrator password, public registration route, or password-reset flow in V1.
 
 Once the application is running, administrator sign-in is available at `/admin/login`. The admin routes use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
@@ -188,7 +188,7 @@ The stable public protocol paths are:
 
 The required OAuth resource scope is `mcp`. `offline_access` is optional and is the only condition under which the Gateway issues a refresh token. A refresh request may narrow from `mcp offline_access` to `mcp`; the replacement access token remains valid but no new refresh token is issued, so refresh authority cannot survive a deliberate scope reduction.
 
-The V0.1 MCP tool registry is stable even before site routing is implemented:
+The V1 MCP tool registry is stable even before site routing is implemented:
 
 ```text
 sites-list

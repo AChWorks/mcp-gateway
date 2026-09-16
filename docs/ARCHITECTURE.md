@@ -61,7 +61,7 @@ Prefer the official `modelcontextprotocol/php-sdk` (`mcp/sdk`) for MCP server/cl
 
 The SDK is pre-1.0/experimental at the time this architecture is established. Implementation must therefore pin an exact compatible dependency through Composer, exercise the required server/client paths in tests, and review release notes before SDK upgrades.
 
-The current MCP protocol revision used by V0.1 is `2026-07-28`. Its primary request path is stateless: request-level protocol/client metadata and capabilities travel in `_meta`, routing uses the required MCP headers such as `Mcp-Method`/`Mcp-Name`, and the modern path does not depend on `initialize` or `Mcp-Session-Id`. The official PHP SDK `0.8.1` supports this modern era and also retains the 2025-era handshake/session compatibility path.
+The current MCP protocol revision used by V1 is `2026-07-28`. Its primary request path is stateless: request-level protocol/client metadata and capabilities travel in `_meta`, routing uses the required MCP headers such as `Mcp-Method`/`Mcp-Name`, and the modern path does not depend on `initialize` or `Mcp-Session-Id`. The official PHP SDK `0.8.1` supports this modern era and also retains the 2025-era handshake/session compatibility path.
 
 Legacy 2025-era Streamable HTTP compatibility still spans multiple HTTP requests. A PHP-FPM/LSAPI request lifecycle cannot use the SDK's default in-memory session store for that legacy path because the next request may execute in a different process. The single-host V1 compatibility layer therefore uses the SDK file session store in private application storage with bounded TTL and garbage collection. Modern `2026-07-28` requests do not require that store. Horizontal multi-host support for legacy sessions remains outside V1 unless explicitly introduced later.
 
@@ -207,7 +207,7 @@ MCP handlers call application services; they do not make raw downstream HTTP req
 
 Owns `remote MCP client -> Gateway` authorization.
 
-The V0.1 public surfaces are:
+The V1 public surfaces are:
 
 ```text
 /.well-known/oauth-protected-resource/mcp

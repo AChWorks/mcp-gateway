@@ -9,12 +9,12 @@ Use the source that owns the kind of truth you need:
 - [`MASTER-SPEC.md`](./MASTER-SPEC.md) — canonical project purpose, durable requirements, constraints, non-goals, security boundaries, and V1 completion criteria.
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — current technical architecture, component boundaries, protocol flows, persistence, deployment shape, and testing direction.
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
-- [`DEPLOYMENT.md`](./DEPLOYMENT.md) — current pre-release aaPanel/OpenLiteSpeed/PHP/MySQL deployment-validation baseline and operational safety boundaries.
+- [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported V1 aaPanel/OpenLiteSpeed/PHP/MySQL deployment, validation, backup, upgrade, rollback, and operational safety boundaries.
 - [GitHub Issues](https://github.com/ach1992/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
-- [Program Issue #1](https://github.com/ach1992/mcp-gateway/issues/1) — V0.1 execution program and dependency graph.
+- [Program Issue #1](https://github.com/ach1992/mcp-gateway/issues/1) — completed V1 execution program and dependency graph.
 - Pull requests and commits — implementation identity, review history, and integrated changes.
 - GitHub Actions / CI — validation evidence tied to exact commits.
-- Release/deployment state — production truth when delivery is explicitly authorized later.
+- [GitHub Releases](https://github.com/ach1992/mcp-gateway/releases) — immutable public release identity and release notes; deployment state remains separate production truth when deployment is explicitly authorized.
 
 `README.md` is not a project-state, architecture, or recovery source. It is the public/user-facing project page.
 
@@ -39,7 +39,7 @@ A replacement Master or developer should recover in this order:
 3. Open Program Issue #1 to locate the active workstream and dependency path.
 4. Read only the relevant current Issue/Task Contract and its dependencies.
 5. Inspect the corresponding branch/PR/commit and exact CI evidence before changing or integrating implementation.
-6. Use `docs/DEPLOYMENT.md` plus deployment/release evidence when deployment readiness or delivery becomes relevant.
+6. Use `docs/DEPLOYMENT.md` plus the applicable GitHub Release and deployment evidence when installation, upgrade, or delivery becomes relevant.
 
 Conversation history is not an authoritative project source and is not required to continue the project.
 
@@ -51,7 +51,7 @@ Keep information in its natural owner:
 - durable project intent -> `docs/MASTER-SPEC.md`;
 - architecture and engineering structure -> `docs/ARCHITECTURE.md` and other focused docs when genuinely needed;
 - development workflow -> `docs/DEVELOPMENT.md`;
-- pre-release deployment-validation procedure -> `docs/DEPLOYMENT.md`;
+- deployment/upgrade/rollback procedure -> `docs/DEPLOYMENT.md`;
 - navigation/recovery topology -> this file;
 - live work/status/dependencies -> GitHub Issues/PRs/CI;
 - release/deployment truth -> release/deployment systems.
