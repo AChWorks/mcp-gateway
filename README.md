@@ -72,7 +72,7 @@ For a stable installation, use an immutable release tag instead of a moving bran
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.0.0 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.0.1 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
@@ -350,10 +350,10 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 
 ## Release status
 
-V1 is complete and release-ready. Stable installations should use the published `v1.0.0` tag rather than `main`.
+V1 is complete and released. Stable installations should use the published `v1.0.1` tag rather than `main`.
 
 Publishing a GitHub release does not deploy MCP Gateway to any server automatically. Production deployment remains an operator-controlled action.
 
 ## License
 
-No software license has been published for this repository. Do not assume permission to reuse or redistribute the code beyond rights provided by applicable law or a separate agreement.
+MCP Gateway is open-source software released under the [MIT License](LICENSE).
