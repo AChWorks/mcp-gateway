@@ -42,6 +42,16 @@ final class SimpleWebInstallerTest extends TestCase
     }
 
     #[Test]
+    public function it_rejects_mysql_dsn_injection_characters_in_the_host(): void
+    {
+        $errors = SimpleWebInstaller::validateInput($this->validInput([
+            'db_host' => '127.0.0.1;unix_socket=/tmp/mysql.sock',
+        ]), 'gateway.example.com');
+
+        self::assertArrayHasKey('db_host', $errors);
+    }
+
+    #[Test]
     public function it_requires_the_same_admin_password_policy_as_the_cli_command(): void
     {
         $errors = SimpleWebInstaller::validateInput($this->validInput([
