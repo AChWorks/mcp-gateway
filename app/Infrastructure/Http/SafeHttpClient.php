@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Http;
 
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
 
 final class SafeHttpClient
@@ -50,23 +51,9 @@ final class SafeHttpClient
         $connectTimeout = max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
         $requestTimeout = max($connectTimeout, (int) config('bridge.http.request_timeout_seconds', 5));
         $maxBytes = max(1024, (int) config('bridge.http.max_response_bytes', 65536));
-        $responseTooLarge = false;
+        $responseBody = new BoundedResponseBody($maxBytes);
 
         $curlOptions = [];
-        $progress = static function (
-            int $downloadTotal,
-            int $downloadNow,
-            int $uploadTotal,
-            int $uploadNow,
-        ) use ($maxBytes, &$responseTooLarge): bool {
-            if ($downloadNow > $maxBytes) {
-                $responseTooLarge = true;
-
-                return true;
-            }
-
-            return false;
-        };
         if (filter_var($target->host, FILTER_VALIDATE_IP) === false) {
             if (! defined('CURLOPT_RESOLVE')) {
                 throw new OutboundRequestException('runtime', 'Secure outbound DNS pinning is unavailable.');
@@ -82,7 +69,8 @@ final class SafeHttpClient
             'allow_redirects' => false,
             'verify' => true,
             'proxy' => '',
-            'progress' => $progress,
+            'progress' => [$responseBody, 'progress'],
+            'sink' => $responseBody->stream(),
             ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),
         ])
             ->connectTimeout($connectTimeout)
@@ -98,15 +86,23 @@ final class SafeHttpClient
                 'DELETE' => $request->delete($target->url),
                 default => $request->get($target->url),
             };
-        } catch (ConnectionException $exception) {
-            if ($responseTooLarge) {
+        } catch (ConnectionException|RequestException $exception) {
+            if ($responseBody->limitExceeded()) {
                 throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+            }
+
+            if ($exception instanceof RequestException) {
+                throw $exception;
             }
 
             $message = $exception->getMessage();
             $reason = preg_match('/(?:SSL|TLS|certificate|cURL error 60)/i', $message) === 1 ? 'tls_failure' : 'network_failure';
 
             throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.');
+        }
+
+        if ($responseBody->limitExceeded()) {
+            throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
         }
 
         $status = $response->status();
@@ -120,18 +116,14 @@ final class SafeHttpClient
             throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
         }
 
-        $stream = $psrResponse->getBody();
-        $body = '';
-        try {
-            while (! $stream->eof()) {
-                $remaining = $maxBytes + 1 - strlen($body);
-                if ($remaining <= 0) {
-                    throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
-                }
-                $body .= $stream->read(min(8192, $remaining));
-            }
-        } finally {
-            $stream->close();
+        $stream = $responseBody->stream();
+        if (! rewind($stream)) {
+            throw new OutboundRequestException('network_failure', 'Remote response body could not be read.');
+        }
+
+        $body = stream_get_contents($stream);
+        if ($body === false) {
+            throw new OutboundRequestException('network_failure', 'Remote response body could not be read.');
         }
 
         if (strlen($body) > $maxBytes) {
