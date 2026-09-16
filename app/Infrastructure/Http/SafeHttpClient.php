@@ -47,7 +47,26 @@ final class SafeHttpClient
     private function send(string $method, string $url, array $headers, array $payload, string $format): SafeHttpResponse
     {
         $target = $this->targets->validate($url);
+        $connectTimeout = max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
+        $requestTimeout = max($connectTimeout, (int) config('bridge.http.request_timeout_seconds', 5));
+        $maxBytes = max(1024, (int) config('bridge.http.max_response_bytes', 65536));
+        $responseTooLarge = false;
+
         $curlOptions = [];
+        $progress = static function (
+            int $downloadTotal,
+            int $downloadNow,
+            int $uploadTotal,
+            int $uploadNow,
+        ) use ($maxBytes, &$responseTooLarge): bool {
+            if ($downloadNow > $maxBytes) {
+                $responseTooLarge = true;
+
+                return true;
+            }
+
+            return false;
+        };
         if (filter_var($target->host, FILTER_VALIDATE_IP) === false) {
             if (! defined('CURLOPT_RESOLVE')) {
                 throw new OutboundRequestException('runtime', 'Secure outbound DNS pinning is unavailable.');
@@ -59,15 +78,11 @@ final class SafeHttpClient
             $curlOptions[CURLOPT_RESOLVE] = [$target->host.':'.$target->port.':'.$resolveAddress];
         }
 
-        $connectTimeout = max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
-        $requestTimeout = max($connectTimeout, (int) config('bridge.http.request_timeout_seconds', 5));
-        $maxBytes = max(1024, (int) config('bridge.http.max_response_bytes', 65536));
-
         $request = Http::withOptions([
             'allow_redirects' => false,
             'verify' => true,
             'proxy' => '',
-            'stream' => true,
+            'progress' => $progress,
             ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),
         ])
             ->connectTimeout($connectTimeout)
@@ -84,6 +99,10 @@ final class SafeHttpClient
                 default => $request->get($target->url),
             };
         } catch (ConnectionException $exception) {
+            if ($responseTooLarge) {
+                throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+            }
+
             $message = $exception->getMessage();
             $reason = preg_match('/(?:SSL|TLS|certificate|cURL error 60)/i', $message) === 1 ? 'tls_failure' : 'network_failure';
 

@@ -95,6 +95,8 @@ final class SafeHttpClientTest extends TestCase
 
     public function test_policy_requests_disable_ambient_proxy_while_retaining_dns_pin(): void
     {
+        config()->set('bridge.http.max_response_bytes', 1024);
+
         $factory = new CapturingHttpFactory;
         Http::swap($factory);
         $factory->preventStrayRequests();
@@ -116,11 +118,16 @@ final class SafeHttpClientTest extends TestCase
         }
 
         self::assertSame('', $factory->lastOptions[RequestOptions::PROXY] ?? null);
+        self::assertFalse($factory->lastOptions[RequestOptions::STREAM] ?? false);
         self::assertArrayHasKey('curl', $factory->lastOptions);
         self::assertSame(
             ['wp.example.test:443:1.1.1.1'],
             $factory->lastOptions['curl'][CURLOPT_RESOLVE] ?? null,
         );
+        $progress = $factory->lastOptions[RequestOptions::PROGRESS] ?? null;
+        self::assertIsCallable($progress);
+        self::assertFalse($progress(0, 1024, 0, 0));
+        self::assertTrue($progress(0, 1025, 0, 0));
     }
 
     private function restoreEnvironmentVariable(string $name, string|false $value): void
