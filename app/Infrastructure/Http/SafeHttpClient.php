@@ -53,83 +53,87 @@ final class SafeHttpClient
         $maxBytes = max(1024, (int) config('bridge.http.max_response_bytes', 65536));
         $responseBody = new BoundedResponseBody($maxBytes);
 
-        $curlOptions = [];
-        if (filter_var($target->host, FILTER_VALIDATE_IP) === false) {
-            if (! defined('CURLOPT_RESOLVE')) {
-                throw new OutboundRequestException('runtime', 'Secure outbound DNS pinning is unavailable.');
+        try {
+            $curlOptions = [];
+            if (filter_var($target->host, FILTER_VALIDATE_IP) === false) {
+                if (! defined('CURLOPT_RESOLVE')) {
+                    throw new OutboundRequestException('runtime', 'Secure outbound DNS pinning is unavailable.');
+                }
+
+                $resolveAddress = str_contains($target->pinnedAddress(), ':')
+                    ? '['.$target->pinnedAddress().']'
+                    : $target->pinnedAddress();
+                $curlOptions[CURLOPT_RESOLVE] = [$target->host.':'.$target->port.':'.$resolveAddress];
             }
 
-            $resolveAddress = str_contains($target->pinnedAddress(), ':')
-                ? '['.$target->pinnedAddress().']'
-                : $target->pinnedAddress();
-            $curlOptions[CURLOPT_RESOLVE] = [$target->host.':'.$target->port.':'.$resolveAddress];
-        }
+            $request = Http::withOptions([
+                'allow_redirects' => false,
+                'verify' => true,
+                'proxy' => '',
+                'progress' => [$responseBody, 'progress'],
+                'sink' => $responseBody->stream(),
+                ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),
+            ])
+                ->connectTimeout($connectTimeout)
+                ->timeout($requestTimeout)
+                ->acceptJson()
+                ->withHeaders($headers);
 
-        $request = Http::withOptions([
-            'allow_redirects' => false,
-            'verify' => true,
-            'proxy' => '',
-            'progress' => [$responseBody, 'progress'],
-            'sink' => $responseBody->stream(),
-            ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),
-        ])
-            ->connectTimeout($connectTimeout)
-            ->timeout($requestTimeout)
-            ->acceptJson()
-            ->withHeaders($headers);
+            try {
+                $response = match ($method) {
+                    'POST' => $format === 'json'
+                        ? $request->asJson()->post($target->url, $payload)
+                        : $request->asForm()->post($target->url, $payload),
+                    'DELETE' => $request->delete($target->url),
+                    default => $request->get($target->url),
+                };
+            } catch (ConnectionException|RequestException $exception) {
+                if ($responseBody->limitExceeded()) {
+                    throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+                }
 
-        try {
-            $response = match ($method) {
-                'POST' => $format === 'json'
-                    ? $request->asJson()->post($target->url, $payload)
-                    : $request->asForm()->post($target->url, $payload),
-                'DELETE' => $request->delete($target->url),
-                default => $request->get($target->url),
-            };
-        } catch (ConnectionException|RequestException $exception) {
+                if ($exception instanceof RequestException) {
+                    throw $exception;
+                }
+
+                $message = $exception->getMessage();
+                $reason = preg_match('/(?:SSL|TLS|certificate|cURL error 60)/i', $message) === 1 ? 'tls_failure' : 'network_failure';
+
+                throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.');
+            }
+
             if ($responseBody->limitExceeded()) {
                 throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
             }
 
-            if ($exception instanceof RequestException) {
-                throw $exception;
+            $status = $response->status();
+            if ($status >= 300 && $status < 400) {
+                throw new OutboundRequestException('unsafe_redirect', 'Remote endpoint attempted an unsupported redirect.');
             }
 
-            $message = $exception->getMessage();
-            $reason = preg_match('/(?:SSL|TLS|certificate|cURL error 60)/i', $message) === 1 ? 'tls_failure' : 'network_failure';
+            $psrResponse = $response->toPsrResponse();
+            $lengthHeader = $psrResponse->getHeaderLine('Content-Length');
+            if ($lengthHeader !== '' && ctype_digit($lengthHeader) && (int) $lengthHeader > $maxBytes) {
+                throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+            }
 
-            throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.');
+            $stream = $responseBody->stream();
+            if (! rewind($stream)) {
+                throw new OutboundRequestException('network_failure', 'Remote response body could not be read.');
+            }
+
+            $body = stream_get_contents($stream);
+            if ($body === false) {
+                throw new OutboundRequestException('network_failure', 'Remote response body could not be read.');
+            }
+
+            if (strlen($body) > $maxBytes) {
+                throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+            }
+
+            return new SafeHttpResponse($status, $psrResponse->getHeaders(), $body);
+        } finally {
+            $responseBody->close();
         }
-
-        if ($responseBody->limitExceeded()) {
-            throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
-        }
-
-        $status = $response->status();
-        if ($status >= 300 && $status < 400) {
-            throw new OutboundRequestException('unsafe_redirect', 'Remote endpoint attempted an unsupported redirect.');
-        }
-
-        $psrResponse = $response->toPsrResponse();
-        $lengthHeader = $psrResponse->getHeaderLine('Content-Length');
-        if ($lengthHeader !== '' && ctype_digit($lengthHeader) && (int) $lengthHeader > $maxBytes) {
-            throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
-        }
-
-        $stream = $responseBody->stream();
-        if (! rewind($stream)) {
-            throw new OutboundRequestException('network_failure', 'Remote response body could not be read.');
-        }
-
-        $body = stream_get_contents($stream);
-        if ($body === false) {
-            throw new OutboundRequestException('network_failure', 'Remote response body could not be read.');
-        }
-
-        if (strlen($body) > $maxBytes) {
-            throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
-        }
-
-        return new SafeHttpResponse($status, $psrResponse->getHeaders(), $body);
     }
 }
