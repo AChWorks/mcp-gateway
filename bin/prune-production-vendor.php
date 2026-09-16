@@ -74,13 +74,12 @@ function directoryBytes(string $path): int
 }
 
 /** @return list<string> */
-function autoloadDevPaths(array $composer): array
+function autoloadPaths(array $autoload): array
 {
     $paths = [];
-    $autoloadDev = $composer['autoload-dev'] ?? [];
 
     foreach (['psr-4', 'psr-0'] as $type) {
-        foreach (($autoloadDev[$type] ?? []) as $value) {
+        foreach (($autoload[$type] ?? []) as $value) {
             foreach ((array) $value as $path) {
                 $normalized = normalizeRelativePath((string) $path);
                 if ($normalized !== null) {
@@ -91,7 +90,7 @@ function autoloadDevPaths(array $composer): array
     }
 
     foreach (['classmap', 'files'] as $type) {
-        foreach (($autoloadDev[$type] ?? []) as $path) {
+        foreach (($autoload[$type] ?? []) as $path) {
             $normalized = normalizeRelativePath((string) $path);
             if ($normalized !== null) {
                 $paths[] = $normalized;
@@ -100,6 +99,25 @@ function autoloadDevPaths(array $composer): array
     }
 
     return array_values(array_unique($paths));
+}
+
+function pathsOverlap(string $left, string $right): bool
+{
+    return $left === $right
+        || str_starts_with($left.'/', rtrim($right, '/').'/')
+        || str_starts_with($right.'/', rtrim($left, '/').'/');
+}
+
+/** @param list<string> $productionAutoloadPaths */
+function overlapsProductionAutoload(string $candidate, array $productionAutoloadPaths): bool
+{
+    foreach ($productionAutoloadPaths as $productionPath) {
+        if (pathsOverlap($candidate, $productionPath)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /** @return list<array{path: string, reason: string}> */
@@ -123,16 +141,22 @@ function collectCandidates(string $vendor): array
             fail('Invalid package composer.json: '.$manifest);
         }
 
+        $productionAutoloadPaths = autoloadPaths($composer['autoload'] ?? []);
+
         foreach (['.github', '.gitlab', '.circleci'] as $directory) {
             $add($packageRoot.'/'.$directory, 'repository/CI metadata');
         }
 
         foreach (['docs', 'doc', 'examples', 'example', 'benchmarks', 'benchmark'] as $directory) {
-            $add($packageRoot.'/'.$directory, 'package documentation/example/benchmark material');
+            if (! overlapsProductionAutoload($directory, $productionAutoloadPaths)) {
+                $add($packageRoot.'/'.$directory, 'package documentation/example/benchmark material');
+            }
         }
 
-        foreach (autoloadDevPaths($composer) as $relativePath) {
-            $add($packageRoot.'/'.$relativePath, 'package autoload-dev material');
+        foreach (autoloadPaths($composer['autoload-dev'] ?? []) as $relativePath) {
+            if (! overlapsProductionAutoload($relativePath, $productionAutoloadPaths)) {
+                $add($packageRoot.'/'.$relativePath, 'package autoload-dev material');
+            }
         }
 
         foreach ((array) ($composer['autoload']['exclude-from-classmap'] ?? []) as $excludedPath) {
