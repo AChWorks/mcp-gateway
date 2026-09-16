@@ -1,17 +1,18 @@
 # MCP Gateway Deployment Baseline
 
-This document defines the supported **V1 deployment and validation baseline** for MCP Gateway on aaPanel + OpenLiteSpeed + PHP 8.4 + MySQL.
+This document defines the supported **V1 deployment and validation baseline** for MCP Gateway on PHP 8.4 + MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory.
 
-GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. For stable installations, prefer an immutable release tag over a moving branch. `README.md` remains the user-facing installation and usage guide.
+GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide.
 
 ## What this baseline proves
 
 The current repository supports a conventional single-host PHP deployment with:
 
 - PHP `>= 8.4.1` within the repository's PHP 8.4 target;
-- Composer 2;
 - MySQL as the production database;
-- Laravel served only from the repository `public/` directory;
+- Laravel served only from the repository/package `public/` directory;
+- a deployment-ready Release ZIP with production Composer dependencies bundled, so Git/Composer are not required on the target host;
+- Git + Composer + Artisan as a supported advanced deployment path;
 - Blade/static assets with no required Node.js production build;
 - file-backed cache and administrator sessions by default;
 - no required Redis, queue worker, broker, Docker runtime, or separate MCP daemon.
@@ -26,28 +27,23 @@ Under the pinned WP AI Bridge compatibility contract, OAuth `invalid_client` is 
 
 Before placing application code on the server, prepare:
 
-1. An aaPanel site for the intended Gateway hostname or subdomain.
-2. OpenLiteSpeed as the site's web server.
-3. PHP 8.4 for both the site and deployment CLI. Verify the CLI used for Artisan/Composer is the intended PHP 8.4 runtime and that the explicitly required application extensions are loaded:
+1. An aaPanel/shared-hosting site for the intended Gateway hostname or subdomain.
+2. PHP 8.4 for the website. The runtime must provide `curl`, `mbstring`, `openssl`, `pdo_mysql`, and `sodium`, and cURL must expose `CURLOPT_RESOLVE`.
+3. A dedicated **empty** MySQL database and user scoped to the Gateway database. The account must be able to create/alter/drop application tables and indexes as well as perform normal application reads/writes. Do not use a global MySQL administrator account for normal application runtime.
+4. DNS resolving the Gateway hostname to the intended server before final HTTPS/OAuth verification.
+5. A valid HTTPS certificate for the exact hostname. Production OAuth identity is derived from `APP_URL`, so the hostname must be stable before installation.
+6. A hosting layout that can make the application `public/` directory the effective document root.
 
-   ```bash
-   php -v
-   php -r 'foreach (["curl", "mbstring", "openssl", "pdo_mysql", "sodium"] as $extension) { if (! extension_loaded($extension)) { fwrite(STDERR, "Missing PHP extension: {$extension}\n"); exit(1); } } if (! defined("CURLOPT_RESOLVE")) { fwrite(STDERR, "Missing cURL CURLOPT_RESOLVE support\n"); exit(1); } echo "Required PHP extensions: OK\n";'
-   composer --version
-   ```
+Composer 2 and Git are required only for the advanced source installation path. The recommended deployment ZIP already contains `vendor/`.
 
-4. A dedicated MySQL database and user scoped to the Gateway database. The account used for deployment migrations must be able to create/alter/drop application tables and indexes as well as perform normal application reads/writes. Do not use a global MySQL administrator account for normal application runtime.
-5. DNS already resolving the Gateway hostname to the intended server before final HTTPS/OAuth verification.
-6. A valid HTTPS certificate for the exact hostname. Production OAuth identity is derived from `APP_URL`, so the hostname must be stable before live integration.
-
-On aaPanel, `/www/wwwroot/` is the normal website base location, but the actual application path may differ. In the examples below:
+On aaPanel, `/www/wwwroot/` is the normal website base location. Example:
 
 ```text
-APP_ROOT=/www/wwwroot/mcp-gateway
+APP_ROOT=/www/wwwroot/mcp-gateway-v1.1.0
 GATEWAY_ORIGIN=https://gateway.example.com
 ```
 
-Replace both with the real authorized values.
+Replace both with the real values.
 
 ## 2. OpenLiteSpeed document root and rewrite boundary
 
@@ -57,7 +53,7 @@ The effective web document root / running directory **must be**:
 <APP_ROOT>/public
 ```
 
-Never expose the repository root as the website document root. The repository root contains `.env`, application code, private storage, Composer metadata, and other files that must not be directly web-accessible.
+Never expose the application root as the website document root. It contains `.env`, application code, private storage, Composer metadata, and other files that must not be directly web-accessible.
 
 For OpenLiteSpeed:
 
@@ -66,38 +62,66 @@ For OpenLiteSpeed:
 - enable rewrite processing;
 - enable loading rewrite rules from `.htaccess` for this document root.
 
-The repository already owns `public/.htaccess`. It preserves the `Authorization` header, preserves the XSRF header, serves existing files/directories directly, and sends other requests to `index.php`. Prefer this single repository-owned rewrite source instead of duplicating the same rules into an OpenLiteSpeed virtual-host rule block.
+The repository owns `public/.htaccess`. It preserves the `Authorization` header, preserves the XSRF header, maps `/install` to the standalone fresh-install entry point, serves existing files/directories directly, and sends other requests to `index.php`.
 
-Do not copy nginx configuration into OpenLiteSpeed. LSAPI/SSE buffering and long-response behavior are intentionally **not** prescribed here; final Issue #8 validation must prove any required OpenLiteSpeed-specific adjustment on the production-like stack first.
+Do not copy nginx configuration into OpenLiteSpeed. LSAPI/SSE buffering and long-response behavior are not prescribed unless a future release produces evidence that a custom adjustment is needed.
 
 ## 3. Deployment user and filesystem ownership
 
-Run Composer and Artisan as the application deployment/PHP owner whenever practical, not as an unrelated privileged account.
-
-This matters especially for signing keys: `gateway:oauth-keygen` and `gateway:bridge-client-keygen` create private key directories with mode `0700` and key files with mode `0600`. The PHP process must therefore run as the owning account or have ownership deliberately aligned without weakening those permissions.
+The PHP process must be able to read the application and write only the runtime paths that need it.
 
 Required filesystem behavior:
 
-- application source and `.env`: readable by the PHP process, not generally writable by web requests;
+- application source and `.env`: readable by the PHP process;
+- application root: writable during the one-time web install so `.env` can be created;
 - `storage/`: writable by the PHP process;
 - `bootstrap/cache/`: writable by the PHP process;
 - `storage/app/private/`: never served by the web server;
 - both OAuth signing keypairs: outside `public/`, owned for the PHP runtime, mode `0600` on Unix-like systems;
 - the Bridge client signing pair must be distinct from the ChatGPT-facing Gateway OAuth signing pair.
 
-Do **not** fix a key ownership mistake by making a private key world/group readable.
+Do **not** fix an ownership problem with `chmod -R 777` or by making private keys world/group readable.
+
+For advanced Composer/Artisan deployment, run Composer and Artisan as the application/PHP owner whenever practical.
 
 ## 4. Install an immutable release
 
-For stable V1 installations, use the immutable release tag rather than a moving branch. For development or controlled validation, an exact reviewed commit is also acceptable.
+### Recommended: deployment ZIP + web installer
 
-Example:
+For normal aaPanel/shared-hosting installs, download the named deployment package attached to the GitHub Release:
+
+```text
+mcp-gateway-v1.1.0.zip
+```
+
+Do not use GitHub's generic **Source code (zip)** archive; that archive does not contain production `vendor/` dependencies.
+
+Procedure:
+
+1. Upload and extract the deployment ZIP.
+2. Point the HTTPS domain document root to `<APP_ROOT>/public`.
+3. Confirm `storage/` and `bootstrap/cache/` are writable by the PHP process.
+4. Open:
+
+   ```text
+   https://gateway.example.com/install
+   ```
+
+5. Provide the canonical HTTPS Gateway URL, dedicated empty MySQL database credentials, and first administrator details.
+6. Complete installation once.
+
+The installer runs before Laravel is configured and does **not** invoke shell commands. It validates the runtime, writes a production `.env` with a unique `APP_KEY`, runs migrations through Laravel's console kernel, generates both signing keypairs, runs `gateway:check`, creates the first administrator, and writes a private installed marker. After successful installation, `/install` cannot be used to reinstall/reset the Gateway.
+
+The installer accepts credentials only over HTTPS and never redisplays/logs the MySQL password, `APP_KEY`, private keys, or generated authorization material.
+
+### Advanced: Git + Composer + Artisan
+
+For development or operators who explicitly prefer source deployment:
 
 ```bash
 cd /www/wwwroot
-git clone https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.1.0 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
-git checkout v1.0.0
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
 cp .env.example .env
@@ -105,17 +129,17 @@ cp .env.example .env
 
 `composer check-platform-reqs --no-dev` must succeed for the exact PHP CLI that will run Artisan. Do not run `composer update` on the server. Production/staging installation must consume the committed lockfile through `composer install`.
 
-This baseline has not validated route/config optimization caches against every current route and deployment condition, so it does not prescribe `php artisan optimize` as a deployment requirement. Add framework caches only after they are proven compatible with the exact release.
+The baseline does not prescribe `php artisan optimize` as a deployment requirement. Add framework caches only after they are proven compatible with the exact release.
 
-## 5. Configure production-shaped `.env`
+## 5. Configure production-shaped `.env` (advanced path)
 
-Generate the Laravel application key after `.env` exists:
+The web installer performs this section automatically. For the advanced CLI path, generate the Laravel application key after `.env` exists:
 
 ```bash
 php artisan key:generate
 ```
 
-Then configure at least these values for production-shaped validation:
+Then configure at least:
 
 ```dotenv
 APP_ENV=production
@@ -150,20 +174,20 @@ BRIDGE_CLIENT_PUBLIC_KEY_PATH=storage/app/private/bridge-client/public.key
 
 Important boundaries:
 
-- `APP_URL` must be one canonical HTTP(S) origin with no userinfo, query, fragment, or application subpath. In production it must be HTTPS.
-- Keep `APP_DEBUG=false`.
-- Do not commit `.env` or copy a development/test `APP_KEY` into production.
-- Keep `SESSION_ENCRYPT=true`; production cookies must remain HTTPS-only.
-- Do not enable the MCP bootstrap fixture in production.
-- Keep Laravel's `local` filesystem private/non-served.
-- Both signing-key directories are intentionally below `storage/app/private/`, outside the public web root.
-- The Bridge client keypair is a separate trust identity. Do not point its paths at the ChatGPT-facing OAuth keypair.
+- `APP_URL` must be one canonical origin with no userinfo, query, fragment, or application subpath; production must use HTTPS;
+- keep `APP_DEBUG=false`;
+- do not commit `.env` or copy a development/test `APP_KEY` into production;
+- keep `SESSION_ENCRYPT=true` and HTTPS-only production cookies;
+- do not enable the MCP bootstrap fixture in production;
+- keep Laravel's `local` filesystem private/non-served;
+- both signing-key directories stay below `storage/app/private/`, outside the public web root;
+- the Bridge client keypair is a separate trust identity.
 
-The rest of `.env.example` provides the current bounded timeout/size defaults. Change them only from evidence, not as a workaround for an unverified proxy/web-server problem.
+The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
-## 6. Generate signing keys
+## 6. Generate signing keys (advanced path)
 
-After application ownership and `.env` are correct, generate both signing pairs as the deployment/PHP owner:
+The web installer performs this automatically. For CLI deployment:
 
 ```bash
 php artisan gateway:oauth-keygen
@@ -177,35 +201,28 @@ OAuth signing keypair generated.
 Bridge OAuth client signing keypair generated.
 ```
 
-Both commands refuse to overwrite an existing pair unless `--force` is supplied. Do not use `--force` during a normal deploy or upgrade. Replacing the Gateway OAuth pair is an explicit server-key rotation event. Replacing the Bridge client pair changes the public JWKS used by approved WP AI Bridge clients and can require deliberate approval/reconnection handling; it is not a routine deployment step.
+Both commands refuse to overwrite an existing pair unless `--force` is supplied. Do not use `--force` during a normal deploy or upgrade. Never print, copy into Git, or place either private key below `public/`.
 
-Never print, copy into Git, or place either private key below `public/`.
+## 7. Initialize the database and administrator (advanced path)
 
-## 7. Initialize the database and administrator
-
-Apply the exact release migrations:
+The web installer performs this automatically against a dedicated empty database. For CLI deployment:
 
 ```bash
 php artisan migrate --force
-```
-
-Create the initial administrator interactively:
-
-```bash
 php artisan gateway:admin:create
 ```
 
-The administrator password is intentionally accepted only through hidden interactive prompts. Do not add it to a shell command, deployment script, environment variable, or process argument.
+The administrator password is accepted only through hidden interactive prompts. Do not add it to a shell command, deployment script, environment variable, or process argument.
 
 ## 8. Run the repository-owned environment gate
 
-Before treating the instance as deployable, run:
+The web installer runs this gate automatically before creating the administrator. CLI operators must run:
 
 ```bash
 php artisan gateway:check
 ```
 
-Every reported item must be `[OK]`. In the current application this validates, among other things:
+Every reported item must be `[OK]`. The current application validates, among other things:
 
 - PHP `>= 8.4.1`;
 - PDO MySQL, cURL with DNS pinning support, OpenSSL and Sodium;
@@ -237,10 +254,10 @@ Expected behavior:
 
 - `/up` succeeds without contacting every downstream WordPress site;
 - protected-resource metadata identifies the configured Gateway MCP resource;
-- authorization-server metadata identifies the same canonical issuer and the current OAuth endpoints;
-- the Bridge client metadata and JWKS endpoints are publicly reachable over the same canonical HTTPS origin.
+- authorization-server metadata identifies the same canonical issuer and current OAuth endpoints;
+- Bridge client metadata and JWKS endpoints are publicly reachable over the same canonical HTTPS origin.
 
-Then verify the configured ChatGPT client metadata contract without printing JWK values or assertions:
+CLI operators can additionally verify the configured ChatGPT client metadata contract:
 
 ```bash
 php artisan gateway:oauth-client-check --refresh
@@ -264,20 +281,22 @@ Before every migration-bearing upgrade, preserve a recoverable set containing:
 - the deployment `.env` / Laravel `APP_KEY` through the site's approved secret-backup mechanism;
 - `OAUTH_PRIVATE_KEY_PATH` and `OAUTH_PUBLIC_KEY_PATH` with permissions preserved;
 - `BRIDGE_CLIENT_PRIVATE_KEY_PATH` and `BRIDGE_CLIENT_PUBLIC_KEY_PATH` with permissions preserved;
-- the exact deployed Git commit/tag and Composer lockfile identity.
+- the exact deployed release identity and Composer lockfile identity.
 
 Treat the database, `APP_KEY`, and both signing keypairs as one recovery set. Site access/refresh tokens are encrypted with the application encryption boundary, so restoring the database without the matching `APP_KEY` makes those credentials unusable. Restoring a different Bridge client keypair changes the `private_key_jwt` identity material advertised through the Gateway JWKS endpoint and can break approved site connections even when the database is intact.
 
-V1 recovery validation proved this set on a controlled two-site installation: the database, matching `APP_KEY`, both signing keypairs, and exact code/lock identity were restored together and the encrypted site credentials remained usable. Preserve the same recovery-set invariant for future releases; backup presence alone is not sufficient unless restore assumptions remain valid.
+V1 recovery validation proved this set on a controlled two-site installation. Preserve the same recovery-set invariant for future releases; backup presence alone is not sufficient unless restore assumptions remain valid.
 
 ## 12. Upgrade and rollback outline
+
+The web installer is **fresh-install only**. Never use `/install` to upgrade an existing Gateway.
 
 For an authorized staging/release upgrade:
 
 1. Capture the backup/recovery set above.
-2. Record the current deployed commit/tag.
-3. Fetch the intended reviewed release/revision.
-4. Install the committed dependencies without updating them:
+2. Record the current deployed release identity.
+3. Replace application code with the intended reviewed release while preserving `.env` and `storage/app/private/`.
+4. Ensure the intended release dependencies are present. Source deployments use:
 
    ```bash
    composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
@@ -313,4 +332,4 @@ These external references were checked while establishing this baseline. Reposit
 - aaPanel PHP Project/site configuration: https://www.aapanel.com/docs/Function/php.html
 - aaPanel site deployment notes: https://www.aapanel.com/docs/faq/Site_Related.html
 
-V1 production-like readiness evidence was completed under Issue #8 and is preserved in the repository/GitHub history. Future releases must revalidate only the deployment assumptions materially changed by that release.
+V1 production-like readiness evidence was completed under Issue #8 and is preserved in the repository/GitHub history. Future releases must revalidate only deployment assumptions materially changed by that release.
