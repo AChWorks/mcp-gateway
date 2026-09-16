@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 
-declare(strict_types=1);
+use Composer\InstalledVersions;
 
 function fail(string $message): never
 {
@@ -244,9 +244,9 @@ if ($remaining !== []) {
 
 require $vendor.'/autoload.php';
 
-if (! class_exists(Composer\InstalledVersions::class)
-    || Composer\InstalledVersions::getPrettyVersion('laravel/framework') === null
-    || Composer\InstalledVersions::getPrettyVersion('mcp/sdk') === null) {
+if (! class_exists(InstalledVersions::class)
+    || InstalledVersions::getPrettyVersion('laravel/framework') === null
+    || InstalledVersions::getPrettyVersion('mcp/sdk') === null) {
     fail('Composer runtime metadata is incomplete after vendor pruning.');
 }
 
