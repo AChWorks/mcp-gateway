@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - VERSION
+      - .github/workflows/release-package.yml
 
 permissions:
   contents: write
@@ -54,25 +55,31 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "package=mcp-gateway-v$version" >> "$GITHUB_OUTPUT"
 
-      - name: Refuse to rewrite an existing tag or release
+      - name: Check release state
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists; refusing to move or replace it." >&2
-            exit 1
-          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; refusing to replace an immutable release." >&2
+            echo "Release $TAG already exists; package publication is already complete."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists without a matching release; refusing to move or replace it." >&2
             exit 1
           fi
+          echo "needed=true" >> "$GITHUB_OUTPUT"
 
       - name: Install production dependencies
+        if: steps.publish.outputs.needed == 'true'
         run: composer install --no-dev --no-interaction --prefer-dist --no-progress --optimize-autoloader
 
       - name: Remove development runtime artifacts
+        if: steps.publish.outputs.needed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -82,6 +89,7 @@ jobs:
             -type f ! -name '.gitignore' -delete
 
       - name: Build deployment ZIP
+        if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
         shell: bash
@@ -93,7 +101,8 @@ jobs:
             --exclude='.github/' \
             --exclude='dist/' \
             --exclude='tests/' \
-            --exclude='.env' \
+            --include='.env.example' \
+            --exclude='.env*' \
             --exclude='phpunit.xml' \
             --exclude='phpstan.neon'
           (
@@ -103,6 +112,7 @@ jobs:
           )
 
       - name: Verify deployment ZIP contents
+        if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
         shell: bash
@@ -116,11 +126,12 @@ jobs:
           unzip -l "$zip" | grep -F "$PACKAGE/LICENSE"
           unzip -l "$zip" | grep -F "$PACKAGE/VERSION"
           if unzip -l "$zip" | grep -F "$PACKAGE/.env" | grep -v -F "$PACKAGE/.env.example"; then
-            echo 'Deployment ZIP must not contain a live .env file.' >&2
+            echo 'Deployment ZIP must not contain any environment file except .env.example.' >&2
             exit 1
           fi
 
       - name: Publish GitHub release
+        if: steps.publish.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
