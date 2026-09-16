@@ -39,7 +39,7 @@ Composer 2 and Git are required only for the advanced source installation path. 
 On aaPanel, `/www/wwwroot/` is the normal website base location. Example:
 
 ```text
-APP_ROOT=/www/wwwroot/mcp-gateway-v1.1.1
+APP_ROOT=/www/wwwroot/mcp-gateway-v1.1.2
 GATEWAY_ORIGIN=https://gateway.example.com
 ```
 
@@ -53,7 +53,7 @@ The effective web document root / running directory **must be**:
 <APP_ROOT>/public
 ```
 
-Never expose the application root as the website document root. It contains `.env`, application code, private storage, Composer metadata, and other files that must not be directly web-accessible.
+Never expose the application root as the website document root. It contains `.env`, application code, private storage, Composer runtime metadata, and other files that must not be directly web-accessible.
 
 For OpenLiteSpeed:
 
@@ -91,10 +91,28 @@ For advanced Composer/Artisan deployment, run Composer and Artisan as the applic
 For normal aaPanel/shared-hosting installs, download the named deployment package attached to the GitHub Release:
 
 ```text
-mcp-gateway-v1.1.1.zip
+mcp-gateway-v1.1.2.zip
 ```
 
 Do not use GitHub's generic **Source code (zip)** archive; that archive does not contain production `vendor/` dependencies. The named deployment ZIP contains only the application/runtime files required for installation and operation.
+
+### Release package hygiene invariant
+
+The named deployment ZIP is a production artifact, not a filtered repository archive. Every current and future release must be built and verified through the repository-owned `bin/build-release-package.sh` and `bin/verify-release-package.sh` path.
+
+The invariant is:
+
+- assemble the artifact in a new staging tree rather than reusing the development checkout;
+- install Composer dependencies directly with `--no-dev` from the committed source `composer.lock`;
+- keep only application/runtime files, required generated Laravel package manifests, the runtime Composer manifest, dependency runtime resources, license/notice material, and version identity;
+- remove dependency repository metadata, docs/examples/benchmarks, declared dev/test trees, development configs/tools, Composer binary proxies, and source-distribution signing/build leftovers only where they are demonstrably non-runtime;
+- preserve package resources that runtime code can consume even when they are large or have names such as `dist` or `Test`;
+- ship `storage/` as empty runtime directory scaffolding, including the empty `storage/framework/mcp-sessions/` directory required by legacy MCP session compatibility; never inherit test keys, sessions, caches, logs, views, or other generated state from CI/development;
+- ship migrations but not factories, seeders, repository placeholders, or development database artifacts;
+- omit source-only `composer.lock` from the deployment artifact after production `vendor/` has been built; the release/tag still identifies the authoritative repository lockfile used to build it;
+- fail the build if the extracted ZIP does not pass exact top-level allowlisting, recursive hygiene checks, Composer runtime identity checks, Laravel bootstrap/route discovery, installer preflight, package-manifest rebuild, and a migration smoke test.
+
+This rule is intentionally enforced in normal CI as well as release publication so a future feature or dependency change cannot silently reintroduce repository/test/build state into the operator package.
 
 Procedure:
 
@@ -120,14 +138,14 @@ For development or operators who explicitly prefer source deployment:
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.1 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.1.2 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
 cp .env.example .env
 ```
 
-`composer check-platform-reqs --no-dev` must succeed for the exact PHP CLI that will run Artisan. Do not run `composer update` on the server. Production/staging installation must consume the committed lockfile through `composer install`.
+`composer check-platform-reqs --no-dev` must succeed for the exact PHP CLI that will run Artisan. Do not run `composer update` on the server. Production/staging source installation must consume the committed lockfile through `composer install`.
 
 The baseline does not prescribe `php artisan optimize` as a deployment requirement. Add framework caches only after they are proven compatible with the exact release.
 
@@ -281,7 +299,7 @@ Before every migration-bearing upgrade, preserve a recoverable set containing:
 - the deployment `.env` / Laravel `APP_KEY` through the site's approved secret-backup mechanism;
 - `OAUTH_PRIVATE_KEY_PATH` and `OAUTH_PUBLIC_KEY_PATH` with permissions preserved;
 - `BRIDGE_CLIENT_PRIVATE_KEY_PATH` and `BRIDGE_CLIENT_PUBLIC_KEY_PATH` with permissions preserved;
-- the exact deployed release identity and Composer lockfile identity.
+- the exact deployed release identity and the corresponding repository Composer lockfile identity.
 
 Treat the database, `APP_KEY`, and both signing keypairs as one recovery set. Site access/refresh tokens are encrypted with the application encryption boundary, so restoring the database without the matching `APP_KEY` makes those credentials unusable. Restoring a different Bridge client keypair changes the `private_key_jwt` identity material advertised through the Gateway JWKS endpoint and can break approved site connections even when the database is intact.
 
@@ -303,6 +321,8 @@ For an authorized staging/release upgrade:
    composer check-platform-reqs --no-dev
    php artisan optimize:clear
    ```
+
+   Named deployment ZIPs already contain the exact verified production dependency tree and do not require Composer on the target host.
 
 5. Apply migrations:
 

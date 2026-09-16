@@ -29,6 +29,7 @@ Primary deployment target:
 - MySQL-compatible database, with MySQL as the primary target;
 - a dedicated HTTPS domain or subdomain such as `gateway.example.com`;
 - a deployment-ready release ZIP with production Composer dependencies bundled as the recommended operator installation path;
+- every official deployment ZIP must be assembled from a clean production-only staging tree and contain only installation/runtime application files, required dependency runtime/license material, version identity, and empty writable runtime scaffolding; repository/development/test/generated state is forbidden and this invariant must remain CI-enforced for future releases;
 - Git + Composer + Artisan source deployment remains a supported advanced path;
 - the web server must expose only the application's `public/` directory;
 - no required Docker, Redis, Node.js runtime, message broker, queue daemon, or separate microservice.
@@ -36,6 +37,8 @@ Primary deployment target:
 The application must remain usable on a conventional shared-style PHP request lifecycle. Long-running daemons must not be required for normal V1 operation.
 
 The recommended fresh-install experience should remain intentionally small: upload/extract the official deployment ZIP, point the HTTPS domain at `public/`, open the one-page installer, provide an empty MySQL database plus first-administrator details, and finish. The installer must not become a general hosting control plane or command runner, and after a successful installation it must fail closed against reinstallation.
+
+Release packaging is a standing product/deployment requirement, not release-by-release cleanup. Runtime correctness and license/notice preservation take precedence over minimizing bytes, but dependency docs/examples/tests, development tooling/configuration, repository metadata, generated test keys/sessions/caches/logs, and source-checkout-only material must not be shipped when they are not needed to install or operate the application. The repository-owned package builder/verifier is the authoritative implementation of this boundary.
 
 ## 4. Product principles
 

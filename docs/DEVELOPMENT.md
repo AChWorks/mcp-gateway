@@ -118,6 +118,23 @@ composer test
 
 `composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting MySQL. The dedicated path-filtered `MySQL Concurrency` workflow owns MySQL 8.4 `migrate:fresh` and the `mysql-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate. Draft pull requests skip these heavy jobs until they are marked ready for review.
 
+## Release package validation
+
+The official deployment ZIP has a permanent clean-artifact invariant. Do not handcraft a release ZIP and do not copy the development checkout or its existing `vendor/`, `storage/`, or `bootstrap/cache/` into a release artifact.
+
+Use the repository-owned path:
+
+```bash
+bash bin/build-release-package.sh mcp-gateway-local
+bash bin/verify-release-package.sh dist/mcp-gateway-local.zip mcp-gateway-local
+```
+
+`build-release-package.sh` creates a new staging tree, installs the committed lockfile directly with `composer install --no-dev`, prunes only demonstrably non-runtime dependency material, emits empty writable runtime directories, and creates a deterministic ordered ZIP. `verify-release-package.sh` extracts that ZIP and fails closed on unexpected top-level files, repository/development metadata, dependency dev/docs/example material, transient storage state, source-only Composer metadata, or broken runtime behavior.
+
+The verifier also boots Laravel from the extracted package, rebuilds the Laravel package manifest, checks routes and Composer runtime identities, runs the web-installer preflight, and performs a migration smoke test. Dependency license/notice files and runtime resources are intentionally retained even when they add size.
+
+Normal CI runs this build/verify path after the application test steps. This is deliberate: tests generate ephemeral keys/cache/session state in the development checkout, and the package build must prove that none of that state can leak into the release. Any future change that alters application runtime files, Composer dependencies, package scripts, or release packaging must keep this gate green. If a new legitimate runtime file is required, update the builder/verifier intentionally in the same reviewed change rather than weakening the hygiene checks broadly.
+
 ## MCP bootstrap compatibility fixture
 
 `/_internal/mcp-bootstrap` exists only to prove the Laravel/PSR/MCP SDK integration during bootstrap. It is disabled by default and returns `404` unless both of these test-only settings are supplied:

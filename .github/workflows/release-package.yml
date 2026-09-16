@@ -7,6 +7,9 @@ on:
     paths:
       - VERSION
       - .github/workflows/release-package.yml
+      - bin/build-release-package.sh
+      - bin/prune-production-vendor.php
+      - bin/verify-release-package.sh
 
 permissions:
   contents: write
@@ -48,7 +51,7 @@ jobs:
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "VERSION must contain a semantic version such as 1.1.1" >&2
+            echo "VERSION must contain a semantic version such as 1.1.2" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -74,113 +77,17 @@ jobs:
           fi
           echo "needed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Install production dependencies
-        if: steps.publish.outputs.needed == 'true'
-        run: composer install --no-dev --no-interaction --prefer-dist --no-progress --optimize-autoloader
-
-      - name: Remove development runtime artifacts
-        if: steps.publish.outputs.needed == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf storage/framework/cache/phpstan
-          rm -f .phpunit.result.cache .phpunit.cache/test-results
-          find storage/framework/cache storage/framework/sessions storage/framework/views storage/logs \
-            -type f ! -name '.gitignore' -delete
-
-      - name: Build deployment ZIP
+      - name: Build deployment ZIP from clean production staging
         if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          destination="dist/$PACKAGE"
-          mkdir -p "$destination"
+        run: bash bin/build-release-package.sh "$PACKAGE"
 
-          cp -a \
-            app \
-            artisan \
-            bootstrap \
-            composer.json \
-            composer.lock \
-            config \
-            database \
-            LICENSE \
-            public \
-            resources \
-            routes \
-            storage \
-            VERSION \
-            vendor \
-            .env.example \
-            "$destination/"
-
-          (
-            cd dist
-            zip -qr "$PACKAGE.zip" "$PACKAGE"
-            sha256sum "$PACKAGE.zip" > "$PACKAGE.zip.sha256"
-          )
-
-      - name: Verify deployment ZIP contents
+      - name: Verify deployment ZIP contents and runtime
         if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          zip="dist/$PACKAGE.zip"
-
-          required_paths=(
-            "$PACKAGE/app/"
-            "$PACKAGE/bootstrap/"
-            "$PACKAGE/config/"
-            "$PACKAGE/database/"
-            "$PACKAGE/public/"
-            "$PACKAGE/resources/"
-            "$PACKAGE/routes/"
-            "$PACKAGE/storage/"
-            "$PACKAGE/vendor/autoload.php"
-            "$PACKAGE/public/install.php"
-            "$PACKAGE/artisan"
-            "$PACKAGE/.env.example"
-            "$PACKAGE/composer.json"
-            "$PACKAGE/composer.lock"
-            "$PACKAGE/LICENSE"
-            "$PACKAGE/VERSION"
-          )
-
-          for path in "${required_paths[@]}"; do
-            unzip -Z1 "$zip" | grep -Fx "$path" >/dev/null || {
-              echo "Deployment ZIP is missing required path: $path" >&2
-              exit 1
-            }
-          done
-
-          cat > dist/expected-top-level.txt <<'EOF'
-          .env.example
-          LICENSE
-          VERSION
-          app
-          artisan
-          bootstrap
-          composer.json
-          composer.lock
-          config
-          database
-          public
-          resources
-          routes
-          storage
-          vendor
-          EOF
-
-          unzip -Z1 "$zip" \
-            | awk -F/ -v root="$PACKAGE" '$1 == root && NF >= 2 && $2 != "" { print $2 }' \
-            | sort -u \
-            > dist/actual-top-level.txt
-
-          diff -u dist/expected-top-level.txt dist/actual-top-level.txt
+        run: bash bin/verify-release-package.sh "dist/$PACKAGE.zip" "$PACKAGE"
 
       - name: Publish GitHub release
         if: steps.publish.outputs.needed == 'true'
@@ -193,15 +100,15 @@ jobs:
         run: |
           set -euo pipefail
           cat > dist/release-notes.md <<EOF
-          MCP Gateway v$VERSION ships a trimmed deployment-only ZIP built from an explicit production runtime allowlist.
+          MCP Gateway v$VERSION ships a clean deployment-only ZIP assembled in isolated production staging from the committed Composer lockfile.
 
           ## Recommended installation
 
           Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
 
-          The deployment ZIP contains the application runtime, installer, production Composer dependencies, dependency manifests, license and version identity only. Repository/development files are not packaged.
+          The deployment ZIP contains only install/runtime application files, production Composer dependencies, required runtime manifests/resources, license/notice material, version identity, and empty writable runtime directories. Repository metadata, development dependencies/tools, package docs/examples/tests, generated test keys, sessions, caches, logs, and other transient build state are not shipped.
 
-          Git and Composer are not required on the target host. The existing Git/Composer/Artisan installation path remains supported for advanced operators.
+          The package is boot-smoke-tested after extraction before publication. Git and Composer are not required on the target host. The Git/Composer/Artisan source installation path remains supported for advanced operators.
 
           No production server is deployed or modified by publishing this release.
           EOF

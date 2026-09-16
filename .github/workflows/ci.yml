@@ -86,3 +86,8 @@ jobs:
           DB_USERNAME: mcp_gateway
           DB_PASSWORD: test-password
         run: php artisan gateway:check
+
+      - name: Build and verify clean deployment package
+        run: |
+          bash bin/build-release-package.sh mcp-gateway-ci
+          bash bin/verify-release-package.sh dist/mcp-gateway-ci.zip mcp-gateway-ci
