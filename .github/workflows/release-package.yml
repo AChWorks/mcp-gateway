@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "VERSION must contain a semantic version such as 1.1.0" >&2
+            echo "VERSION must contain a semantic version such as 1.1.1" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -95,16 +95,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "dist/$PACKAGE"
-          rsync -a ./ "dist/$PACKAGE/" \
-            --exclude='.git/' \
-            --exclude='.github/' \
-            --exclude='dist/' \
-            --exclude='tests/' \
-            --include='.env.example' \
-            --exclude='.env*' \
-            --exclude='phpunit.xml' \
-            --exclude='phpstan.neon'
+          destination="dist/$PACKAGE"
+          mkdir -p "$destination"
+
+          cp -a \
+            app \
+            artisan \
+            bootstrap \
+            composer.json \
+            composer.lock \
+            config \
+            database \
+            LICENSE \
+            public \
+            resources \
+            routes \
+            storage \
+            VERSION \
+            vendor \
+            .env.example \
+            "$destination/"
+
           (
             cd dist
             zip -qr "$PACKAGE.zip" "$PACKAGE"
@@ -119,16 +130,57 @@ jobs:
         run: |
           set -euo pipefail
           zip="dist/$PACKAGE.zip"
-          unzip -l "$zip" | grep -F "$PACKAGE/vendor/autoload.php"
-          unzip -l "$zip" | grep -F "$PACKAGE/public/install.php"
-          unzip -l "$zip" | grep -F "$PACKAGE/.env.example"
-          unzip -l "$zip" | grep -F "$PACKAGE/composer.lock"
-          unzip -l "$zip" | grep -F "$PACKAGE/LICENSE"
-          unzip -l "$zip" | grep -F "$PACKAGE/VERSION"
-          if unzip -l "$zip" | grep -F "$PACKAGE/.env" | grep -v -F "$PACKAGE/.env.example"; then
-            echo 'Deployment ZIP must not contain any environment file except .env.example.' >&2
-            exit 1
-          fi
+
+          required_paths=(
+            "$PACKAGE/app/"
+            "$PACKAGE/bootstrap/"
+            "$PACKAGE/config/"
+            "$PACKAGE/database/"
+            "$PACKAGE/public/"
+            "$PACKAGE/resources/"
+            "$PACKAGE/routes/"
+            "$PACKAGE/storage/"
+            "$PACKAGE/vendor/autoload.php"
+            "$PACKAGE/public/install.php"
+            "$PACKAGE/artisan"
+            "$PACKAGE/.env.example"
+            "$PACKAGE/composer.json"
+            "$PACKAGE/composer.lock"
+            "$PACKAGE/LICENSE"
+            "$PACKAGE/VERSION"
+          )
+
+          for path in "${required_paths[@]}"; do
+            unzip -Z1 "$zip" | grep -Fx "$path" >/dev/null || {
+              echo "Deployment ZIP is missing required path: $path" >&2
+              exit 1
+            }
+          done
+
+          cat > dist/expected-top-level.txt <<'EOF'
+          .env.example
+          LICENSE
+          VERSION
+          app
+          artisan
+          bootstrap
+          composer.json
+          composer.lock
+          config
+          database
+          public
+          resources
+          routes
+          storage
+          vendor
+          EOF
+
+          unzip -Z1 "$zip" \
+            | awk -F/ -v root="$PACKAGE" '$1 == root && NF >= 2 && $2 != "" { print $2 }' \
+            | sort -u \
+            > dist/actual-top-level.txt
+
+          diff -u dist/expected-top-level.txt dist/actual-top-level.txt
 
       - name: Publish GitHub release
         if: steps.publish.outputs.needed == 'true'
@@ -141,15 +193,15 @@ jobs:
         run: |
           set -euo pipefail
           cat > dist/release-notes.md <<EOF
-          MCP Gateway v$VERSION adds the simple deployment package and web installer.
+          MCP Gateway v$VERSION ships a trimmed deployment-only ZIP built from an explicit production runtime allowlist.
 
           ## Recommended installation
 
           Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
 
-          The deployment ZIP already contains production Composer dependencies; Git and Composer are not required on the target host.
+          The deployment ZIP contains the application runtime, installer, production Composer dependencies, dependency manifests, license and version identity only. Repository/development files are not packaged.
 
-          The existing Git/Composer/Artisan installation path remains supported for advanced operators.
+          Git and Composer are not required on the target host. The existing Git/Composer/Artisan installation path remains supported for advanced operators.
 
           No production server is deployed or modified by publishing this release.
           EOF
