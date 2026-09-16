@@ -115,7 +115,7 @@ final class SimpleWebInstallerTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $overrides
+     * @param  array<string, mixed>  $overrides
      * @return array<string, mixed>
      */
     private function validInput(array $overrides = []): array
