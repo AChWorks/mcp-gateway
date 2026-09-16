@@ -82,7 +82,11 @@ final class ChatGptOAuthFlowTest extends TestCase
             ->assertStatus(401)
             ->assertSee('Administrator sign-in required')
             ->assertHeader('X-Frame-Options', 'DENY')
-            ->assertHeader('Referrer-Policy', 'no-referrer');
+            ->assertHeader('Referrer-Policy', 'no-referrer')
+            ->assertHeader(
+                'Content-Security-Policy',
+                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+            );
     }
 
     public function test_authorization_rejects_wrong_resource_redirect_and_non_s256_pkce(): void
@@ -129,7 +133,11 @@ final class ChatGptOAuthFlowTest extends TestCase
             ->assertSee('Authorize ChatGPT')
             ->assertSee(self::CLIENT_ID)
             ->assertHeader('X-Frame-Options', 'DENY')
-            ->assertHeader('Referrer-Policy', 'no-referrer');
+            ->assertHeader('Referrer-Policy', 'no-referrer')
+            ->assertHeader(
+                'Content-Security-Policy',
+                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'",
+            );
 
         $authorization = $this->actingAs($user)->post('/oauth/authorize', [
             ...$parameters,

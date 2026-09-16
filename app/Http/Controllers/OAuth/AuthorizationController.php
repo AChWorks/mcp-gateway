@@ -32,16 +32,18 @@ final readonly class AuthorizationController
             $psrRequest = $this->bridge->request($request)->withQueryParams($parameters);
             $authorization = $this->servers->authorizationServer()->validateAuthorizationRequest($psrRequest);
 
+            $redirectUri = (string) $authorization->getRedirectUri();
+
             return $this->browserResponse(response()->view('oauth.consent', [
                 'parameters' => $parameters,
                 'clientName' => $authorization->getClient()->getName(),
                 'clientId' => $authorization->getClient()->getIdentifier(),
-                'redirectUri' => $authorization->getRedirectUri(),
+                'redirectUri' => $redirectUri,
                 'scope' => implode(' ', array_map(
                     static fn ($scope): string => $scope->getIdentifier(),
                     $authorization->getScopes(),
                 )),
-            ]));
+            ]), $redirectUri);
         } catch (OAuthServerException $exception) {
             return $this->bridge->error($exception);
         }
@@ -88,15 +90,41 @@ final readonly class AuthorizationController
         }
     }
 
-    private function browserResponse(Response $response): Response
+    private function browserResponse(Response $response, ?string $authorizedRedirectUri = null): Response
     {
+        $formAction = "'self'";
+        if ($authorizedRedirectUri !== null) {
+            $redirectOrigin = $this->httpsOrigin($authorizedRedirectUri);
+            if ($redirectOrigin !== null) {
+                $formAction .= ' '.$redirectOrigin;
+            }
+        }
+
         $response->headers->set('Cache-Control', 'no-store');
         $response->headers->set('Pragma', 'no-cache');
         $response->headers->set('Referrer-Policy', 'no-referrer');
         $response->headers->set('X-Frame-Options', 'DENY');
-        $response->headers->set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+        $response->headers->set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action {$formAction}; frame-ancestors 'none'; base-uri 'none'");
 
         return $response;
+    }
+
+    private function httpsOrigin(string $url): ?string
+    {
+        $parts = parse_url($url);
+        if (! is_array($parts)
+            || ($parts['scheme'] ?? null) !== 'https'
+            || ! is_string($parts['host'] ?? null)
+            || $parts['host'] === '') {
+            return null;
+        }
+
+        $origin = 'https://'.$parts['host'];
+        if (isset($parts['port'])) {
+            $origin .= ':'.$parts['port'];
+        }
+
+        return $origin;
     }
 
     /**

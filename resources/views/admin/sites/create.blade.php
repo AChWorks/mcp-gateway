@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Sites') }}</div>
         <h1>{{ __('Add WordPress site') }}</h1>
-        <p class="muted">{{ __('The Gateway will verify a public HTTPS target and discover the site's WP AI Bridge OAuth/MCP metadata before saving it.') }}</p>
+        <p class="muted">{{ __("The Gateway will verify a public HTTPS target and discover the site's WP AI Bridge OAuth/MCP metadata before saving it.") }}</p>
     </div>
     <a href="{{ route('admin.sites.index') }}">{{ __('Back to sites') }}</a>
 </div>
