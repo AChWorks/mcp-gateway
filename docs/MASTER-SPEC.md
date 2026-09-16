@@ -10,7 +10,7 @@ MCP Gateway is a small self-hosted web application that lets one remote MCP clie
 
 The immediate problem is operational: connecting ChatGPT directly to many WordPress sites creates one ChatGPT custom App per site. MCP Gateway provides one stable public MCP endpoint and a small administration panel so sites can be added, removed, connected, tested, and routed without creating another ChatGPT App for every site.
 
-The project must remain simple enough to deploy on an ordinary aaPanel host while keeping clean extension boundaries so future clients and backend connector types can be added without rewriting the core.
+The project must remain simple enough to deploy on an ordinary aaPanel host or compatible shared PHP hosting while keeping clean extension boundaries so future clients and backend connector types can be added without rewriting the core.
 
 ## 2. Primary outcome
 
@@ -24,15 +24,18 @@ V1 is a private, self-hosted gateway for a trusted operator or small trusted wor
 
 Primary deployment target:
 
-- aaPanel-managed Linux host;
-- OpenLiteSpeed;
+- aaPanel-managed Linux host with OpenLiteSpeed, or compatible shared PHP hosting;
 - PHP 8.4;
 - MySQL-compatible database, with MySQL as the primary target;
 - a dedicated HTTPS domain or subdomain such as `gateway.example.com`;
-- normal Composer-based PHP deployment;
+- a deployment-ready release ZIP with production Composer dependencies bundled as the recommended operator installation path;
+- Git + Composer + Artisan source deployment remains a supported advanced path;
+- the web server must expose only the application's `public/` directory;
 - no required Docker, Redis, Node.js runtime, message broker, queue daemon, or separate microservice.
 
 The application must remain usable on a conventional shared-style PHP request lifecycle. Long-running daemons must not be required for normal V1 operation.
+
+The recommended fresh-install experience should remain intentionally small: upload/extract the official deployment ZIP, point the HTTPS domain at `public/`, open the one-page installer, provide an empty MySQL database plus first-administrator details, and finish. The installer must not become a general hosting control plane or command runner, and after a successful installation it must fail closed against reinstallation.
 
 ## 4. Product principles
 
@@ -193,7 +196,8 @@ At minimum:
 - the Gateway does not automatically retry a target mutation/tool execution whose idempotency is unknown;
 - target identifiers, credentials, and responses from one site must not leak into another site's request;
 - errors returned to MCP clients are useful but do not expose secrets or unnecessary internal stack/configuration data;
-- destructive administration actions in the web panel require deliberate user interaction and preserve recoverable target-side state when the downstream system supports revocation rather than silent deletion.
+- destructive administration actions in the web panel require deliberate user interaction and preserve recoverable target-side state when the downstream system supports revocation rather than silent deletion;
+- the fresh-install web installer accepts secrets only over HTTPS, does not log or redisplay them, only writes outside-public-root secret material, requires a dedicated empty database, and locks itself after successful installation.
 
 ## 8. Data and persistence requirements
 
@@ -256,7 +260,8 @@ V1 deliberately does not provide:
 - automatic installation/modification of WP AI Bridge on remote sites;
 - copying all downstream WordPress operations into Gateway-specific implementations;
 - a workflow/orchestration engine;
-- a marketplace or dynamic third-party code loader.
+- a marketplace or dynamic third-party code loader;
+- a generic hosting control panel or reusable arbitrary-command facility in the installer.
 
 ## 12. Future evolution
 
@@ -276,7 +281,7 @@ Future features must preserve the core trust rule: the Gateway routes explicitly
 
 V1 is successful when all of the following are demonstrated against supported test/deployment environments:
 
-1. The application installs on the target PHP 8.4 + OpenLiteSpeed + MySQL deployment model using normal Composer/application setup.
+1. The application installs on the target PHP 8.4 + OpenLiteSpeed/shared-PHP + MySQL deployment model using the official deployment ZIP and simple web installer; the Git/Composer/Artisan installation path remains supported for advanced operators.
 2. The administration panel can securely create an administrator session and manage multiple site records.
 3. At least two independent WP AI Bridge sites can be authorized and remain separately revocable.
 4. One ChatGPT custom MCP App can authenticate to the Gateway and discover the stable Gateway tools.
@@ -285,7 +290,7 @@ V1 is successful when all of the following are demonstrated against supported te
 7. A disconnected/revoked site fails closed without breaking other connected sites.
 8. Adding a third site does not require another ChatGPT App or a new Gateway MCP endpoint.
 9. Direct ChatGPT-to-WP-AI-Bridge operation remains available for sites that use it.
-10. Sensitive credentials are not exposed through the panel, MCP responses, application logs, or activity records.
+10. Sensitive credentials are not exposed through the panel, installer, MCP responses, application logs, or activity records.
 11. A fresh developer/Master can recover project intent, architecture, current work, and validation expectations from the repository and GitHub without relying on prior chat history.
 
 ## 14. Source-of-truth model
