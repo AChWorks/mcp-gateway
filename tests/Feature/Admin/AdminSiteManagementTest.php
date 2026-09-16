@@ -65,6 +65,16 @@ final class AdminSiteManagementTest extends TestCase
         }
     }
 
+    public function test_operator_can_open_create_site_form(): void
+    {
+        $this->actingAs($this->administrator());
+
+        $this->get('/admin/sites/create')
+            ->assertOk()
+            ->assertSee('Add WordPress site')
+            ->assertSee('Discover and add site');
+    }
+
     public function test_operator_can_create_edit_test_and_view_site_through_real_registry(): void
     {
         $this->actingAs($this->administrator());
