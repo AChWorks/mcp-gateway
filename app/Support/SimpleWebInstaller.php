@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\User;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
+use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\DB;
 use PDO;
 use RuntimeException;
@@ -75,7 +76,7 @@ final class SimpleWebInstaller
     }
 
     /**
-     * @param array<string, mixed> $input
+     * @param  array<string, mixed>  $input
      * @return array<string, string>
      */
     public static function validateInput(array $input, string $currentHost): array
@@ -168,7 +169,7 @@ final class SimpleWebInstaller
         self::atomicWrite($basePath.'/.env', $environment, 0600);
 
         try {
-            /** @var \Illuminate\Foundation\Application $app */
+            /** @var Application $app */
             $app = require $basePath.'/bootstrap/app.php';
             /** @var ConsoleKernel $kernel */
             $kernel = $app->make(ConsoleKernel::class);
@@ -213,7 +214,7 @@ final class SimpleWebInstaller
     }
 
     /**
-     * @param array<string, mixed> $input
+     * @param  array<string, mixed>  $input
      */
     public static function buildEnvironment(string $template, array $input, string $applicationKey): string
     {
