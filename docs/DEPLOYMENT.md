@@ -354,15 +354,17 @@ Before mutation, the browser updater verifies its private manifest and temporary
 
 #### Browser updater recovery state machine
 
-Treat recovery as three distinct states; "pre-migration failure" alone is not sufficient to infer that rollback occurred.
+Backup creation and its first integrity check happen before maintenance mode. If that initial recovery proof fails, the updater aborts before managed application files are changed; no automatic restore is needed and the application remains on the original runtime.
+
+Once maintenance mode and managed-file replacement begin, treat recovery as three distinct states; "pre-migration failure" alone is not sufficient to infer that rollback occurred.
 
 | State | Automatic action | Operator-visible result |
 | --- | --- | --- |
 | Recovery backup is credible, then a different failure occurs before migration starts | Revalidate the backup immediately before restore, restore the previous Gateway-managed application files, clear updater state, and resume the application | Previous managed runtime is restored; migration state is unchanged |
-| Recovery backup itself fails integrity validation before migration starts | **Do not restore from the rejected backup and do not start migration** | Keep maintenance mode active; keep the candidate managed runtime in place; retain updater state and the backup as recovery evidence for manual reconciliation |
+| Recovery backup is rejected when an automatic restore or the final pre-migration boundary needs it | **Do not restore from the rejected backup and do not start migration** | Keep maintenance mode active and retain updater state plus backup evidence for manual reconciliation. Do not infer that old code was restored: after a completed stage the candidate runtime remains installed, while an earlier replacement failure may leave a partially replaced managed tree |
 | Database migration may have started | **Do not perform blind code/database rollback** | Keep maintenance mode active and retain recovery evidence until schema/data state is reconciled and a release-specific roll-forward or rollback procedure is selected |
 
-For the rejected-backup state, do not re-extract, start another update, delete updater state, or discard the retained backup merely because migration did not start. A failed backup-integrity check means automatic restore is intentionally unavailable. The retained code backup is evidence/recovery material, not proof that a database rollback or code restore is safe.
+For the rejected-backup state, do not re-extract, start another update, delete updater state, or discard the retained backup merely because migration did not start. A failed backup-integrity check means automatic restore is intentionally unavailable. Treat the current managed runtime as recovery-required until its exact state is verified. The retained code backup is evidence/recovery material, not proof that a database rollback or code restore is safe.
 
 #### Public ownership boundary
 

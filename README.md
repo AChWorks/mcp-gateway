@@ -334,10 +334,10 @@ The updater validates the exact package and target before changing managed files
 
 After a successful update, the temporary root `update/` directory, `public/update/` endpoint, and private updater state are removed automatically, so `/update/` cannot be run again. If the canonical `mcp-gateway-update-vX.Y.Z.zip` and matching checksum file are still present in the application root, the updater removes those exact files too. Arbitrarily renamed files are never deleted.
 
-Only the three newest updater-created code backups are retained. Recovery is deliberately state-dependent:
+Only the three newest updater-created code backups are retained. Recovery is deliberately state-dependent. If backup creation or its initial integrity check fails **before maintenance mode**, the update aborts before managed application files are changed and no restore is needed. After maintenance begins:
 
 - **Credible backup + another pre-migration failure:** the updater revalidates the backup before its first restore mutation, restores the previous Gateway-managed application files automatically, clears updater state, and returns the application to service.
-- **Recovery backup fails integrity validation before migration:** database migration does not start and the updater does **not** restore from that rejected backup. The application remains in maintenance mode with the candidate managed runtime, updater state, and retained backup preserved for manual recovery. Do not re-run the updater or delete that evidence.
+- **Recovery backup is rejected when recovery or the final pre-migration check needs it:** database migration does not start and the updater does **not** restore from that rejected backup. Maintenance mode, updater state, and recovery evidence are retained for manual reconciliation. Do not assume the previous runtime was restored; depending on the failure point, the managed tree may be the complete candidate or a partially replaced tree.
 - **Database migration may have started:** the updater intentionally does **not** attempt a blind code/database rollback. Maintenance mode and recovery evidence are retained until schema/data state is reconciled and a release-specific rollback or roll-forward procedure is chosen.
 
 See `docs/DEPLOYMENT.md` for the authoritative operator recovery state machine.
