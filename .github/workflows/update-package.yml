@@ -17,7 +17,8 @@ on:
       - composer.lock
       - 'bin/build-release-package.sh'
       - 'bin/build-update-package.sh'
-      - 'bin/mcp-gateway-update.sh'
+      - 'bin/mcp-gateway-web-updater.php'
+      - 'bin/mcp-gateway-web-update-index.php'
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
       - 'bin/verify-update-package.sh'
@@ -41,7 +42,8 @@ on:
       - composer.lock
       - 'bin/build-release-package.sh'
       - 'bin/build-update-package.sh'
-      - 'bin/mcp-gateway-update.sh'
+      - 'bin/mcp-gateway-web-updater.php'
+      - 'bin/mcp-gateway-web-update-index.php'
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
       - 'bin/verify-update-package.sh'
@@ -88,11 +90,11 @@ jobs:
           coverage: none
           tools: composer:v2
 
-      - name: Build and verify update candidate
+      - name: Build and verify browser update candidate
         run: |
           bash bin/build-release-package.sh mcp-gateway-update-test-runtime
           bash bin/build-update-package.sh mcp-gateway-update-ci dist/mcp-gateway-update-test-runtime
-          bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip mcp-gateway-update-ci
+          bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip
 
       - name: Download released v1.1.2 deployment baseline
         env:
@@ -101,7 +103,7 @@ jobs:
           mkdir -p dist/baseline
           gh release download v1.1.2 --pattern 'mcp-gateway-v1.1.2.zip' --dir dist/baseline
 
-      - name: Verify v1.1.2 to candidate manual update
+      - name: Verify v1.1.2 to candidate browser update
         env:
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
@@ -111,5 +113,4 @@ jobs:
         run: >-
           bash bin/test-update-package.sh
           dist/mcp-gateway-update-ci.zip
-          mcp-gateway-update-ci
           dist/baseline/mcp-gateway-v1.1.2.zip
