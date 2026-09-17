@@ -12,6 +12,7 @@ The current repository supports a conventional single-host PHP deployment with:
 - MySQL as the production database;
 - Laravel served only from the repository/package `public/` directory;
 - a deployment-ready Release ZIP with production Composer dependencies bundled, so Git/Composer are not required on the target host;
+- a separate authenticated browser-update ZIP for existing deployment-ZIP installations, also without requiring SSH, Git, or Composer;
 - Git + Composer + Artisan as a supported advanced deployment path;
 - Blade/static assets with no required Node.js production build;
 - file-backed cache and administrator sessions by default;
@@ -39,7 +40,7 @@ Composer 2 and Git are required only for the advanced source installation path. 
 On aaPanel, `/www/wwwroot/` is the normal website base location. Example:
 
 ```text
-APP_ROOT=/www/wwwroot/mcp-gateway-v1.1.4
+APP_ROOT=/www/wwwroot/mcp-gateway-v1.1.5
 GATEWAY_ORIGIN=https://gateway.example.com
 ```
 
@@ -62,7 +63,7 @@ For OpenLiteSpeed:
 - enable rewrite processing;
 - enable loading rewrite rules from `.htaccess` for this document root.
 
-The repository owns `public/.htaccess`. It preserves the `Authorization` header, preserves the XSRF header, maps `/install` to the standalone fresh-install entry point, serves existing files/directories directly, and sends other requests to `index.php`.
+The repository owns `public/.htaccess`. It preserves the `Authorization` header, preserves the XSRF header, maps `/install` to the standalone fresh-install entry point, serves existing files/directories directly, and sends other requests to `index.php`. The browser update package temporarily creates `public/update/`, so `/update/` is served as a real temporary directory only while an update package is staged; successful update cleanup removes that directory again.
 
 Do not copy nginx configuration into OpenLiteSpeed. LSAPI/SSE buffering and long-response behavior are not prescribed unless a future release produces evidence that a custom adjustment is needed.
 
@@ -73,7 +74,7 @@ The PHP process must be able to read the application and write only the runtime 
 Required filesystem behavior:
 
 - application source and `.env`: readable by the PHP process;
-- application root: writable during the one-time web install so `.env` can be created;
+- application root: writable during the one-time web install and browser update so `.env` can be created initially and managed release files can later be replaced;
 - `storage/`: writable by the PHP process;
 - `bootstrap/cache/`: writable by the PHP process;
 - `storage/app/private/`: never served by the web server;
@@ -91,7 +92,7 @@ For advanced Composer/Artisan deployment, run Composer and Artisan as the applic
 For normal aaPanel/shared-hosting installs, download the named deployment package attached to the GitHub Release:
 
 ```text
-mcp-gateway-v1.1.4.zip
+mcp-gateway-v1.1.5.zip
 ```
 
 Do not use GitHub's generic **Source code (zip)** archive; that archive does not contain production `vendor/` dependencies. The named deployment ZIP contains only the application/runtime files required for installation and operation.
@@ -138,7 +139,7 @@ For development or operators who explicitly prefer source deployment:
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.4 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.1.5 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
@@ -321,35 +322,34 @@ The web installer is **fresh-install only**. Never use `/install` to upgrade an 
 
 ### Deployment-ZIP installations
 
-Each release publishes a separate update artifact named `mcp-gateway-update-vX.Y.Z.zip`. It contains the verified production runtime tree plus a standalone `update.sh`; Git and Composer are not required on the target host.
+Each release publishes a separate browser-update artifact named `mcp-gateway-update-vX.Y.Z.zip`. Git, Composer, and SSH are not required for the normal update path.
 
 For an authorized upgrade:
 
 1. Capture the recovery set above when the release contains or may contain migrations.
 2. Download the exact named update ZIP for the intended release and, when practical, compare it with its published `.sha256` file.
-3. Extract the update ZIP outside the live Gateway directory.
-4. Run:
+3. Upload the ZIP into the **existing Gateway application root** containing `.env`, `artisan`, `public/`, and `storage/`.
+4. Extract it in that same application root. Extraction may add only private `update/` staging and temporary `public/update/`; it must not replace normal application-managed files before explicit confirmation.
+5. Open `https://gateway.example.com/update/` over HTTPS.
+6. Authenticate with the existing Gateway administrator account if prompted. The temporary updater reuses the normal administrator session and CSRF boundary.
+7. Confirm the installed/target versions and all preflight checks, then choose **Update MCP Gateway**.
+8. Keep the browser request active until success is reported, then repeat the safe HTTP verification from this document.
 
-   ```bash
-   bash update.sh /absolute/path/to/existing-mcp-gateway
-   ```
-
-5. Confirm the updater reports the intended installed version and a successful `gateway:check`.
-6. Repeat the safe HTTP verification from this document.
-
-Before mutation, `update.sh` verifies its internal manifest, rejects symbolic links/unsafe targets, validates semantic version direction, confirms the target is an installed deployment-ZIP layout, and runs the current Gateway environment check. It then:
+Before mutation, the browser updater verifies its private manifest and temporary public-entry hash, rejects symbolic links/unsafe targets, validates semantic version direction, confirms the target is an installed deployment-ZIP layout, and runs the current Gateway environment check. It then:
 
 - puts Laravel into maintenance mode;
 - stores a code-only backup under `storage/app/private/update-backups/`;
 - preserves `.env` and the entire persistent `storage/` tree;
 - replaces all application-managed release paths rather than overlaying them, preventing deleted old files from lingering;
-- runs `php artisan optimize:clear`;
-- runs `php artisan migrate --force --no-interaction`;
-- runs `php artisan gateway:check --no-interaction`;
+- runs `php artisan optimize:clear` through Laravel;
+- runs migrations with `--force`;
+- runs `gateway:check`;
 - resumes the application only after successful postflight validation;
-- retains only the three newest updater-created code backups.
+- retains only the three newest updater-created code backups;
+- removes private update state, root `update/` staging, and `public/update/` after success so the temporary update URL cannot be reused;
+- removes only the exact canonical uploaded `mcp-gateway-update-vX.Y.Z.zip` and matching checksum when those files are present in the application root; arbitrarily renamed files are not deleted.
 
-If failure occurs before migrations begin, the updater automatically restores the previous application files. If migration may already have started, it does **not** perform an automatic code/database rollback and intentionally leaves maintenance mode in place. The retained code backup is evidence/recovery material, not proof that a database rollback is safe. Reconcile schema/data state first and follow release-specific rollback or roll-forward guidance.
+If failure occurs before migrations begin, the updater automatically restores the previous application files and resumes the application. If migration may already have started, it does **not** perform an automatic code/database rollback and intentionally leaves maintenance mode in place. The retained code backup is evidence/recovery material, not proof that a database rollback is safe. Do not re-extract or start another update in that state; reconcile schema/data state first and follow release-specific rollback or roll-forward guidance.
 
 The update ZIP is intentionally unsupported for Git/source checkouts; use the source procedure below for those installations.
 

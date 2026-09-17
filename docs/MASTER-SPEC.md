@@ -29,7 +29,7 @@ Primary deployment target:
 - MySQL-compatible database, with MySQL as the primary target;
 - a dedicated HTTPS domain or subdomain such as `gateway.example.com`;
 - a deployment-ready fresh-install ZIP with production Composer dependencies bundled as the recommended operator installation path;
-- a separate release update ZIP for existing deployment-ZIP installations, runnable without Git or Composer on the target host;
+- a separate release update ZIP for existing deployment-ZIP installations, runnable through a temporary authenticated browser updater without SSH, Git, or Composer on the target host;
 - every official deployment ZIP must be assembled from a clean production-only staging tree and contain only installation/runtime application files, required dependency runtime/license material, version identity, and empty writable runtime scaffolding; repository/development/test/generated state is forbidden and this invariant must remain CI-enforced for future releases;
 - Git + Composer + Artisan source deployment remains a supported advanced path;
 - the web server must expose only the application's `public/` directory;
@@ -39,7 +39,7 @@ The application must remain usable on a conventional shared-style PHP request li
 
 The recommended fresh-install experience should remain intentionally small: upload/extract the official deployment ZIP, point the HTTPS domain at `public/`, open the one-page installer, provide an empty MySQL database plus first-administrator details, and finish. The installer must not become a general hosting control plane or command runner, and after a successful installation it must fail closed against reinstallation.
 
-The recommended manual-update experience should likewise remain small: download/extract the named update ZIP outside the live application directory and run one explicit updater command against the installed Gateway root. The updater must validate before mutation, preserve `.env` and persistent `storage/`, use the release-bundled dependency tree, replace managed files deterministically, run required migrations/postflight checks, and fail closed without pretending that an unknown or partial database migration can be rolled back automatically.
+The recommended manual-update experience should likewise remain small: upload the named update ZIP into the existing application root, extract it there without overwriting the running application, open a temporary `/update/` page, authenticate with the existing Gateway administrator session, review the preflight, and confirm the update. The updater must validate before mutation, preserve `.env` and persistent `storage/`, use the release-bundled dependency tree, replace managed files deterministically, run required migrations/postflight checks, and remove/disable its temporary web/staging surface after success so it cannot be reused. It must fail closed without pretending that an unknown or partial database migration can be rolled back automatically.
 
 Release packaging is a standing product/deployment requirement, not release-by-release cleanup. Runtime correctness and license/notice preservation take precedence over minimizing bytes, but dependency docs/examples/tests, development tooling/configuration, repository metadata, generated test keys/sessions/caches/logs, and source-checkout-only material must not be shipped when they are not needed to install or operate the application. The repository-owned package builder/verifier is the authoritative implementation of this boundary.
 
@@ -203,7 +203,8 @@ At minimum:
 - target identifiers, credentials, and responses from one site must not leak into another site's request;
 - errors returned to MCP clients are useful but do not expose secrets or unnecessary internal stack/configuration data;
 - destructive administration actions in the web panel require deliberate user interaction and preserve recoverable target-side state when the downstream system supports revocation rather than silent deletion;
-- the fresh-install web installer accepts secrets only over HTTPS, does not log or redisplay them, only writes outside-public-root secret material, requires a dedicated empty database, and locks itself after successful installation.
+- the fresh-install web installer accepts secrets only over HTTPS, does not log or redisplay them, only writes outside-public-root secret material, requires a dedicated empty database, and locks itself after successful installation;
+- the temporary browser updater requires HTTPS plus the existing administrator session and CSRF boundary before mutation, keeps the full update payload outside the document root, uses only a minimal temporary public entrypoint, validates exact package identity before mutation, and removes/disables its temporary staging and web entry after successful completion.
 
 ## 8. Data and persistence requirements
 
@@ -296,9 +297,9 @@ V1 is successful when all of the following are demonstrated against supported te
 7. A disconnected/revoked site fails closed without breaking other connected sites.
 8. Adding a third site does not require another ChatGPT App or a new Gateway MCP endpoint.
 9. Direct ChatGPT-to-WP-AI-Bridge operation remains available for sites that use it.
-10. Sensitive credentials are not exposed through the panel, installer, MCP responses, application logs, or activity records.
+10. Sensitive credentials are not exposed through the panel, installer, updater, MCP responses, application logs, or activity records.
 11. A fresh developer/Master can recover project intent, architecture, current work, and validation expectations from the repository and GitHub without relying on prior chat history.
-12. An existing deployment-ZIP installation can be upgraded with the official update ZIP without Git or Composer while preserving `.env` and persistent private state, removing stale managed files, and exercising migrations/postflight validation through CI against a real older packaged release.
+12. An existing deployment-ZIP installation can be upgraded with the official update ZIP through the authenticated one-time browser flow without SSH, Git, or Composer while preserving `.env` and persistent private state, removing stale managed files, exercising migrations/postflight validation against a real older packaged release, and removing/disabling the temporary updater after success.
 
 ## 14. Source-of-truth model
 

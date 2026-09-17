@@ -9,7 +9,8 @@ on:
       - .github/workflows/release-package.yml
       - bin/build-release-package.sh
       - bin/build-update-package.sh
-      - bin/mcp-gateway-update.sh
+      - bin/mcp-gateway-web-updater.php
+      - bin/mcp-gateway-web-update-index.php
       - bin/test-update-package.sh
       - bin/prune-production-vendor.php
       - bin/verify-release-package.sh
@@ -25,7 +26,7 @@ concurrency:
 jobs:
   package:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 20
 
     services:
       mysql:
@@ -71,7 +72,7 @@ jobs:
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "VERSION must contain a semantic version such as 1.1.4" >&2
+            echo "VERSION must contain a semantic version such as 1.1.5" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -110,18 +111,18 @@ jobs:
           PACKAGE: ${{ steps.release.outputs.package }}
         run: bash bin/verify-release-package.sh "dist/$PACKAGE.zip" "$PACKAGE"
 
-      - name: Build manual update ZIP
+      - name: Build browser update ZIP
         if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
         run: bash bin/build-update-package.sh "$UPDATE_PACKAGE" "dist/$PACKAGE"
 
-      - name: Verify manual update ZIP
+      - name: Verify browser update ZIP
         if: steps.publish.outputs.needed == 'true'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
-        run: bash bin/verify-update-package.sh "dist/$UPDATE_PACKAGE.zip" "$UPDATE_PACKAGE"
+        run: bash bin/verify-update-package.sh "dist/$UPDATE_PACKAGE.zip"
 
       - name: Download released v1.1.2 deployment baseline
         if: steps.publish.outputs.needed == 'true'
@@ -131,7 +132,7 @@ jobs:
           mkdir -p dist/baseline
           gh release download v1.1.2 --pattern 'mcp-gateway-v1.1.2.zip' --dir dist/baseline
 
-      - name: Verify released-baseline manual update
+      - name: Verify released-baseline browser update
         if: steps.publish.outputs.needed == 'true'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
@@ -143,7 +144,6 @@ jobs:
         run: >-
           bash bin/test-update-package.sh
           dist/$UPDATE_PACKAGE.zip
-          $UPDATE_PACKAGE
           dist/baseline/mcp-gateway-v1.1.2.zip
 
       - name: Publish GitHub release
@@ -164,15 +164,19 @@ jobs:
 
           Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
 
-          ## Manual update
+          ## Simple browser update
 
-          Existing deployment-ZIP installations can download \`$UPDATE_PACKAGE.zip\`, extract it outside the live Gateway directory, and run:
+          Existing deployment-ZIP installations can update without SSH, Git, or Composer:
 
-          \`bash update.sh /absolute/path/to/existing-mcp-gateway\`
+          1. Download \`$UPDATE_PACKAGE.zip\`.
+          2. Upload it into the existing MCP Gateway application root — the directory containing \`.env\`, \`artisan\`, \`public/\`, and \`storage/\`.
+          3. Extract the ZIP **in that application root**. Extraction only adds temporary \`update/\` and \`public/update/\` staging files; it does not replace the live application yet.
+          4. Open \`https://your-gateway.example/update/\` in a browser.
+          5. Sign in with the existing Gateway administrator account if prompted, review the preflight, and click **Update MCP Gateway**.
 
-          The updater verifies the package and target first, preserves \`.env\` and persistent \`storage/\`, creates a bounded code backup, replaces application-managed files deterministically, clears Laravel caches, applies migrations, runs \`gateway:check\`, and rejects same-version or downgrade attempts. Git and Composer are not required on the target host.
+          The browser updater verifies the package and target, preserves \`.env\` and persistent \`storage/\`, creates a bounded private code backup, replaces application-managed files deterministically, clears Laravel caches, applies migrations, runs \`gateway:check\`, returns the Gateway to service, and removes its temporary \`update/\` + \`public/update/\` staging automatically after success. When the canonical uploaded ZIP/checksum are present in the application root, those are removed too.
 
-          If a failure happens after database migration may have started, the updater intentionally does not claim an automatic database rollback; it leaves maintenance mode in place and reports the retained code backup for operator-directed recovery.
+          The updater rejects same-version/downgrade, unsafe layout, symlink, and tampered-package cases before mutation. If a failure occurs after database migration may have started, it intentionally leaves maintenance mode enabled and retains the private code backup rather than pretending an automatic database rollback is safe.
 
           No production server is deployed or modified by publishing this release.
           EOF_NOTES

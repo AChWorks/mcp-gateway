@@ -18,6 +18,7 @@ The Gateway is a routing and connection layer. WordPress and WP AI Bridge remain
 - deployment/runtime diagnostics through `php artisan gateway:check`;
 - validated PHP 8.4 + MySQL + OpenLiteSpeed deployment shape;
 - a deployment-ready ZIP and one-page web installer for aaPanel/shared hosting;
+- a one-time browser updater for deployment-ZIP installations, with no SSH, Git, or Composer required on the target host;
 - documented backup and recovery requirements.
 
 ## Requirements
@@ -45,12 +46,12 @@ This is the easiest installation method for aaPanel and compatible shared hostin
 
 1. Create a dedicated HTTPS domain/subdomain, for example `gateway.example.com`.
 2. Create a dedicated **empty** MySQL database and database user.
-3. Download `mcp-gateway-v1.1.4.zip` from the [v1.1.4 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.4).
+3. Download `mcp-gateway-v1.1.5.zip` from the [v1.1.5 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.5).
 4. Upload and extract the ZIP on the host. The archive contains only deployment/runtime files and already includes production Composer dependencies in `vendor/`.
 5. Point the domain document root / aaPanel running directory to the extracted package's `public/` directory. Example:
 
    ```text
-   /www/wwwroot/mcp-gateway-v1.1.4/public
+   /www/wwwroot/mcp-gateway-v1.1.5/public
    ```
 
 6. Make sure the PHP process can write to:
@@ -94,7 +95,7 @@ https://gateway.example.com/admin/login
 
 The installer never displays the MySQL password, `APP_KEY`, private keys, access tokens, or other generated secret material.
 
-> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-v1.1.4.zip` Release asset.
+> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-v1.1.5.zip` Release asset.
 
 ### aaPanel quick setup
 
@@ -104,9 +105,9 @@ A typical aaPanel setup is:
 Domain:          gateway.example.com
 PHP:             8.4
 Database:        dedicated MySQL database/user
-Application:     /www/wwwroot/mcp-gateway-v1.1.4
+Application:     /www/wwwroot/mcp-gateway-v1.1.5
 Running directory/document root:
-                 /www/wwwroot/mcp-gateway-v1.1.4/public
+                 /www/wwwroot/mcp-gateway-v1.1.5/public
 SSL:             enabled before /install
 ```
 
@@ -132,7 +133,7 @@ Operators who prefer source-based deployment can continue to use the existing CL
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.4 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.1.5 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
@@ -309,24 +310,31 @@ The web panel supports adding/editing site metadata, connect/reconnect/disconnec
 
 The web installer is only for a **fresh installation**. Do not use `/install` to upgrade an existing Gateway.
 
-### Recommended: manual update ZIP
+### Recommended: browser update ZIP
 
-Deployment-ZIP installations can be updated without Git or Composer on the production host.
+Deployment-ZIP installations can be updated without SSH, Git, or Composer on the production host.
 
-1. Download the named `mcp-gateway-update-vX.Y.Z.zip` asset from the intended GitHub Release.
-2. Optionally verify it with the accompanying `.sha256` file.
-3. Upload and extract the update ZIP **outside** the live Gateway directory, for example under a temporary directory in your account.
-4. From the extracted update directory, run one command against the existing Gateway root:
+1. For migration-bearing releases, first preserve the documented recovery set: a consistent database backup, the matching `.env`/`APP_KEY`, both signing-key pairs, and the currently deployed release identity.
+2. Download the named `mcp-gateway-update-vX.Y.Z.zip` asset from the intended GitHub Release. You may also download its `.sha256` file for an independent checksum check.
+3. Upload the update ZIP into the **existing MCP Gateway application root** — the directory that already contains `.env`, `artisan`, `public/`, and `storage/`.
+4. Extract the ZIP **in that same application root**. Extraction only adds a private `update/` staging directory and a temporary `public/update/` entrypoint; it does not replace the running application yet.
+5. Open:
 
-   ```bash
-   bash update.sh /absolute/path/to/existing-mcp-gateway
+   ```text
+   https://gateway.example.com/update/
    ```
 
-The updater validates the package and target before changing files. It refuses same-version/downgrade attempts, rejects unsafe package layouts/symlinks, runs the current Gateway preflight, enters Laravel maintenance mode, retains a bounded code backup under `storage/app/private/update-backups/`, replaces application-managed files deterministically, preserves the production `.env` and all persistent `storage/`, clears caches, applies migrations, runs `gateway:check`, and returns the application to service after success.
+6. If prompted, sign in with the existing MCP Gateway administrator account. The updater reuses the normal administrator session and CSRF protection.
+7. Review the installed version, target version, package-integrity checks, and writable-path preflight, then choose **Update MCP Gateway**.
+8. Keep the browser page open until it reports success.
 
-Only the three newest updater-created code backups are retained. If the update fails before migrations begin, the updater restores application files automatically. Once database migration may have started, it intentionally **does not** attempt a blind code/database rollback; the application remains in maintenance mode and the updater reports the retained code-backup path so the operator can choose a release-specific rollback or roll-forward procedure.
+The updater validates the exact package and target before changing managed files. It refuses same-version/downgrade attempts and rejects unsafe paths, symlinks, incomplete/tampered packages, source checkouts, and invalid targets. After confirmation it runs the current Gateway preflight, enters Laravel maintenance mode, creates a private code backup under `storage/app/private/update-backups/`, replaces application-managed files deterministically, preserves the production `.env` and all persistent `storage/`, clears caches, applies migrations, runs `gateway:check`, and returns the application to service.
 
-For migration-bearing releases, preserve the documented database + `.env`/`APP_KEY` + signing-key recovery set before updating. Release-specific upgrade notes take precedence when they add requirements.
+After a successful update, the temporary root `update/` directory, `public/update/` endpoint, and private updater state are removed automatically, so `/update/` cannot be run again. If the canonical `mcp-gateway-update-vX.Y.Z.zip` and matching checksum file are still present in the application root, the updater removes those exact files too. Arbitrarily renamed files are never deleted.
+
+Only the three newest updater-created code backups are retained. If the update fails before migrations begin, the updater restores application files automatically. Once database migration may have started, it intentionally **does not** attempt a blind code/database rollback; the application remains in maintenance mode and the private code backup is retained for a release-specific rollback or roll-forward procedure. Do not re-extract or start another update in that state.
+
+Release-specific upgrade notes take precedence when they add requirements.
 
 ### Advanced: source/Composer installation
 
@@ -340,7 +348,7 @@ php artisan migrate --force
 php artisan gateway:check
 ```
 
-The manual update ZIP intentionally refuses source checkouts (`.git` / `composer.lock`) so that it cannot silently overwrite a developer-managed deployment.
+The browser update ZIP intentionally refuses source checkouts (`.git` / `composer.lock`) so that it cannot silently overwrite a developer-managed deployment.
 
 Do not blindly run `migrate:rollback` after a partial or unknown deployment failure.
 
@@ -357,6 +365,14 @@ For the ZIP installer, start with the server checks shown on `/install`. Common 
 - MySQL credentials/permissions are incorrect.
 
 If the installer stops after creating `.env`, use a fresh extracted package and an empty database for the next attempt. Do not remove the private installed marker from a completed installation to force a reinstall.
+
+For browser updates:
+
+- a redirect from `/update/` to `/admin/login` is expected when the administrator session is not active;
+- if `/update/` reports a package-integrity or incomplete-staging error, use the named update ZIP from the intended Release and extract it again in the existing application root before any update has started;
+- do not manually copy the payload over the live application — the temporary updater owns deterministic file replacement;
+- after a successful update, `/update/` should no longer exist;
+- if a failure page says database migration may have started, do not re-run the updater or delete the private backup/state manually; follow a release-specific recovery or roll-forward procedure.
 
 For an existing/CLI installation, also run:
 
@@ -376,9 +392,9 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 
 ## Release status
 
-Current stable release: `v1.1.4`.
+Current stable release: `v1.1.5`.
 
-Recommended installations should use the named deployment ZIP attached to the GitHub Release rather than the generic source archive or moving `main` branch.
+Recommended installations should use the named deployment ZIP attached to the GitHub Release rather than the generic source archive or moving `main` branch. Existing deployment-ZIP installations should use the named browser update ZIP attached to the same Release.
 
 Publishing a GitHub release does not deploy MCP Gateway to any server automatically. Production deployment remains an operator-controlled action.
 
