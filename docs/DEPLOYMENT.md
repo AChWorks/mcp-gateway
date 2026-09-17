@@ -352,7 +352,17 @@ Before mutation, the browser updater verifies its private manifest and temporary
 - removes private update state, root `update/` staging, and `public/update/` after success so the temporary update URL cannot be reused;
 - removes only the exact canonical uploaded `mcp-gateway-update-vX.Y.Z.zip` and matching checksum when those files are present in the application root; arbitrarily renamed files are not deleted.
 
-If failure occurs before migrations begin, the updater automatically restores the previous application files and resumes the application. If migration may already have started, it does **not** perform an automatic code/database rollback and intentionally leaves maintenance mode in place. The retained code backup is evidence/recovery material, not proof that a database rollback is safe. Do not re-extract or start another update in that state; reconcile schema/data state first and follow release-specific rollback or roll-forward guidance.
+#### Browser updater recovery state machine
+
+Treat recovery as three distinct states; "pre-migration failure" alone is not sufficient to infer that rollback occurred.
+
+| State | Automatic action | Operator-visible result |
+| --- | --- | --- |
+| Recovery backup is credible, then a different failure occurs before migration starts | Revalidate the backup immediately before restore, restore the previous Gateway-managed application files, clear updater state, and resume the application | Previous managed runtime is restored; migration state is unchanged |
+| Recovery backup itself fails integrity validation before migration starts | **Do not restore from the rejected backup and do not start migration** | Keep maintenance mode active; keep the candidate managed runtime in place; retain updater state and the backup as recovery evidence for manual reconciliation |
+| Database migration may have started | **Do not perform blind code/database rollback** | Keep maintenance mode active and retain recovery evidence until schema/data state is reconciled and a release-specific roll-forward or rollback procedure is selected |
+
+For the rejected-backup state, do not re-extract, start another update, delete updater state, or discard the retained backup merely because migration did not start. A failed backup-integrity check means automatic restore is intentionally unavailable. The retained code backup is evidence/recovery material, not proof that a database rollback or code restore is safe.
 
 #### Public ownership boundary
 
