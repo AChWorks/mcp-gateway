@@ -13,7 +13,7 @@ The current bootstrap is intentionally a conventional PHP application:
 - Blade/server-rendered frontend;
 - no required Node.js build, Redis, queue worker, Docker, broker, or separate MCP daemon.
 
-CI uses MySQL 8.4 only in the dedicated path-filtered MySQL validation workflow. Application tests may use SQLite in memory when the test does not depend on MySQL-specific behavior.
+Common application tests may use SQLite in memory when the test does not depend on MySQL-specific behavior. MySQL 8.4 is used by dedicated workflows where the evidence depends on production database semantics, including the path-filtered concurrency gate and the real packaged browser-update integration gate.
 
 ## Install a development checkout
 
@@ -116,7 +116,7 @@ composer analyse
 composer test
 ```
 
-`composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting MySQL. The dedicated path-filtered `MySQL Concurrency` workflow owns MySQL 8.4 `migrate:fresh` and the `mysql-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate. Draft pull requests skip these heavy jobs until they are marked ready for review.
+`composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting MySQL. The dedicated path-filtered `MySQL Concurrency` workflow owns MySQL 8.4 `migrate:fresh` and the `mysql-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The `Update Package` workflow independently owns the MySQL-backed released-package-to-candidate browser update proof. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate. Draft pull requests skip these heavy jobs until they are marked ready for review.
 
 ## Release package validation
 
@@ -131,18 +131,30 @@ bash bin/verify-release-package.sh dist/mcp-gateway-local.zip mcp-gateway-local
 
 `build-release-package.sh` creates a new staging tree, installs the committed lockfile directly with `composer install --no-dev`, prunes only demonstrably non-runtime dependency material, emits empty writable runtime directories, and creates a deterministic ordered ZIP. `verify-release-package.sh` extracts that ZIP and fails closed on unexpected top-level files, repository/development metadata, dependency dev/docs/example material, transient storage state, source-only Composer metadata, or broken runtime behavior.
 
-For the manual-update artifact, build it from the already verified runtime staging tree and then verify its fail-closed package shape:
+For the browser-update artifact, build it from the already verified runtime staging tree and then verify its fail-closed package shape:
 
 ```bash
 bash bin/build-update-package.sh mcp-gateway-update-local dist/mcp-gateway-local
-bash bin/verify-update-package.sh dist/mcp-gateway-update-local.zip mcp-gateway-update-local
+bash bin/verify-update-package.sh dist/mcp-gateway-update-local.zip
 ```
 
-The MySQL-backed GitHub workflow additionally downloads the released `v1.1.2` deployment artifact and executes `bin/test-update-package.sh` against it. That integration test verifies a real packaged upgrade, preservation of `.env` and private persistent state, deterministic removal of stale managed files, migration/postflight behavior, and rejection of same-version, downgrade, tampered-package, symlink-package, and invalid-target cases.
+The update ZIP must contain only private root `update/` staging and the minimal temporary `public/update/` entrypoint. Extracting it into an installed application root must not replace any normal application-managed path before the administrator explicitly confirms the update in the browser. The full production runtime payload stays under private `update/payload/`; `.env` and `storage/` are never included in that payload.
 
-The verifier also boots Laravel from the extracted package, rebuilds the Laravel package manifest, checks routes and Composer runtime identities, runs the web-installer preflight, and performs a migration smoke test. Dependency license/notice files and runtime resources are intentionally retained even when they add size.
+The MySQL-backed `Update Package` workflow downloads the real released `v1.1.2` deployment artifact, installs it, stages the candidate update ZIP exactly as an operator would, authenticates through the real administrator login, obtains normal CSRF state, and exercises `/update/` through both browser-update phases. The integration test verifies:
 
-Normal CI runs this build/verify path after the application test steps. This is deliberate: tests generate ephemeral keys/cache/session state in the development checkout, and the package build must prove that none of that state can leak into the release. Any future change that alters application runtime files, Composer dependencies, package scripts, or release packaging must keep this gate green. If a new legitimate runtime file is required, update the builder/verifier intentionally in the same reviewed change rather than weakening the hygiene checks broadly.
+- the live application remains unchanged immediately after ZIP extraction;
+- guest `/update/` access cannot trigger mutation and is redirected to administrator login;
+- installed/target version and integrity/preflight state are exposed only through the authenticated flow;
+- `.env` and persistent private state survive unchanged;
+- stale application-managed files absent from the new release are removed;
+- Laravel maintenance/cache/migration/`gateway:check` postflight completes;
+- the private code backup exists and backup count remains bounded;
+- same-version, downgrade, tampered-package, symlink-package, and invalid-target cases fail before mutation;
+- successful completion removes private update state, root `update/`, temporary `public/update/`, and the exact canonical uploaded update ZIP/checksum, leaving `/update/` unavailable.
+
+The fresh-install verifier also boots Laravel from the extracted package, rebuilds the Laravel package manifest, checks routes and Composer runtime identities, runs the web-installer preflight, and performs a migration smoke test. Dependency license/notice files and runtime resources are intentionally retained even when they add size.
+
+Normal CI runs both artifact builders/verifiers after the application test steps. Release publication repeats the real `v1.1.2` browser-update integration before publishing a new release. This is deliberate: tests generate ephemeral keys/cache/session state in the development checkout, and release packaging must prove that none of that state can leak into operator artifacts. Any future change that alters application runtime files, Composer dependencies, updater logic, package scripts, or release packaging must keep these gates green. If a new legitimate runtime file is required, update the builder/verifier intentionally in the same reviewed change rather than weakening the hygiene checks broadly.
 
 ## MCP bootstrap compatibility fixture
 
