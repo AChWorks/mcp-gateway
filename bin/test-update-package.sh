@@ -97,6 +97,17 @@ unzip -q "$update_zip" -d "$candidate"
 new_version="$(tr -d '[:space:]' < "$candidate/update/UPDATE_VERSION")"
 [[ -f "$candidate/public/update/index.php" && -f "$candidate/update/WebUpdater.php" ]] || { echo "Browser updater files are missing after extraction." >&2; exit 1; }
 
+# The real operator staging step: upload the named ZIP into the existing
+# application root and extract it there. This must add only temporary updater
+# files and must not replace the live application before confirmation.
+canonical_zip="$target/mcp-gateway-update-v$new_version.zip"
+cp "$update_zip" "$canonical_zip"
+sha256sum "$canonical_zip" > "$canonical_zip.sha256"
+unzip -q "$canonical_zip" -d "$target"
+[[ -d "$target/update" && -f "$target/public/update/index.php" ]] || { echo "In-place extraction did not stage the browser updater." >&2; exit 1; }
+[[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" ]] || { echo "Extracting the update ZIP changed the live version before confirmation." >&2; exit 1; }
+[[ -f "$target/app/obsolete-update-test.txt" ]] || { echo "Extracting the update ZIP overwrote managed application files before confirmation." >&2; exit 1; }
+
 inspect_package() {
   local base="$1"
   local package="$2"
@@ -117,53 +128,43 @@ inspect_package() {
 
 # Browser preflight must reject same-version and downgrade targets before mutation.
 printf '%s\n' "$new_version" > "$target/VERSION"
-if inspect_package "$target" "$candidate/update" >"$tmp/same.out" 2>&1; then
+if inspect_package "$target" "$target/update" >"$tmp/same.out" 2>&1; then
   echo "Same-version update unexpectedly passed preflight." >&2
   exit 1
 fi
-grep -F "target version must be newer" "$tmp/same.out" >/dev/null || { echo "Same-version rejection was not actionable." >&2; exit 1; }
+grep -F "target version must be newer" "$tmp/same.out" >/dev/null || { cat "$tmp/same.out" >&2; echo "Same-version rejection was not actionable." >&2; exit 1; }
 printf '99.99.99\n' > "$target/VERSION"
-if inspect_package "$target" "$candidate/update" >"$tmp/downgrade.out" 2>&1; then
+if inspect_package "$target" "$target/update" >"$tmp/downgrade.out" 2>&1; then
   echo "Downgrade unexpectedly passed preflight." >&2
   exit 1
 fi
-grep -F "target version must be newer" "$tmp/downgrade.out" >/dev/null || { echo "Downgrade rejection was not actionable." >&2; exit 1; }
+grep -F "target version must be newer" "$tmp/downgrade.out" >/dev/null || { cat "$tmp/downgrade.out" >&2; echo "Downgrade rejection was not actionable." >&2; exit 1; }
 printf '%s\n' "$old_version" > "$target/VERSION"
 
 # Tampering and symlinked package content must fail before target mutation.
-cp -a "$candidate/update" "$tmp/tampered-update"
+cp -a "$target/update" "$tmp/tampered-update"
 printf 'tampered\n' >> "$tmp/tampered-update/payload/VERSION"
 if inspect_package "$target" "$tmp/tampered-update" >"$tmp/tampered.out" 2>&1; then
   echo "Tampered update unexpectedly passed preflight." >&2
   exit 1
 fi
-grep -F "checksum validation failed" "$tmp/tampered.out" >/dev/null || { echo "Tampered-package rejection was not actionable." >&2; exit 1; }
+grep -F "checksum validation failed" "$tmp/tampered.out" >/dev/null || { cat "$tmp/tampered.out" >&2; echo "Tampered-package rejection was not actionable." >&2; exit 1; }
 
-cp -a "$candidate/update" "$tmp/symlink-update"
+cp -a "$target/update" "$tmp/symlink-update"
 ln -s /etc/passwd "$tmp/symlink-update/payload/unsafe-link"
 if inspect_package "$target" "$tmp/symlink-update" >"$tmp/symlink.out" 2>&1; then
   echo "Symlinked update unexpectedly passed preflight." >&2
   exit 1
 fi
-grep -F "symbolic link" "$tmp/symlink.out" >/dev/null || { echo "Symlink-package rejection was not actionable." >&2; exit 1; }
+grep -F "symbolic link" "$tmp/symlink.out" >/dev/null || { cat "$tmp/symlink.out" >&2; echo "Symlink-package rejection was not actionable." >&2; exit 1; }
 
 unsafe_target="$tmp/unsafe-target"
 mkdir -p "$unsafe_target"
-if inspect_package "$unsafe_target" "$candidate/update" >"$tmp/unsafe.out" 2>&1; then
+if inspect_package "$unsafe_target" "$target/update" >"$tmp/unsafe.out" 2>&1; then
   echo "Unsafe target unexpectedly passed preflight." >&2
   exit 1
 fi
-grep -F "does not look like an installed MCP Gateway deployment" "$tmp/unsafe.out" >/dev/null || { echo "Unsafe-target rejection was not actionable." >&2; exit 1; }
-
-# The real operator flow: upload the named ZIP into the existing application
-# root, extract it in place, then use /update/ in the browser.
-canonical_zip="$target/mcp-gateway-update-v$new_version.zip"
-cp "$update_zip" "$canonical_zip"
-sha256sum "$canonical_zip" > "$canonical_zip.sha256"
-unzip -q "$canonical_zip" -d "$target"
-[[ -d "$target/update" && -f "$target/public/update/index.php" ]] || { echo "In-place extraction did not stage the browser updater." >&2; exit 1; }
-[[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" ]] || { echo "Extracting the update ZIP changed the live version before confirmation." >&2; exit 1; }
-[[ -f "$target/app/obsolete-update-test.txt" ]] || { echo "Extracting the update ZIP overwrote managed application files before confirmation." >&2; exit 1; }
+grep -F "does not look like an installed MCP Gateway deployment" "$tmp/unsafe.out" >/dev/null || { cat "$tmp/unsafe.out" >&2; echo "Unsafe-target rejection was not actionable." >&2; exit 1; }
 
 cat > "$tmp/router.php" <<'PHP_ROUTER'
 <?php
@@ -210,37 +211,24 @@ curl -fsS -L -c "$jar" -b "$jar" -H "$https_header" \
   "$base_url/admin/login" > "$tmp/login-result.html"
 grep -F 'Gateway dashboard' "$tmp/login-result.html" >/dev/null || { echo "Administrator login did not reach the dashboard." >&2; exit 1; }
 
-curl -fsS -c "$jar" -b "$jar" -H "$https_header" "$base_url/update/" > "$tmp/update.html"
+curl -fsS -D "$tmp/update.headers" -c "$jar" -b "$jar" -H "$https_header" "$base_url/update/" > "$tmp/update.html"
 grep -F "Installed:</strong> $old_version" "$tmp/update.html" >/dev/null || { echo "Browser updater did not show the installed version." >&2; exit 1; }
 grep -F "Target:</strong> $new_version" "$tmp/update.html" >/dev/null || { echo "Browser updater did not show the target version." >&2; exit 1; }
 update_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/update.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
-update_cookie="$(grep 'mcp_gateway_update_session' "$jar" | tail -n 1 | awk '{print $NF}')"
-[[ -n "$update_csrf" && -n "$update_cookie" ]] || { echo "Browser updater session/CSRF material was not issued." >&2; exit 1; }
+update_cookie="$(grep -i '^Set-Cookie: mcp_gateway_update_session=' "$tmp/update.headers" | tail -n 1 | sed -E 's/^[^=]+=([^;]+).*/\1/' | tr -d '\r')"
+[[ -n "$update_csrf" && "$update_cookie" =~ ^[a-f0-9]{64}$ ]] || { echo "Browser updater session/CSRF material was not issued." >&2; exit 1; }
 
-cookie_header="$(awk '
+admin_cookie_header="$(awk '
   BEGIN { first=1 }
   /^#/ && $0 !~ /^#HttpOnly_/ { next }
-  NF >= 7 {
-    name=$6; value=$7;
-    if (name=="mcp_gateway_update_session") value=ENVIRON["UPDATE_COOKIE"];
-    if (!first) printf "; ";
-    printf "%s=%s", name, value;
-    first=0;
-  }
-' UPDATE_COOKIE="$update_cookie" "$jar")"
-# awk environment assignment is not portable in that position; append the
-# dedicated secure updater cookie explicitly for the local HTTP test server.
-cookie_header="$(awk '
-  BEGIN { first=1 }
-  /^#/ && $0 !~ /^#HttpOnly_/ { next }
-  NF >= 7 {
+  NF >= 7 && $6 != "mcp_gateway_update_session" {
     if (!first) printf "; ";
     printf "%s=%s", $6, $7;
     first=0;
   }
 ' "$jar")"
-if [[ -n "$cookie_header" ]]; then
-  cookie_header="$cookie_header; mcp_gateway_update_session=$update_cookie"
+if [[ -n "$admin_cookie_header" ]]; then
+  cookie_header="$admin_cookie_header; mcp_gateway_update_session=$update_cookie"
 else
   cookie_header="mcp_gateway_update_session=$update_cookie"
 fi
