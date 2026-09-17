@@ -26,41 +26,43 @@ source_version="$(tr -d '[:space:]' < "$runtime_tree/VERSION")"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Repository VERSION is invalid: $version" >&2; exit 1; }
 [[ "$source_version" == "$version" ]] || { echo "Runtime tree VERSION ($source_version) does not match repository VERSION ($version)." >&2; exit 1; }
 
-root="$dist_dir/$package"
+stage="$dist_dir/.$package-stage"
 zip_path="$dist_dir/$package.zip"
-rm -rf "$root"
+rm -rf "$stage"
 rm -f "$zip_path" "$zip_path.sha256" "$dist_dir/.$package.files"
-mkdir -p "$root/payload"
+mkdir -p "$stage/update/payload" "$stage/public/update"
 
 for entry in .env.example LICENSE VERSION app artisan bootstrap composer.json config database public resources routes vendor; do
   [[ -e "$runtime_tree/$entry" ]] || { echo "Runtime tree is missing required entry: $entry" >&2; exit 1; }
-  cp -a "$runtime_tree/$entry" "$root/payload/"
+  cp -a "$runtime_tree/$entry" "$stage/update/payload/"
 done
 
-cp -a "$repo_root/bin/mcp-gateway-update.sh" "$root/update.sh"
-chmod +x "$root/update.sh"
-printf '%s\n' "$version" > "$root/UPDATE_VERSION"
+cp -a "$repo_root/bin/mcp-gateway-web-updater.php" "$stage/update/WebUpdater.php"
+cp -a "$repo_root/bin/mcp-gateway-web-update-index.php" "$stage/public/update/index.php"
+printf '%s\n' "$version" > "$stage/update/UPDATE_VERSION"
+sha256sum "$stage/public/update/index.php" | awk '{print $1}' > "$stage/update/PUBLIC_ENTRY_SHA256"
 
 (
-  cd "$root"
+  cd "$stage/update"
   {
-    printf '%s\0' UPDATE_VERSION update.sh
+    printf '%s\0' UPDATE_VERSION PUBLIC_ENTRY_SHA256 WebUpdater.php
     find payload -type f -print0 | LC_ALL=C sort -z
   } | xargs -0 sha256sum > manifest.sha256
 )
 
 source_date_epoch="${SOURCE_DATE_EPOCH:-$(git -C "$repo_root" log -1 --format=%ct)}"
 [[ "$source_date_epoch" =~ ^[0-9]+$ ]] || { echo "Invalid SOURCE_DATE_EPOCH: $source_date_epoch" >&2; exit 1; }
-find "$root" -exec touch -h -d "@$source_date_epoch" {} +
+find "$stage" -exec touch -h -d "@$source_date_epoch" {} +
 
 (
-  cd "$dist_dir"
-  list_file=".$package.files"
-  find "$package" -print | LC_ALL=C sort > "$list_file"
-  zip -X -q "$package.zip" -@ < "$list_file"
+  cd "$stage"
+  list_file="$dist_dir/.$package.files"
+  find update public/update -print | LC_ALL=C sort > "$list_file"
+  zip -X -q "$zip_path" -@ < "$list_file"
   rm -f "$list_file"
-  sha256sum "$package.zip" > "$package.zip.sha256"
 )
+sha256sum "$zip_path" > "$zip_path.sha256"
+rm -rf "$stage"
 
 printf 'Built %s\n' "$zip_path"
 printf 'SHA256: '
