@@ -62,7 +62,10 @@ find "$stage" -exec touch -h -d "@$source_date_epoch" {} +
   zip -X -q "$zip_path" -@ < "$list_file"
   rm -f "$list_file"
 )
-sha256sum "$zip_path" > "$zip_path.sha256"
+(
+  cd "$dist_dir"
+  sha256sum "$package.zip" > "$package.zip.sha256"
+)
 rm -rf "$stage"
 
 printf 'Built %s\n' "$zip_path"

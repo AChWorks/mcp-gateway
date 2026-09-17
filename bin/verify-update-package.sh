@@ -10,9 +10,26 @@ zip_path="$1"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ -f "$zip_path" ]] || { echo "Update ZIP does not exist: $zip_path" >&2; exit 1; }
 
-for command in unzip php find sort diff awk grep mktemp sha256sum; do
+for command in unzip php find sort diff awk grep mktemp sha256sum basename dirname; do
   command -v "$command" >/dev/null 2>&1 || { echo "Required verification command is unavailable: $command" >&2; exit 1; }
 done
+
+checksum_path="$zip_path.sha256"
+[[ -f "$checksum_path" ]] || { echo "Update ZIP checksum does not exist: $checksum_path" >&2; exit 1; }
+
+zip_dir="$(cd "$(dirname "$zip_path")" && pwd -P)"
+zip_name="$(basename "$zip_path")"
+checksum_name="$(basename "$checksum_path")"
+expected_checksum="$(sha256sum "$zip_path" | awk -v name="$zip_name" '{print $1 "  " name}')"
+actual_checksum="$(cat "$checksum_path")"
+[[ "$actual_checksum" == "$expected_checksum" ]] || {
+  echo "Update ZIP checksum file must contain the ZIP basename and exact SHA-256 digest." >&2
+  exit 1
+}
+(
+  cd "$zip_dir"
+  sha256sum --check --strict "$checksum_name" >/dev/null
+)
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
