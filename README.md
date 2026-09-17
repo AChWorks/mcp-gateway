@@ -45,12 +45,12 @@ This is the easiest installation method for aaPanel and compatible shared hostin
 
 1. Create a dedicated HTTPS domain/subdomain, for example `gateway.example.com`.
 2. Create a dedicated **empty** MySQL database and database user.
-3. Download `mcp-gateway-v1.1.2.zip` from the [v1.1.2 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.2).
+3. Download `mcp-gateway-v1.1.3.zip` from the [v1.1.3 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.3).
 4. Upload and extract the ZIP on the host. The archive contains only deployment/runtime files and already includes production Composer dependencies in `vendor/`.
 5. Point the domain document root / aaPanel running directory to the extracted package's `public/` directory. Example:
 
    ```text
-   /www/wwwroot/mcp-gateway-v1.1.2/public
+   /www/wwwroot/mcp-gateway-v1.1.3/public
    ```
 
 6. Make sure the PHP process can write to:
@@ -94,7 +94,7 @@ https://gateway.example.com/admin/login
 
 The installer never displays the MySQL password, `APP_KEY`, private keys, access tokens, or other generated secret material.
 
-> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-v1.1.2.zip` Release asset.
+> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-v1.1.3.zip` Release asset.
 
 ### aaPanel quick setup
 
@@ -104,9 +104,9 @@ A typical aaPanel setup is:
 Domain:          gateway.example.com
 PHP:             8.4
 Database:        dedicated MySQL database/user
-Application:     /www/wwwroot/mcp-gateway-v1.1.2
+Application:     /www/wwwroot/mcp-gateway-v1.1.3
 Running directory/document root:
-                 /www/wwwroot/mcp-gateway-v1.1.2/public
+                 /www/wwwroot/mcp-gateway-v1.1.3/public
 SSL:             enabled before /install
 ```
 
@@ -132,7 +132,7 @@ Operators who prefer source-based deployment can continue to use the existing CL
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.2 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.1.3 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
@@ -208,7 +208,7 @@ Do not place access tokens, refresh tokens, authorization codes, assertions, pas
 
 ## Connect WordPress sites
 
-Each WordPress site needs a compatible WP AI Bridge installation. V1 was validated against the WP AI Bridge contract at commit `37d1b39b8f53f4667d67c4effc00e01f7aa193a8`.
+Each WordPress site needs a compatible WP AI Bridge installation. The current Gateway contract is validated against WP AI Bridge v0.4.1 at commit `5c5bdadf1d5594c006913770ea7b2f540b32e22a`, including its canonical `wp-ai-bridge/*` Ability namespace.
 
 Before the first **Connect** attempt for a WordPress site, approve the Gateway as an additional OAuth client in that site's WP AI Bridge:
 
@@ -363,7 +363,7 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 
 ## Release status
 
-Current stable release: `v1.1.2`.
+Current stable release: `v1.1.3`.
 
 Recommended installations should use the named deployment ZIP attached to the GitHub Release rather than the generic source archive or moving `main` branch.
 

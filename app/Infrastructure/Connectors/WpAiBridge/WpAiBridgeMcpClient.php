@@ -18,7 +18,7 @@ final readonly class WpAiBridgeMcpClient
 
     private const EXECUTE_TOOL = 'mcp-adapter-execute-ability';
 
-    private const CATALOG_ABILITY = 'wp-native-builder/abilities-read';
+    private const CATALOG_ABILITY = 'wp-ai-bridge/abilities-read';
 
     public function __construct(
         private SiteConnectionService $connections,
