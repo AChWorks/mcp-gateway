@@ -38,6 +38,7 @@ for entry in .env.example LICENSE VERSION app artisan bootstrap composer.json co
 done
 
 cp -a "$repo_root/bin/mcp-gateway-web-updater.php" "$stage/update/WebUpdater.php"
+cp -a "$repo_root/bin/update-managed-public-paths.txt" "$stage/update/MANAGED_PUBLIC_PATHS"
 cp -a "$repo_root/bin/mcp-gateway-web-update-index.php" "$stage/public/update/index.php"
 printf '%s\n' "$version" > "$stage/update/UPDATE_VERSION"
 sha256sum "$stage/public/update/index.php" | awk '{print $1}' > "$stage/update/PUBLIC_ENTRY_SHA256"
@@ -45,7 +46,7 @@ sha256sum "$stage/public/update/index.php" | awk '{print $1}' > "$stage/update/P
 (
   cd "$stage/update"
   {
-    printf '%s\0' UPDATE_VERSION PUBLIC_ENTRY_SHA256 WebUpdater.php
+    printf '%s\0' UPDATE_VERSION PUBLIC_ENTRY_SHA256 MANAGED_PUBLIC_PATHS WebUpdater.php
     find payload -type f -print0 | LC_ALL=C sort -z
   } | xargs -0 sha256sum > manifest.sha256
 )

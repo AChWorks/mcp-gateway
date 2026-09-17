@@ -140,21 +140,29 @@ bash bin/verify-update-package.sh dist/mcp-gateway-update-local.zip
 
 The update ZIP must contain only private root `update/` staging and the minimal temporary `public/update/` entrypoint. Extracting it into an installed application root must not replace any normal application-managed path before the administrator explicitly confirms the update in the browser. The full production runtime payload stays under private `update/payload/`; `.env` and `storage/` are never included in that payload.
 
+`bin/update-managed-public-paths.txt` is the canonical, append-only ownership list for normal public runtime files. Add every newly shipped `public/` file to it. Do not remove an old Gateway-owned file path merely because the current payload no longer ships that file; retaining the path lets later updaters remove stale Gateway files without claiming the rest of `public/`.
+
 The MySQL-backed `Update Package` workflow downloads the real released `v1.1.2` deployment artifact, installs it, stages the candidate update ZIP exactly as an operator would, authenticates through the real administrator login, obtains normal CSRF state, and exercises `/update/` through both browser-update phases. The integration test verifies:
 
 - the live application remains unchanged immediately after ZIP extraction;
 - guest `/update/` access cannot trigger mutation and is redirected to administrator login;
 - installed/target version and integrity/preflight state are exposed only through the authenticated flow;
 - `.env` and persistent private state survive unchanged;
+- a protected, non-Gateway `public/.user.ini` plus an unknown file inside a shared public subdirectory survive both successful update and forced pre-migration restore unchanged;
 - stale application-managed files absent from the new release are removed;
+- a conflict on an explicitly Gateway-owned public file is rejected pre-mutation with the exact path while unknown public paths are ignored;
 - Laravel maintenance/cache/migration/`gateway:check` postflight completes;
-- the private code backup exists and backup count remains bounded;
+- the private code backup exists, excludes host-managed public state, and backup count remains bounded;
+- a different pre-migration installed-runtime failure automatically restores only from a separately revalidated intact backup, leaves migration state unchanged, resumes service, and clears updater state;
+- `bin/test-update-backup-integrity.sh` separately removes and content-corrupts a backed-up managed file after staging and proves both rejected backups stop before migration, do not trigger destructive restore, keep the candidate runtime unchanged, retain maintenance mode/state/backup evidence, and leave migration state unchanged;
 - same-version, downgrade, tampered-package, symlink-package, and invalid-target cases fail before mutation;
 - successful completion removes private update state, root `update/`, temporary `public/update/`, and the exact canonical uploaded update ZIP/checksum, leaving `/update/` unavailable.
 
 The fresh-install verifier also boots Laravel from the extracted package, rebuilds the Laravel package manifest, checks routes and Composer runtime identities, runs the web-installer preflight, and performs a migration smoke test. Dependency license/notice files and runtime resources are intentionally retained even when they add size.
 
-Normal CI runs both artifact builders/verifiers after the application test steps. Release publication repeats the real `v1.1.2` browser-update integration before publishing a new release. This is deliberate: tests generate ephemeral keys/cache/session state in the development checkout, and release packaging must prove that none of that state can leak into operator artifacts. Any future change that alters application runtime files, Composer dependencies, updater logic, package scripts, or release packaging must keep these gates green. If a new legitimate runtime file is required, update the builder/verifier intentionally in the same reviewed change rather than weakening the hygiene checks broadly.
+Normal CI runs both artifact builders/verifiers after the application test steps. Release publication must repeat **both** the real `v1.1.2` browser-update integration (`bin/test-update-package.sh`) and the backup-integrity fail-safe regression (`bin/test-update-backup-integrity.sh`) against the exact candidate artifacts before publishing a new release. This is deliberate: tests generate ephemeral keys/cache/session state in the development checkout, release packaging must prove that none of that state can leak into operator artifacts, and the updater's recovery boundary must remain fail-safe when its own backup is missing or corrupted.
+
+The browser-updater recovery semantics are one state machine across implementation, tests, operator documentation, and release notes. Any change to that state machine must update `README.md`, `docs/DEPLOYMENT.md`, the relevant repository-owned updater regressions, and release-note behavior in the same reviewed change. Any future change that alters application runtime files, Composer dependencies, updater logic, package scripts, or release packaging must keep these gates green. If a new legitimate runtime file is required, update the builder/verifier intentionally in the same reviewed change rather than weakening the hygiene checks broadly.
 
 ## MCP bootstrap compatibility fixture
 

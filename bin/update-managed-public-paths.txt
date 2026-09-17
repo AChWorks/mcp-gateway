@@ -1,0 +1,5 @@
+.htaccess
+css/admin.css
+index.php
+install.php
+robots.txt

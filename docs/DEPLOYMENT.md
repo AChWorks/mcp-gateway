@@ -337,10 +337,13 @@ For an authorized upgrade:
 
 Before mutation, the browser updater verifies its private manifest and temporary public-entry hash, rejects symbolic links/unsafe targets, validates semantic version direction, confirms the target is an installed deployment-ZIP layout, and runs the current Gateway environment check. It then:
 
-- puts Laravel into maintenance mode;
-- stores a code-only backup under `storage/app/private/update-backups/`;
+- verifies that the exact Gateway-managed paths used by the mutation/recovery model are readable and replaceable;
+- creates and validates a code-only recovery backup under `storage/app/private/update-backups/` before maintenance mode;
+- puts Laravel into maintenance mode only after that recovery state is credible;
 - preserves `.env` and the entire persistent `storage/` tree;
 - replaces all application-managed release paths rather than overlaying them, preventing deleted old files from lingering;
+- replaces only explicitly Gateway-owned public files and preserves unknown/host-managed files under `public/`;
+- verifies the complete installed managed runtime against the package hashes before crossing the migration boundary;
 - runs `php artisan optimize:clear` through Laravel;
 - runs migrations with `--force`;
 - runs `gateway:check`;
@@ -349,7 +352,31 @@ Before mutation, the browser updater verifies its private manifest and temporary
 - removes private update state, root `update/` staging, and `public/update/` after success so the temporary update URL cannot be reused;
 - removes only the exact canonical uploaded `mcp-gateway-update-vX.Y.Z.zip` and matching checksum when those files are present in the application root; arbitrarily renamed files are not deleted.
 
-If failure occurs before migrations begin, the updater automatically restores the previous application files and resumes the application. If migration may already have started, it does **not** perform an automatic code/database rollback and intentionally leaves maintenance mode in place. The retained code backup is evidence/recovery material, not proof that a database rollback is safe. Do not re-extract or start another update in that state; reconcile schema/data state first and follow release-specific rollback or roll-forward guidance.
+#### Browser updater recovery state machine
+
+Backup creation and its first integrity check happen before maintenance mode. If that initial recovery proof fails, the updater aborts before managed application files are changed; no automatic restore is needed and the application remains on the original runtime.
+
+Once maintenance mode and managed-file replacement begin, "pre-migration failure" alone is not sufficient to infer that rollback occurred. Distinguish these recovery outcomes:
+
+| State | Automatic action | Operator-visible result |
+| --- | --- | --- |
+| Recovery backup is credible, a different failure occurs before migration starts, and guarded restore completes | Revalidate the backup immediately before restore, restore the previous Gateway-managed application files, clear updater state, and resume the application | Previous managed runtime is restored; migration state is unchanged |
+| Recovery backup is credible but the guarded restore itself cannot complete | Stop automatic recovery; do not start migration | Keep maintenance mode active and retain updater state plus backup evidence. The managed runtime may be partially restored/replaced and requires manual recovery |
+| Recovery backup is rejected when an automatic restore or the final pre-migration boundary needs it | **Do not restore from the rejected backup and do not start migration** | Keep maintenance mode active and retain updater state plus backup evidence for manual reconciliation. Do not infer that old code was restored: after a completed stage the candidate runtime remains installed, while an earlier replacement failure may leave a partially replaced managed tree |
+| Database migration may have started | **Do not perform blind code/database rollback** | Keep maintenance mode active and retain recovery evidence until schema/data state is reconciled and a release-specific roll-forward or rollback procedure is selected |
+
+For either retained-maintenance pre-migration failure, do not re-extract, start another update, delete updater state, or discard the retained backup merely because migration did not start. A failed backup-integrity check means automatic restore is intentionally unavailable; a failed guarded restore means automatic recovery did not complete. Treat the current managed runtime as recovery-required until its exact state is verified. The retained code backup is evidence/recovery material, not proof that a database rollback or code restore is safe.
+
+#### Public ownership boundary
+
+`public/` is shared with the hosting/control-panel layer. MCP Gateway owns public **file paths**, not the entire directory or shared subdirectories. The canonical repository list is `bin/update-managed-public-paths.txt`, and each update artifact carries the checksummed copy as `update/MANAGED_PUBLIC_PATHS`.
+
+- Every public file shipped by the release payload must be declared in that list.
+- Once a public file path becomes Gateway-owned, keep the path declared even if a later release removes the file from the payload; the retained entry is the tombstone for deterministic stale-file cleanup.
+- A listed path identifies a file only. Listing a directory must never imply ownership of unknown descendants.
+- `public/update/` is separate temporary updater staging and is removed after a successful update.
+- Any unlisted path is host/operator-managed and must survive both update and pre-migration restore unchanged. This includes aaPanel `public/.user.ini` and unknown files inside otherwise shared directories.
+- An update must not require weakening ownership or filesystem protections on host-managed public state.
 
 The update ZIP is intentionally unsupported for Git/source checkouts; use the source procedure below for those installations.
 
