@@ -8,10 +8,10 @@
  * of reproducing their error mapping in a Gateway fixture.
  */
 
-use WP_Native_Builder_Bridge\Auth\Approved_OAuth_Clients;
-use WP_Native_Builder_Bridge\Auth\Client_Assertion_Validator;
-use WP_Native_Builder_Bridge\Auth\OAuth_Server;
-use WP_Native_Builder_Bridge\Auth\OAuth_Store;
+use WP_AI_Bridge\Auth\Approved_OAuth_Clients;
+use WP_AI_Bridge\Auth\Client_Assertion_Validator;
+use WP_AI_Bridge\Auth\OAuth_Server;
+use WP_AI_Bridge\Auth\OAuth_Store;
 
 function gateway_bridge_contract_assert($condition, string $message): void
 {

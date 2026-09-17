@@ -93,7 +93,7 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertSame('object', $betaExact['catalog']['items'][0]['input_schema']['type']);
 
         self::assertSame(['alpha.example.test', 'beta.example.test'], array_column($this->toolCalls, 'host'));
-        self::assertSame(['wp-native-builder/abilities-read', 'wp-native-builder/abilities-read'], array_column($this->toolCalls, 'ability'));
+        self::assertSame(['wp-ai-bridge/abilities-read', 'wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'));
         self::assertSame(['Bearer alpha-access', 'Bearer beta-access'], array_column($this->toolCalls, 'authorization'));
     }
 
@@ -385,7 +385,7 @@ final class MultiSiteRoutingTest extends TestCase
             ], 200);
         }
 
-        if ($ability === 'wp-native-builder/abilities-read') {
+        if ($ability === 'wp-ai-bridge/abilities-read') {
             $parameters = $arguments['parameters'] ?? [];
             $exact = ($parameters['action'] ?? 'list') === 'get';
             $itemName = $exact ? (string) ($parameters['name'] ?? '') : $siteId.'/demo';

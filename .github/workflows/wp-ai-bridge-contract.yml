@@ -68,7 +68,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ach1992/wp-ai-bridge
-          ref: 37d1b39b8f53f4667d67c4effc00e01f7aa193a8
+          ref: 5c5bdadf1d5594c006913770ea7b2f540b32e22a
           path: .contract/wp-ai-bridge
           persist-credentials: false
 
@@ -83,4 +83,4 @@ jobs:
         run: >-
           bash bin/check-wp-ai-bridge-contract.sh
           .contract/wp-ai-bridge
-          37d1b39b8f53f4667d67c4effc00e01f7aa193a8
+          5c5bdadf1d5594c006913770ea7b2f540b32e22a
