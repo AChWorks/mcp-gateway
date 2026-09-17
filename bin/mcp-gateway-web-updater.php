@@ -29,8 +29,7 @@ final class WebUpdater
     public function __construct(
         private readonly string $basePath,
         private readonly string $packagePath,
-    ) {
-    }
+    ) {}
 
     /** @return array{installed:string,target:string,checks:array<string,bool>} */
     public function inspect(): array
@@ -145,7 +144,6 @@ final class WebUpdater
 
         $from = $this->requireStateString($state, 'from');
         $to = $this->requireStateString($state, 'to');
-        $backup = $this->requireStateString($state, 'backup');
         $phase = $this->requireStateString($state, 'phase');
 
         if ($phase !== 'files-replaced') {
@@ -202,6 +200,7 @@ final class WebUpdater
                 return null;
             }
             $continuation = $state['continuation_token'] ?? null;
+
             return is_string($continuation) && preg_match('/^[a-f0-9]{64}$/', $continuation) ? $continuation : null;
         } catch (Throwable) {
             return null;
@@ -224,11 +223,6 @@ final class WebUpdater
         }
 
         return null;
-    }
-
-    public function hasState(): bool
-    {
-        return is_file($this->statePath());
     }
 
     private function assertBaseLayout(): void
@@ -328,6 +322,7 @@ final class WebUpdater
         foreach (self::MANAGED as $entry) {
             if ($entry === 'public') {
                 $this->replacePublicPreservingUpdater();
+
                 continue;
             }
 
@@ -427,6 +422,7 @@ final class WebUpdater
                     }
                     $this->copyPath($backup.'/files/public/'.$item, $public.'/'.$item);
                 }
+
                 continue;
             }
 
@@ -548,6 +544,7 @@ final class WebUpdater
             return false;
         }
         $expected = $state['browser_token_hash'] ?? null;
+
         return is_string($expected) && preg_match('/^[a-f0-9]{64}$/', $expected) && hash_equals($expected, hash('sha256', $browserToken));
     }
 
@@ -565,6 +562,7 @@ final class WebUpdater
         if (! is_string($value) || $value === '') {
             throw new RuntimeException('Updater state is missing '.$key.'.');
         }
+
         return $value;
     }
 
@@ -575,6 +573,7 @@ final class WebUpdater
         if (! preg_match('/^\\d+\\.\\d+\\.\\d+$/', $version)) {
             throw new RuntimeException($label.' is invalid.');
         }
+
         return $version;
     }
 
@@ -598,6 +597,7 @@ final class WebUpdater
                 return true;
             }
         }
+
         return false;
     }
 
@@ -608,6 +608,7 @@ final class WebUpdater
         if ($items === false) {
             throw new RuntimeException('Could not inspect update payload layout.');
         }
+
         return array_values(array_filter($items, static fn (string $item): bool => $item !== '.' && $item !== '..'));
     }
 
@@ -637,6 +638,7 @@ final class WebUpdater
             }
         };
         $walk($root, $prefix);
+
         return $files;
     }
 
@@ -644,7 +646,7 @@ final class WebUpdater
     {
         return $path !== ''
             && ! str_starts_with($path, '/')
-            && ! str_contains($path, "\\\\")
+            && ! str_contains($path, '\\')
             && ! preg_match('#(^|/)\\.\\.(/|$)#', $path)
             && ! str_contains($path, "\0");
     }
@@ -663,6 +665,7 @@ final class WebUpdater
             if (! copy($source, $target)) {
                 throw new RuntimeException('Could not copy update file: '.basename($source).'.');
             }
+
             return;
         }
         if (! is_dir($source)) {
@@ -692,6 +695,7 @@ final class WebUpdater
             if (! @unlink($path)) {
                 throw new RuntimeException('Could not remove path: '.$path.'.');
             }
+
             return;
         }
         $items = scandir($path);
