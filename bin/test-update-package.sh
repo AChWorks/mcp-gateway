@@ -112,8 +112,8 @@ inspect_package() {
   local base="$1"
   local package="$2"
   php -r '
-    [$base, $package] = array_slice($argv, 1);
-    require $base."/vendor/autoload.php";
+    [$base, $package, $autoload] = array_slice($argv, 1);
+    require $autoload;
     require $package."/WebUpdater.php";
     $updater = new McpGatewayUpdate\WebUpdater($base, $package);
     try {
@@ -123,7 +123,7 @@ inspect_package() {
       fwrite(STDERR, $e->getMessage()."\n");
       exit(1);
     }
-  ' "$base" "$package"
+  ' "$base" "$package" "$target/vendor/autoload.php"
 }
 
 # Browser preflight must reject same-version and downgrade targets before mutation.
