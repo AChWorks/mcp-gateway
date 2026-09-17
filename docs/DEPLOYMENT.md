@@ -281,6 +281,16 @@ CLI operators can additionally verify the configured ChatGPT client metadata con
 php artisan gateway:oauth-client-check --refresh
 ```
 
+Before using **Connect** for any WP AI Bridge site, the site's WordPress administrator must approve the Gateway's exact additional OAuth client identity under **WP AI Bridge -> OAuth Clients -> Approved client metadata URLs**:
+
+```text
+<GATEWAY_ORIGIN>/oauth/client.json
+```
+
+The Gateway metadata document is authoritative for its redirect and signing-key endpoints. WP AI Bridge discovers the exact `<GATEWAY_ORIGIN>/oauth/sites/callback` redirect URI and `<GATEWAY_ORIGIN>/oauth/jwks.json` JWKS URI from that document; do not configure those URLs separately and never copy a private key or shared secret into WordPress. Keep the built-in direct ChatGPT client available when direct ChatGPT -> WP AI Bridge access is desired. Additional-client approval only makes the Gateway eligible to connect: WP AI Bridge access groups and the WordPress user authorizing OAuth still bound the resulting authority.
+
+If an existing site later reports `invalid_client`, first confirm the exact current client metadata URL is still approved and reachable. A Gateway reinstall or move that changes `GATEWAY_ORIGIN` creates a different client identity and requires approval of the new metadata URL before reconnecting. Intentional Bridge-client key rotation on the same origin keeps the client ID stable; the metadata-declared JWKS endpoint remains the source of truth and WP AI Bridge performs bounded key refresh behavior rather than requiring a manually pasted JWKS URL.
+
 Finally, sign in at `/admin/login` and confirm the authenticated Gateway connection-information page shows the canonical public MCP/discovery information without token/private-key values.
 
 Do not include access tokens, refresh tokens, authorization codes, client assertions, passwords, `APP_KEY`, `.env` contents, or private-key contents in deployment logs/screenshots used as evidence.

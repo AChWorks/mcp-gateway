@@ -210,6 +210,21 @@ Do not place access tokens, refresh tokens, authorization codes, assertions, pas
 
 Each WordPress site needs a compatible WP AI Bridge installation. V1 was validated against the WP AI Bridge contract at commit `37d1b39b8f53f4667d67c4effc00e01f7aa193a8`.
 
+Before the first **Connect** attempt for a WordPress site, approve the Gateway as an additional OAuth client in that site's WP AI Bridge:
+
+1. Confirm the Gateway publishes its client metadata at the exact URL derived from its canonical origin:
+
+   ```text
+   <GATEWAY_ORIGIN>/oauth/client.json
+   ```
+
+   For example, `https://gateway.example.com/oauth/client.json`.
+2. In WordPress, open **WP AI Bridge -> OAuth Clients**.
+3. Add that exact client metadata URL under **Approved client metadata URLs** and save. Do not add a callback URL, JWKS URL, shared secret, or private key.
+4. Leave the built-in ChatGPT client in place if direct ChatGPT -> WP AI Bridge access is also wanted. It is independent from the additional-client list and does not need to be added manually.
+
+WP AI Bridge fetches the approved client metadata itself. The document supplies the Gateway's exact `/oauth/sites/callback` redirect URI and `/oauth/jwks.json` signing-key URL, so operators must not paste either value separately into WordPress. Approval grants connection eligibility only; WP AI Bridge access groups and the authorizing WordPress user's capabilities remain authoritative for every operation.
+
 For each site:
 
 1. Sign in to MCP Gateway at:
@@ -230,6 +245,8 @@ For each site:
 Each site stores an independent encrypted authorization relationship. Disconnecting or revoking one site does not grant or revoke permissions on another site.
 
 WP AI Bridge access groups and WordPress capabilities still control what the Gateway can do. If Bridge denies an operation, the Gateway preserves that denial instead of bypassing it.
+
+If WordPress rejects the Gateway with `invalid_client` or reports that the OAuth client is not approved, verify that the exact current `<GATEWAY_ORIGIN>/oauth/client.json` URL is still present under **WP AI Bridge -> OAuth Clients** and is publicly reachable. After moving/reinstalling the Gateway on a different canonical origin, approve the new metadata URL before reconnecting. After intentionally replacing the Gateway Bridge-client signing keypair while keeping the same origin, keep the same approved metadata URL; WP AI Bridge obtains signing keys from the metadata-declared JWKS endpoint and may need a bounded JWKS refresh when it first sees the new key. Do not work around stale approval/key state by pasting tokens, callbacks, JWKS URLs, or shared secrets.
 
 ## Connect ChatGPT
 
