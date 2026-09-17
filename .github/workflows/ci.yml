@@ -92,4 +92,4 @@ jobs:
           bash bin/build-release-package.sh mcp-gateway-ci
           bash bin/verify-release-package.sh dist/mcp-gateway-ci.zip mcp-gateway-ci
           bash bin/build-update-package.sh mcp-gateway-update-ci dist/mcp-gateway-ci
-          bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip mcp-gateway-update-ci
+          bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip
