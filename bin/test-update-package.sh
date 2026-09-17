@@ -194,28 +194,30 @@ for attempt in $(seq 1 40); do
 done
 
 https_header='X-Forwarded-Proto: https'
+jar="$tmp/admin.cookies"
 
-guest_code="$(curl -sS -o "$tmp/guest-update.html" -D "$tmp/guest-update.headers" -w '%{http_code}' -H "$https_header" "$base_url/update/")"
+guest_code="$(curl -sS -c "$jar" -b "$jar" -o "$tmp/guest-update.html" -D "$tmp/guest-update.headers" -w '%{http_code}' -H "$https_header" "$base_url/update/")"
 [[ "$guest_code" == "302" ]] || { cat "$tmp/guest-update.headers" >&2; echo "Guest browser updater access was not redirected to admin login." >&2; exit 1; }
 grep -i '^Location: .*/admin/login' "$tmp/guest-update.headers" >/dev/null || { echo "Guest updater redirect did not target admin login." >&2; exit 1; }
+grep -i '^Set-Cookie:' "$tmp/guest-update.headers" >/dev/null || { echo "Guest updater redirect did not preserve the intended update session." >&2; exit 1; }
 
-jar="$tmp/admin.cookies"
 curl -fsS -c "$jar" -b "$jar" -H "$https_header" "$base_url/admin/login" > "$tmp/login.html"
 login_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/login.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
 [[ -n "$login_csrf" ]] || { echo "Could not extract admin login CSRF token." >&2; exit 1; }
 
-curl -fsS -L -c "$jar" -b "$jar" -H "$https_header" \
+# Follow the normal login redirect. The preserved intended URL must return the
+# operator directly to /update/ rather than requiring the URL to be opened a
+# second time.
+curl -fsS -L -D "$tmp/login-flow.headers" -c "$jar" -b "$jar" -H "$https_header" \
   --data-urlencode "_token=$login_csrf" \
   --data-urlencode 'email=admin@example.test' \
   --data-urlencode 'password=CorrectHorse!234' \
-  "$base_url/admin/login" > "$tmp/login-result.html"
-grep -F 'Gateway dashboard' "$tmp/login-result.html" >/dev/null || { echo "Administrator login did not reach the dashboard." >&2; exit 1; }
+  "$base_url/admin/login" > "$tmp/update.html"
+grep -F "Installed:</strong> $old_version" "$tmp/update.html" >/dev/null || { cat "$tmp/update.html" >&2; echo "Administrator login did not return directly to the browser updater." >&2; exit 1; }
+grep -F "Target:</strong> $new_version" "$tmp/update.html" >/dev/null || { echo "Browser updater did not show the target version after login." >&2; exit 1; }
 
-curl -fsS -D "$tmp/update.headers" -c "$jar" -b "$jar" -H "$https_header" "$base_url/update/" > "$tmp/update.html"
-grep -F "Installed:</strong> $old_version" "$tmp/update.html" >/dev/null || { echo "Browser updater did not show the installed version." >&2; exit 1; }
-grep -F "Target:</strong> $new_version" "$tmp/update.html" >/dev/null || { echo "Browser updater did not show the target version." >&2; exit 1; }
 update_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/update.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
-update_cookie="$(grep -i '^Set-Cookie: mcp_gateway_update_session=' "$tmp/update.headers" | tail -n 1 | sed -E 's/^[^=]+=([^;]+).*/\1/' | tr -d '\r')"
+update_cookie="$(grep -i '^Set-Cookie: mcp_gateway_update_session=' "$tmp/login-flow.headers" | tail -n 1 | sed -E 's/^[^=]+=([^;]+).*/\1/' | tr -d '\r')"
 [[ -n "$update_csrf" && "$update_cookie" =~ ^[a-f0-9]{64}$ ]] || { echo "Browser updater session/CSRF material was not issued." >&2; exit 1; }
 
 admin_cookie_header="$(awk '
