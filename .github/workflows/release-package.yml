@@ -8,8 +8,12 @@ on:
       - VERSION
       - .github/workflows/release-package.yml
       - bin/build-release-package.sh
+      - bin/build-update-package.sh
+      - bin/mcp-gateway-update.sh
+      - bin/test-update-package.sh
       - bin/prune-production-vendor.php
       - bin/verify-release-package.sh
+      - bin/verify-update-package.sh
 
 permissions:
   contents: write
@@ -21,7 +25,23 @@ concurrency:
 jobs:
   package:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 18
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: mcp_gateway_test
+          MYSQL_USER: mcp_gateway
+          MYSQL_PASSWORD: test-password
+          MYSQL_ROOT_PASSWORD: root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
 
     steps:
       - name: Check out repository
@@ -51,12 +71,13 @@ jobs:
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "VERSION must contain a semantic version such as 1.1.3" >&2
+            echo "VERSION must contain a semantic version such as 1.1.4" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "package=mcp-gateway-v$version" >> "$GITHUB_OUTPUT"
+          echo "update_package=mcp-gateway-update-v$version" >> "$GITHUB_OUTPUT"
 
       - name: Check release state
         id: publish
@@ -77,17 +98,53 @@ jobs:
           fi
           echo "needed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Build deployment ZIP from clean production staging
+      - name: Build fresh-install deployment ZIP
         if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
         run: bash bin/build-release-package.sh "$PACKAGE"
 
-      - name: Verify deployment ZIP contents and runtime
+      - name: Verify fresh-install deployment ZIP
         if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
         run: bash bin/verify-release-package.sh "dist/$PACKAGE.zip" "$PACKAGE"
+
+      - name: Build manual update ZIP
+        if: steps.publish.outputs.needed == 'true'
+        env:
+          PACKAGE: ${{ steps.release.outputs.package }}
+          UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
+        run: bash bin/build-update-package.sh "$UPDATE_PACKAGE" "dist/$PACKAGE"
+
+      - name: Verify manual update ZIP
+        if: steps.publish.outputs.needed == 'true'
+        env:
+          UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
+        run: bash bin/verify-update-package.sh "dist/$UPDATE_PACKAGE.zip" "$UPDATE_PACKAGE"
+
+      - name: Download released v1.1.2 deployment baseline
+        if: steps.publish.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/baseline
+          gh release download v1.1.2 --pattern 'mcp-gateway-v1.1.2.zip' --dir dist/baseline
+
+      - name: Verify released-baseline manual update
+        if: steps.publish.outputs.needed == 'true'
+        env:
+          UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
+          UPDATE_TEST_DB_HOST: 127.0.0.1
+          UPDATE_TEST_DB_PORT: 3306
+          UPDATE_TEST_DB_DATABASE: mcp_gateway_test
+          UPDATE_TEST_DB_USERNAME: mcp_gateway
+          UPDATE_TEST_DB_PASSWORD: test-password
+        run: >-
+          bash bin/test-update-package.sh
+          dist/$UPDATE_PACKAGE.zip
+          $UPDATE_PACKAGE
+          dist/baseline/mcp-gateway-v1.1.2.zip
 
       - name: Publish GitHub release
         if: steps.publish.outputs.needed == 'true'
@@ -96,25 +153,34 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
           PACKAGE: ${{ steps.release.outputs.package }}
+          UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
         shell: bash
         run: |
           set -euo pipefail
-          cat > dist/release-notes.md <<EOF
-          MCP Gateway v$VERSION ships a clean deployment-only ZIP assembled in isolated production staging from the committed Composer lockfile.
+          cat > dist/release-notes.md <<EOF_NOTES
+          MCP Gateway v$VERSION ships two verified operator artifacts built from the same production runtime tree.
 
-          ## Recommended installation
+          ## Fresh installation
 
           Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
 
-          The deployment ZIP contains only install/runtime application files, production Composer dependencies, required runtime manifests/resources, license/notice material, version identity, and empty writable runtime directories. Repository metadata, development dependencies/tools, package docs/examples/tests, generated test keys, sessions, caches, logs, and other transient build state are not shipped.
+          ## Manual update
 
-          The package is boot-smoke-tested after extraction before publication. Git and Composer are not required on the target host. The Git/Composer/Artisan source installation path remains supported for advanced operators.
+          Existing deployment-ZIP installations can download \`$UPDATE_PACKAGE.zip\`, extract it outside the live Gateway directory, and run:
+
+          \`bash update.sh /absolute/path/to/existing-mcp-gateway\`
+
+          The updater verifies the package and target first, preserves \`.env\` and persistent \`storage/\`, creates a bounded code backup, replaces application-managed files deterministically, clears Laravel caches, applies migrations, runs \`gateway:check\`, and rejects same-version or downgrade attempts. Git and Composer are not required on the target host.
+
+          If a failure happens after database migration may have started, the updater intentionally does not claim an automatic database rollback; it leaves maintenance mode in place and reports the retained code backup for operator-directed recovery.
 
           No production server is deployed or modified by publishing this release.
-          EOF
+          EOF_NOTES
           gh release create "$TAG" \
             "dist/$PACKAGE.zip" \
             "dist/$PACKAGE.zip.sha256" \
+            "dist/$UPDATE_PACKAGE.zip" \
+            "dist/$UPDATE_PACKAGE.zip.sha256" \
             --target "$GITHUB_SHA" \
             --title "MCP Gateway $TAG" \
             --notes-file dist/release-notes.md

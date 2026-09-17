@@ -39,7 +39,7 @@ Composer 2 and Git are required only for the advanced source installation path. 
 On aaPanel, `/www/wwwroot/` is the normal website base location. Example:
 
 ```text
-APP_ROOT=/www/wwwroot/mcp-gateway-v1.1.3
+APP_ROOT=/www/wwwroot/mcp-gateway-v1.1.4
 GATEWAY_ORIGIN=https://gateway.example.com
 ```
 
@@ -91,7 +91,7 @@ For advanced Composer/Artisan deployment, run Composer and Artisan as the applic
 For normal aaPanel/shared-hosting installs, download the named deployment package attached to the GitHub Release:
 
 ```text
-mcp-gateway-v1.1.3.zip
+mcp-gateway-v1.1.4.zip
 ```
 
 Do not use GitHub's generic **Source code (zip)** archive; that archive does not contain production `vendor/` dependencies. The named deployment ZIP contains only the application/runtime files required for installation and operation.
@@ -138,7 +138,7 @@ For development or operators who explicitly prefer source deployment:
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.3 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.1.4 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
@@ -319,38 +319,53 @@ V1 recovery validation proved this set on a controlled two-site installation. Pr
 
 The web installer is **fresh-install only**. Never use `/install` to upgrade an existing Gateway.
 
-For an authorized staging/release upgrade:
+### Deployment-ZIP installations
 
-1. Capture the backup/recovery set above.
-2. Record the current deployed release identity.
-3. Replace application code with the intended reviewed release while preserving `.env` and `storage/app/private/`.
-4. Ensure the intended release dependencies are present. Source deployments use:
+Each release publishes a separate update artifact named `mcp-gateway-update-vX.Y.Z.zip`. It contains the verified production runtime tree plus a standalone `update.sh`; Git and Composer are not required on the target host.
 
-   ```bash
-   composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
-   composer check-platform-reqs --no-dev
-   php artisan optimize:clear
-   ```
+For an authorized upgrade:
 
-   Named deployment ZIPs already contain the exact verified production dependency tree and do not require Composer on the target host.
-
-5. Apply migrations:
+1. Capture the recovery set above when the release contains or may contain migrations.
+2. Download the exact named update ZIP for the intended release and, when practical, compare it with its published `.sha256` file.
+3. Extract the update ZIP outside the live Gateway directory.
+4. Run:
 
    ```bash
-   php artisan migrate --force
+   bash update.sh /absolute/path/to/existing-mcp-gateway
    ```
 
-6. Re-run:
+5. Confirm the updater reports the intended installed version and a successful `gateway:check`.
+6. Repeat the safe HTTP verification from this document.
 
-   ```bash
-   php artisan gateway:check
-   ```
+Before mutation, `update.sh` verifies its internal manifest, rejects symbolic links/unsafe targets, validates semantic version direction, confirms the target is an installed deployment-ZIP layout, and runs the current Gateway environment check. It then:
 
-7. Repeat the safe HTTP verification from this document.
+- puts Laravel into maintenance mode;
+- stores a code-only backup under `storage/app/private/update-backups/`;
+- preserves `.env` and the entire persistent `storage/` tree;
+- replaces all application-managed release paths rather than overlaying them, preventing deleted old files from lingering;
+- runs `php artisan optimize:clear`;
+- runs `php artisan migrate --force --no-interaction`;
+- runs `php artisan gateway:check --no-interaction`;
+- resumes the application only after successful postflight validation;
+- retains only the three newest updater-created code backups.
 
-Do not promise zero-downtime schema changes unless the exact release has been designed and tested for them.
+If failure occurs before migrations begin, the updater automatically restores the previous application files. If migration may already have started, it does **not** perform an automatic code/database rollback and intentionally leaves maintenance mode in place. The retained code backup is evidence/recovery material, not proof that a database rollback is safe. Reconcile schema/data state first and follow release-specific rollback or roll-forward guidance.
 
-If rollback is required, restore the previous reviewed code **and** reconcile database state. Do not blindly run `migrate:rollback` after an unknown or partially completed failure. When schema/data compatibility is uncertain, restore the pre-upgrade database backup or follow release-specific roll-forward/rollback instructions.
+The update ZIP is intentionally unsupported for Git/source checkouts; use the source procedure below for those installations.
+
+### Source/Composer installations
+
+For source deployments, move to the reviewed release and run:
+
+```bash
+composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+composer check-platform-reqs --no-dev
+php artisan optimize:clear
+php artisan migrate --force
+php artisan gateway:check
+```
+
+Do not promise zero-downtime schema changes unless the exact release has been designed and tested for them. Do not blindly run `migrate:rollback` after an unknown or partially completed failure. When schema/data compatibility is uncertain, restore the pre-upgrade database backup or follow release-specific roll-forward/rollback instructions.
 
 ## 13. Current external references
 

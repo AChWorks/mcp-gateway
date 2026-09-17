@@ -1,0 +1,115 @@
+name: Update Package
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - VERSION
+      - 'app/**'
+      - 'bootstrap/**'
+      - 'config/**'
+      - 'database/migrations/**'
+      - 'public/**'
+      - 'resources/**'
+      - 'routes/**'
+      - composer.json
+      - composer.lock
+      - 'bin/build-release-package.sh'
+      - 'bin/build-update-package.sh'
+      - 'bin/mcp-gateway-update.sh'
+      - 'bin/prune-production-vendor.php'
+      - 'bin/test-update-package.sh'
+      - 'bin/verify-update-package.sh'
+      - '.github/workflows/update-package.yml'
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - VERSION
+      - 'app/**'
+      - 'bootstrap/**'
+      - 'config/**'
+      - 'database/migrations/**'
+      - 'public/**'
+      - 'resources/**'
+      - 'routes/**'
+      - composer.json
+      - composer.lock
+      - 'bin/build-release-package.sh'
+      - 'bin/build-update-package.sh'
+      - 'bin/mcp-gateway-update.sh'
+      - 'bin/prune-production-vendor.php'
+      - 'bin/test-update-package.sh'
+      - 'bin/verify-update-package.sh'
+      - '.github/workflows/update-package.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upgrade-from-v1-1-2:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: mcp_gateway_test
+          MYSQL_USER: mcp_gateway
+          MYSQL_PASSWORD: test-password
+          MYSQL_ROOT_PASSWORD: root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring, openssl, pdo_mysql, sodium
+          coverage: none
+          tools: composer:v2
+
+      - name: Build and verify update candidate
+        run: |
+          bash bin/build-release-package.sh mcp-gateway-update-test-runtime
+          bash bin/build-update-package.sh mcp-gateway-update-ci dist/mcp-gateway-update-test-runtime
+          bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip mcp-gateway-update-ci
+
+      - name: Download released v1.1.2 deployment baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/baseline
+          gh release download v1.1.2 --pattern 'mcp-gateway-v1.1.2.zip' --dir dist/baseline
+
+      - name: Verify v1.1.2 to candidate manual update
+        env:
+          UPDATE_TEST_DB_HOST: 127.0.0.1
+          UPDATE_TEST_DB_PORT: 3306
+          UPDATE_TEST_DB_DATABASE: mcp_gateway_test
+          UPDATE_TEST_DB_USERNAME: mcp_gateway
+          UPDATE_TEST_DB_PASSWORD: test-password
+        run: >-
+          bash bin/test-update-package.sh
+          dist/mcp-gateway-update-ci.zip
+          mcp-gateway-update-ci
+          dist/baseline/mcp-gateway-v1.1.2.zip

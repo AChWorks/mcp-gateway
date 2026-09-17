@@ -45,12 +45,12 @@ This is the easiest installation method for aaPanel and compatible shared hostin
 
 1. Create a dedicated HTTPS domain/subdomain, for example `gateway.example.com`.
 2. Create a dedicated **empty** MySQL database and database user.
-3. Download `mcp-gateway-v1.1.3.zip` from the [v1.1.3 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.3).
+3. Download `mcp-gateway-v1.1.4.zip` from the [v1.1.4 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.4).
 4. Upload and extract the ZIP on the host. The archive contains only deployment/runtime files and already includes production Composer dependencies in `vendor/`.
 5. Point the domain document root / aaPanel running directory to the extracted package's `public/` directory. Example:
 
    ```text
-   /www/wwwroot/mcp-gateway-v1.1.3/public
+   /www/wwwroot/mcp-gateway-v1.1.4/public
    ```
 
 6. Make sure the PHP process can write to:
@@ -94,7 +94,7 @@ https://gateway.example.com/admin/login
 
 The installer never displays the MySQL password, `APP_KEY`, private keys, access tokens, or other generated secret material.
 
-> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-v1.1.3.zip` Release asset.
+> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-v1.1.4.zip` Release asset.
 
 ### aaPanel quick setup
 
@@ -104,9 +104,9 @@ A typical aaPanel setup is:
 Domain:          gateway.example.com
 PHP:             8.4
 Database:        dedicated MySQL database/user
-Application:     /www/wwwroot/mcp-gateway-v1.1.3
+Application:     /www/wwwroot/mcp-gateway-v1.1.4
 Running directory/document root:
-                 /www/wwwroot/mcp-gateway-v1.1.3/public
+                 /www/wwwroot/mcp-gateway-v1.1.4/public
 SSL:             enabled before /install
 ```
 
@@ -132,7 +132,7 @@ Operators who prefer source-based deployment can continue to use the existing CL
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.3 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch v1.1.4 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
@@ -307,15 +307,28 @@ The web panel supports adding/editing site metadata, connect/reconnect/disconnec
 
 ## Upgrade
 
-The web installer is only for a **fresh installation**. Do not use it to upgrade an existing Gateway.
+The web installer is only for a **fresh installation**. Do not use `/install` to upgrade an existing Gateway.
 
-Before every migration-bearing upgrade, preserve one recovery set containing:
+### Recommended: manual update ZIP
 
-- a consistent MySQL database backup;
-- the matching `.env` / `APP_KEY` through your approved secret-backup mechanism;
-- the Gateway OAuth signing keypair;
-- the Gateway-to-Bridge signing keypair;
-- the currently deployed release tag/commit and the corresponding repository `composer.lock` identity.
+Deployment-ZIP installations can be updated without Git or Composer on the production host.
+
+1. Download the named `mcp-gateway-update-vX.Y.Z.zip` asset from the intended GitHub Release.
+2. Optionally verify it with the accompanying `.sha256` file.
+3. Upload and extract the update ZIP **outside** the live Gateway directory, for example under a temporary directory in your account.
+4. From the extracted update directory, run one command against the existing Gateway root:
+
+   ```bash
+   bash update.sh /absolute/path/to/existing-mcp-gateway
+   ```
+
+The updater validates the package and target before changing files. It refuses same-version/downgrade attempts, rejects unsafe package layouts/symlinks, runs the current Gateway preflight, enters Laravel maintenance mode, retains a bounded code backup under `storage/app/private/update-backups/`, replaces application-managed files deterministically, preserves the production `.env` and all persistent `storage/`, clears caches, applies migrations, runs `gateway:check`, and returns the application to service after success.
+
+Only the three newest updater-created code backups are retained. If the update fails before migrations begin, the updater restores application files automatically. Once database migration may have started, it intentionally **does not** attempt a blind code/database rollback; the application remains in maintenance mode and the updater reports the retained code-backup path so the operator can choose a release-specific rollback or roll-forward procedure.
+
+For migration-bearing releases, preserve the documented database + `.env`/`APP_KEY` + signing-key recovery set before updating. Release-specific upgrade notes take precedence when they add requirements.
+
+### Advanced: source/Composer installation
 
 For an existing source/CLI deployment, move to the intended release and run:
 
@@ -327,7 +340,7 @@ php artisan migrate --force
 php artisan gateway:check
 ```
 
-For a ZIP deployment, preserve the recovery set, replace application files with the newer deployment package while preserving `.env` and `storage/app/private/`, then run the migration/check commands through an available CLI. Release-specific upgrade notes take precedence when a release changes schema or procedure.
+The manual update ZIP intentionally refuses source checkouts (`.git` / `composer.lock`) so that it cannot silently overwrite a developer-managed deployment.
 
 Do not blindly run `migrate:rollback` after a partial or unknown deployment failure.
 
@@ -363,7 +376,7 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 
 ## Release status
 
-Current stable release: `v1.1.3`.
+Current stable release: `v1.1.4`.
 
 Recommended installations should use the named deployment ZIP attached to the GitHub Release rather than the generic source archive or moving `main` branch.
 

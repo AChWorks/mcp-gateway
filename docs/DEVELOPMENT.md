@@ -131,6 +131,15 @@ bash bin/verify-release-package.sh dist/mcp-gateway-local.zip mcp-gateway-local
 
 `build-release-package.sh` creates a new staging tree, installs the committed lockfile directly with `composer install --no-dev`, prunes only demonstrably non-runtime dependency material, emits empty writable runtime directories, and creates a deterministic ordered ZIP. `verify-release-package.sh` extracts that ZIP and fails closed on unexpected top-level files, repository/development metadata, dependency dev/docs/example material, transient storage state, source-only Composer metadata, or broken runtime behavior.
 
+For the manual-update artifact, build it from the already verified runtime staging tree and then verify its fail-closed package shape:
+
+```bash
+bash bin/build-update-package.sh mcp-gateway-update-local dist/mcp-gateway-local
+bash bin/verify-update-package.sh dist/mcp-gateway-update-local.zip mcp-gateway-update-local
+```
+
+The MySQL-backed GitHub workflow additionally downloads the released `v1.1.2` deployment artifact and executes `bin/test-update-package.sh` against it. That integration test verifies a real packaged upgrade, preservation of `.env` and private persistent state, deterministic removal of stale managed files, migration/postflight behavior, and rejection of same-version, downgrade, tampered-package, symlink-package, and invalid-target cases.
+
 The verifier also boots Laravel from the extracted package, rebuilds the Laravel package manifest, checks routes and Composer runtime identities, runs the web-installer preflight, and performs a migration smoke test. Dependency license/notice files and runtime resources are intentionally retained even when they add size.
 
 Normal CI runs this build/verify path after the application test steps. This is deliberate: tests generate ephemeral keys/cache/session state in the development checkout, and the package build must prove that none of that state can leak into the release. Any future change that alters application runtime files, Composer dependencies, package scripts, or release packaging must keep this gate green. If a new legitimate runtime file is required, update the builder/verifier intentionally in the same reviewed change rather than weakening the hygiene checks broadly.
