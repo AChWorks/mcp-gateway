@@ -27,6 +27,8 @@ final class WebUpdater
 
     private const MANAGED_PUBLIC_PATHS_FILE = 'MANAGED_PUBLIC_PATHS';
 
+    private const BACKUP_MANIFEST_FILE = 'BACKUP_MANIFEST.sha256';
+
     public function __construct(
         private readonly string $basePath,
         private readonly string $packagePath,
@@ -151,7 +153,7 @@ final class WebUpdater
         } catch (Throwable $exception) {
             if ($filesMutated && is_string($backup)) {
                 try {
-                    $this->restoreFiles($backup);
+                    $this->restoreFiles($backup, $from, $to);
                 } catch (Throwable $restoreException) {
                     $this->tryWriteState([
                         'from' => $from,
@@ -164,7 +166,7 @@ final class WebUpdater
                     ]);
 
                     throw new RuntimeException(
-                        'The update failed before database migration and automatic code restore also failed. The application remains in maintenance mode; use the retained private code backup for recovery.',
+                        'The update failed before database migration and automatic code restore was not safe or could not complete. The application remains in maintenance mode; preserve the updater state and retained private code backup for recovery.',
                         0,
                         $restoreException,
                     );
@@ -210,9 +212,11 @@ final class WebUpdater
         }
 
         $migrationStarted = false;
+        $backupCredible = false;
 
         try {
             $this->assertBackupCredible($backup, $from, $to);
+            $backupCredible = true;
             $this->assertInstalledRuntimeMatchesPackage($to);
             $this->runArtisan('optimize:clear', ['--no-interaction' => true], 'Cache cleanup failed after file replacement.');
 
@@ -226,8 +230,20 @@ final class WebUpdater
             $this->runArtisan('up', ['--no-interaction' => true], 'Update completed but maintenance mode could not be cleared automatically.');
         } catch (Throwable $exception) {
             if (! $migrationStarted) {
+                if (! $backupCredible) {
+                    $state['phase'] = 'failed-before-migration-backup';
+                    $state['migration_started'] = false;
+                    $this->tryWriteState($state);
+
+                    throw new RuntimeException(
+                        'Pre-migration recovery backup failed integrity validation. Database migration did not start and automatic code restore was not attempted. The application remains in maintenance mode; preserve the updater state and retained backup for manual recovery.',
+                        0,
+                        $exception,
+                    );
+                }
+
                 try {
-                    $this->restoreFiles($backup);
+                    $this->restoreFiles($backup, $from, $to);
                     @unlink($this->statePath());
                     $this->tryResumeApplication();
                 } catch (Throwable $restoreException) {
@@ -236,7 +252,7 @@ final class WebUpdater
                     $this->tryWriteState($state);
 
                     throw new RuntimeException(
-                        'The update failed before database migration and automatic code restore also failed. The application remains in maintenance mode; use the retained private code backup for recovery.',
+                        'The update failed before database migration and automatic code restore was not safe or could not complete. The application remains in maintenance mode; preserve the updater state and retained private code backup for recovery.',
                         0,
                         $restoreException,
                     );
@@ -523,12 +539,65 @@ final class WebUpdater
 
     private function assertBackupCredible(string $backup, string $from, string $to): void
     {
-        if (! is_dir($backup.'/files')
-            || ! is_file($backup.'/FROM_VERSION')
-            || ! is_file($backup.'/TO_VERSION')
-            || ! is_file($backup.'/'.self::MANAGED_PUBLIC_PATHS_FILE)
-            || ! is_file($backup.'/files/VERSION')) {
+        $expectedTop = [
+            self::BACKUP_MANIFEST_FILE,
+            self::MANAGED_PUBLIC_PATHS_FILE,
+            'FROM_VERSION',
+            'TO_VERSION',
+            'files',
+        ];
+        $actualTop = $this->directoryNames($backup);
+        sort($expectedTop);
+        sort($actualTop);
+        if ($actualTop !== $expectedTop || is_link($backup.'/files')) {
+            throw new RuntimeException('Pre-migration recovery backup layout is incomplete or unexpected.');
+        }
+
+        foreach ([self::BACKUP_MANIFEST_FILE, self::MANAGED_PUBLIC_PATHS_FILE, 'FROM_VERSION', 'TO_VERSION'] as $requiredFile) {
+            if (! is_file($backup.'/'.$requiredFile) || is_link($backup.'/'.$requiredFile)) {
+                throw new RuntimeException('Pre-migration recovery backup is incomplete.');
+            }
+        }
+        if (! is_dir($backup.'/files') || ! is_file($backup.'/files/VERSION')) {
             throw new RuntimeException('Pre-migration recovery backup is incomplete.');
+        }
+
+        $manifestLines = file($backup.'/'.self::BACKUP_MANIFEST_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($manifestLines === false || $manifestLines === []) {
+            throw new RuntimeException('Pre-migration recovery backup integrity manifest is empty or unreadable.');
+        }
+
+        $seen = [];
+        foreach ($manifestLines as $line) {
+            if (! preg_match('/^([a-f0-9]{64})  (.+)$/', $line, $match)) {
+                throw new RuntimeException('Pre-migration recovery backup integrity manifest contains an invalid entry.');
+            }
+            $relative = $match[2];
+            if (! $this->safeRelativePath($relative)
+                || $relative === self::BACKUP_MANIFEST_FILE
+                || isset($seen[$relative])) {
+                throw new RuntimeException('Pre-migration recovery backup integrity manifest contains an unsafe or duplicate path.');
+            }
+            $full = $backup.'/'.$relative;
+            if (! is_file($full) || is_link($full)) {
+                throw new RuntimeException('Pre-migration recovery backup file is missing or invalid: '.$relative.'.');
+            }
+            $actual = hash_file('sha256', $full);
+            if (! is_string($actual) || ! hash_equals($match[1], $actual)) {
+                throw new RuntimeException('Pre-migration recovery backup checksum validation failed: '.$relative.'.');
+            }
+            $seen[$relative] = true;
+        }
+
+        $requiredManifest = ['FROM_VERSION', 'TO_VERSION', self::MANAGED_PUBLIC_PATHS_FILE];
+        foreach ($this->recursiveFiles($backup.'/files', 'files') as $relative) {
+            $requiredManifest[] = $relative;
+        }
+        sort($requiredManifest);
+        $actualManifest = array_keys($seen);
+        sort($actualManifest);
+        if ($requiredManifest !== $actualManifest) {
+            throw new RuntimeException('Pre-migration recovery backup integrity manifest does not exactly cover the recovery set.');
         }
 
         if ($this->readVersion($backup.'/FROM_VERSION', 'Backup FROM_VERSION') !== $from
@@ -660,6 +729,28 @@ final class WebUpdater
                 || file_put_contents($backup.'/TO_VERSION', $to."\n", LOCK_EX) === false) {
                 throw new RuntimeException('Could not finalize updater backup metadata.');
             }
+
+            $manifestPaths = ['FROM_VERSION', 'TO_VERSION', self::MANAGED_PUBLIC_PATHS_FILE];
+            foreach ($this->recursiveFiles($backup.'/files', 'files') as $relative) {
+                $manifestPaths[] = $relative;
+            }
+            sort($manifestPaths, SORT_STRING);
+
+            $manifestLines = [];
+            foreach ($manifestPaths as $relative) {
+                $full = $backup.'/'.$relative;
+                if (! is_file($full) || is_link($full)) {
+                    throw new RuntimeException('Could not finalize updater backup integrity manifest; invalid recovery path: '.$relative.'.');
+                }
+                $hash = hash_file('sha256', $full);
+                if (! is_string($hash)) {
+                    throw new RuntimeException('Could not hash updater backup recovery path: '.$relative.'.');
+                }
+                $manifestLines[] = $hash.'  '.$relative;
+            }
+            if (file_put_contents($backup.'/'.self::BACKUP_MANIFEST_FILE, implode("\n", $manifestLines)."\n", LOCK_EX) === false) {
+                throw new RuntimeException('Could not finalize updater backup integrity manifest.');
+            }
         } catch (Throwable $exception) {
             $this->removePath($backup);
             throw $exception;
@@ -668,12 +759,9 @@ final class WebUpdater
         return $backup;
     }
 
-    private function restoreFiles(string $backup): void
+    private function restoreFiles(string $backup, string $from, string $to): void
     {
-        if (! is_dir($backup.'/files')) {
-            throw new RuntimeException('Updater backup is unavailable for automatic restore.');
-        }
-
+        $this->assertBackupCredible($backup, $from, $to);
         $managedPublicPaths = $this->managedPublicPaths($backup.'/'.self::MANAGED_PUBLIC_PATHS_FILE);
 
         foreach (self::MANAGED_ROOT as $entry) {
@@ -851,7 +939,7 @@ final class WebUpdater
     {
         $raw = @file_get_contents($path);
         $version = is_string($raw) ? trim($raw) : '';
-        if (! preg_match('/^\\d+\\.\\d+\\.\\d+$/', $version)) {
+        if (! preg_match('/^\d+\.\d+\.\d+$/', $version)) {
             throw new RuntimeException($label.' is invalid.');
         }
 
@@ -928,7 +1016,7 @@ final class WebUpdater
         return $path !== ''
             && ! str_starts_with($path, '/')
             && ! str_contains($path, '\\')
-            && ! preg_match('#(^|/)\\.\\.(/|$)#', $path)
+            && ! preg_match('#(^|/)\.\.(/|$)#', $path)
             && ! str_contains($path, "\0");
     }
 
