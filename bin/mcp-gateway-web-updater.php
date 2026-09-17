@@ -60,7 +60,10 @@ final class WebUpdater
             'Persistent storage is available' => is_dir($this->basePath.'/storage/app/private'),
             'Application root is writable' => is_writable($this->basePath),
             'Persistent storage is writable' => is_writable($this->basePath.'/storage/app/private'),
-            'Temporary updater can clean itself up' => is_writable($this->basePath.'/public') && is_writable($this->basePath),
+            'Temporary updater can clean itself up' => is_writable($this->packagePath)
+                && is_writable($this->basePath.'/public/update')
+                && is_writable($this->basePath.'/public')
+                && is_writable($this->basePath),
         ];
 
         if (in_array(false, $checks, true)) {
@@ -86,10 +89,11 @@ final class WebUpdater
         $this->runArtisan('gateway:check', ['--no-interaction' => true], 'Current Gateway preflight failed. No files were changed.');
         $this->runArtisan('down', ['--retry' => 60, '--no-interaction' => true], 'Could not enter maintenance mode. No files were changed.');
 
-        $backup = $this->createBackup($from, $to);
+        $backup = null;
         $filesMutated = false;
 
         try {
+            $backup = $this->createBackup($from, $to);
             $this->writeState([
                 'from' => $from,
                 'to' => $to,
@@ -122,14 +126,40 @@ final class WebUpdater
 
             return ['from' => $from, 'to' => $to, 'continuation' => $continuation];
         } catch (Throwable $exception) {
-            if ($filesMutated) {
-                $this->restoreFiles($backup);
+            if ($filesMutated && is_string($backup)) {
+                try {
+                    $this->restoreFiles($backup);
+                } catch (Throwable $restoreException) {
+                    $this->tryWriteState([
+                        'from' => $from,
+                        'to' => $to,
+                        'backup' => $backup,
+                        'phase' => 'failed-before-migration-restore',
+                        'migration_started' => false,
+                        'browser_token_hash' => hash('sha256', $browserToken),
+                        'continuation_token' => $continuation,
+                    ]);
+
+                    throw new RuntimeException(
+                        'The update failed before database migration and automatic code restore also failed. The application remains in maintenance mode; use the retained private code backup for recovery.',
+                        0,
+                        $restoreException,
+                    );
+                }
+            } elseif (is_string($backup)) {
+                try {
+                    $this->removePath($backup);
+                } catch (Throwable) {
+                }
             }
+
             @unlink($this->statePath());
             $this->tryResumeApplication();
 
             throw new RuntimeException(
-                'The update failed before database migration. Application files were restored automatically. '.$exception->getMessage(),
+                $filesMutated
+                    ? 'The update failed before database migration. Application files were restored automatically. '.$exception->getMessage()
+                    : 'The update failed before application files were changed. The application was returned to service. '.$exception->getMessage(),
                 0,
                 $exception,
             );
@@ -144,6 +174,7 @@ final class WebUpdater
 
         $from = $this->requireStateString($state, 'from');
         $to = $this->requireStateString($state, 'to');
+        $backup = $this->requireStateString($state, 'backup');
         $phase = $this->requireStateString($state, 'phase');
 
         if ($phase !== 'files-replaced') {
@@ -155,20 +186,47 @@ final class WebUpdater
             throw new RuntimeException('Installed files do not match the expected target version.');
         }
 
+        $migrationStarted = false;
+
         try {
             $this->runArtisan('optimize:clear', ['--no-interaction' => true], 'Cache cleanup failed after file replacement.');
 
             $state['phase'] = 'migrate';
             $state['migration_started'] = true;
             $this->writeState($state);
+            $migrationStarted = true;
 
             $this->runArtisan('migrate', ['--force' => true, '--no-interaction' => true], 'Database migration failed. The application remains in maintenance mode.');
             $this->runArtisan('gateway:check', ['--no-interaction' => true], 'Post-update Gateway validation failed. The application remains in maintenance mode.');
             $this->runArtisan('up', ['--no-interaction' => true], 'Update completed but maintenance mode could not be cleared automatically.');
         } catch (Throwable $exception) {
+            if (! $migrationStarted) {
+                try {
+                    $this->restoreFiles($backup);
+                    @unlink($this->statePath());
+                    $this->tryResumeApplication();
+                } catch (Throwable $restoreException) {
+                    $state['phase'] = 'failed-before-migration-restore';
+                    $state['migration_started'] = false;
+                    $this->tryWriteState($state);
+
+                    throw new RuntimeException(
+                        'The update failed before database migration and automatic code restore also failed. The application remains in maintenance mode; use the retained private code backup for recovery.',
+                        0,
+                        $restoreException,
+                    );
+                }
+
+                throw new RuntimeException(
+                    'The update failed before database migration. Application files were restored automatically and the application was returned to service. '.$exception->getMessage(),
+                    0,
+                    $exception,
+                );
+            }
+
             $state['phase'] = 'failed-after-migration-start';
             $state['migration_started'] = true;
-            $this->writeState($state);
+            $this->tryWriteState($state);
 
             throw new RuntimeException(
                 'The update reached the database-migration boundary and could not finish safely. Automatic code rollback was not attempted. '.$exception->getMessage(),
@@ -216,7 +274,8 @@ final class WebUpdater
 
         try {
             $state = $this->readState();
-            if (($state['phase'] ?? null) === 'failed-after-migration-start' && $this->browserTokenMatches($state, $browserToken)) {
+            $phase = $state['phase'] ?? null;
+            if (is_string($phase) && str_starts_with($phase, 'failed-') && $this->browserTokenMatches($state, $browserToken)) {
                 return $state;
             }
         } catch (Throwable) {
@@ -250,6 +309,20 @@ final class WebUpdater
             if (! file_exists($this->packagePath.'/'.$required)) {
                 throw new RuntimeException('The extracted update package is incomplete; missing '.$required.'.');
             }
+        }
+
+        $expectedPackageTop = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', 'WebUpdater.php', 'manifest.sha256', 'payload'];
+        $actualPackageTop = $this->directoryNames($this->packagePath);
+        sort($expectedPackageTop);
+        sort($actualPackageTop);
+        if ($actualPackageTop !== $expectedPackageTop) {
+            throw new RuntimeException('The private update staging directory contains unexpected files. Remove or rename the conflicting root update directory and re-extract the named update ZIP.');
+        }
+
+        $expectedPublicTop = ['index.php'];
+        $actualPublicTop = $this->directoryNames($this->basePath.'/public/update');
+        if ($actualPublicTop !== $expectedPublicTop) {
+            throw new RuntimeException('The temporary public update directory contains unexpected files. Remove or rename the conflicting public/update directory and re-extract the named update ZIP.');
         }
 
         if ($this->containsSymlink($this->packagePath)) {
@@ -503,6 +576,15 @@ final class WebUpdater
             throw new RuntimeException('Could not persist updater state.');
         }
         @chmod($this->statePath(), 0600);
+    }
+
+    /** @param array<string,mixed> $state */
+    private function tryWriteState(array $state): void
+    {
+        try {
+            $this->writeState($state);
+        } catch (Throwable) {
+        }
     }
 
     /** @return array<string,mixed> */
