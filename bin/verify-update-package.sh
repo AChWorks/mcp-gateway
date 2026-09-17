@@ -42,6 +42,7 @@ root="$tmp/extracted"
 [[ -f "$root/update/WebUpdater.php" ]] || { echo "Browser update engine is missing." >&2; exit 1; }
 [[ -f "$root/update/UPDATE_VERSION" ]] || { echo "UPDATE_VERSION is missing." >&2; exit 1; }
 [[ -f "$root/update/PUBLIC_ENTRY_SHA256" ]] || { echo "PUBLIC_ENTRY_SHA256 is missing." >&2; exit 1; }
+[[ -f "$root/update/MANAGED_PUBLIC_PATHS" ]] || { echo "MANAGED_PUBLIC_PATHS is missing." >&2; exit 1; }
 [[ -f "$root/update/manifest.sha256" ]] || { echo "Update manifest is missing." >&2; exit 1; }
 
 php -l "$root/update/WebUpdater.php" >/dev/null
@@ -63,6 +64,25 @@ actual_public_hash="$(sha256sum "$root/public/update/index.php" | awk '{print $1
   cd "$root/update"
   sha256sum --check --strict manifest.sha256 >/dev/null
 )
+
+if grep -n '^$' "$root/update/MANAGED_PUBLIC_PATHS" >/dev/null \
+  || grep -Ev '^[A-Za-z0-9._/-]+$' "$root/update/MANAGED_PUBLIC_PATHS" | grep . >/dev/null \
+  || grep -E '(^|/)\.\.(/|$)|^/|\\|/$|^update($|/)' "$root/update/MANAGED_PUBLIC_PATHS" >/dev/null; then
+  echo "MANAGED_PUBLIC_PATHS contains an unsafe path." >&2
+  exit 1
+fi
+if [[ "$(sort "$root/update/MANAGED_PUBLIC_PATHS" | uniq -d | wc -l)" -ne 0 ]]; then
+  echo "MANAGED_PUBLIC_PATHS contains a duplicate path." >&2
+  exit 1
+fi
+diff -u "$repo_root/bin/update-managed-public-paths.txt" "$root/update/MANAGED_PUBLIC_PATHS"
+while IFS= read -r public_file; do
+  [[ -n "$public_file" ]] || continue
+  grep -Fx "$public_file" "$root/update/MANAGED_PUBLIC_PATHS" >/dev/null || {
+    echo "Public payload file is outside the Gateway-owned manifest: public/$public_file" >&2
+    exit 1
+  }
+done < <(find "$root/update/payload/public" -type f -printf '%P\n' | LC_ALL=C sort)
 
 version="$(tr -d '[:space:]' < "$root/update/UPDATE_VERSION")"
 payload_version="$(tr -d '[:space:]' < "$root/update/payload/VERSION")"

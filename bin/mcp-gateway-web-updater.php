@@ -10,7 +10,7 @@ use Throwable;
 
 final class WebUpdater
 {
-    private const MANAGED = [
+    private const MANAGED_ROOT = [
         '.env.example',
         'LICENSE',
         'VERSION',
@@ -20,11 +20,12 @@ final class WebUpdater
         'composer.json',
         'config',
         'database',
-        'public',
         'resources',
         'routes',
         'vendor',
     ];
+
+    private const MANAGED_PUBLIC_PATHS_FILE = 'MANAGED_PUBLIC_PATHS';
 
     public function __construct(
         private readonly string $basePath,
@@ -60,15 +61,18 @@ final class WebUpdater
             'Persistent storage is available' => is_dir($this->basePath.'/storage/app/private'),
             'Application root is writable' => is_writable($this->basePath),
             'Persistent storage is writable' => is_writable($this->basePath.'/storage/app/private'),
-            'Temporary updater can clean itself up' => is_writable($this->packagePath)
-                && is_writable($this->basePath.'/public/update')
-                && is_writable($this->basePath.'/public')
-                && is_writable($this->basePath),
+            'Private update staging is writable' => is_writable($this->packagePath),
+            'Public directory is writable' => is_writable($this->basePath.'/public'),
+            'Temporary public update staging is writable' => is_writable($this->basePath.'/public/update'),
         ];
 
-        if (in_array(false, $checks, true)) {
-            throw new RuntimeException('One or more update preflight checks failed. Fix the failed filesystem permissions before continuing.');
+        $failedChecks = array_keys(array_filter($checks, static fn (bool $passed): bool => ! $passed));
+        if ($failedChecks !== []) {
+            throw new RuntimeException('Update preflight failed: '.implode('; ', $failedChecks).'.');
         }
+
+        $this->assertManagedMutationPreflight();
+        $checks['Gateway-managed paths are replaceable and recoverable'] = true;
 
         return [
             'installed' => $installed,
@@ -87,13 +91,31 @@ final class WebUpdater
         $continuation = bin2hex(random_bytes(32));
 
         $this->runArtisan('gateway:check', ['--no-interaction' => true], 'Current Gateway preflight failed. No files were changed.');
-        $this->runArtisan('down', ['--retry' => 60, '--no-interaction' => true], 'Could not enter maintenance mode. No files were changed.');
 
-        $backup = null;
+        $backup = $this->createBackup($from, $to);
+        try {
+            $this->assertBackupCredible($backup, $from, $to);
+        } catch (Throwable $exception) {
+            try {
+                $this->removePath($backup);
+            } catch (Throwable) {
+            }
+            throw $exception;
+        }
+        try {
+            $this->runArtisan('down', ['--retry' => 60, '--no-interaction' => true], 'Could not enter maintenance mode. No application files were changed.');
+        } catch (Throwable $exception) {
+            try {
+                $this->removePath($backup);
+            } catch (Throwable) {
+            }
+            $this->tryResumeApplication();
+            throw $exception;
+        }
+
         $filesMutated = false;
 
         try {
-            $backup = $this->createBackup($from, $to);
             $this->writeState([
                 'from' => $from,
                 'to' => $to,
@@ -113,6 +135,7 @@ final class WebUpdater
             if (! is_file($this->basePath.'/storage/app/private/installed')) {
                 throw new RuntimeException('Installed marker disappeared unexpectedly.');
             }
+            $this->assertInstalledRuntimeMatchesPackage($to);
 
             $this->writeState([
                 'from' => $from,
@@ -189,6 +212,8 @@ final class WebUpdater
         $migrationStarted = false;
 
         try {
+            $this->assertBackupCredible($backup, $from, $to);
+            $this->assertInstalledRuntimeMatchesPackage($to);
             $this->runArtisan('optimize:clear', ['--no-interaction' => true], 'Cache cleanup failed after file replacement.');
 
             $state['phase'] = 'migrate';
@@ -296,22 +321,119 @@ final class WebUpdater
             throw new RuntimeException('The browser updater is for deployment-ZIP installations. Use the documented source/Composer path for a source checkout.');
         }
 
-        foreach (array_merge(self::MANAGED, ['storage', 'storage/app', 'storage/app/private']) as $entry) {
+        foreach (array_merge(self::MANAGED_ROOT, ['public', 'storage', 'storage/app', 'storage/app/private']) as $entry) {
             if (is_link($this->basePath.'/'.$entry)) {
                 throw new RuntimeException('The installation contains an unsupported symlink: '.$entry.'.');
             }
         }
     }
 
+    private function assertManagedMutationPreflight(): void
+    {
+        foreach (self::MANAGED_ROOT as $entry) {
+            $this->assertManagedRootPathPreflight($this->basePath.'/'.$entry, $entry);
+        }
+
+        foreach ($this->managedPublicPaths($this->packagePath.'/'.self::MANAGED_PUBLIC_PATHS_FILE) as $relative) {
+            $this->assertManagedPublicPathPreflight($relative);
+        }
+    }
+
+    private function assertManagedRootPathPreflight(string $path, string $relative): void
+    {
+        if (is_link($path)) {
+            throw new RuntimeException('Gateway-managed path contains an unsupported symlink: '.$relative.'.');
+        }
+        if (! file_exists($path)) {
+            return;
+        }
+        if (is_file($path)) {
+            if (! is_readable($path)) {
+                throw new RuntimeException('Gateway-managed file is not readable for backup: '.$relative.'.');
+            }
+            if (! is_writable(dirname($path))) {
+                throw new RuntimeException('Gateway-managed file cannot be replaced because its parent directory is not writable: '.$relative.'.');
+            }
+
+            return;
+        }
+        if (! is_dir($path)) {
+            throw new RuntimeException('Gateway-managed path has an unsupported filesystem type: '.$relative.'.');
+        }
+        if (! is_readable($path) || ! is_writable($path)) {
+            throw new RuntimeException('Gateway-managed directory is not readable and writable for backup/replacement: '.$relative.'.');
+        }
+
+        $items = scandir($path);
+        if ($items === false) {
+            throw new RuntimeException('Could not inspect Gateway-managed directory during preflight: '.$relative.'.');
+        }
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $childRelative = $relative.'/'.$item;
+            $this->assertManagedRootPathPreflight($path.'/'.$item, $childRelative);
+        }
+    }
+
+    private function assertManagedPublicPathPreflight(string $relative): void
+    {
+        $public = $this->basePath.'/public';
+        $segments = explode('/', $relative);
+        $leaf = array_pop($segments);
+        $parent = $public;
+
+        foreach ($segments as $segment) {
+            $candidate = $parent.'/'.$segment;
+            if (is_link($candidate)) {
+                throw new RuntimeException('Gateway-managed public path has a symlinked parent: public/'.$relative.'.');
+            }
+            if (file_exists($candidate) && ! is_dir($candidate)) {
+                throw new RuntimeException('Gateway-managed public path has a non-directory parent conflict: public/'.$relative.'.');
+            }
+            if (is_dir($candidate)) {
+                if (! is_readable($candidate) || ! is_writable($candidate)) {
+                    throw new RuntimeException('Gateway-managed public path parent is not readable/writable: public/'.$relative.'.');
+                }
+                $parent = $candidate;
+
+                continue;
+            }
+            if (! is_writable($parent)) {
+                throw new RuntimeException('Gateway-managed public path cannot create its missing parent: public/'.$relative.'.');
+            }
+
+            return;
+        }
+
+        if (! is_string($leaf) || $leaf === '') {
+            throw new RuntimeException('Gateway-managed public path is invalid.');
+        }
+        $target = $parent.'/'.$leaf;
+        if (is_link($target)) {
+            throw new RuntimeException('Gateway-managed public path is an unsupported symlink: public/'.$relative.'.');
+        }
+        if (is_dir($target)) {
+            throw new RuntimeException('Gateway-managed public path conflicts with a directory: public/'.$relative.'.');
+        }
+        if (is_file($target) && ! is_readable($target)) {
+            throw new RuntimeException('Gateway-managed public file is not readable for backup: public/'.$relative.'.');
+        }
+        if (! is_writable($parent)) {
+            throw new RuntimeException('Gateway-managed public path cannot be replaced because its parent is not writable: public/'.$relative.'.');
+        }
+    }
+
     private function assertPackageIntegrity(): void
     {
-        foreach (['UPDATE_VERSION', 'PUBLIC_ENTRY_SHA256', 'manifest.sha256', 'payload', 'WebUpdater.php'] as $required) {
+        foreach (['UPDATE_VERSION', 'PUBLIC_ENTRY_SHA256', self::MANAGED_PUBLIC_PATHS_FILE, 'manifest.sha256', 'payload', 'WebUpdater.php'] as $required) {
             if (! file_exists($this->packagePath.'/'.$required)) {
                 throw new RuntimeException('The extracted update package is incomplete; missing '.$required.'.');
             }
         }
 
-        $expectedPackageTop = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', 'WebUpdater.php', 'manifest.sha256', 'payload'];
+        $expectedPackageTop = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', self::MANAGED_PUBLIC_PATHS_FILE, 'WebUpdater.php', 'manifest.sha256', 'payload'];
         $actualPackageTop = $this->directoryNames($this->packagePath);
         sort($expectedPackageTop);
         sort($actualPackageTop);
@@ -378,7 +500,16 @@ final class WebUpdater
             $seen[$relative] = true;
         }
 
-        $requiredManifest = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', 'WebUpdater.php'];
+        $managedPublicPaths = $this->managedPublicPaths($this->packagePath.'/'.self::MANAGED_PUBLIC_PATHS_FILE);
+        $managedPublicLookup = array_fill_keys($managedPublicPaths, true);
+        foreach ($this->recursiveFiles($this->packagePath.'/payload/public', '') as $relative) {
+            $publicPath = ltrim($relative, '/');
+            if (! isset($managedPublicLookup[$publicPath])) {
+                throw new RuntimeException('Update payload contains a public file outside the Gateway-owned manifest: public/'.$publicPath.'.');
+            }
+        }
+
+        $requiredManifest = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', self::MANAGED_PUBLIC_PATHS_FILE, 'WebUpdater.php'];
         foreach ($this->recursiveFiles($this->packagePath.'/payload', 'payload') as $relative) {
             $requiredManifest[] = $relative;
         }
@@ -390,48 +521,106 @@ final class WebUpdater
         }
     }
 
-    private function replaceManagedFiles(): void
+    private function assertBackupCredible(string $backup, string $from, string $to): void
     {
-        foreach (self::MANAGED as $entry) {
-            if ($entry === 'public') {
-                $this->replacePublicPreservingUpdater();
+        if (! is_dir($backup.'/files')
+            || ! is_file($backup.'/FROM_VERSION')
+            || ! is_file($backup.'/TO_VERSION')
+            || ! is_file($backup.'/'.self::MANAGED_PUBLIC_PATHS_FILE)
+            || ! is_file($backup.'/files/VERSION')) {
+            throw new RuntimeException('Pre-migration recovery backup is incomplete.');
+        }
 
+        if ($this->readVersion($backup.'/FROM_VERSION', 'Backup FROM_VERSION') !== $from
+            || $this->readVersion($backup.'/TO_VERSION', 'Backup TO_VERSION') !== $to
+            || $this->readVersion($backup.'/files/VERSION', 'Backup installed VERSION') !== $from) {
+            throw new RuntimeException('Pre-migration recovery backup identity does not match the update.');
+        }
+
+        $backupPublicPaths = $this->managedPublicPaths($backup.'/'.self::MANAGED_PUBLIC_PATHS_FILE);
+        $packagePublicPaths = $this->managedPublicPaths($this->packagePath.'/'.self::MANAGED_PUBLIC_PATHS_FILE);
+        if ($backupPublicPaths !== $packagePublicPaths) {
+            throw new RuntimeException('Pre-migration recovery backup public ownership manifest does not match the update.');
+        }
+
+        if (is_dir($backup.'/files/public')) {
+            $allowed = array_fill_keys($backupPublicPaths, true);
+            foreach ($this->recursiveFiles($backup.'/files/public', '') as $relative) {
+                $publicPath = ltrim($relative, '/');
+                if (! isset($allowed[$publicPath])) {
+                    throw new RuntimeException('Pre-migration recovery backup contains an unexpected public path: public/'.$publicPath.'.');
+                }
+            }
+        }
+    }
+
+    private function assertInstalledRuntimeMatchesPackage(string $targetVersion): void
+    {
+        if ($this->readVersion($this->basePath.'/VERSION', 'Installed VERSION') !== $targetVersion) {
+            throw new RuntimeException('Installed managed runtime version does not match the update target.');
+        }
+
+        $lines = file($this->packagePath.'/manifest.sha256', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines === false || $lines === []) {
+            throw new RuntimeException('Update manifest is unavailable while verifying the installed managed runtime.');
+        }
+
+        foreach ($lines as $line) {
+            if (! preg_match('/^([a-f0-9]{64})  payload\/(.+)$/', $line, $match)) {
                 continue;
             }
 
+            $relative = $match[2];
+            $target = str_starts_with($relative, 'public/')
+                ? $this->basePath.'/public/'.substr($relative, strlen('public/'))
+                : $this->basePath.'/'.$relative;
+
+            if (! is_file($target) || is_link($target)) {
+                throw new RuntimeException('Installed managed runtime path is missing or invalid: '.$relative.'.');
+            }
+            $actual = hash_file('sha256', $target);
+            if (! is_string($actual) || ! hash_equals($match[1], $actual)) {
+                throw new RuntimeException('Installed managed runtime path does not match the verified payload: '.$relative.'.');
+            }
+        }
+    }
+
+    private function replaceManagedFiles(): void
+    {
+        foreach (self::MANAGED_ROOT as $entry) {
             $target = $this->basePath.'/'.$entry;
             $this->removePath($target);
             $this->copyPath($this->packagePath.'/payload/'.$entry, $target);
         }
+
+        $this->replaceManagedPublicFiles();
     }
 
-    private function replacePublicPreservingUpdater(): void
+    private function replaceManagedPublicFiles(): void
     {
-        $public = $this->basePath.'/public';
-        if (! is_dir($public.'/update')) {
+        if (! is_dir($this->basePath.'/public/update')) {
             throw new RuntimeException('Temporary public updater disappeared before file replacement.');
         }
 
-        $items = scandir($public);
-        if ($items === false) {
-            throw new RuntimeException('Could not enumerate the public directory.');
-        }
-        foreach ($items as $item) {
-            if ($item === '.' || $item === '..' || $item === 'update') {
-                continue;
-            }
-            $this->removePath($public.'/'.$item);
-        }
+        foreach ($this->managedPublicPaths($this->packagePath.'/'.self::MANAGED_PUBLIC_PATHS_FILE) as $relative) {
+            $target = $this->basePath.'/public/'.$relative;
+            $source = $this->packagePath.'/payload/public/'.$relative;
 
-        $sourceItems = scandir($this->packagePath.'/payload/public');
-        if ($sourceItems === false) {
-            throw new RuntimeException('Could not enumerate the new public payload.');
-        }
-        foreach ($sourceItems as $item) {
-            if ($item === '.' || $item === '..' || $item === 'update') {
-                continue;
+            if (is_dir($target) && ! is_link($target)) {
+                throw new RuntimeException('Gateway-managed public path conflicts with a directory: public/'.$relative.'.');
             }
-            $this->copyPath($this->packagePath.'/payload/public/'.$item, $public.'/'.$item);
+
+            if (file_exists($target) || is_link($target)) {
+                try {
+                    $this->removePath($target);
+                } catch (Throwable $exception) {
+                    throw new RuntimeException('Could not replace Gateway-managed public path: public/'.$relative.'.', 0, $exception);
+                }
+            }
+
+            if (is_file($source)) {
+                $this->copyPath($source, $target);
+            }
         }
     }
 
@@ -448,13 +637,26 @@ final class WebUpdater
         }
 
         try {
-            foreach (self::MANAGED as $entry) {
+            foreach (self::MANAGED_ROOT as $entry) {
                 $source = $this->basePath.'/'.$entry;
                 if (file_exists($source) || is_link($source)) {
-                    $this->copyPath($source, $backup.'/files/'.$entry, $entry === 'public' ? ['update'] : []);
+                    $this->copyPath($source, $backup.'/files/'.$entry);
                 }
             }
-            if (file_put_contents($backup.'/FROM_VERSION', $from."\n", LOCK_EX) === false
+
+            $managedPublicPaths = $this->managedPublicPaths($this->packagePath.'/'.self::MANAGED_PUBLIC_PATHS_FILE);
+            foreach ($managedPublicPaths as $relative) {
+                $source = $this->basePath.'/public/'.$relative;
+                if (is_dir($source) && ! is_link($source)) {
+                    throw new RuntimeException('Gateway-managed public path conflicts with a directory while creating backup: public/'.$relative.'.');
+                }
+                if (file_exists($source) || is_link($source)) {
+                    $this->copyPath($source, $backup.'/files/public/'.$relative);
+                }
+            }
+
+            if (file_put_contents($backup.'/'.self::MANAGED_PUBLIC_PATHS_FILE, implode("\n", $managedPublicPaths)."\n", LOCK_EX) === false
+                || file_put_contents($backup.'/FROM_VERSION', $from."\n", LOCK_EX) === false
                 || file_put_contents($backup.'/TO_VERSION', $to."\n", LOCK_EX) === false) {
                 throw new RuntimeException('Could not finalize updater backup metadata.');
             }
@@ -472,36 +674,33 @@ final class WebUpdater
             throw new RuntimeException('Updater backup is unavailable for automatic restore.');
         }
 
-        foreach (self::MANAGED as $entry) {
-            if ($entry === 'public') {
-                $public = $this->basePath.'/public';
-                $items = is_dir($public) ? scandir($public) : false;
-                if ($items === false) {
-                    throw new RuntimeException('Could not enumerate public files during restore.');
-                }
-                foreach ($items as $item) {
-                    if ($item === '.' || $item === '..' || $item === 'update') {
-                        continue;
-                    }
-                    $this->removePath($public.'/'.$item);
-                }
-                $backupItems = scandir($backup.'/files/public');
-                if ($backupItems === false) {
-                    throw new RuntimeException('Could not enumerate backup public files.');
-                }
-                foreach ($backupItems as $item) {
-                    if ($item === '.' || $item === '..') {
-                        continue;
-                    }
-                    $this->copyPath($backup.'/files/public/'.$item, $public.'/'.$item);
-                }
+        $managedPublicPaths = $this->managedPublicPaths($backup.'/'.self::MANAGED_PUBLIC_PATHS_FILE);
 
-                continue;
-            }
-
+        foreach (self::MANAGED_ROOT as $entry) {
             $this->removePath($this->basePath.'/'.$entry);
             if (file_exists($backup.'/files/'.$entry)) {
                 $this->copyPath($backup.'/files/'.$entry, $this->basePath.'/'.$entry);
+            }
+        }
+
+        foreach ($managedPublicPaths as $relative) {
+            $target = $this->basePath.'/public/'.$relative;
+            $source = $backup.'/files/public/'.$relative;
+
+            if (is_dir($target) && ! is_link($target)) {
+                throw new RuntimeException('Gateway-managed public path conflicts with a directory during restore: public/'.$relative.'.');
+            }
+
+            if (file_exists($target) || is_link($target)) {
+                try {
+                    $this->removePath($target);
+                } catch (Throwable $exception) {
+                    throw new RuntimeException('Could not restore Gateway-managed public path: public/'.$relative.'.', 0, $exception);
+                }
+            }
+
+            if (is_file($source)) {
+                $this->copyPath($source, $target);
             }
         }
     }
@@ -733,6 +932,36 @@ final class WebUpdater
             && ! str_contains($path, "\0");
     }
 
+    /** @return list<string> */
+    private function managedPublicPaths(string $manifestPath): array
+    {
+        $lines = file($manifestPath, FILE_IGNORE_NEW_LINES);
+        if ($lines === false || $lines === []) {
+            throw new RuntimeException('Gateway-managed public path manifest is empty or unreadable.');
+        }
+
+        $paths = [];
+        $seen = [];
+        foreach ($lines as $line) {
+            if ($line === ''
+                || trim($line) !== $line
+                || ! preg_match('#^[A-Za-z0-9._/-]+$#', $line)
+                || ! $this->safeRelativePath($line)
+                || str_ends_with($line, '/')
+                || $line === 'update'
+                || str_starts_with($line, 'update/')
+                || isset($seen[$line])) {
+                throw new RuntimeException('Gateway-managed public path manifest contains an unsafe, blank, or duplicate entry.');
+            }
+            $seen[$line] = true;
+            $paths[] = $line;
+        }
+
+        sort($paths, SORT_STRING);
+
+        return $paths;
+    }
+
     /** @param list<string> $excludeNames */
     private function copyPath(string $source, string $target, array $excludeNames = []): void
     {
@@ -742,10 +971,10 @@ final class WebUpdater
         if (is_file($source)) {
             $parent = dirname($target);
             if (! is_dir($parent) && ! mkdir($parent, 0755, true) && ! is_dir($parent)) {
-                throw new RuntimeException('Could not create destination directory.');
+                throw new RuntimeException('Could not create destination directory: '.$parent.'.');
             }
             if (! copy($source, $target)) {
-                throw new RuntimeException('Could not copy update file: '.basename($source).'.');
+                throw new RuntimeException('Could not copy update file to: '.$target.'.');
             }
 
             return;
@@ -754,7 +983,7 @@ final class WebUpdater
             throw new RuntimeException('Update source path is missing: '.$source.'.');
         }
         if (! is_dir($target) && ! mkdir($target, 0755, true) && ! is_dir($target)) {
-            throw new RuntimeException('Could not create update destination directory.');
+            throw new RuntimeException('Could not create update destination directory: '.$target.'.');
         }
         $items = scandir($source);
         if ($items === false) {

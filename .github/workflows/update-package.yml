@@ -18,6 +18,7 @@ on:
       - 'bin/build-release-package.sh'
       - 'bin/build-update-package.sh'
       - 'bin/mcp-gateway-web-updater.php'
+      - 'bin/update-managed-public-paths.txt'
       - 'bin/mcp-gateway-web-update-index.php'
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
@@ -43,6 +44,7 @@ on:
       - 'bin/build-release-package.sh'
       - 'bin/build-update-package.sh'
       - 'bin/mcp-gateway-web-updater.php'
+      - 'bin/update-managed-public-paths.txt'
       - 'bin/mcp-gateway-web-update-index.php'
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
@@ -110,6 +112,7 @@ jobs:
           UPDATE_TEST_DB_DATABASE: mcp_gateway_test
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
+          UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
         run: >-
           bash bin/test-update-package.sh
           dist/mcp-gateway-update-ci.zip

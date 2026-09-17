@@ -328,7 +328,9 @@ Deployment-ZIP installations can be updated without SSH, Git, or Composer on the
 7. Review the installed version, target version, package-integrity checks, and writable-path preflight, then choose **Update MCP Gateway**.
 8. Keep the browser page open until it reports success.
 
-The updater validates the exact package and target before changing managed files. It refuses same-version/downgrade attempts and rejects unsafe paths, symlinks, incomplete/tampered packages, source checkouts, and invalid targets. After confirmation it runs the current Gateway preflight, enters Laravel maintenance mode, creates a private code backup under `storage/app/private/update-backups/`, replaces application-managed files deterministically, preserves the production `.env` and all persistent `storage/`, clears caches, applies migrations, runs `gateway:check`, and returns the application to service.
+The updater validates the exact package and target before changing managed files. It refuses same-version/downgrade attempts and rejects unsafe paths, symlinks, incomplete/tampered packages, source checkouts, invalid targets, and conflicts on Gateway-owned paths. After confirmation it runs the current Gateway preflight, creates and validates a private code backup under `storage/app/private/update-backups/`, enters Laravel maintenance mode, replaces application-managed files deterministically, verifies the complete installed runtime against the package manifest, preserves the production `.env` and all persistent `storage/`, clears caches, applies migrations, runs `gateway:check`, and returns the application to service.
+
+`public/` is a shared hosting boundary, not an application-owned directory. The updater changes only the exact Gateway-owned public files declared by the release ownership manifest. Unknown or host-managed public files, including control-panel files such as aaPanel `public/.user.ini` and unknown files inside shared subdirectories, are neither deleted nor copied into the updater backup. Operators should not alter host-managed ownership or filesystem attributes merely to run an MCP Gateway update.
 
 After a successful update, the temporary root `update/` directory, `public/update/` endpoint, and private updater state are removed automatically, so `/update/` cannot be run again. If the canonical `mcp-gateway-update-vX.Y.Z.zip` and matching checksum file are still present in the application root, the updater removes those exact files too. Arbitrarily renamed files are never deleted.
 
@@ -371,6 +373,7 @@ For browser updates:
 - a redirect from `/update/` to `/admin/login` is expected when the administrator session is not active;
 - if `/update/` reports a package-integrity or incomplete-staging error, use the named update ZIP from the intended Release and extract it again in the existing application root before any update has started;
 - do not manually copy the payload over the live application — the temporary updater owns deterministic file replacement;
+- do not alter or delete unknown/control-panel files under `public/` for the updater; those paths are outside the Gateway ownership boundary;
 - after a successful update, `/update/` should no longer exist;
 - if a failure page says database migration may have started, do not re-run the updater or delete the private backup/state manually; follow a release-specific recovery or roll-forward procedure.
 

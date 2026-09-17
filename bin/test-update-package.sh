@@ -17,16 +17,47 @@ done
 
 tmp="$(mktemp -d)"
 server_pid=""
+needs_sudo_cleanup=0
+protected_public_enforced=0
 cleanup() {
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" >/dev/null 2>&1 || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  rm -rf "$tmp"
+  if [[ "$needs_sudo_cleanup" -eq 1 ]] && command -v sudo >/dev/null 2>&1; then
+    sudo -n rm -rf "$tmp" >/dev/null 2>&1 || true
+  else
+    rm -rf "$tmp"
+  fi
 }
 trap cleanup EXIT
 
-old_root_name="$(unzip -Z1 "$old_zip" | awk -F/ 'NF && $1 != "" {print $1; exit}')"
+protect_host_public_state() {
+  local root="$1"
+  mkdir -p "$root/public/css"
+  printf 'aaPanel-host-managed-state\n' > "$root/public/.user.ini"
+  printf 'host-managed-shared-directory-file\n' > "$root/public/css/host-managed.txt"
+  chmod 0444 "$root/public/.user.ini"
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo -n chown root:root "$root/public" "$root/public/.user.ini"
+    sudo -n chmod 1777 "$root/public"
+    sudo -n chmod 0444 "$root/public/.user.ini"
+    needs_sudo_cleanup=1
+    protected_public_enforced=1
+
+    if rm -f "$root/public/.user.ini" 2>/dev/null; then
+      echo "Protected host-managed public regression setup is invalid: .user.ini was deletable by the updater user." >&2
+      exit 1
+    fi
+  elif [[ "${UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC:-0}" == "1" ]]; then
+    echo "Protected host-managed public regression requires passwordless sudo on this runner." >&2
+    exit 1
+  fi
+}
+
+unzip -Z1 "$old_zip" > "$tmp/old-zip-list.txt"
+old_root_name="$(awk -F/ 'NF && $1 != "" {print $1; exit}' "$tmp/old-zip-list.txt")"
 [[ -n "$old_root_name" ]] || { echo "Could not identify old package root." >&2; exit 1; }
 unzip -q "$old_zip" -d "$tmp/old"
 target="$tmp/old/$old_root_name"
@@ -96,6 +127,66 @@ mkdir -p "$candidate"
 unzip -q "$update_zip" -d "$candidate"
 new_version="$(tr -d '[:space:]' < "$candidate/update/UPDATE_VERSION")"
 [[ -f "$candidate/public/update/index.php" && -f "$candidate/update/WebUpdater.php" ]] || { echo "Browser updater files are missing after extraction." >&2; exit 1; }
+[[ -f "$candidate/update/MANAGED_PUBLIC_PATHS" ]] || { echo "Gateway-owned public path manifest is missing after extraction." >&2; exit 1; }
+
+# Regression for the production incident: an unknown public/.user.ini is made
+# non-deletable by the updater user while Gateway-owned public files remain
+# replaceable. A forced pre-migration verification failure must restore the old
+# managed runtime without touching host-managed public state.
+rollback_target="$tmp/rollback-target"
+cp -a "$target" "$rollback_target"
+protect_host_public_state "$rollback_target"
+rollback_user_ini_hash="$(sha256sum "$rollback_target/public/.user.ini" | awk '{print $1}')"
+rollback_host_file_hash="$(sha256sum "$rollback_target/public/css/host-managed.txt" | awk '{print $1}')"
+rollback_artisan_hash="$(sha256sum "$rollback_target/artisan" | awk '{print $1}')"
+rollback_migrations_before="$(cd "$rollback_target" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')"
+rollback_zip="$rollback_target/mcp-gateway-update-v$new_version.zip"
+cp "$update_zip" "$rollback_zip"
+sha256sum "$rollback_zip" > "$rollback_zip.sha256"
+unzip -q "$rollback_zip" -d "$rollback_target"
+
+php -r '
+  [$base] = array_slice($argv, 1);
+  chdir($base);
+  require $base."/vendor/autoload.php";
+  $app = require $base."/bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  require $base."/update/WebUpdater.php";
+  $token = str_repeat("a", 64);
+  $updater = new McpGatewayUpdate\WebUpdater($base, $base."/update");
+  $stage = $updater->stage($token);
+  file_put_contents($base."/artisan", "\n# force pre-migration restore regression\n", FILE_APPEND);
+  try {
+    $updater->finish($token, $stage["continuation"]);
+    fwrite(STDERR, "Forced pre-migration failure unexpectedly completed.\n");
+    exit(1);
+  } catch (Throwable $e) {
+    if (!str_contains($e->getMessage(), "restored automatically")) {
+      fwrite(STDERR, $e->getMessage()."\n");
+      exit(2);
+    }
+  }
+' "$rollback_target"
+
+[[ "$(tr -d '[:space:]' < "$rollback_target/VERSION")" == "$old_version" ]] || { echo "Pre-migration restore did not restore the previous VERSION." >&2; exit 1; }
+[[ "$(sha256sum "$rollback_target/artisan" | awk '{print $1}')" == "$rollback_artisan_hash" ]] || { echo "Pre-migration restore did not restore managed application files." >&2; exit 1; }
+[[ "$(sha256sum "$rollback_target/public/.user.ini" | awk '{print $1}')" == "$rollback_user_ini_hash" ]] || { echo "Pre-migration restore changed host-managed public/.user.ini." >&2; exit 1; }
+[[ "$(sha256sum "$rollback_target/public/css/host-managed.txt" | awk '{print $1}')" == "$rollback_host_file_hash" ]] || { echo "Pre-migration restore changed an unknown file inside a shared public directory." >&2; exit 1; }
+[[ "$(cd "$rollback_target" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')" == "$rollback_migrations_before" ]] || { echo "Database migration state changed during the forced pre-migration restore regression." >&2; exit 1; }
+[[ ! -e "$rollback_target/storage/framework/down" ]] || { echo "Application remained in maintenance mode after successful pre-migration restore." >&2; exit 1; }
+[[ ! -e "$rollback_target/storage/app/private/update-state.json" ]] || { echo "Updater state remained after successful pre-migration restore." >&2; exit 1; }
+
+if [[ "$needs_sudo_cleanup" -eq 1 ]]; then
+  sudo -n rm -rf "$rollback_target"
+else
+  rm -rf "$rollback_target"
+fi
+
+protect_host_public_state "$target"
+user_ini_hash_before="$(sha256sum "$target/public/.user.ini" | awk '{print $1}')"
+user_ini_meta_before="$(stat -c '%u:%g:%a' "$target/public/.user.ini")"
+public_dir_meta_before="$(stat -c '%u:%g:%a' "$target/public")"
+host_file_hash_before="$(sha256sum "$target/public/css/host-managed.txt" | awk '{print $1}')"
 
 # The real operator staging step: upload the named ZIP into the existing
 # application root and extract it there. This must add only temporary updater
@@ -165,6 +256,19 @@ if inspect_package "$unsafe_target" "$target/update" >"$tmp/unsafe.out" 2>&1; th
   exit 1
 fi
 grep -F "does not look like an installed MCP Gateway deployment" "$tmp/unsafe.out" >/dev/null || { cat "$tmp/unsafe.out" >&2; echo "Unsafe-target rejection was not actionable." >&2; exit 1; }
+
+# A conflict on an explicitly Gateway-owned public path must fail preflight with
+# the exact path before maintenance mode or application mutation. Unknown public
+# files such as .user.ini are intentionally not part of this check.
+mv "$target/public/index.php" "$target/public/index.php.issue44-original"
+mkdir "$target/public/index.php"
+if inspect_package "$target" "$target/update" >"$tmp/public-conflict.out" 2>&1; then
+  echo "Managed public path conflict unexpectedly passed preflight." >&2
+  exit 1
+fi
+grep -F "conflicts with a directory: public/index.php" "$tmp/public-conflict.out" >/dev/null || { cat "$tmp/public-conflict.out" >&2; echo "Managed public path conflict was not path-specific." >&2; exit 1; }
+rmdir "$target/public/index.php"
+mv "$target/public/index.php.issue44-original" "$target/public/index.php"
 
 cat > "$tmp/router.php" <<'PHP_ROUTER'
 <?php
@@ -252,6 +356,10 @@ grep -F 'Update complete.' "$tmp/finish.html" >/dev/null || { cat "$tmp/finish.h
 [[ ! -e "$target/app/obsolete-update-test.txt" ]] || { echo "Stale managed file survived update." >&2; exit 1; }
 [[ "$(sha256sum "$target/.env" | awk '{print $1}')" == "$env_hash_before" ]] || { echo ".env changed during update." >&2; exit 1; }
 [[ "$(sha256sum "$target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')" == "$private_hash_before" ]] || { echo "Persistent private state changed during update." >&2; exit 1; }
+[[ "$(sha256sum "$target/public/.user.ini" | awk '{print $1}')" == "$user_ini_hash_before" ]] || { echo "Successful update changed host-managed public/.user.ini." >&2; exit 1; }
+[[ "$(stat -c '%u:%g:%a' "$target/public/.user.ini")" == "$user_ini_meta_before" ]] || { echo "Successful update changed public/.user.ini ownership or mode." >&2; exit 1; }
+[[ "$(stat -c '%u:%g:%a' "$target/public")" == "$public_dir_meta_before" ]] || { echo "Successful update changed host-managed public directory ownership or mode." >&2; exit 1; }
+[[ "$(sha256sum "$target/public/css/host-managed.txt" | awk '{print $1}')" == "$host_file_hash_before" ]] || { echo "Successful update changed an unknown file inside a shared public directory." >&2; exit 1; }
 [[ -f "$target/storage/app/private/installed" ]] || { echo "Installed marker did not survive update." >&2; exit 1; }
 [[ ! -e "$target/update" ]] || { echo "Private update staging survived successful cleanup." >&2; exit 1; }
 [[ ! -e "$target/public/update" ]] || { echo "Temporary public updater survived successful cleanup." >&2; exit 1; }
@@ -261,6 +369,9 @@ grep -F 'Update complete.' "$tmp/finish.html" >/dev/null || { cat "$tmp/finish.h
 backup_dir="$(find "$target/storage/app/private/update-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 [[ "$(tr -d '[:space:]' < "$backup_dir/FROM_VERSION")" == "$old_version" ]] || { echo "Code backup does not identify the previous version." >&2; exit 1; }
 [[ -f "$backup_dir/files/app/obsolete-update-test.txt" ]] || { echo "Code backup does not contain the previous managed tree." >&2; exit 1; }
+[[ -f "$backup_dir/MANAGED_PUBLIC_PATHS" ]] || { echo "Code backup is missing the managed-public ownership manifest." >&2; exit 1; }
+[[ ! -e "$backup_dir/files/public/.user.ini" ]] || { echo "Code backup incorrectly captured host-managed public/.user.ini." >&2; exit 1; }
+[[ ! -e "$backup_dir/files/public/css/host-managed.txt" ]] || { echo "Code backup incorrectly captured an unknown file inside a shared public directory." >&2; exit 1; }
 (
   cd "$target"
   php artisan migrate:status --no-interaction >/dev/null
@@ -271,5 +382,10 @@ post_cleanup_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "$https_header" 
 [[ "$post_cleanup_code" == "404" ]] || { echo "Temporary /update/ endpoint remained reachable after successful cleanup (HTTP $post_cleanup_code)." >&2; exit 1; }
 
 printf 'Browser update integration verified: %s -> %s\n' "$old_version" "$new_version"
-printf '.env/private state preserved; stale files removed; authenticated web flow and one-time cleanup verified.\n'
+printf '.env/private state and host-managed public files preserved; stale managed files removed; authenticated web flow and one-time cleanup verified.\n'
+if [[ "$protected_public_enforced" -eq 1 ]]; then
+  printf 'protected public/.user.ini update + pre-migration restore regression verified.\n'
+else
+  printf 'host-managed public preservation + pre-migration restore logic verified locally; protected deletion resistance is required in CI.\n'
+fi
 printf 'same/downgrade/tampered/symlink/unsafe preflight cases rejected.\n'
