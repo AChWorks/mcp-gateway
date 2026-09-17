@@ -336,11 +336,11 @@ After a successful update, the temporary root `update/` directory, `public/updat
 
 Only the three newest updater-created code backups are retained. Recovery is deliberately state-dependent. If backup creation or its initial integrity check fails **before maintenance mode**, the update aborts before managed application files are changed and no restore is needed. After maintenance begins:
 
-- **Credible backup + another pre-migration failure:** the updater revalidates the backup before its first restore mutation, restores the previous Gateway-managed application files automatically, clears updater state, and returns the application to service.
+- **Credible backup + another pre-migration failure:** the updater revalidates the backup and attempts automatic restore. If restore completes, updater state is cleared and the previous managed runtime returns to service. If the guarded restore itself cannot complete, migration still does not start; maintenance mode, updater state, and recovery evidence are retained for manual recovery.
 - **Recovery backup is rejected when recovery or the final pre-migration check needs it:** database migration does not start and the updater does **not** restore from that rejected backup. Maintenance mode, updater state, and recovery evidence are retained for manual reconciliation. Do not assume the previous runtime was restored; depending on the failure point, the managed tree may be the complete candidate or a partially replaced tree.
 - **Database migration may have started:** the updater intentionally does **not** attempt a blind code/database rollback. Maintenance mode and recovery evidence are retained until schema/data state is reconciled and a release-specific rollback or roll-forward procedure is chosen.
 
-See `docs/DEPLOYMENT.md` for the authoritative operator recovery state machine.
+Whenever maintenance mode is retained after a failed update, treat the managed runtime as recovery-required until its exact state is verified. See `docs/DEPLOYMENT.md` for the authoritative operator recovery state machine.
 
 Release-specific upgrade notes take precedence when they add requirements.
 

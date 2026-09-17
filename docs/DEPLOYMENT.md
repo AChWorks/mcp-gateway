@@ -356,15 +356,16 @@ Before mutation, the browser updater verifies its private manifest and temporary
 
 Backup creation and its first integrity check happen before maintenance mode. If that initial recovery proof fails, the updater aborts before managed application files are changed; no automatic restore is needed and the application remains on the original runtime.
 
-Once maintenance mode and managed-file replacement begin, treat recovery as three distinct states; "pre-migration failure" alone is not sufficient to infer that rollback occurred.
+Once maintenance mode and managed-file replacement begin, "pre-migration failure" alone is not sufficient to infer that rollback occurred. Distinguish these recovery outcomes:
 
 | State | Automatic action | Operator-visible result |
 | --- | --- | --- |
-| Recovery backup is credible, then a different failure occurs before migration starts | Revalidate the backup immediately before restore, restore the previous Gateway-managed application files, clear updater state, and resume the application | Previous managed runtime is restored; migration state is unchanged |
+| Recovery backup is credible, a different failure occurs before migration starts, and guarded restore completes | Revalidate the backup immediately before restore, restore the previous Gateway-managed application files, clear updater state, and resume the application | Previous managed runtime is restored; migration state is unchanged |
+| Recovery backup is credible but the guarded restore itself cannot complete | Stop automatic recovery; do not start migration | Keep maintenance mode active and retain updater state plus backup evidence. The managed runtime may be partially restored/replaced and requires manual recovery |
 | Recovery backup is rejected when an automatic restore or the final pre-migration boundary needs it | **Do not restore from the rejected backup and do not start migration** | Keep maintenance mode active and retain updater state plus backup evidence for manual reconciliation. Do not infer that old code was restored: after a completed stage the candidate runtime remains installed, while an earlier replacement failure may leave a partially replaced managed tree |
 | Database migration may have started | **Do not perform blind code/database rollback** | Keep maintenance mode active and retain recovery evidence until schema/data state is reconciled and a release-specific roll-forward or rollback procedure is selected |
 
-For the rejected-backup state, do not re-extract, start another update, delete updater state, or discard the retained backup merely because migration did not start. A failed backup-integrity check means automatic restore is intentionally unavailable. Treat the current managed runtime as recovery-required until its exact state is verified. The retained code backup is evidence/recovery material, not proof that a database rollback or code restore is safe.
+For either retained-maintenance pre-migration failure, do not re-extract, start another update, delete updater state, or discard the retained backup merely because migration did not start. A failed backup-integrity check means automatic restore is intentionally unavailable; a failed guarded restore means automatic recovery did not complete. Treat the current managed runtime as recovery-required until its exact state is verified. The retained code backup is evidence/recovery material, not proof that a database rollback or code restore is safe.
 
 #### Public ownership boundary
 
