@@ -7,7 +7,6 @@ use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Http\Request;
 use McpGatewayUpdate\WebUpdater;
 use Symfony\Component\HttpFoundation\RedirectResponse;
-use Throwable;
 
 $basePath = dirname(__DIR__, 2);
 $packagePath = $basePath.'/update';
