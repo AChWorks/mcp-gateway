@@ -12,7 +12,6 @@ $basePath = dirname(__DIR__, 2);
 $packagePath = $basePath.'/update';
 $autoloadPath = $basePath.'/vendor/autoload.php';
 $updaterPath = $packagePath.'/WebUpdater.php';
-$statePath = $basePath.'/storage/app/private/update-state.json';
 
 function updaterEscape(string $value): string
 {
@@ -28,6 +27,15 @@ function updaterIsHttps(array $server): bool
 
     if ((string) ($server['SERVER_PORT'] ?? '') === '443') {
         return true;
+    }
+
+    // The primary deployment target terminates HTTPS in OpenLiteSpeed and
+    // therefore sets HTTPS/SERVER_PORT directly. The forwarded-proto fallback
+    // is accepted only from loopback for local reverse-proxy/test setups so an
+    // arbitrary remote client cannot spoof HTTPS with a request header.
+    $remoteAddress = (string) ($server['REMOTE_ADDR'] ?? '');
+    if (! in_array($remoteAddress, ['127.0.0.1', '::1'], true)) {
+        return false;
     }
 
     $forwarded = strtolower(trim(explode(',', (string) ($server['HTTP_X_FORWARDED_PROTO'] ?? ''))[0] ?? ''));
@@ -123,7 +131,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
     } catch (Throwable $exception) {
         updaterRender(
             'MCP Gateway Update Needs Attention',
-            '<p class="error">'.updaterEscape($exception->getMessage()).'</p><div class="notice">Do not re-extract or start another update. The application is intentionally left in maintenance mode when database migration may have started. Use the retained private code backup for operator-directed recovery.</div>',
+            '<p class="error">'.updaterEscape($exception->getMessage()).'</p><div class="notice">Do not re-extract or start another update unless the message above confirms that the previous application files were restored and the application returned to service.</div>',
             500,
         );
     }
@@ -142,9 +150,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $browserToken !== '') {
 
     $failed = $updater->failedState($browserToken);
     if ($failed !== null) {
+        $phase = is_string($failed['phase'] ?? null) ? $failed['phase'] : 'failed';
+        $message = $phase === 'failed-after-migration-start'
+            ? 'A previous update reached the database-migration boundary and did not complete safely.'
+            : 'A previous update failed before database migration and automatic code restore did not complete safely.';
+
         updaterRender(
             'MCP Gateway Update Needs Attention',
-            '<p class="error">A previous update reached the database-migration boundary and did not complete safely.</p><div class="notice">Do not start another update. The Gateway remains in maintenance mode and the private code backup is retained for recovery.</div>',
+            '<p class="error">'.updaterEscape($message).'</p><div class="notice">Do not start another update. The Gateway remains in maintenance mode and the private code backup is retained for recovery.</div>',
             500,
         );
     }
@@ -166,6 +179,14 @@ try {
             $authRequest->session()->save();
         }
         $httpKernel->terminate($authRequest, $authResponse);
+
+        // The internal request owns the Laravel session cookie. Forward it to
+        // the real response so /admin/login can return the operator directly
+        // to /update/ instead of requiring the update URL to be opened twice.
+        foreach ($authResponse->headers->getCookies() as $cookie) {
+            header('Set-Cookie: '.$cookie, false);
+        }
+
         header('Location: /admin/login', true, 302);
         exit;
     }
@@ -178,7 +199,7 @@ try {
     $csrf = (string) $authRequest->session()->token();
     $httpKernel->terminate($authRequest, $authResponse);
     $app->make(ConsoleKernel::class)->bootstrap();
-} catch (Throwable $exception) {
+} catch (Throwable) {
     updaterRender('MCP Gateway Update', '<p class="error">Could not initialize the authenticated update session.</p>', 500);
 }
 
@@ -203,7 +224,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
         $result = $updater->stage($browserToken);
         header('Content-Type: text/html; charset=UTF-8');
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
         header('X-Robots-Tag: noindex, nofollow, noarchive');
+        header('X-Frame-Options: DENY');
+        header('Referrer-Policy: no-referrer');
+        header("Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
         echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Continuing MCP Gateway Update</title></head><body>';
         echo '<p>Application files are installed. Continuing database and health checks…</p>';
         echo '<form id="continue-update" method="post" action="/update/"><input type="hidden" name="action" value="finish"><input type="hidden" name="continuation" value="'.updaterEscape($result['continuation']).'"></form>';
@@ -211,7 +236,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
         echo '</body></html>';
         exit;
     } catch (Throwable $exception) {
-        updaterRender('MCP Gateway Update Failed', '<p class="error">'.updaterEscape($exception->getMessage()).'</p><p>The live application was restored automatically because database migration had not started.</p>', 500);
+        updaterRender(
+            'MCP Gateway Update Failed',
+            '<p class="error">'.updaterEscape($exception->getMessage()).'</p><p>Follow the recovery state reported above before attempting another update.</p>',
+            500,
+        );
     }
 }
 
