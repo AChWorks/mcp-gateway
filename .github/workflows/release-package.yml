@@ -13,6 +13,7 @@ on:
       - bin/update-managed-public-paths.txt
       - bin/mcp-gateway-web-update-index.php
       - bin/test-update-package.sh
+      - bin/test-update-backup-integrity.sh
       - bin/prune-production-vendor.php
       - bin/verify-release-package.sh
       - bin/verify-update-package.sh
@@ -148,6 +149,20 @@ jobs:
           dist/$UPDATE_PACKAGE.zip
           dist/baseline/mcp-gateway-v1.1.2.zip
 
+      - name: Verify backup integrity fail-safe
+        if: steps.publish.outputs.needed == 'true'
+        env:
+          UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
+          UPDATE_TEST_DB_HOST: 127.0.0.1
+          UPDATE_TEST_DB_PORT: 3306
+          UPDATE_TEST_DB_DATABASE: mcp_gateway_test
+          UPDATE_TEST_DB_USERNAME: mcp_gateway
+          UPDATE_TEST_DB_PASSWORD: test-password
+        run: >-
+          bash bin/test-update-backup-integrity.sh
+          dist/$UPDATE_PACKAGE.zip
+          dist/baseline/mcp-gateway-v1.1.2.zip
+
       - name: Publish GitHub release
         if: steps.publish.outputs.needed == 'true'
         env:
@@ -176,9 +191,9 @@ jobs:
           4. Open \`https://your-gateway.example/update/\` in a browser.
           5. Sign in with the existing Gateway administrator account if prompted, review the preflight, and click **Update MCP Gateway**.
 
-          The browser updater verifies the package and target, preserves \`.env\`, persistent \`storage/\`, and unknown/host-managed files under \`public/\`, creates and validates a bounded private code backup before maintenance mode, replaces only Gateway-managed paths deterministically, verifies the installed runtime before migration, clears Laravel caches, applies migrations, runs \`gateway:check\`, returns the Gateway to service, and removes its temporary \`update/\` + \`public/update/\` staging automatically after success. When the canonical uploaded ZIP/checksum are present in the application root, those are removed too.
+          The browser updater verifies the package and target, preserves \`.env\`, persistent \`storage/\`, and unknown/host-managed files under \`public/\`, creates and cryptographically validates a bounded private code backup before maintenance mode, replaces only Gateway-managed paths deterministically, verifies both the recovery backup and installed runtime again before migration, clears Laravel caches, applies migrations, runs \`gateway:check\`, returns the Gateway to service, and removes its temporary \`update/\` + \`public/update/\` staging automatically after success. When the canonical uploaded ZIP/checksum are present in the application root, those are removed too.
 
-          The updater rejects same-version/downgrade, unsafe layout, symlink, and tampered-package cases before mutation. If a failure occurs after database migration may have started, it intentionally leaves maintenance mode enabled and retains the private code backup rather than pretending an automatic database rollback is safe.
+          The updater rejects same-version/downgrade, unsafe layout, symlink, and tampered-package cases before mutation. If the recovery backup fails integrity validation before migration, automatic restore is not attempted from that rejected backup and the application remains in maintenance mode with recovery evidence retained. If a failure occurs after database migration may have started, it intentionally leaves maintenance mode enabled and retains the private code backup rather than pretending an automatic database rollback is safe.
 
           No production server is deployed or modified by publishing this release.
           EOF_NOTES
