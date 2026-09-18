@@ -41,57 +41,75 @@ class AppServiceProvider extends ServiceProvider
             ];
         });
 
-        RateLimiter::for('mcp-edge', function (Request $request): Limit {
-            return $this->mcpRateLimit(
-                240,
+        RateLimiter::for('mcp-edge', function (Request $request): array {
+            return $this->mcpRateLimits(
+                (int) config('mcp.rate_limits.edge.burst_per_second', 120),
+                (int) config('mcp.rate_limits.edge.per_minute', 1200),
                 'mcp-edge:'.$request->ip(),
                 'mcp_edge_rate_limited',
             );
         });
 
-        RateLimiter::for('mcp', function (Request $request): Limit {
+        RateLimiter::for('mcp', function (Request $request): array {
             $client = (string) $request->attributes->get('oauth_client_id', 'unauthenticated');
             $user = (string) $request->attributes->get('oauth_user_id', 'unknown');
 
-            return $this->mcpRateLimit(
-                120,
+            return $this->mcpRateLimits(
+                (int) config('mcp.rate_limits.principal.burst_per_second', 60),
+                (int) config('mcp.rate_limits.principal.per_minute', 600),
                 'mcp:'.$client.':'.$user,
                 'mcp_principal_rate_limited',
             );
         });
     }
 
-    private function mcpRateLimit(int $maxAttempts, string $key, string $errorCode): Limit
-    {
-        return Limit::perMinute($maxAttempts)
-            ->by($key)
-            ->response(static function (Request $request, array $headers) use ($errorCode) {
-                $correlationId = CorrelationId::current();
-                app(ActivityRecorder::class)->record(
-                    $correlationId,
-                    'mcp-rate-limit',
-                    'failure',
-                    null,
-                    $errorCode,
-                );
+    /**
+     * @return array<int, Limit>
+     */
+    private function mcpRateLimits(
+        int $burstPerSecond,
+        int $perMinute,
+        string $key,
+        string $errorCode,
+    ): array {
+        $burstPerSecond = max(1, $burstPerSecond);
+        $perMinute = max(1, $perMinute);
+        $response = static function (Request $request, array $headers) use ($errorCode) {
+            $correlationId = CorrelationId::current();
+            app(ActivityRecorder::class)->record(
+                $correlationId,
+                'mcp-rate-limit',
+                'failure',
+                null,
+                $errorCode,
+            );
 
-                $id = $request->input('id');
-                if (! is_int($id) && ! is_string($id)) {
-                    $id = null;
-                }
+            $id = $request->input('id');
+            if (! is_int($id) && ! is_string($id)) {
+                $id = null;
+            }
 
-                return response()->json([
-                    'jsonrpc' => '2.0',
-                    'id' => $id,
-                    'error' => [
-                        'code' => -32000,
-                        'message' => 'MCP request rate limit exceeded. Retry after the advertised delay.',
-                        'data' => [
-                            'reason' => $errorCode,
-                            'correlation_id' => $correlationId,
-                        ],
+            return response()->json([
+                'jsonrpc' => '2.0',
+                'id' => $id,
+                'error' => [
+                    'code' => -32000,
+                    'message' => 'MCP request rate limit exceeded. Retry after the advertised delay.',
+                    'data' => [
+                        'reason' => $errorCode,
+                        'correlation_id' => $correlationId,
                     ],
-                ], 429, $headers)->header('Cache-Control', 'no-store');
-            });
+                ],
+            ], 429, $headers)->header('Cache-Control', 'no-store');
+        };
+
+        return [
+            Limit::perSecond($burstPerSecond)
+                ->by($key.':burst')
+                ->response($response),
+            Limit::perMinute($perMinute)
+                ->by($key.':sustained')
+                ->response($response),
+        ];
     }
 }
