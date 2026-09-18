@@ -97,6 +97,7 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertSame(['Bearer alpha-access', 'Bearer beta-access'], array_column($this->toolCalls, 'authorization'));
     }
 
+
     public function test_execution_routes_read_write_and_downstream_denial_without_bypass(): void
     {
         $alpha = $this->createSite('alpha');
@@ -120,13 +121,151 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertStringContainsString('Permission denied', $denied['error']['message']);
 
         self::assertSame(
-            ['demo/read', 'demo/write', 'demo/denied'],
+            [
+                'wp-ai-bridge/abilities-read',
+                'demo/read',
+                'wp-ai-bridge/abilities-read',
+                'demo/write',
+                'wp-ai-bridge/abilities-read',
+                'demo/denied',
+            ],
             array_column($this->toolCalls, 'ability'),
         );
         self::assertSame(
-            ['Bearer alpha-access', 'Bearer beta-access', 'Bearer alpha-access'],
+            [
+                'Bearer alpha-access',
+                'Bearer alpha-access',
+                'Bearer beta-access',
+                'Bearer beta-access',
+                'Bearer alpha-access',
+                'Bearer alpha-access',
+            ],
             array_column($this->toolCalls, 'authorization'),
         );
+    }
+
+    public function test_default_ability_catalog_page_size_is_ten(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead('alpha');
+
+        self::assertTrue($result['ok']);
+        self::assertSame(10, $result['catalog']['per_page']);
+    }
+
+    public function test_readonly_transport_failure_is_not_reported_as_mutation_uncertainty_or_retried(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+
+        $catalogCalls = 0;
+        $targetCalls = 0;
+        $this->resetHttp();
+        Http::fake(function (Request $request) use (&$catalogCalls, &$targetCalls) {
+            $path = (string) parse_url($request->url(), PHP_URL_PATH);
+            if ($path !== '/wp-json/wp-ai-bridge/v1/mcp') {
+                return $this->bridgeResponse($request);
+            }
+
+            if ($request->method() === 'DELETE') {
+                return Http::response('', 200);
+            }
+
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => 1,
+                    'result' => ['protocolVersion' => '2025-11-25'],
+                ], 200, ['Mcp-Session-Id' => 'session-alpha']);
+            }
+
+            if (($payload['method'] ?? null) === 'tools/call') {
+                $ability = (string) ($payload['params']['arguments']['ability_name'] ?? '');
+                if ($ability === 'wp-ai-bridge/abilities-read') {
+                    $catalogCalls++;
+
+                    return $this->bridgeResponse($request);
+                }
+                if ($ability === 'demo/read') {
+                    $targetCalls++;
+
+                    return Http::failedConnection();
+                }
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute('alpha', 'demo/read', []);
+
+        self::assertFalse($result['ok']);
+        self::assertSame('network_failure', $result['error']['code']);
+        self::assertStringContainsString('downstream read', $result['error']['message']);
+        self::assertSame(1, $catalogCalls);
+        self::assertSame(1, $targetCalls);
+    }
+
+    public function test_real_mcp_transport_accepts_nested_empty_object_and_preserves_object_identity_downstream(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+
+        $downstreamParameters = null;
+        $this->fakeBridge(function (Request $request) use (&$downstreamParameters) {
+            $path = (string) parse_url($request->url(), PHP_URL_PATH);
+            if ($path === '/wp-json/wp-ai-bridge/v1/mcp' && $request->method() === 'POST') {
+                $payload = $request->data();
+                if (($payload['method'] ?? null) === 'tools/call'
+                    && ($payload['params']['arguments']['ability_name'] ?? null) === 'demo/read') {
+                    $raw = json_decode($request->body());
+                    $downstreamParameters = $raw?->params?->arguments?->parameters;
+                }
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $host = parse_url((string) config('oauth.resource'), PHP_URL_HOST);
+        self::assertIsString($host);
+
+        $meta = [
+            'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+            'io.modelcontextprotocol/clientCapabilities' => (object) [],
+            'io.modelcontextprotocol/clientInfo' => ['name' => 'issue-50-test', 'version' => '1.0.0'],
+        ];
+        $body = json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 50,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'site-ability-execute',
+                'arguments' => [
+                    'site_id' => 'alpha',
+                    'ability' => 'demo/read',
+                    'input' => (object) [],
+                ],
+                '_meta' => $meta,
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $request = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], [
+            'HTTP_HOST' => $host,
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+            'HTTP_MCP_PROTOCOL_VERSION' => '2026-07-28',
+            'HTTP_MCP_METHOD' => 'tools/call',
+            'HTTP_MCP_NAME' => 'site-ability-execute',
+        ], $body);
+
+        $response = app(\App\Infrastructure\Mcp\GatewayMcpEndpoint::class)->handle($request);
+        self::assertSame(200, $response->getStatusCode());
+
+        $payload = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
+        self::assertTrue((bool) ($payload['result']['structuredContent']['ok'] ?? false));
+        self::assertInstanceOf(\stdClass::class, $downstreamParameters);
     }
 
     public function test_unknown_or_disconnected_site_fails_before_downstream_mcp_execution(): void
@@ -152,14 +291,16 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertSame(0, $mcpRequests);
     }
 
+
     public function test_ambiguous_mutation_transport_failure_is_not_retried(): void
     {
         $alpha = $this->createSite('alpha');
         $this->pair($alpha);
 
-        $toolCalls = 0;
+        $catalogCalls = 0;
+        $targetCalls = 0;
         $this->resetHttp();
-        Http::fake(function (Request $request) use (&$toolCalls) {
+        Http::fake(function (Request $request) use (&$catalogCalls, &$targetCalls) {
             $path = (string) parse_url($request->url(), PHP_URL_PATH);
             if ($path !== '/wp-json/wp-ai-bridge/v1/mcp') {
                 return $this->bridgeResponse($request);
@@ -179,12 +320,20 @@ final class MultiSiteRoutingTest extends TestCase
             }
 
             if (($payload['method'] ?? null) === 'tools/call') {
-                $toolCalls++;
+                $ability = (string) ($payload['params']['arguments']['ability_name'] ?? '');
+                if ($ability === 'wp-ai-bridge/abilities-read') {
+                    $catalogCalls++;
 
-                return Http::failedConnection();
+                    return $this->bridgeResponse($request);
+                }
+                if ($ability === 'demo/write') {
+                    $targetCalls++;
+
+                    return Http::failedConnection();
+                }
             }
 
-            return Http::response(['error' => 'unexpected'], 500);
+            return $this->bridgeResponse($request);
         });
 
         $result = app(PendingGatewayToolHandlers::class)
@@ -192,9 +341,9 @@ final class MultiSiteRoutingTest extends TestCase
 
         self::assertFalse($result['ok']);
         self::assertSame('outcome_unknown', $result['error']['code']);
-        self::assertSame(1, $toolCalls);
+        self::assertSame(1, $catalogCalls);
+        self::assertSame(1, $targetCalls);
     }
-
     public function test_disconnect_of_one_site_does_not_break_other_site_routing(): void
     {
         $alpha = $this->createSite('alpha');
@@ -240,7 +389,7 @@ final class MultiSiteRoutingTest extends TestCase
             return Http::response(str_repeat('x', 2048), 200, ['Content-Type' => 'application/json']);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead('alpha');
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead('alpha', null, 1, 25);
 
         self::assertFalse($result['ok']);
         self::assertSame('response_too_large', $result['error']['code']);
@@ -394,6 +543,13 @@ final class MultiSiteRoutingTest extends TestCase
                 'namespace' => $siteId,
                 'label' => ucfirst($siteId).' Demo',
                 'description' => 'Site-specific current ability contract.',
+                'mcp_type' => 'tool',
+                'annotations' => [
+                    'readonly' => $itemName === 'demo/read',
+                    'destructive' => $itemName !== 'demo/read',
+                    'idempotent' => true,
+                ],
+                'bridge_delegation' => 'native_abilities',
                 'execution_permission' => 'not_evaluated',
             ];
             if ($exact) {
