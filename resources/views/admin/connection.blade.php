@@ -22,6 +22,11 @@
             <dd><code>{{ rtrim((string) config('oauth.issuer'), '/').'/.well-known/oauth-authorization-server' }}</code></dd>
         </div>
         <div>
+            <dt>{{ __('Gateway OAuth client metadata') }}</dt>
+            <dd><code>{{ config('bridge.client.id') }}</code></dd>
+            <dd class="muted">{{ __('Approve or configure this client metadata URL in WP AI Bridge when connecting the Gateway.') }}</dd>
+        </div>
+        <div>
             <dt>{{ __('Required MCP scope') }}</dt>
             <dd><code>{{ config('oauth.scope') }}</code></dd>
         </div>
