@@ -50,14 +50,21 @@ class AppServiceProvider extends ServiceProvider
             );
         });
 
-        RateLimiter::for('mcp', function (Request $request): array {
-            $client = (string) $request->attributes->get('oauth_client_id', 'unauthenticated');
-            $user = (string) $request->attributes->get('oauth_user_id', 'unknown');
+        RateLimiter::for('mcp', function (Request $request) {
+            $client = $request->attributes->get('oauth_client_id');
+            $user = $request->attributes->get('oauth_user_id');
+
+            if (! is_string($client)
+                || $client === ''
+                || (! is_string($user) && ! is_int($user))
+                || (string) $user === '') {
+                return Limit::none();
+            }
 
             return $this->mcpRateLimits(
                 (int) config('mcp.rate_limits.principal.burst_per_second', 60),
                 (int) config('mcp.rate_limits.principal.per_minute', 600),
-                'mcp:'.$client.':'.$user,
+                'mcp:'.$client.':'.(string) $user,
                 'mcp_principal_rate_limited',
             );
         });
