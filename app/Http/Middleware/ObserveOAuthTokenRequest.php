@@ -6,6 +6,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Support\CorrelationId;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
@@ -31,7 +32,8 @@ final readonly class ObserveOAuthTokenRequest
             throw $throwable;
         }
 
-        if ($request->attributes->get('oauth_token_recovered') === true) {
+        $recovered = $request->attributes->get('oauth_token_recovered') === true;
+        if ($recovered) {
             $operation = 'oauth-token-refresh-recovery';
         }
 
@@ -47,15 +49,61 @@ final readonly class ObserveOAuthTokenRequest
             }
         }
 
+        $outcome = $response->isSuccessful() ? 'success' : 'failure';
+        $correlationId = CorrelationId::current();
+
         $this->activity->record(
-            CorrelationId::current(),
+            $correlationId,
             $operation,
-            $response->isSuccessful() ? 'success' : 'failure',
+            $outcome,
             null,
             $errorCode,
         );
 
+        Log::info('OAuth token exchange completed.', [
+            'correlation_id' => $correlationId,
+            'operation' => $operation,
+            'outcome' => $outcome,
+            'error_code' => $errorCode,
+            'status' => $response->getStatusCode(),
+            'requested_scopes' => $this->requestedScopes($request),
+            'refresh_token_issued' => $this->refreshTokenIssued($response),
+            'recovered' => $recovered,
+        ]);
+
         return $response;
+    }
+
+    /** @return list<string> */
+    private function requestedScopes(Request $request): array
+    {
+        $scope = $request->input('scope');
+        if (! is_string($scope) || trim($scope) === '') {
+            return [];
+        }
+
+        $requested = preg_split('/\\s+/', trim($scope), -1, PREG_SPLIT_NO_EMPTY);
+        if (! is_array($requested)) {
+            return [];
+        }
+
+        $supported = array_values(array_map('strval', (array) config('oauth.scopes')));
+
+        return array_values(array_unique(array_intersect($requested, $supported)));
+    }
+
+    private function refreshTokenIssued(Response $response): ?bool
+    {
+        if (! $response->isSuccessful()) {
+            return null;
+        }
+
+        $payload = json_decode((string) $response->getContent(), true);
+        if (! is_array($payload)) {
+            return null;
+        }
+
+        return array_key_exists('refresh_token', $payload);
     }
 
     private function operation(mixed $grantType): string
