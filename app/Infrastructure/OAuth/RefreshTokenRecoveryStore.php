@@ -245,7 +245,12 @@ final readonly class RefreshTokenRecoveryStore
                 }
             }
 
-            $storedScopes = $this->decodeScopes((string) $recovery->effective_scopes);
+            try {
+                $storedScopes = $this->decodeScopes((string) $recovery->effective_scopes);
+            } catch (Throwable) {
+                return null;
+            }
+
             if ($storedScopes !== $this->requestedScopes($parameters, $oldScopes)) {
                 return null;
             }
