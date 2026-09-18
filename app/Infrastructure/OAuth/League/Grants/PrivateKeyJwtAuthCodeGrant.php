@@ -16,7 +16,7 @@ use Psr\Http\Message\ServerRequestInterface;
 
 final class PrivateKeyJwtAuthCodeGrant extends AuthCodeGrant
 {
-    use IssuesRefreshTokensForOfflineAccess;
+    use IssuesRefreshTokensForMcpAccess;
 
     private const VALIDATED_CLIENT_ATTRIBUTE = 'gateway.oauth.validated_client';
 
