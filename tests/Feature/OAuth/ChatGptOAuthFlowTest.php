@@ -514,7 +514,7 @@ final class ChatGptOAuthFlowTest extends TestCase
         $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
         self::assertSame(0, \DB::table('oauth_refresh_recoveries')->count());
 
-        $oldPayload = app(\App\Infrastructure\OAuth\RefreshTokenInspector::class)->inspect($refreshToken);
+        $oldPayload = app(RefreshTokenInspector::class)->inspect($refreshToken);
         self::assertIsArray($oldPayload);
         self::assertIsString($oldPayload['refresh_token_id'] ?? null);
         self::assertNotNull(
