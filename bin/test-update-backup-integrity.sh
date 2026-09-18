@@ -81,8 +81,8 @@ migration_db_state() {
     php -r '
       require "vendor/autoload.php";
       $app = require "bootstrap/app.php";
-      $app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();
-      $rows = Illuminate\\Support\\Facades\\DB::table("migrations")
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      $rows = Illuminate\Support\Facades\DB::table("migrations")
           ->orderBy("migration")
           ->get(["migration", "batch"])
           ->map(static fn ($row): array => [
