@@ -12,14 +12,13 @@ return new class extends Migration
             $table->char('old_token_hash', 64)->primary();
             $table->string('old_refresh_token_id', 128);
             $table->string('successor_access_token_id', 128);
-            $table->string('successor_refresh_token_id', 128);
+            $table->string('successor_refresh_token_id', 128)->nullable();
             $table->ulid('authorization_id');
             $table->string('client_id', 255);
             $table->foreignId('user_id');
             $table->string('resource', 1024);
-            $table->json('requested_scopes')->nullable();
+            $table->json('effective_scopes');
             $table->longText('response_ciphertext');
-            $table->unsignedBigInteger('rotation_staged_at_us');
             $table->timestamp('recovery_expires_at');
             $table->unsignedTinyInteger('uses_remaining')->default(1);
             $table->timestamps();
