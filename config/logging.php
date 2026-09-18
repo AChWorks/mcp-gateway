@@ -1,19 +1,15 @@
 <?php
 
+use App\Support\BoundedLogDefaults;
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
 use Monolog\Processor\PsrLogMessageProcessor;
 
-$defaultChannel = env('LOG_CHANNEL', 'daily');
-$stackChannels = (string) env('LOG_STACK', 'daily');
-
-// Existing installations created before bounded logging used this exact installer pair.
-// Normalize only that legacy default so updates become bounded without rewriting .env.
-if ($defaultChannel === 'stack' && $stackChannels === 'single') {
-    $defaultChannel = 'daily';
-    $stackChannels = 'daily';
-}
+[$defaultChannel, $stackChannels] = BoundedLogDefaults::normalize(
+    env('LOG_CHANNEL', 'daily'),
+    (string) env('LOG_STACK', 'daily'),
+);
 
 return [
 
