@@ -5,6 +5,16 @@ use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
 use Monolog\Processor\PsrLogMessageProcessor;
 
+$defaultChannel = env('LOG_CHANNEL', 'daily');
+$stackChannels = (string) env('LOG_STACK', 'daily');
+
+// Existing installations created before bounded logging used this exact installer pair.
+// Normalize only that legacy default so updates become bounded without rewriting .env.
+if ($defaultChannel === 'stack' && $stackChannels === 'single') {
+    $defaultChannel = 'daily';
+    $stackChannels = 'daily';
+}
+
 return [
 
     /*
@@ -18,7 +28,7 @@ return [
     |
     */
 
-    'default' => env('LOG_CHANNEL', 'daily'),
+    'default' => $defaultChannel,
 
     /*
     |--------------------------------------------------------------------------
@@ -54,7 +64,7 @@ return [
 
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', (string) env('LOG_STACK', 'daily')),
+            'channels' => explode(',', $stackChannels),
             'ignore_exceptions' => false,
         ],
 
