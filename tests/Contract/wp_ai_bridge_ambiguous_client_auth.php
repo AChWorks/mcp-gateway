@@ -113,6 +113,7 @@ $resource = $oauth->mcp_endpoint_url();
 $scenarios = [
     'refresh_metadata_503' => ['operation' => 'refresh', 'fault' => 'metadata_503'],
     'refresh_jwks_503' => ['operation' => 'refresh', 'fault' => 'jwks_503'],
+    'refresh_lost_response' => ['operation' => 'refresh_lost_response', 'fault' => 'normal'],
     'revoke_metadata_503' => ['operation' => 'revoke', 'fault' => 'metadata_503'],
     'revoke_jwks_503' => ['operation' => 'revoke', 'fault' => 'jwks_503'],
 ];
@@ -178,7 +179,66 @@ try {
             'scope' => OAuth_Server::SCOPE_MCP.' '.OAuth_Server::SCOPE_OFFLINE,
         ];
 
-        if ($scenario['operation'] === 'refresh') {
+        if ($scenario['operation'] === 'refresh_lost_response') {
+            $refresh = $store->issue(OAuth_Store::TYPE_REFRESH, $claims, OAuth_Server::REFRESH_TTL);
+
+            // The first successful response is deliberately treated as lost after the
+            // Bridge has committed rotation. Gateway retains the old refresh token
+            // after an ambiguous transport failure and may present it once later.
+            $first = new WP_REST_Request('POST', '/wp-ai-bridge/v1/oauth/token');
+            $first->set_param('grant_type', 'refresh_token');
+            $first->set_param('refresh_token', $refresh);
+            $first->set_param('client_id', $client['client_id']);
+            $first->set_param('resource', $resource);
+            gateway_bridge_contract_auth(
+                $first,
+                gateway_bridge_contract_assertion($client['client_id'], $oauth->token_endpoint_url(), $client['key'])
+            );
+
+            $committed = $oauth->handle_token_request($first);
+            $committedData = gateway_bridge_contract_data($committed);
+            gateway_bridge_contract_assert($committed->get_status() === 200, $name.': initial refresh did not commit successfully.');
+            gateway_bridge_contract_assert(is_string($committedData['access_token'] ?? null) && $committedData['access_token'] !== '', $name.': initial refresh omitted the successor access token.');
+            gateway_bridge_contract_assert(is_string($committedData['refresh_token'] ?? null) && $committedData['refresh_token'] !== '', $name.': initial refresh omitted the successor refresh token.');
+            gateway_bridge_contract_assert($store->read(OAuth_Store::TYPE_REFRESH, $refresh) === false, $name.': initial refresh did not rotate the original refresh token.');
+
+            $retry = new WP_REST_Request('POST', '/wp-ai-bridge/v1/oauth/token');
+            $retry->set_param('grant_type', 'refresh_token');
+            $retry->set_param('refresh_token', $refresh);
+            $retry->set_param('client_id', $client['client_id']);
+            $retry->set_param('resource', $resource);
+            gateway_bridge_contract_auth(
+                $retry,
+                gateway_bridge_contract_assertion($client['client_id'], $oauth->token_endpoint_url(), $client['key'])
+            );
+
+            $recovered = $oauth->handle_token_request($retry);
+            $recoveredData = gateway_bridge_contract_data($recovered);
+            gateway_bridge_contract_assert($recovered->get_status() === 200, $name.': exact old-token retry did not recover the committed successor response.');
+            gateway_bridge_contract_assert(
+                hash_equals((string) $committedData['access_token'], (string) ($recoveredData['access_token'] ?? '')),
+                $name.': recovery returned a different successor access token.'
+            );
+            gateway_bridge_contract_assert(
+                hash_equals((string) $committedData['refresh_token'], (string) ($recoveredData['refresh_token'] ?? '')),
+                $name.': recovery returned a different successor refresh token.'
+            );
+
+            $replay = new WP_REST_Request('POST', '/wp-ai-bridge/v1/oauth/token');
+            $replay->set_param('grant_type', 'refresh_token');
+            $replay->set_param('refresh_token', $refresh);
+            $replay->set_param('client_id', $client['client_id']);
+            $replay->set_param('resource', $resource);
+            gateway_bridge_contract_auth(
+                $replay,
+                gateway_bridge_contract_assertion($client['client_id'], $oauth->token_endpoint_url(), $client['key'])
+            );
+
+            $rejected = $oauth->handle_token_request($replay);
+            $rejectedData = gateway_bridge_contract_data($rejected);
+            gateway_bridge_contract_assert($rejected->get_status() === 400, $name.': replay after one recovery was not rejected.');
+            gateway_bridge_contract_assert(($rejectedData['error'] ?? '') === 'invalid_grant', $name.': replay after one recovery did not fail as invalid_grant.');
+        } elseif ($scenario['operation'] === 'refresh') {
             $refresh = $store->issue(OAuth_Store::TYPE_REFRESH, $claims, OAuth_Server::REFRESH_TTL);
             $request = new WP_REST_Request('POST', '/wp-ai-bridge/v1/oauth/token');
             $request->set_param('grant_type', 'refresh_token');
@@ -251,4 +311,4 @@ try {
     }
 }
 
-echo "PASS: exact pinned WP AI Bridge dependency failures occur before refresh consumption/revocation.\n";
+echo "PASS: exact pinned WP AI Bridge dependency failures and ambiguous refresh-response recovery contract.\n";

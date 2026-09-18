@@ -340,6 +340,48 @@ final class SiteRegistryAndPairingTest extends TestCase
         self::assertSame($before, $site->credential()->firstOrFail()->encrypted_payload);
     }
 
+    public function test_refresh_network_failure_preserves_credential_and_later_retry_succeeds(): void
+    {
+        /** @var SiteRegistry $registry */
+        $registry = app(SiteRegistry::class);
+        /** @var SiteConnectionService $connections */
+        $connections = app(SiteConnectionService::class);
+        $site = $registry->create('alpha', 'Alpha', 'https://alpha.example.test');
+        $this->pair($connections, $site);
+        $before = $site->credential()->firstOrFail()->encrypted_payload;
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fakeSequence()
+            ->pushFailedConnection('Connection reset after the refresh request was sent.')
+            ->push([
+                'token_type' => 'Bearer',
+                'expires_in' => 3600,
+                'access_token' => 'alpha-refreshed-access',
+                'refresh_token' => 'alpha-refreshed-refresh',
+                'scope' => 'mcp:use offline_access',
+            ], 200);
+
+        $this->travel(2)->seconds();
+        try {
+            $connections->accessToken($site);
+            self::fail('Ambiguous refresh network failure was treated as success.');
+        } catch (SiteConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+        }
+
+        $site->refresh();
+        self::assertSame(SiteConnectionState::Error, $site->connection_state);
+        self::assertSame('network_failure', $site->last_error_code);
+        self::assertTrue($site->credential()->exists());
+        self::assertSame($before, $site->credential()->firstOrFail()->encrypted_payload);
+
+        self::assertSame('alpha-refreshed-access', $connections->accessToken($site));
+        self::assertSame(SiteConnectionState::Connected, $site->refresh()->connection_state);
+        self::assertNull($site->refresh()->last_error_code);
+        self::assertNotSame($before, $site->credential()->firstOrFail()->encrypted_payload);
+    }
+
     public function test_refresh_oauth_temporarily_unavailable_preserves_credential_and_later_retry_succeeds(): void
     {
         /** @var SiteRegistry $registry */
