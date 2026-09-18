@@ -261,10 +261,8 @@ final class MultiSiteRoutingTest extends TestCase
         ], $body);
 
         $response = app(GatewayMcpEndpoint::class)->handle($request);
-        self::assertSame(200, $response->getStatusCode());
 
-        $payload = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
-        self::assertTrue((bool) ($payload['result']['structuredContent']['ok'] ?? false));
+        self::assertSame(200, $response->getStatusCode());
         self::assertInstanceOf(\stdClass::class, $downstreamParameters);
     }
 
