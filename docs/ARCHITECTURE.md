@@ -406,6 +406,8 @@ Activity is operator-facing audit metadata, distinct from debug logs. Record onl
 - correlation ID;
 - concise safe error category.
 
+Retention is bounded by configuration. The default policy keeps Activity for at most 30 days and at most 5,000 rows, controlled by `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`. Every Activity write applies the policy under the shared retention lock, and the daily Laravel scheduler invokes `activity:prune` so age-based retention also advances on otherwise idle installations. The command is safe to run manually and reports only deletion counts; it does not expose stored Activity content.
+
 ### Health
 
 Provide a cheap application health endpoint that proves the application can boot and reach required local dependencies as appropriate. Do not make it call every remote WordPress site.

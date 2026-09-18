@@ -205,6 +205,24 @@ Important boundaries:
 
 The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
+### Activity retention scheduling
+
+Activity storage is bounded even without a scheduler: every new Activity record applies the configured age and row-count policy. Defaults are 30 days and 5,000 rows through `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`.
+
+To ensure age-based retention also advances while the Gateway is otherwise idle, configure the host's cron/scheduled-task facility to run Laravel's scheduler once per minute from the application root:
+
+```cron
+* * * * * cd <APP_ROOT> && php artisan schedule:run >> /dev/null 2>&1
+```
+
+Use the PHP 8.4 CLI that belongs to the deployed site when `php` is not that binary. The application schedules `activity:prune` once per day with overlap protection. Operators may also apply the same configured policy on demand:
+
+```bash
+php artisan activity:prune
+```
+
+The command reports only expired/overflow deletion counts and the remaining row count. It does not dump Activity records or credentials.
+
 ## 6. Generate signing keys (advanced path)
 
 The web installer performs this automatically. For CLI deployment:

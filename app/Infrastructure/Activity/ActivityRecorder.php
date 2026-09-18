@@ -2,14 +2,14 @@
 
 namespace App\Infrastructure\Activity;
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use RuntimeException;
 use Throwable;
 
 final class ActivityRecorder
 {
+    public function __construct(private readonly ActivityRetention $retention) {}
+
     public function record(
         string $correlationId,
         string $operation,
@@ -26,30 +26,18 @@ final class ActivityRecorder
         try {
             [$actorType, $actorId, $clientHash] = $this->actor();
 
-            DB::transaction(function () use ($correlationId, $operation, $outcome, $siteId, $errorCode, $actorType, $actorId, $clientHash): void {
-                $lock = DB::table('activity_retention_state')
-                    ->where('id', 1)
-                    ->lockForUpdate()
-                    ->first();
-                if ($lock === null) {
-                    throw new RuntimeException('Activity retention state is unavailable.');
-                }
-
-                DB::table('activity_events')->insert([
-                    'id' => (string) Str::ulid(),
-                    'correlation_id' => $correlationId,
-                    'actor_type' => $actorType,
-                    'actor_id' => $actorId,
-                    'client_id_hash' => $clientHash,
-                    'site_id' => $siteId,
-                    'operation' => $operation,
-                    'outcome' => $outcome,
-                    'error_code' => $errorCode,
-                    'created_at' => now(),
-                ]);
-
-                $this->prune();
-            });
+            $this->retention->store([
+                'id' => (string) Str::ulid(),
+                'correlation_id' => $correlationId,
+                'actor_type' => $actorType,
+                'actor_id' => $actorId,
+                'client_id_hash' => $clientHash,
+                'site_id' => $siteId,
+                'operation' => $operation,
+                'outcome' => $outcome,
+                'error_code' => $errorCode,
+                'created_at' => now(),
+            ]);
         } catch (Throwable) {
             // Activity persistence must never change the authoritative outcome of a
             // routed operation, especially after a remote mutation may have executed.
@@ -96,32 +84,6 @@ final class ActivityRecorder
         }
 
         return ['anonymous', null, $clientHash];
-    }
-
-    private function prune(): void
-    {
-        $retentionDays = max(1, (int) config('activity.retention_days', 30));
-        $maxRows = max(1, (int) config('activity.max_rows', 5000));
-
-        DB::table('activity_events')
-            ->where('created_at', '<', now()->subDays($retentionDays))
-            ->delete();
-
-        $overflow = DB::table('activity_events')->count() - $maxRows;
-        if ($overflow <= 0) {
-            return;
-        }
-
-        $ids = DB::table('activity_events')
-            ->orderBy('created_at')
-            ->orderBy('id')
-            ->limit($overflow)
-            ->pluck('id')
-            ->all();
-
-        if ($ids !== []) {
-            DB::table('activity_events')->whereIn('id', $ids)->delete();
-        }
     }
 
     private function correlationId(string $value): string
