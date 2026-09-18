@@ -7,6 +7,7 @@ use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteRegistry;
 use App\Domain\Sites\Site;
 use App\Infrastructure\Http\DnsResolver;
+use App\Infrastructure\Mcp\GatewayMcpEndpoint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
@@ -96,7 +97,6 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertSame(['wp-ai-bridge/abilities-read', 'wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'));
         self::assertSame(['Bearer alpha-access', 'Bearer beta-access'], array_column($this->toolCalls, 'authorization'));
     }
-
 
     public function test_execution_routes_read_write_and_downstream_denial_without_bypass(): void
     {
@@ -260,7 +260,7 @@ final class MultiSiteRoutingTest extends TestCase
             'HTTP_MCP_NAME' => 'site-ability-execute',
         ], $body);
 
-        $response = app(\App\Infrastructure\Mcp\GatewayMcpEndpoint::class)->handle($request);
+        $response = app(GatewayMcpEndpoint::class)->handle($request);
         self::assertSame(200, $response->getStatusCode());
 
         $payload = json_decode((string) $response->getContent(), true, flags: JSON_THROW_ON_ERROR);
@@ -290,7 +290,6 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertSame('missing_credential', $disconnected['error']['code']);
         self::assertSame(0, $mcpRequests);
     }
-
 
     public function test_ambiguous_mutation_transport_failure_is_not_retried(): void
     {
@@ -344,6 +343,7 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertSame(1, $catalogCalls);
         self::assertSame(1, $targetCalls);
     }
+
     public function test_disconnect_of_one_site_does_not_break_other_site_routing(): void
     {
         $alpha = $this->createSite('alpha');
