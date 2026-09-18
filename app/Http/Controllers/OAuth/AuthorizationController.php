@@ -7,9 +7,12 @@ use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthScopePolicy;
 use App\Infrastructure\OAuth\OAuthServerManager;
+use App\Support\CorrelationId;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use League\OAuth2\Server\Exception\OAuthServerException;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 final readonly class AuthorizationController
 {
@@ -66,17 +69,30 @@ final readonly class AuthorizationController
             $approved = hash_equals('approve', (string) $request->input('decision'));
             $authorization->setAuthorizationApproved($approved);
 
+            $scopes = array_map(
+                static fn ($scope): string => $scope->getIdentifier(),
+                $authorization->getScopes(),
+            );
+
             if ($approved) {
-                $scopes = array_map(
-                    static fn ($scope): string => $scope->getIdentifier(),
-                    $authorization->getScopes(),
-                );
                 $this->authorizations->approve(
                     (int) $user->getAuthIdentifier(),
                     $authorization->getClient()->getIdentifier(),
                     (string) config('oauth.resource'),
                     $scopes,
                 );
+            }
+
+            try {
+                Log::info('OAuth authorization decision.', [
+                    'correlation_id' => CorrelationId::current(),
+                    'approved' => $approved,
+                    'client_id_hash' => hash('sha256', $authorization->getClient()->getIdentifier()),
+                    'scopes' => $scopes,
+                    'refresh_eligible' => $approved && in_array((string) config('oauth.scope'), $scopes, true),
+                ]);
+            } catch (Throwable) {
+                // Diagnostics must never change the authorization outcome.
             }
 
             $psrResponse = $this->servers->authorizationServer()->completeAuthorizationRequest(

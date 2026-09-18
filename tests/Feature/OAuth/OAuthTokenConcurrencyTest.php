@@ -49,7 +49,7 @@ final class OAuthTokenConcurrencyTest extends TestCase
     public function test_authorization_code_can_only_be_redeemed_once_under_concurrency(): void
     {
         $user = $this->operator();
-        [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
+        [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp');
         $codeId = DB::table('oauth_auth_codes')->value('id');
         self::assertIsString($codeId);
 
@@ -79,7 +79,7 @@ final class OAuthTokenConcurrencyTest extends TestCase
     public function test_refresh_token_rotation_has_only_one_successor_under_concurrency(): void
     {
         $user = $this->operator();
-        [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
+        [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp');
         $initial = $this->post('/oauth/token', [
             'grant_type' => 'authorization_code',
             'client_id' => self::CLIENT_ID,

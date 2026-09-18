@@ -9,6 +9,7 @@
 <main>
     <h1>Authorize {{ $clientName }}</h1>
     <p>This client is requesting access to the MCP Gateway resource.</p>
+    <p>If approved, this connection remains authorized until revoked. The Gateway renews short-lived access tokens so the client can stay connected without repeated sign-in.</p>
     <dl>
         <dt>Client</dt>
         <dd><code>{{ $clientId }}</code></dd>
