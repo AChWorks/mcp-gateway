@@ -8,6 +8,7 @@ use App\Application\Sites\SiteRegistry;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteCredential;
 use App\Http\Middleware\EnsureCorrelationId;
+use App\Http\Middleware\ObserveOAuthTokenRequest;
 use App\Infrastructure\Activity\ActivityFeed;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Http\DnsResolver;
@@ -90,6 +91,13 @@ final class IntegratedSafeguardsTest extends TestCase
         self::assertStringNotContainsString('payload', $encoded);
         self::assertStringNotContainsString('authorization', strtolower($encoded));
         self::assertStringNotContainsString('client_id_hash', $encoded);
+    }
+
+    public function test_default_application_logging_is_bounded_daily_rotation(): void
+    {
+        self::assertSame('daily', config('logging.default'));
+        self::assertSame(['daily'], config('logging.channels.stack.channels'));
+        self::assertSame(14, (int) config('logging.channels.daily.max_files'));
     }
 
     public function test_wrong_application_key_fails_closed_without_losing_encrypted_credential(): void
@@ -284,6 +292,8 @@ final class IntegratedSafeguardsTest extends TestCase
 
         $token = $routes->first(fn ($route) => $route->uri() === 'oauth/token' && in_array('POST', $route->methods(), true));
         self::assertNotNull($token);
+        self::assertContains(EnsureCorrelationId::class, $token->middleware());
+        self::assertContains(ObserveOAuthTokenRequest::class, $token->middleware());
         self::assertContains('throttle:oauth-token', $token->middleware());
 
         $login = Route::getRoutes()->getByName('admin.login.store');
