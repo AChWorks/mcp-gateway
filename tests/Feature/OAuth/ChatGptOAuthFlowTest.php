@@ -784,7 +784,7 @@ final class ChatGptOAuthFlowTest extends TestCase
     private function issueRefreshableToken(?User $user = null): array
     {
         $user ??= $this->operator();
-        [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
         $response = $this->post('/oauth/token', [
             'grant_type' => 'authorization_code',
             'client_id' => self::CLIENT_ID,
