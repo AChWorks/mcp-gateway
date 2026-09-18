@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use League\OAuth2\Server\Exception\OAuthServerException;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 final readonly class AuthorizationController
 {
@@ -82,13 +83,17 @@ final readonly class AuthorizationController
                 );
             }
 
-            Log::info('OAuth authorization decision.', [
-                'correlation_id' => CorrelationId::current(),
-                'approved' => $approved,
-                'client_id_hash' => hash('sha256', $authorization->getClient()->getIdentifier()),
-                'scopes' => $scopes,
-                'refresh_eligible' => $approved && in_array((string) config('oauth.scope'), $scopes, true),
-            ]);
+            try {
+                Log::info('OAuth authorization decision.', [
+                    'correlation_id' => CorrelationId::current(),
+                    'approved' => $approved,
+                    'client_id_hash' => hash('sha256', $authorization->getClient()->getIdentifier()),
+                    'scopes' => $scopes,
+                    'refresh_eligible' => $approved && in_array((string) config('oauth.scope'), $scopes, true),
+                ]);
+            } catch (Throwable) {
+                // Diagnostics must never change the authorization outcome.
+            }
 
             $psrResponse = $this->servers->authorizationServer()->completeAuthorizationRequest(
                 $authorization,
