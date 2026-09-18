@@ -245,7 +245,7 @@ V1 ChatGPT requirements:
 - exact redirect validation;
 - resource binding/audience validation;
 - `mcp` as the required resource scope;
-- optional `offline_access`; a refresh token is issued only when that scope was explicitly authorized, and refresh may narrow scope and lose further refresh authority;
+- the required `mcp` authorization is refreshable for the fixed ChatGPT client so connectivity survives bounded access-token expiry even when ChatGPT omits `offline_access`; `offline_access` remains accepted and advertised for client compatibility, while refresh rotation, replay protection, expiry, and authorization-wide revocation remain enforced;
 - RFC 9207 `iss` on authorization responses to reduce authorization-server mix-up risk;
 - revocation;
 - expiry and rotation semantics;
