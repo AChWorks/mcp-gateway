@@ -387,6 +387,8 @@ For browser updates:
 For ChatGPT custom App connection problems:
 
 - first verify the Gateway itself with `php artisan gateway:check` and the documented OAuth/discovery endpoints before changing credentials;
+- an approved ChatGPT `mcp` authorization is refreshable: access tokens remain short-lived, while rotating refresh tokens preserve connectivity until expiry or revocation;
+- inspect the secret-safe `OAuth authorization decision.` and `OAuth token exchange completed.` log records. They include correlation identity, approved/requested scopes, outcome, and whether a refresh token was issued, but never the token value;
 - if ChatGPT shows the App as disconnected while Gateway health/discovery remain healthy, use ChatGPT's **Reconnect** control when available. A disconnected UI state alone does not prove that Gateway OAuth keys or downstream site authorization were lost;
 - preserve the failure time/time zone plus safe correlation IDs and relevant Activity metadata for diagnosis. Never copy access/refresh tokens, authorization codes, client assertions, private keys, or raw credential payloads into logs or support notes;
 - do not rotate Gateway signing keys or reauthorize downstream WordPress sites solely as a reconnect diagnostic shortcut;
