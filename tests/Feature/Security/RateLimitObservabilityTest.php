@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Security;
 
-use App\Infrastructure\Activity\ActivityRecorder;
 use App\Support\CorrelationId;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
