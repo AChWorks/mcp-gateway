@@ -186,6 +186,11 @@ FILESYSTEM_DISK=local
 MCP_BOOTSTRAP_FIXTURE_ENABLED=false
 MCP_BOOTSTRAP_FIXTURE_TOKEN=
 
+MCP_EDGE_RATE_LIMIT_BURST_PER_SECOND=120
+MCP_EDGE_RATE_LIMIT_PER_MINUTE=1200
+MCP_PRINCIPAL_RATE_LIMIT_BURST_PER_SECOND=60
+MCP_PRINCIPAL_RATE_LIMIT_PER_MINUTE=600
+
 OAUTH_PRIVATE_KEY_PATH=storage/app/private/oauth/private.key
 OAUTH_PUBLIC_KEY_PATH=storage/app/private/oauth/public.key
 BRIDGE_CLIENT_PRIVATE_KEY_PATH=storage/app/private/bridge-client/private.key
@@ -202,6 +207,8 @@ Important boundaries:
 - keep Laravel's `local` filesystem private/non-served;
 - both signing-key directories stay below `storage/app/private/`, outside the public web root;
 - the Bridge client keypair is a separate trust identity.
+
+The ChatGPT-facing MCP limiter is burst-aware by default: the unauthenticated edge allows 120 requests/second and 1,200/minute per source IP, while the authenticated principal allows 60 requests/second and 600/minute per `oauth_client_id + oauth_user_id`. Both windows must pass. Existing installations do not need new `.env` entries after an update because these values are application defaults; the variables above exist for evidence-based tuning without another code release. Values are clamped to at least 1, so setting them to zero does not disable abuse protection. A limited request remains an HTTP 429 with `Retry-After`/rate-limit headers and the bounded MCP diagnostic already recorded by the Gateway.
 
 The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
