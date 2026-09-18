@@ -315,6 +315,24 @@ Finally, sign in at `/admin/login` and confirm the authenticated Gateway connect
 
 Do not include access tokens, refresh tokens, authorization codes, client assertions, passwords, `APP_KEY`, `.env` contents, or private-key contents in deployment logs/screenshots used as evidence.
 
+### Production diagnostics runbook
+
+Start diagnosis with the exact failure time/time zone, affected site/operation, HTTP status when known, and the Gateway correlation ID. Preserve identifiers and bounded metadata; never preserve raw credentials or request bodies merely to make a failure easier to inspect.
+
+Use the evidence in this order:
+
+1. **Gateway health/configuration** — run `php artisan gateway:check`; for ChatGPT client-contract questions also run `php artisan gateway:oauth-client-check --refresh`, then verify the safe public endpoints above.
+2. **Operator Activity** — use `/admin/activity` to correlate the timestamp/site/operation/outcome/error category. Activity intentionally contains metadata rather than access/refresh tokens, authorization codes, client assertions, passwords, private keys, or arbitrary MCP payloads.
+3. **Application log** — the default `daily` channel writes date-rotated Laravel logs under `storage/logs/` (normally `laravel-YYYY-MM-DD.log`) and retains 14 files by default through `LOG_DAILY_DAYS`. Historical installer defaults are normalized to the same bounded daily behavior unless the operator supplied a custom logging configuration.
+4. **Web/PHP/OpenLiteSpeed evidence** — inspect the aaPanel/site/PHP/OpenLiteSpeed error log that owns the failing request only when the Gateway evidence is insufficient. Those paths are hosting-configuration state rather than Gateway-owned paths, so this document does not invent one fixed filesystem location; use the per-site/PHP error-log location configured by the host/control panel.
+5. **Updater evidence** — for update failures, preserve the exact updater page/state and the private code backup under `storage/app/private/update-backups/`. The updater retains only the three newest updater-created code backups. Do not discard retained recovery evidence while an update is in a recovery-required state.
+
+Classify the failure before changing credentials or retry policy: distinguish local preflight/configuration failure, rate limiting, OAuth client/grant failure, downstream network/TLS failure, protocol incompatibility, downstream authorization/rejection, and an ambiguous mutation outcome. Unknown writes must not be retried merely to improve observability.
+
+The application-level log policy bounds retained file count, not the byte size of an unusually busy single day. Do not add arbitrary request-body logging or speculative logging infrastructure to obtain a strict byte cap. If measured production traffic shows daily log size can create disk pressure, treat that measurement as the trigger for a separate targeted log-size/host-retention change.
+
+When escalating a problem, share only the timestamp/time zone, correlation ID, safe Activity/error category, relevant HTTP status/Retry-After metadata, release identity, and redacted log excerpts. Never attach `.env`, `APP_KEY`, bearer/refresh tokens, authorization codes, client assertions, database passwords, or private keys.
+
 ## 10. OpenLiteSpeed V1 validation result
 
 V1 validation completed the production-like aaPanel/OpenLiteSpeed/LSAPI proof on OpenLiteSpeed 1.8.4 with PHP 8.4 and MySQL 8.4. Modern MCP requests and the retained legacy compatibility flow worked through HTTPS/OpenLiteSpeed without an evidence-based need for custom buffering or timeout overrides beyond the normal Laravel `public/` document-root/rewrite configuration.

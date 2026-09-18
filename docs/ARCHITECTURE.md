@@ -138,6 +138,23 @@ Web/MCP entrypoints
 
 Controllers and MCP handlers must not contain raw WP AI Bridge HTTP/OAuth logic.
 
+### Control-plane evolution boundary
+
+The application/domain layer is the long-lived control-plane boundary. MCP, the server-rendered admin UI, and any future API/automation surface are adapters over explicit site identity, lifecycle, credential, health, activity, and operation rules; transport-specific entrypoints must not become the only owner of those rules.
+
+The current V1 code intentionally stops short of a speculative provider framework. Direct site-inventory queries in the MCP/admin adapters and concrete `WpAiBridge` dependencies in the existing site/connector flow are acceptable while there is one evidenced connector and one small-fleet deployment model. They are known extraction points, not a reason to introduce generic indirection early.
+
+Extract reusable query/connector contracts only when a concrete trigger exists, such as a second connector/provider, a non-MCP consumer needing the same inventory semantics, or measured fleet-scale pressure. Prefer the smallest extraction first (for example, a shared site inventory/query service or connector contract) and keep these invariants:
+
+- every target operation retains explicit `site_id`/site identity and authorization boundaries;
+- adapters cannot turn the Gateway into a generic privileged HTTP/shell/SQL proxy;
+- admin/API/MCP surfaces reuse common application rules rather than reimplementing authority;
+- queues/background workers remain optional scale mechanisms, not baseline dependencies;
+- simple single-host PHP/MySQL/shared-hosting deployment remains supported until evidence requires otherwise;
+- tenant/workspace, bulk-operation, provider-plugin, or microservice abstractions are introduced only for measured use cases.
+
+Large-fleet inventory behavior remains a separate scalability concern rather than a prerequisite for this architectural boundary.
+
 ## 4. Core components
 
 ### 4.1 Admin Panel
