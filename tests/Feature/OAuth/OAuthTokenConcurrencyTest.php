@@ -110,11 +110,19 @@ final class OAuthTokenConcurrencyTest extends TestCase
             $refreshTokenId,
         );
 
-        self::assertSame([200, 400], $this->sortedStatuses($responses));
+        self::assertSame([200, 200], $this->sortedStatuses($responses));
+        self::assertSame($responses[0]['body'], $responses[1]['body']);
         self::assertSame(2, DB::table('oauth_access_tokens')->count());
         self::assertSame(2, DB::table('oauth_refresh_tokens')->count());
         self::assertSame(1, DB::table('oauth_refresh_tokens')->whereNotNull('revoked_at')->count());
         self::assertSame(1, DB::table('oauth_refresh_tokens')->whereNull('revoked_at')->count());
+        self::assertSame(1, DB::table('oauth_refresh_recoveries')->count());
+        self::assertSame(0, (int) DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+
+        $this->post('/oauth/token', [
+            ...$base,
+            'client_assertion' => $this->clientAssertion(),
+        ])->assertStatus(400);
     }
 
     /**
