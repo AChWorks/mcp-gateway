@@ -135,6 +135,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             ->get('/oauth/authorize?'.http_build_query($parameters))
             ->assertOk()
             ->assertSee('Authorize ChatGPT')
+            ->assertSee('remains authorized until revoked')
             ->assertSee(self::CLIENT_ID)
             ->assertHeader('X-Frame-Options', 'DENY')
             ->assertHeader('Referrer-Policy', 'no-referrer')
