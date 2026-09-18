@@ -17,7 +17,10 @@ Route::get('/.well-known/oauth-authorization-server', AuthorizationServerMetadat
 Route::post('/oauth/token', TokenController::class)->middleware([EnsureCorrelationId::class, ObserveOAuthTokenRequest::class, 'throttle:oauth-token']);
 Route::post('/oauth/revoke', RevocationController::class)->middleware('throttle:oauth-token');
 
-Route::match(['POST', 'DELETE', 'OPTIONS'], '/mcp', [GatewayMcpEndpoint::class, 'handle'])
+Route::options('/mcp', [GatewayMcpEndpoint::class, 'handle'])
+    ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge']);
+
+Route::match(['POST', 'DELETE'], '/mcp', [GatewayMcpEndpoint::class, 'handle'])
     ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
 
 Route::match(
