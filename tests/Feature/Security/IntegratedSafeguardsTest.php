@@ -13,6 +13,7 @@ use App\Infrastructure\Activity\ActivityFeed;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\SiteCredentialVault;
+use App\Support\BoundedLogDefaults;
 use App\Support\CorrelationId;
 use DateTimeImmutable;
 use Illuminate\Encryption\Encrypter;
@@ -101,6 +102,9 @@ final class IntegratedSafeguardsTest extends TestCase
         self::assertStringContainsString("LOG_STACK=daily\n", $example);
         self::assertStringContainsString("LOG_DAILY_DAYS=14\n", $example);
         self::assertSame(14, (int) config('logging.channels.daily.max_files'));
+        self::assertSame(['daily', 'daily'], BoundedLogDefaults::normalize('stack', 'single'));
+        self::assertSame(['stack', 'daily,stderr'], BoundedLogDefaults::normalize('stack', 'daily,stderr'));
+        self::assertSame(['single', 'single'], BoundedLogDefaults::normalize('single', 'single'));
     }
 
     public function test_wrong_application_key_fails_closed_without_losing_encrypted_credential(): void
