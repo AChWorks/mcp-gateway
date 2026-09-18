@@ -8,10 +8,12 @@ use App\Application\Sites\SiteRegistry;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteCredential;
 use App\Http\Middleware\EnsureCorrelationId;
+use App\Http\Middleware\ObserveOAuthTokenRequest;
 use App\Infrastructure\Activity\ActivityFeed;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\SiteCredentialVault;
+use App\Support\BoundedLogDefaults;
 use App\Support\CorrelationId;
 use DateTimeImmutable;
 use Illuminate\Encryption\Encrypter;
@@ -90,6 +92,19 @@ final class IntegratedSafeguardsTest extends TestCase
         self::assertStringNotContainsString('payload', $encoded);
         self::assertStringNotContainsString('authorization', strtolower($encoded));
         self::assertStringNotContainsString('client_id_hash', $encoded);
+    }
+
+    public function test_default_application_logging_is_bounded_daily_rotation(): void
+    {
+        $example = file_get_contents(base_path('.env.example'));
+        self::assertIsString($example);
+        self::assertStringContainsString("LOG_CHANNEL=daily\n", $example);
+        self::assertStringContainsString("LOG_STACK=daily\n", $example);
+        self::assertStringContainsString("LOG_DAILY_DAYS=14\n", $example);
+        self::assertSame(14, (int) config('logging.channels.daily.max_files'));
+        self::assertSame(['daily', 'daily'], BoundedLogDefaults::normalize('stack', 'single'));
+        self::assertSame(['stack', 'daily,stderr'], BoundedLogDefaults::normalize('stack', 'daily,stderr'));
+        self::assertSame(['single', 'single'], BoundedLogDefaults::normalize('single', 'single'));
     }
 
     public function test_wrong_application_key_fails_closed_without_losing_encrypted_credential(): void
@@ -284,6 +299,8 @@ final class IntegratedSafeguardsTest extends TestCase
 
         $token = $routes->first(fn ($route) => $route->uri() === 'oauth/token' && in_array('POST', $route->methods(), true));
         self::assertNotNull($token);
+        self::assertContains(EnsureCorrelationId::class, $token->middleware());
+        self::assertContains(ObserveOAuthTokenRequest::class, $token->middleware());
         self::assertContains('throttle:oauth-token', $token->middleware());
 
         $login = Route::getRoutes()->getByName('admin.login.store');

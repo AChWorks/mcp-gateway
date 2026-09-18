@@ -4,6 +4,7 @@ namespace Tests\Feature\OAuth;
 
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
 use App\Models\User;
+use App\Support\CorrelationId;
 use Firebase\JWT\JWT;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
@@ -159,6 +160,14 @@ final class ChatGptOAuthFlowTest extends TestCase
         $tokenResponse->assertOk()->assertJsonStructure([
             'token_type', 'expires_in', 'access_token', 'refresh_token',
         ]);
+        $authorizationCodeCorrelationId = (string) $tokenResponse->headers->get(CorrelationId::HEADER);
+        self::assertTrue(Str::isUuid($authorizationCodeCorrelationId));
+        self::assertDatabaseHas('activity_events', [
+            'correlation_id' => $authorizationCodeCorrelationId,
+            'operation' => 'oauth-token-authorization-code',
+            'outcome' => 'success',
+            'error_code' => null,
+        ]);
 
         $accessToken = (string) $tokenResponse->json('access_token');
         $refreshToken = (string) $tokenResponse->json('refresh_token');
@@ -277,19 +286,46 @@ final class ChatGptOAuthFlowTest extends TestCase
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
         ]);
         $refreshResponse->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+        $refreshCorrelationId = (string) $refreshResponse->headers->get(CorrelationId::HEADER);
+        self::assertTrue(Str::isUuid($refreshCorrelationId));
+        self::assertDatabaseHas('activity_events', [
+            'correlation_id' => $refreshCorrelationId,
+            'operation' => 'oauth-token-refresh',
+            'outcome' => 'success',
+            'error_code' => null,
+        ]);
+
         $refreshedAccessToken = (string) $refreshResponse->json('access_token');
         $refreshedRefreshToken = (string) $refreshResponse->json('refresh_token');
         self::assertNotSame($accessToken, $refreshedAccessToken);
         self::assertNotSame($refreshToken, $refreshedRefreshToken);
 
-        $this->post('/oauth/token', [
+        $replayResponse = $this->post('/oauth/token', [
             'grant_type' => 'refresh_token',
             'client_id' => self::CLIENT_ID,
             'refresh_token' => $refreshToken,
             'resource' => config('oauth.resource'),
             'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
-        ])->assertStatus(400);
+        ]);
+        $replayResponse->assertStatus(400);
+        $replayCorrelationId = (string) $replayResponse->headers->get(CorrelationId::HEADER);
+        self::assertTrue(Str::isUuid($replayCorrelationId));
+        self::assertDatabaseHas('activity_events', [
+            'correlation_id' => $replayCorrelationId,
+            'operation' => 'oauth-token-refresh',
+            'outcome' => 'failure',
+            'error_code' => 'invalid_grant',
+        ]);
+
+        $oauthActivity = json_encode(
+            \DB::table('activity_events')->where('operation', 'like', 'oauth-token-%')->get()->all(),
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertStringNotContainsString($accessToken, $oauthActivity);
+        self::assertStringNotContainsString($refreshToken, $oauthActivity);
+        self::assertStringNotContainsString($refreshedAccessToken, $oauthActivity);
+        self::assertStringNotContainsString($refreshedRefreshToken, $oauthActivity);
 
         $this->post('/oauth/revoke', [
             'client_id' => self::CLIENT_ID,

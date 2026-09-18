@@ -1,9 +1,15 @@
 <?php
 
+use App\Support\BoundedLogDefaults;
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
 use Monolog\Processor\PsrLogMessageProcessor;
+
+[$defaultChannel, $stackChannels] = BoundedLogDefaults::normalize(
+    env('LOG_CHANNEL', 'daily'),
+    (string) env('LOG_STACK', 'daily'),
+);
 
 return [
 
@@ -18,7 +24,7 @@ return [
     |
     */
 
-    'default' => env('LOG_CHANNEL', 'stack'),
+    'default' => $defaultChannel,
 
     /*
     |--------------------------------------------------------------------------
@@ -54,7 +60,7 @@ return [
 
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', (string) env('LOG_STACK', 'single')),
+            'channels' => explode(',', $stackChannels),
             'ignore_exceptions' => false,
         ],
 

@@ -44,6 +44,8 @@ final readonly class TokenController
 
             return $this->bridge->laravel($psrResponse);
         } catch (OAuthServerException $exception) {
+            $request->attributes->set('oauth_token_error_code', $exception->getErrorType());
+
             return $this->bridge->error($exception);
         }
     }
