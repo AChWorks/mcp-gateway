@@ -84,7 +84,7 @@ final class PendingGatewayToolHandlers
         string $site_id,
         ?string $ability = null,
         int $page = 1,
-        int $per_page = 25,
+        int $per_page = 10,
         ?string $namespace = null,
         ?string $search = null,
     ): array {
@@ -104,7 +104,7 @@ final class PendingGatewayToolHandlers
         if ($this->tooLong($ability, 255) || $this->tooLong($namespace, 255) || $this->tooLong($search, 255)) {
             return $this->recordedError($correlationId, 'site-abilities-read', $site->site_id, 'invalid_input', 'Ability catalog filters exceed the supported length.');
         }
-        if ($ability !== null && ($namespace !== null || $search !== null || $page !== 1 || $per_page !== 25)) {
+        if ($ability !== null && ($namespace !== null || $search !== null || $page !== 1 || $per_page !== 10)) {
             return $this->recordedError($correlationId, 'site-abilities-read', $site->site_id, 'invalid_input', 'Exact ability inspection cannot be combined with list pagination or filters.');
         }
 

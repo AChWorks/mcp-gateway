@@ -32,7 +32,7 @@ final readonly class WpAiBridgeMcpClient
         string $correlationId,
         ?string $ability = null,
         int $page = 1,
-        int $perPage = 25,
+        int $perPage = 10,
         ?string $namespace = null,
         ?string $search = null,
     ): array {
@@ -57,13 +57,72 @@ final readonly class WpAiBridgeMcpClient
     /** @param array<string, mixed> $input */
     public function executeAbility(Site $site, string $ability, array $input, string $correlationId): mixed
     {
-        return $this->callAbility($site, $ability, $input, true, $correlationId);
+        $routing = $this->routingContext($site);
+        $mutationRisk = $this->abilityMutationRisk($routing, $ability, $correlationId);
+
+        return $this->callAbilityOnRouting($routing, $ability, $input, $mutationRisk, $correlationId);
+    }
+
+    /** @param array{resource_url:string,access_token:string} $routing */
+    private function abilityMutationRisk(array $routing, string $ability, string $correlationId): bool
+    {
+        try {
+            $catalog = $this->callAbilityOnRouting(
+                $routing,
+                self::CATALOG_ABILITY,
+                ['action' => 'get', 'name' => $ability],
+                false,
+                $correlationId,
+            );
+        } catch (WpAiBridgeMcpException) {
+            return true;
+        }
+
+        if (! is_array($catalog)) {
+            return true;
+        }
+
+        $items = $catalog['items'] ?? null;
+        if (! is_array($items) || count($items) !== 1 || ! is_array($items[0] ?? null)) {
+            return true;
+        }
+
+        $contract = $items[0];
+        if (($contract['name'] ?? null) !== $ability || ($contract['mcp_type'] ?? 'tool') !== 'tool') {
+            return true;
+        }
+
+        $annotations = $contract['annotations'] ?? null;
+        if (! is_array($annotations)) {
+            return true;
+        }
+
+        return ($annotations['readonly'] ?? null) !== true || ($annotations['destructive'] ?? null) === true;
     }
 
     /** @param array<string, mixed> $input */
     private function callAbility(Site $site, string $ability, array $input, bool $mutationRisk, string $correlationId): mixed
     {
-        $routing = $this->routingContext($site);
+        return $this->callAbilityOnRouting(
+            $this->routingContext($site),
+            $ability,
+            $input,
+            $mutationRisk,
+            $correlationId,
+        );
+    }
+
+    /**
+     * @param  array{resource_url:string,access_token:string}  $routing
+     * @param  array<string, mixed>  $input
+     */
+    private function callAbilityOnRouting(
+        array $routing,
+        string $ability,
+        array $input,
+        bool $mutationRisk,
+        string $correlationId,
+    ): mixed {
         $headers = [
             'Authorization' => 'Bearer '.$routing['access_token'],
             'Accept' => 'application/json, text/event-stream',
@@ -165,7 +224,10 @@ final readonly class WpAiBridgeMcpClient
                 'method' => 'tools/call',
                 'params' => [
                     'name' => self::EXECUTE_TOOL,
-                    'arguments' => ['ability_name' => $ability, 'parameters' => $input],
+                    'arguments' => [
+                        'ability_name' => $ability,
+                        'parameters' => $input === [] ? (object) [] : $input,
+                    ],
                 ],
             ], $headers);
         } catch (OutboundRequestException $exception) {
