@@ -152,7 +152,6 @@ final readonly class RefreshTokenRecoveryStore
 
         return DB::transaction(function () use (
             $parameters,
-            $oldPayload,
             $oldRefreshTokenId,
             $oldClientId,
             $oldUserId,
