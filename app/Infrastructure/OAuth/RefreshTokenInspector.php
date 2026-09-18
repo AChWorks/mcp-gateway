@@ -8,9 +8,9 @@ final class RefreshTokenInspector
 {
     use CryptTrait;
 
-    public function __construct(OAuthServerManager $servers)
+    public function __construct(OAuthEncryptionKey $keys)
     {
-        $this->setEncryptionKey($servers->encryptionKey());
+        $this->setEncryptionKey($keys->league());
     }
 
     /** @return array<string, mixed>|null */

@@ -36,6 +36,11 @@ return [
         'client_assertion_seconds' => (int) env('OAUTH_CLIENT_ASSERTION_MAX_SECONDS', 300),
     ],
 
+    'refresh_recovery' => [
+        'seconds' => max(5, min(60, (int) env('OAUTH_REFRESH_RECOVERY_SECONDS', 30))),
+        'max_records' => max(100, min(10000, (int) env('OAUTH_REFRESH_RECOVERY_MAX_RECORDS', 1000))),
+    ],
+
     'mcp' => [
         'max_body_bytes' => (int) env('MCP_MAX_BODY_BYTES', 1048576),
         'session_ttl_seconds' => (int) env('MCP_SESSION_TTL_SECONDS', 3600),

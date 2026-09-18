@@ -3,6 +3,8 @@
 namespace Tests\Feature\OAuth;
 
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
+use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
+use App\Infrastructure\OAuth\RefreshTokenInspector;
 use App\Models\User;
 use App\Support\CorrelationId;
 use Firebase\JWT\JWT;
@@ -14,6 +16,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
 final class ChatGptOAuthFlowTest extends TestCase
@@ -300,6 +303,35 @@ final class ChatGptOAuthFlowTest extends TestCase
         self::assertNotSame($accessToken, $refreshedAccessToken);
         self::assertNotSame($refreshToken, $refreshedRefreshToken);
 
+        $tokenRowsAfterRotation = [
+            'access' => \DB::table('oauth_access_tokens')->count(),
+            'refresh' => \DB::table('oauth_refresh_tokens')->count(),
+        ];
+
+        $recoveryResponse = $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $recoveryResponse->assertOk();
+        self::assertSame($refreshResponse->getContent(), $recoveryResponse->getContent());
+        self::assertFalse($recoveryResponse->headers->has(RecoverableBearerTokenResponse::INTERNAL_RECOVERY_HEADER));
+        self::assertSame($tokenRowsAfterRotation['access'], \DB::table('oauth_access_tokens')->count());
+        self::assertSame($tokenRowsAfterRotation['refresh'], \DB::table('oauth_refresh_tokens')->count());
+        self::assertSame(0, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+
+        $recoveryCorrelationId = (string) $recoveryResponse->headers->get(CorrelationId::HEADER);
+        self::assertTrue(Str::isUuid($recoveryCorrelationId));
+        self::assertDatabaseHas('activity_events', [
+            'correlation_id' => $recoveryCorrelationId,
+            'operation' => 'oauth-token-refresh-recovery',
+            'outcome' => 'success',
+            'error_code' => null,
+        ]);
+
         $replayResponse = $this->post('/oauth/token', [
             'grant_type' => 'refresh_token',
             'client_id' => self::CLIENT_ID,
@@ -317,6 +349,15 @@ final class ChatGptOAuthFlowTest extends TestCase
             'outcome' => 'failure',
             'error_code' => 'invalid_grant',
         ]);
+
+        $recoveryStorage = json_encode(
+            \DB::table('oauth_refresh_recoveries')->get()->all(),
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertStringNotContainsString($accessToken, $recoveryStorage);
+        self::assertStringNotContainsString($refreshToken, $recoveryStorage);
+        self::assertStringNotContainsString($refreshedAccessToken, $recoveryStorage);
+        self::assertStringNotContainsString($refreshedRefreshToken, $recoveryStorage);
 
         $oauthActivity = json_encode(
             \DB::table('activity_events')->where('operation', 'like', 'oauth-token-%')->get()->all(),
@@ -343,6 +384,144 @@ final class ChatGptOAuthFlowTest extends TestCase
             'id' => 3,
             'method' => 'tools/list',
         ])->assertUnauthorized();
+    }
+
+    public function test_refresh_recovery_requires_fresh_client_assertion_and_exact_bindings(): void
+    {
+        [$refreshToken] = $this->issueRefreshableToken();
+
+        $rotationAssertion = $this->clientAssertion((string) config('oauth.issuer').'/oauth/token');
+        $rotation = $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $rotationAssertion,
+        ]);
+        $rotation->assertOk();
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $rotationAssertion,
+        ])->assertUnauthorized();
+
+        self::assertSame(1, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => 'https://attacker.example/client.json',
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertUnauthorized();
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => 'https://wrong.example/mcp',
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertStatus(400);
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'scope' => 'mcp',
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertStatus(400);
+
+        self::assertSame(1, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+
+        $recovered = $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $recovered->assertOk();
+        self::assertSame($rotation->getContent(), $recovered->getContent());
+        self::assertSame(0, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+    }
+
+    public function test_refresh_recovery_rejects_revoked_authorization_and_invalid_successors(): void
+    {
+        $user = $this->operator();
+        [$refreshToken] = $this->issueRefreshableToken($user);
+        $rotation = $this->rotateRefreshToken($refreshToken);
+        $successorRefreshToken = (string) $rotation->json('refresh_token');
+
+        $this->post('/oauth/revoke', [
+            'client_id' => self::CLIENT_ID,
+            'token' => $successorRefreshToken,
+            'token_type_hint' => 'refresh_token',
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/revoke'),
+        ])->assertOk();
+
+        $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
+        self::assertSame(1, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+
+        \DB::table('oauth_refresh_recoveries')->delete();
+
+        [$refreshToken] = $this->issueRefreshableToken($user);
+        $rotation = $this->rotateRefreshToken($refreshToken);
+        $successorAccessId = $this->accessTokenIdentifier((string) $rotation->json('access_token'));
+        \DB::table('oauth_access_tokens')->where('id', $successorAccessId)->update([
+            'revoked_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
+
+        \DB::table('oauth_refresh_recoveries')->delete();
+
+        [$refreshToken] = $this->issueRefreshableToken($user);
+        $rotation = $this->rotateRefreshToken($refreshToken);
+        $successorRefreshPayload = app(RefreshTokenInspector::class)
+            ->inspect((string) $rotation->json('refresh_token'));
+        self::assertIsArray($successorRefreshPayload);
+        self::assertIsString($successorRefreshPayload['refresh_token_id'] ?? null);
+
+        \DB::table('oauth_refresh_tokens')
+            ->where('id', $successorRefreshPayload['refresh_token_id'])
+            ->update(['expires_at' => now()->subSecond(), 'updated_at' => now()]);
+
+        $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
+    }
+
+    public function test_refresh_recovery_window_expiry_restores_normal_replay_rejection(): void
+    {
+        [$refreshToken] = $this->issueRefreshableToken();
+        $this->rotateRefreshToken($refreshToken);
+
+        \DB::table('oauth_refresh_recoveries')->update([
+            'recovery_expires_at' => now()->subSecond(),
+            'updated_at' => now(),
+        ]);
+
+        $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
+        self::assertSame(0, \DB::table('oauth_refresh_recoveries')->count());
+
+        $oldPayload = app(RefreshTokenInspector::class)->inspect($refreshToken);
+        self::assertIsArray($oldPayload);
+        self::assertIsString($oldPayload['refresh_token_id'] ?? null);
+        self::assertNotNull(
+            \DB::table('oauth_refresh_tokens')
+                ->where('id', $oldPayload['refresh_token_id'])
+                ->value('revoked_at'),
+        );
     }
 
     public function test_mcp_only_authorization_does_not_issue_a_refresh_token(): void
@@ -583,6 +762,53 @@ final class ChatGptOAuthFlowTest extends TestCase
             ...$base,
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
         ])->assertStatus(400);
+    }
+
+    /** @return array{0:string,1:string} */
+    private function issueRefreshableToken(?User $user = null): array
+    {
+        $user ??= $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
+        $response = $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $response->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+
+        return [(string) $response->json('refresh_token'), (string) $response->json('access_token')];
+    }
+
+    private function rotateRefreshToken(string $refreshToken): TestResponse
+    {
+        $response = $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $response->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+
+        return $response;
+    }
+
+    private function recoverOldRefreshToken(string $refreshToken): TestResponse
+    {
+        return $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
     }
 
     /** @return array<string, string> */

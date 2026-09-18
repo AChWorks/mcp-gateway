@@ -31,6 +31,10 @@ final readonly class ObserveOAuthTokenRequest
             throw $throwable;
         }
 
+        if ($request->attributes->get('oauth_token_recovered') === true) {
+            $operation = 'oauth-token-refresh-recovery';
+        }
+
         $errorCode = null;
         if ($response->getStatusCode() === 429) {
             $errorCode = 'rate_limited';

@@ -74,6 +74,27 @@ unzip -q "$update_zip" -d "$candidate"
 new_version="$(tr -d '[:space:]' < "$candidate/update/UPDATE_VERSION")"
 [[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid candidate version." >&2; exit 1; }
 
+migration_db_state() {
+  local root="$1"
+  (
+    cd "$root"
+    php -r '
+      require "vendor/autoload.php";
+      $app = require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      $rows = Illuminate\Support\Facades\DB::table("migrations")
+          ->orderBy("migration")
+          ->get(["migration", "batch"])
+          ->map(static fn ($row): array => [
+              "migration" => (string) $row->migration,
+              "batch" => (int) $row->batch,
+          ])
+          ->all();
+      echo hash("sha256", json_encode($rows, JSON_THROW_ON_ERROR));
+    '
+  )
+}
+
 run_case() {
   local mode="$1"
   local case_root="$tmp/case-$mode"
@@ -85,7 +106,7 @@ run_case() {
   unzip -q "$staged_zip" -d "$case_root"
 
   local migrations_before
-  migrations_before="$(cd "$case_root" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')"
+  migrations_before="$(migration_db_state "$case_root")"
 
   php -r '
     [$base, $mode] = array_slice($argv, 1);
@@ -167,7 +188,7 @@ run_case() {
   ' "$case_root" "$mode"
 
   local migrations_after
-  migrations_after="$(cd "$case_root" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')"
+  migrations_after="$(migration_db_state "$case_root")"
   [[ "$migrations_after" == "$migrations_before" ]] || { echo "Database migration state changed for rejected $mode backup." >&2; exit 1; }
   [[ -e "$case_root/storage/framework/down" ]] || { echo "Application did not remain in maintenance mode for rejected $mode backup." >&2; exit 1; }
   [[ -e "$case_root/storage/app/private/update-state.json" ]] || { echo "Updater state was not retained for rejected $mode backup." >&2; exit 1; }

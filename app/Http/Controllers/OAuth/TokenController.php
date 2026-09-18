@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\OAuth;
 
+use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthScopePolicy;
 use App\Infrastructure\OAuth\OAuthServerManager;
@@ -38,7 +39,14 @@ final readonly class TokenController
             $psrResponse = $this->servers->authorizationServer()->respondToAccessTokenRequest(
                 $this->bridge->request($request),
                 $this->bridge->response(),
-            )
+            );
+
+            if ($psrResponse->getHeaderLine(RecoverableBearerTokenResponse::INTERNAL_RECOVERY_HEADER) === '1') {
+                $request->attributes->set('oauth_token_recovered', true);
+                $psrResponse = $psrResponse->withoutHeader(RecoverableBearerTokenResponse::INTERNAL_RECOVERY_HEADER);
+            }
+
+            $psrResponse = $psrResponse
                 ->withHeader('Cache-Control', 'no-store')
                 ->withHeader('Pragma', 'no-cache');
 
