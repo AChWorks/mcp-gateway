@@ -7,10 +7,15 @@ use League\OAuth2\Server\Entities\RefreshTokenEntityInterface;
 use League\OAuth2\Server\ResponseTypes\BearerTokenResponse;
 use LogicException;
 use Psr\Http\Message\ResponseInterface;
+use RuntimeException;
 
 final class RecoverableBearerTokenResponse extends BearerTokenResponse
 {
+    public const INTERNAL_RECOVERY_HEADER = 'X-MCP-Gateway-Internal-OAuth-Recovery';
+
     private ?string $preparedBody = null;
+
+    private bool $recovered = false;
 
     public function accessToken(): AccessTokenEntityInterface
     {
@@ -59,6 +64,18 @@ final class RecoverableBearerTokenResponse extends BearerTokenResponse
         return $this->preparedBody = $encoded;
     }
 
+    public function restorePreparedBody(string $body): self
+    {
+        if ($body === '' || $this->preparedBody !== null) {
+            throw new RuntimeException('OAuth refresh recovery response state is invalid.');
+        }
+
+        $this->preparedBody = $body;
+        $this->recovered = true;
+
+        return $this;
+    }
+
     public function generateHttpResponse(ResponseInterface $response): ResponseInterface
     {
         $response = $response
@@ -66,6 +83,10 @@ final class RecoverableBearerTokenResponse extends BearerTokenResponse
             ->withHeader('pragma', 'no-cache')
             ->withHeader('cache-control', 'no-store')
             ->withHeader('content-type', 'application/json; charset=UTF-8');
+
+        if ($this->recovered) {
+            $response = $response->withHeader(self::INTERNAL_RECOVERY_HEADER, '1');
+        }
 
         $response->getBody()->write($this->prepareResponseBody());
 
