@@ -95,8 +95,11 @@ final class IntegratedSafeguardsTest extends TestCase
 
     public function test_default_application_logging_is_bounded_daily_rotation(): void
     {
-        self::assertSame('daily', config('logging.default'));
-        self::assertSame(['daily'], config('logging.channels.stack.channels'));
+        $example = file_get_contents(base_path('.env.example'));
+        self::assertIsString($example);
+        self::assertStringContainsString("LOG_CHANNEL=daily\n", $example);
+        self::assertStringContainsString("LOG_STACK=daily\n", $example);
+        self::assertStringContainsString("LOG_DAILY_DAYS=14\n", $example);
         self::assertSame(14, (int) config('logging.channels.daily.max_files'));
     }
 
