@@ -46,12 +46,12 @@ This is the easiest installation method for aaPanel and compatible shared hostin
 
 1. Create a dedicated HTTPS domain/subdomain, for example `gateway.example.com`.
 2. Create a dedicated **empty** MySQL database and database user.
-3. Download `mcp-gateway-v1.1.5.zip` from the [v1.1.5 GitHub Release](https://github.com/ach1992/mcp-gateway/releases/tag/v1.1.5).
+3. Open the [latest stable GitHub Release](https://github.com/ach1992/mcp-gateway/releases/latest) and download its named deployment asset `mcp-gateway-vX.Y.Z.zip`.
 4. Upload and extract the ZIP on the host. The archive contains only deployment/runtime files and already includes production Composer dependencies in `vendor/`.
 5. Point the domain document root / aaPanel running directory to the extracted package's `public/` directory. Example:
 
    ```text
-   /www/wwwroot/mcp-gateway-v1.1.5/public
+   /www/wwwroot/mcp-gateway/public
    ```
 
 6. Make sure the PHP process can write to:
@@ -95,7 +95,7 @@ https://gateway.example.com/admin/login
 
 The installer never displays the MySQL password, `APP_KEY`, private keys, access tokens, or other generated secret material.
 
-> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-v1.1.5.zip` Release asset.
+> The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-vX.Y.Z.zip` asset from the intended GitHub Release.
 
 ### aaPanel quick setup
 
@@ -105,9 +105,9 @@ A typical aaPanel setup is:
 Domain:          gateway.example.com
 PHP:             8.4
 Database:        dedicated MySQL database/user
-Application:     /www/wwwroot/mcp-gateway-v1.1.5
+Application:     /www/wwwroot/mcp-gateway
 Running directory/document root:
-                 /www/wwwroot/mcp-gateway-v1.1.5/public
+                 /www/wwwroot/mcp-gateway/public
 SSL:             enabled before /install
 ```
 
@@ -133,7 +133,8 @@ Operators who prefer source-based deployment can continue to use the existing CL
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.5 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+RELEASE_TAG=vX.Y.Z
+git clone --branch "$RELEASE_TAG" --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
@@ -401,7 +402,7 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 
 ## Release status
 
-Current stable release: `v1.1.5`.
+GitHub Releases are the public release source of truth. Use the [latest stable Release](https://github.com/ach1992/mcp-gateway/releases/latest) and its named deployment/update assets rather than relying on a hard-coded version in this README.
 
 Recommended installations should use the named deployment ZIP attached to the GitHub Release rather than the generic source archive or moving `main` branch. Existing deployment-ZIP installations should use the named browser update ZIP attached to the same Release.
 
