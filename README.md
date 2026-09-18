@@ -384,6 +384,14 @@ For browser updates:
 - after a successful update, `/update/` should no longer exist;
 - if a failure page says database migration may have started, do not re-run the updater or delete the private backup/state manually; follow a release-specific recovery or roll-forward procedure.
 
+For ChatGPT custom App connection problems:
+
+- first verify the Gateway itself with `php artisan gateway:check` and the documented OAuth/discovery endpoints before changing credentials;
+- if ChatGPT shows the App as disconnected while Gateway health/discovery remain healthy, use ChatGPT's **Reconnect** control when available. A disconnected UI state alone does not prove that Gateway OAuth keys or downstream site authorization were lost;
+- preserve the failure time/time zone plus safe correlation IDs and relevant Activity metadata for diagnosis. Never copy access/refresh tokens, authorization codes, client assertions, private keys, or raw credential payloads into logs or support notes;
+- do not rotate Gateway signing keys or reauthorize downstream WordPress sites solely as a reconnect diagnostic shortcut;
+- if the problem persists after the relevant authorization checks, avoid repeated reconnect loops; check OpenAI service status and contact OpenAI Support with the observed state and timestamps.
+
 For an existing/CLI installation, also run:
 
 ```bash
