@@ -4,6 +4,7 @@ namespace Tests\Feature\Security;
 
 use App\Support\CorrelationId;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Cache\RateLimiting\Unlimited;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -110,6 +111,40 @@ final class RateLimitObservabilityTest extends TestCase
             'outcome' => 'failure',
             'error_code' => 'mcp_principal_rate_limited',
         ]);
+    }
+
+    public function test_unauthenticated_options_bypasses_principal_limiter_but_keeps_edge_protection(): void
+    {
+        $principalDefinition = RateLimiter::limiter('mcp');
+        self::assertIsCallable($principalDefinition);
+        self::assertInstanceOf(
+            Unlimited::class,
+            $principalDefinition(Request::create('/mcp', 'OPTIONS')),
+        );
+
+        $edgeDefinition = RateLimiter::limiter('mcp-edge');
+        self::assertIsCallable($edgeDefinition);
+
+        $productionLimits = $edgeDefinition(Request::create('/mcp', 'OPTIONS'));
+        self::assertIsArray($productionLimits);
+        self::assertCount(2, $productionLimits);
+
+        $responseCallback = $productionLimits[1]->responseCallback;
+        self::assertIsCallable($responseCallback);
+
+        RateLimiter::for('mcp-edge', static function (Request $request) use ($responseCallback): Limit {
+            return Limit::perMinute(1)
+                ->by('mcp-edge-options-test:'.$request->ip())
+                ->response($responseCallback);
+        });
+
+        $first = $this->call('OPTIONS', '/mcp');
+        self::assertNotSame(429, $first->getStatusCode());
+
+        $this->call('OPTIONS', '/mcp')
+            ->assertStatus(429)
+            ->assertHeader('Retry-After')
+            ->assertJsonPath('error.data.reason', 'mcp_edge_rate_limited');
     }
 
     public function test_mcp_rate_limit_configuration_cannot_disable_protection_with_zero_values(): void
