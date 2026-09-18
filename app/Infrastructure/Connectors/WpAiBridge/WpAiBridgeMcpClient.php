@@ -57,16 +57,28 @@ final readonly class WpAiBridgeMcpClient
     /** @param array<string, mixed> $input */
     public function executeAbility(Site $site, string $ability, array $input, string $correlationId): mixed
     {
-        $mutationRisk = $this->abilityMutationRisk($site, $ability, $correlationId);
+        $routing = $this->routingContext($site);
+        $mutationRisk = $this->abilityMutationRisk($routing, $ability, $correlationId);
 
-        return $this->callAbility($site, $ability, $input, $mutationRisk, $correlationId);
+        return $this->callAbilityOnRouting($routing, $ability, $input, $mutationRisk, $correlationId);
     }
 
-    private function abilityMutationRisk(Site $site, string $ability, string $correlationId): bool
+    /** @param array{resource_url:string,access_token:string} $routing */
+    private function abilityMutationRisk(array $routing, string $ability, string $correlationId): bool
     {
         try {
-            $catalog = $this->readAbilities($site, $correlationId, $ability);
-        } catch (SiteConnectionException|WpAiBridgeMcpException) {
+            $catalog = $this->callAbilityOnRouting(
+                $routing,
+                self::CATALOG_ABILITY,
+                ['action' => 'get', 'name' => $ability],
+                false,
+                $correlationId,
+            );
+        } catch (WpAiBridgeMcpException) {
+            return true;
+        }
+
+        if (! is_array($catalog)) {
             return true;
         }
 
@@ -91,7 +103,26 @@ final readonly class WpAiBridgeMcpClient
     /** @param array<string, mixed> $input */
     private function callAbility(Site $site, string $ability, array $input, bool $mutationRisk, string $correlationId): mixed
     {
-        $routing = $this->routingContext($site);
+        return $this->callAbilityOnRouting(
+            $this->routingContext($site),
+            $ability,
+            $input,
+            $mutationRisk,
+            $correlationId,
+        );
+    }
+
+    /**
+     * @param  array{resource_url:string,access_token:string}  $routing
+     * @param  array<string, mixed>  $input
+     */
+    private function callAbilityOnRouting(
+        array $routing,
+        string $ability,
+        array $input,
+        bool $mutationRisk,
+        string $correlationId,
+    ): mixed {
         $headers = [
             'Authorization' => 'Bearer '.$routing['access_token'],
             'Accept' => 'application/json, text/event-stream',
