@@ -17,7 +17,7 @@ use RuntimeException;
 
 final class PrivateKeyJwtRefreshTokenGrant extends RefreshTokenGrant
 {
-    use IssuesRefreshTokensForOfflineAccess;
+    use IssuesRefreshTokensForMcpAccess;
 
     private const VALIDATED_CLIENT_ATTRIBUTE = 'gateway.oauth.validated_client';
 
