@@ -60,16 +60,20 @@ final readonly class ObserveOAuthTokenRequest
             $errorCode,
         );
 
-        Log::info('OAuth token exchange completed.', [
-            'correlation_id' => $correlationId,
-            'operation' => $operation,
-            'outcome' => $outcome,
-            'error_code' => $errorCode,
-            'status' => $response->getStatusCode(),
-            'requested_scopes' => $this->requestedScopes($request),
-            'refresh_token_issued' => $this->refreshTokenIssued($response),
-            'recovered' => $recovered,
-        ]);
+        try {
+            Log::info('OAuth token exchange completed.', [
+                'correlation_id' => $correlationId,
+                'operation' => $operation,
+                'outcome' => $outcome,
+                'error_code' => $errorCode,
+                'status' => $response->getStatusCode(),
+                'requested_scopes' => $this->requestedScopes($request),
+                'refresh_token_issued' => $this->refreshTokenIssued($response),
+                'recovered' => $recovered,
+            ]);
+        } catch (Throwable) {
+            // Diagnostics must never change the token exchange outcome.
+        }
 
         return $response;
     }
