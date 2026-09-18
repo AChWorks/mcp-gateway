@@ -63,7 +63,7 @@ final readonly class GatewayMcpEndpoint
                         'site_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
                         'ability' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
                         'page' => ['type' => 'integer', 'minimum' => 1, 'default' => 1],
-                        'per_page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 25],
+                        'per_page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 10],
                         'namespace' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
                         'search' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
                     ],
@@ -80,7 +80,12 @@ final readonly class GatewayMcpEndpoint
                     'properties' => [
                         'site_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
                         'ability' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
-                        'input' => ['type' => 'object'],
+                        'input' => [
+                            'oneOf' => [
+                                ['type' => 'object'],
+                                ['type' => 'array', 'maxItems' => 0],
+                            ],
+                        ],
                     ],
                     'required' => ['site_id', 'ability', 'input'],
                     'additionalProperties' => false,
