@@ -682,7 +682,7 @@ final class ChatGptOAuthFlowTest extends TestCase
         ])->assertOk();
     }
 
-    public function test_refresh_scope_can_narrow_and_remains_refreshable_for_mcp(): void
+    public function test_refresh_scope_can_narrow_and_drops_refresh_authority(): void
     {
         $user = $this->operator();
         [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
@@ -699,24 +699,43 @@ final class ChatGptOAuthFlowTest extends TestCase
         $token->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
         $refreshToken = (string) $token->json('refresh_token');
 
-        $narrowed = $this->post('/oauth/token', [
+        $refreshPayload = [
             'grant_type' => 'refresh_token',
             'client_id' => self::CLIENT_ID,
             'refresh_token' => $refreshToken,
             'scope' => 'mcp',
             'resource' => config('oauth.resource'),
             'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        ];
+
+        $narrowed = $this->post('/oauth/token', [
+            ...$refreshPayload,
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
         ]);
-        $narrowed->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+        $narrowed->assertOk()->assertJsonStructure(['access_token'])->assertJsonMissingPath('refresh_token');
 
         $accessTokenId = $this->accessTokenIdentifier((string) $narrowed->json('access_token'));
         self::assertSame(
             ['mcp'],
             json_decode((string) \DB::table('oauth_access_tokens')->where('id', $accessTokenId)->value('scopes'), true, flags: JSON_THROW_ON_ERROR),
         );
-        self::assertSame(2, \DB::table('oauth_refresh_tokens')->count());
-        self::assertSame(1, \DB::table('oauth_refresh_tokens')->whereNull('revoked_at')->count());
+        self::assertSame(1, \DB::table('oauth_refresh_tokens')->count());
+        self::assertNotNull(\DB::table('oauth_refresh_tokens')->value('revoked_at'));
+        self::assertSame(1, \DB::table('oauth_refresh_recoveries')->count());
+        self::assertNull(\DB::table('oauth_refresh_recoveries')->value('successor_refresh_token_id'));
+
+        $recovered = $this->post('/oauth/token', [
+            ...$refreshPayload,
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ]);
+        $recovered->assertOk()->assertJsonMissingPath('refresh_token');
+        self::assertSame($narrowed->getContent(), $recovered->getContent());
+        self::assertSame(0, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+
+        $this->post('/oauth/token', [
+            ...$refreshPayload,
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertStatus(400);
     }
 
     public function test_expired_authorization_code_is_rejected(): void
