@@ -24,6 +24,8 @@ final class GatewayConnectionInformationTest extends TestCase
             'password' => 'CorrectHorse!234',
         ]);
         $issuer = rtrim((string) config('oauth.issuer'), '/');
+        $clientMetadataUrl = 'https://gateway.example.test/subpath/oauth/client.json';
+        config()->set('bridge.client.id', $clientMetadataUrl);
 
         $this->actingAs($user)
             ->get('/admin/connection')
@@ -32,6 +34,9 @@ final class GatewayConnectionInformationTest extends TestCase
             ->assertSee((string) config('oauth.resource'))
             ->assertSee($issuer.'/.well-known/oauth-protected-resource/mcp')
             ->assertSee($issuer.'/.well-known/oauth-authorization-server')
+            ->assertSee('Gateway OAuth client metadata')
+            ->assertSee($clientMetadataUrl)
+            ->assertSee('Approve or configure this client metadata URL in WP AI Bridge')
             ->assertSee('Required MCP scope')
             ->assertSee('<code>mcp</code>', false)
             ->assertDontSee('OAUTH_PRIVATE_KEY_PATH')
