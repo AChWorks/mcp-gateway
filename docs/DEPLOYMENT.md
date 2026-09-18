@@ -40,7 +40,7 @@ Composer 2 and Git are required only for the advanced source installation path. 
 On aaPanel, `/www/wwwroot/` is the normal website base location. Example:
 
 ```text
-APP_ROOT=/www/wwwroot/mcp-gateway-v1.1.5
+APP_ROOT=/www/wwwroot/mcp-gateway
 GATEWAY_ORIGIN=https://gateway.example.com
 ```
 
@@ -92,7 +92,7 @@ For advanced Composer/Artisan deployment, run Composer and Artisan as the applic
 For normal aaPanel/shared-hosting installs, download the named deployment package attached to the GitHub Release:
 
 ```text
-mcp-gateway-v1.1.5.zip
+mcp-gateway-vX.Y.Z.zip
 ```
 
 Do not use GitHub's generic **Source code (zip)** archive; that archive does not contain production `vendor/` dependencies. The named deployment ZIP contains only the application/runtime files required for installation and operation.
@@ -139,7 +139,8 @@ For development or operators who explicitly prefer source deployment:
 
 ```bash
 cd /www/wwwroot
-git clone --branch v1.1.5 --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+RELEASE_TAG=vX.Y.Z
+git clone --branch "$RELEASE_TAG" --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
