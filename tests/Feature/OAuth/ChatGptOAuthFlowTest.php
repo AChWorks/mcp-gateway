@@ -435,7 +435,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             'grant_type' => 'refresh_token',
             'client_id' => self::CLIENT_ID,
             'refresh_token' => $refreshToken,
-            'scope' => 'mcp',
+            'scope' => 'mcp offline_access',
             'resource' => config('oauth.resource'),
             'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
