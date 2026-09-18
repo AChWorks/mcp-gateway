@@ -32,7 +32,7 @@ final readonly class WpAiBridgeMcpClient
         string $correlationId,
         ?string $ability = null,
         int $page = 1,
-        int $perPage = 25,
+        int $perPage = 10,
         ?string $namespace = null,
         ?string $search = null,
     ): array {
@@ -57,7 +57,35 @@ final readonly class WpAiBridgeMcpClient
     /** @param array<string, mixed> $input */
     public function executeAbility(Site $site, string $ability, array $input, string $correlationId): mixed
     {
-        return $this->callAbility($site, $ability, $input, true, $correlationId);
+        $mutationRisk = $this->abilityMutationRisk($site, $ability, $correlationId);
+
+        return $this->callAbility($site, $ability, $input, $mutationRisk, $correlationId);
+    }
+
+    private function abilityMutationRisk(Site $site, string $ability, string $correlationId): bool
+    {
+        try {
+            $catalog = $this->readAbilities($site, $correlationId, $ability);
+        } catch (SiteConnectionException|WpAiBridgeMcpException) {
+            return true;
+        }
+
+        $items = $catalog['items'] ?? null;
+        if (! is_array($items) || count($items) !== 1 || ! is_array($items[0] ?? null)) {
+            return true;
+        }
+
+        $contract = $items[0];
+        if (($contract['name'] ?? null) !== $ability || ($contract['mcp_type'] ?? 'tool') !== 'tool') {
+            return true;
+        }
+
+        $annotations = $contract['annotations'] ?? null;
+        if (! is_array($annotations)) {
+            return true;
+        }
+
+        return ($annotations['readonly'] ?? null) !== true || ($annotations['destructive'] ?? null) === true;
     }
 
     /** @param array<string, mixed> $input */
@@ -165,7 +193,10 @@ final readonly class WpAiBridgeMcpClient
                 'method' => 'tools/call',
                 'params' => [
                     'name' => self::EXECUTE_TOOL,
-                    'arguments' => ['ability_name' => $ability, 'parameters' => $input],
+                    'arguments' => [
+                        'ability_name' => $ability,
+                        'parameters' => $input === [] ? (object) [] : $input,
+                    ],
                 ],
             ], $headers);
         } catch (OutboundRequestException $exception) {
