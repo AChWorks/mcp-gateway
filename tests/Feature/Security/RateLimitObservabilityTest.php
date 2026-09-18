@@ -15,18 +15,24 @@ final class RateLimitObservabilityTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_mcp_edge_rate_limit_is_json_rpc_correlated_and_recorded(): void
+    public function test_mcp_edge_rate_limit_is_burst_aware_json_rpc_correlated_and_recorded(): void
     {
         $definition = RateLimiter::limiter('mcp-edge');
         self::assertIsCallable($definition);
 
         $probe = Request::create('/mcp', 'POST');
-        $productionLimit = $definition($probe);
-        self::assertInstanceOf(Limit::class, $productionLimit);
-        self::assertSame(240, $productionLimit->maxAttempts);
-        self::assertIsCallable($productionLimit->responseCallback);
+        $productionLimits = $definition($probe);
+        self::assertIsArray($productionLimits);
+        self::assertCount(2, $productionLimits);
+        self::assertContainsOnlyInstancesOf(Limit::class, $productionLimits);
+        self::assertSame(120, $productionLimits[0]->maxAttempts);
+        self::assertSame(1, $productionLimits[0]->decaySeconds);
+        self::assertSame(1200, $productionLimits[1]->maxAttempts);
+        self::assertSame(60, $productionLimits[1]->decaySeconds);
+        self::assertIsCallable($productionLimits[0]->responseCallback);
+        self::assertIsCallable($productionLimits[1]->responseCallback);
 
-        $responseCallback = $productionLimit->responseCallback;
+        $responseCallback = $productionLimits[1]->responseCallback;
         RateLimiter::for('mcp-edge', static function (Request $request) use ($responseCallback): Limit {
             return Limit::perMinute(1)
                 ->by('mcp-edge-test:'.$request->ip())
@@ -61,7 +67,7 @@ final class RateLimitObservabilityTest extends TestCase
         ]);
     }
 
-    public function test_authenticated_mcp_limiter_keeps_current_bound_and_diagnostic_reason(): void
+    public function test_authenticated_mcp_limiter_allows_bursts_and_keeps_diagnostic_reason(): void
     {
         $definition = RateLimiter::limiter('mcp');
         self::assertIsCallable($definition);
@@ -75,14 +81,20 @@ final class RateLimitObservabilityTest extends TestCase
         $request->attributes->set('oauth_user_id', '42');
         $this->app->instance('request', $request);
 
-        $limit = $definition($request);
-        self::assertInstanceOf(Limit::class, $limit);
-        self::assertSame(120, $limit->maxAttempts);
-        self::assertIsCallable($limit->responseCallback);
+        $limits = $definition($request);
+        self::assertIsArray($limits);
+        self::assertCount(2, $limits);
+        self::assertContainsOnlyInstancesOf(Limit::class, $limits);
+        self::assertSame(60, $limits[0]->maxAttempts);
+        self::assertSame(1, $limits[0]->decaySeconds);
+        self::assertSame(600, $limits[1]->maxAttempts);
+        self::assertSame(60, $limits[1]->decaySeconds);
+        self::assertIsCallable($limits[0]->responseCallback);
+        self::assertIsCallable($limits[1]->responseCallback);
 
-        $response = ($limit->responseCallback)($request, [
+        $response = ($limits[1]->responseCallback)($request, [
             'Retry-After' => 30,
-            'X-RateLimit-Limit' => 120,
+            'X-RateLimit-Limit' => 600,
             'X-RateLimit-Remaining' => 0,
         ]);
 
@@ -98,6 +110,21 @@ final class RateLimitObservabilityTest extends TestCase
             'outcome' => 'failure',
             'error_code' => 'mcp_principal_rate_limited',
         ]);
+    }
+
+    public function test_mcp_rate_limit_configuration_cannot_disable_protection_with_zero_values(): void
+    {
+        config()->set('mcp.rate_limits.edge.burst_per_second', 0);
+        config()->set('mcp.rate_limits.edge.per_minute', 0);
+
+        $definition = RateLimiter::limiter('mcp-edge');
+        self::assertIsCallable($definition);
+
+        $limits = $definition(Request::create('/mcp', 'POST'));
+        self::assertIsArray($limits);
+        self::assertCount(2, $limits);
+        self::assertSame(1, $limits[0]->maxAttempts);
+        self::assertSame(1, $limits[1]->maxAttempts);
     }
 
     public function test_oauth_token_throttle_is_correlated_recorded_and_does_not_store_token_input(): void
