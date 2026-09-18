@@ -4,6 +4,7 @@ namespace Tests\Feature\OAuth;
 
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
+use App\Infrastructure\OAuth\RefreshTokenInspector;
 use App\Models\User;
 use App\Support\CorrelationId;
 use Firebase\JWT\JWT;
@@ -15,6 +16,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
 final class ChatGptOAuthFlowTest extends TestCase
@@ -487,7 +489,7 @@ final class ChatGptOAuthFlowTest extends TestCase
 
         [$refreshToken] = $this->issueRefreshableToken($user);
         $rotation = $this->rotateRefreshToken($refreshToken);
-        $successorRefreshPayload = app(\App\Infrastructure\OAuth\RefreshTokenInspector::class)
+        $successorRefreshPayload = app(RefreshTokenInspector::class)
             ->inspect((string) $rotation->json('refresh_token'));
         self::assertIsArray($successorRefreshPayload);
         self::assertIsString($successorRefreshPayload['refresh_token_id'] ?? null);
@@ -782,7 +784,7 @@ final class ChatGptOAuthFlowTest extends TestCase
         return [(string) $response->json('refresh_token'), (string) $response->json('access_token')];
     }
 
-    private function rotateRefreshToken(string $refreshToken): \Illuminate\Testing\TestResponse
+    private function rotateRefreshToken(string $refreshToken): TestResponse
     {
         $response = $this->post('/oauth/token', [
             'grant_type' => 'refresh_token',
@@ -797,7 +799,7 @@ final class ChatGptOAuthFlowTest extends TestCase
         return $response;
     }
 
-    private function recoverOldRefreshToken(string $refreshToken): \Illuminate\Testing\TestResponse
+    private function recoverOldRefreshToken(string $refreshToken): TestResponse
     {
         return $this->post('/oauth/token', [
             'grant_type' => 'refresh_token',
