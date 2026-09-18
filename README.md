@@ -210,7 +210,7 @@ Do not place access tokens, refresh tokens, authorization codes, assertions, pas
 
 ## Connect WordPress sites
 
-Each WordPress site needs a compatible WP AI Bridge installation. The current Gateway contract is validated against WP AI Bridge v0.4.1 at commit `5c5bdadf1d5594c006913770ea7b2f540b32e22a`, including its canonical `wp-ai-bridge/*` Ability namespace.
+Each WordPress site needs a compatible WP AI Bridge installation. The current Gateway contract is validated against WP AI Bridge v0.4.2 at commit `1bc3693b21072d2a23aa9f7e534eff39591642c9`, including its bounded retry-safe rotating refresh-token recovery and canonical `wp-ai-bridge/*` Ability namespace.
 
 Before the first **Connect** attempt for a WordPress site, approve the Gateway as an additional OAuth client in that site's WP AI Bridge:
 
