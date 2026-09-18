@@ -455,7 +455,8 @@ final class ChatGptOAuthFlowTest extends TestCase
 
     public function test_refresh_recovery_rejects_revoked_authorization_and_invalid_successors(): void
     {
-        [$refreshToken] = $this->issueRefreshableToken();
+        $user = $this->operator();
+        [$refreshToken] = $this->issueRefreshableToken($user);
         $rotation = $this->rotateRefreshToken($refreshToken);
         $successorRefreshToken = (string) $rotation->json('refresh_token');
 
@@ -472,7 +473,7 @@ final class ChatGptOAuthFlowTest extends TestCase
 
         \DB::table('oauth_refresh_recoveries')->delete();
 
-        [$refreshToken] = $this->issueRefreshableToken();
+        [$refreshToken] = $this->issueRefreshableToken($user);
         $rotation = $this->rotateRefreshToken($refreshToken);
         $successorAccessId = $this->accessTokenIdentifier((string) $rotation->json('access_token'));
         \DB::table('oauth_access_tokens')->where('id', $successorAccessId)->update([
@@ -484,7 +485,7 @@ final class ChatGptOAuthFlowTest extends TestCase
 
         \DB::table('oauth_refresh_recoveries')->delete();
 
-        [$refreshToken] = $this->issueRefreshableToken();
+        [$refreshToken] = $this->issueRefreshableToken($user);
         $rotation = $this->rotateRefreshToken($refreshToken);
         $successorRefreshPayload = app(\App\Infrastructure\OAuth\RefreshTokenInspector::class)
             ->inspect((string) $rotation->json('refresh_token'));
@@ -762,9 +763,9 @@ final class ChatGptOAuthFlowTest extends TestCase
     }
 
     /** @return array{0:string,1:string} */
-    private function issueRefreshableToken(): array
+    private function issueRefreshableToken(?User $user = null): array
     {
-        $user = $this->operator();
+        $user ??= $this->operator();
         [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
         $response = $this->post('/oauth/token', [
             'grant_type' => 'authorization_code',
