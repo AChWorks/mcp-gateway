@@ -43,7 +43,6 @@ class AppServiceProvider extends ServiceProvider
 
         RateLimiter::for('mcp-edge', function (Request $request): Limit {
             return $this->mcpRateLimit(
-                $request,
                 240,
                 'mcp-edge:'.$request->ip(),
                 'mcp_edge_rate_limited',
@@ -55,7 +54,6 @@ class AppServiceProvider extends ServiceProvider
             $user = (string) $request->attributes->get('oauth_user_id', 'unknown');
 
             return $this->mcpRateLimit(
-                $request,
                 120,
                 'mcp:'.$client.':'.$user,
                 'mcp_principal_rate_limited',
@@ -63,7 +61,7 @@ class AppServiceProvider extends ServiceProvider
         });
     }
 
-    private function mcpRateLimit(Request $request, int $maxAttempts, string $key, string $errorCode): Limit
+    private function mcpRateLimit(int $maxAttempts, string $key, string $errorCode): Limit
     {
         return Limit::perMinute($maxAttempts)
             ->by($key)
