@@ -232,7 +232,7 @@ The stable public protocol paths are:
 
 `/oauth/authorize` assumes an already authenticated Gateway operator session and performs explicit consent. The login/logout UI remains owned by the administration-panel workstream; do not add a second authentication stack to the OAuth controller. Authorization responses include RFC 9207 `iss` and the authorization-server metadata advertises that behavior.
 
-The required OAuth resource scope is `mcp`. `offline_access` is optional and is the only condition under which the Gateway issues a refresh token. A refresh request may narrow from `mcp offline_access` to `mcp`; the replacement access token remains valid but no new refresh token is issued, so refresh authority cannot survive a deliberate scope reduction.
+The required OAuth resource scope is `mcp`. For the fixed ChatGPT client, an approved `mcp` authorization is refreshable even when ChatGPT omits `offline_access`, because the client must be able to renew the bounded access token without a manual reconnect. `offline_access` remains accepted and advertised for compatibility. Refresh rotation, replay protection, expiry, exact client/resource/user binding, and authorization-wide revocation remain mandatory; narrowing a refresh request from `mcp offline_access` to `mcp` preserves refresh continuity.
 
 The V1 MCP tool registry is stable even before site routing is implemented:
 
