@@ -9,6 +9,7 @@ use App\Infrastructure\OAuth\League\Repositories\AuthCodeRepository;
 use App\Infrastructure\OAuth\League\Repositories\ClientRepository;
 use App\Infrastructure\OAuth\League\Repositories\RefreshTokenRepository;
 use App\Infrastructure\OAuth\League\Repositories\ScopeRepository;
+use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use DateInterval;
 use League\OAuth2\Server\AuthorizationServer;
 use League\OAuth2\Server\CryptKey;
@@ -27,6 +28,8 @@ final class OAuthServerManager
         private readonly AuthCodeRepository $authCodes,
         private readonly RefreshTokenRepository $refreshTokens,
         private readonly PrivateKeyJwtClientAuthenticator $clientAuthenticator,
+        private readonly RefreshTokenRecoveryStore $refreshRecovery,
+        private readonly OAuthEncryptionKey $encryptionKeys,
     ) {}
 
     public function authorizationServer(): AuthorizationServer
@@ -42,6 +45,7 @@ final class OAuthServerManager
             $this->scopes,
             $privateKey,
             $this->encryptionKey(),
+            new RecoverableBearerTokenResponse,
         );
         $server->setDefaultScope((string) config('oauth.scope'));
         $server->revokeRefreshTokens(true);
@@ -57,6 +61,7 @@ final class OAuthServerManager
         $refreshGrant = new PrivateKeyJwtRefreshTokenGrant(
             $this->refreshTokens,
             $this->clientAuthenticator,
+            $this->refreshRecovery,
         );
         $refreshGrant->setRefreshTokenTTL($this->secondsInterval((int) config('oauth.ttl.refresh_token_seconds')));
 
@@ -81,12 +86,7 @@ final class OAuthServerManager
 
     public function encryptionKey(): string
     {
-        $applicationKey = (string) config('app.key');
-        if ($applicationKey === '') {
-            throw new \RuntimeException('APP_KEY is required for the OAuth encryption key.');
-        }
-
-        return hash_hmac('sha256', 'mcp-gateway:league-oauth:v1', $applicationKey);
+        return $this->encryptionKeys->league();
     }
 
     private function secondsInterval(int $seconds): DateInterval
