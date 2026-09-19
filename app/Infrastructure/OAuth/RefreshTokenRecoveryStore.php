@@ -292,7 +292,10 @@ final readonly class RefreshTokenRecoveryStore
                     'updated_at' => now(),
                 ]);
 
-            return $response->restorePreparedBody($envelope['response_body']);
+            return $response->restorePreparedBody(
+                $envelope['response_body'],
+                $successorRefreshTokenId !== null,
+            );
         });
     }
 
