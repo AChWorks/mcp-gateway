@@ -15,6 +15,7 @@ use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
@@ -527,6 +528,7 @@ final class ChatGptOAuthFlowTest extends TestCase
 
     public function test_mcp_only_authorization_issues_refresh_token_and_can_rotate(): void
     {
+        Log::spy();
         $user = $this->operator();
         [$code, $verifier] = $this->approvedAuthorizationCode($user);
 
@@ -542,6 +544,8 @@ final class ChatGptOAuthFlowTest extends TestCase
         ]);
 
         $response->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+        self::assertFalse($response->headers->has(RecoverableBearerTokenResponse::INTERNAL_REFRESH_TOKEN_ISSUED_HEADER));
+        $this->assertOAuthTokenDiagnosticLogged('oauth-token-authorization-code', true, false);
         $refreshToken = (string) $response->json('refresh_token');
         self::assertNotSame('', $refreshToken);
         self::assertSame(['mcp'], json_decode((string) \DB::table('oauth_access_tokens')->value('scopes'), true, flags: JSON_THROW_ON_ERROR));
@@ -557,6 +561,8 @@ final class ChatGptOAuthFlowTest extends TestCase
         ]);
 
         $rotated->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+        self::assertFalse($rotated->headers->has(RecoverableBearerTokenResponse::INTERNAL_REFRESH_TOKEN_ISSUED_HEADER));
+        $this->assertOAuthTokenDiagnosticLogged('oauth-token-refresh', true, false);
         self::assertNotSame($refreshToken, (string) $rotated->json('refresh_token'));
         self::assertSame(2, \DB::table('oauth_refresh_tokens')->count());
         self::assertSame(1, \DB::table('oauth_refresh_tokens')->whereNull('revoked_at')->count());
@@ -684,6 +690,7 @@ final class ChatGptOAuthFlowTest extends TestCase
 
     public function test_refresh_scope_can_narrow_and_drops_refresh_authority(): void
     {
+        Log::spy();
         $user = $this->operator();
         [$code, $verifier] = $this->approvedAuthorizationCode($user, 'mcp offline_access');
         $token = $this->post('/oauth/token', [
@@ -713,6 +720,8 @@ final class ChatGptOAuthFlowTest extends TestCase
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
         ]);
         $narrowed->assertOk()->assertJsonStructure(['access_token'])->assertJsonMissingPath('refresh_token');
+        self::assertFalse($narrowed->headers->has(RecoverableBearerTokenResponse::INTERNAL_REFRESH_TOKEN_ISSUED_HEADER));
+        $this->assertOAuthTokenDiagnosticLogged('oauth-token-refresh', false, false);
 
         $accessTokenId = $this->accessTokenIdentifier((string) $narrowed->json('access_token'));
         self::assertSame(
@@ -729,6 +738,8 @@ final class ChatGptOAuthFlowTest extends TestCase
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
         ]);
         $recovered->assertOk()->assertJsonMissingPath('refresh_token');
+        self::assertFalse($recovered->headers->has(RecoverableBearerTokenResponse::INTERNAL_REFRESH_TOKEN_ISSUED_HEADER));
+        $this->assertOAuthTokenDiagnosticLogged('oauth-token-refresh-recovery', false, true);
         self::assertSame($narrowed->getContent(), $recovered->getContent());
         self::assertSame(0, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
 
@@ -986,6 +997,22 @@ final class ChatGptOAuthFlowTest extends TestCase
             'n' => JWT::urlsafeB64Encode($details['rsa']['n']),
             'e' => JWT::urlsafeB64Encode($details['rsa']['e']),
         ]];
+    }
+
+    private function assertOAuthTokenDiagnosticLogged(
+        string $operation,
+        ?bool $refreshTokenIssued,
+        bool $recovered,
+    ): void {
+        Log::shouldHaveReceived('info')
+            ->withArgs(static function (string $message, array $context) use ($operation, $refreshTokenIssued, $recovered): bool {
+                return $message === 'OAuth token exchange completed.'
+                    && ($context['operation'] ?? null) === $operation
+                    && ($context['outcome'] ?? null) === 'success'
+                    && ($context['refresh_token_issued'] ?? null) === $refreshTokenIssued
+                    && ($context['recovered'] ?? null) === $recovered;
+            })
+            ->once();
     }
 
     private function databaseDump(string $table): string

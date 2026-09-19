@@ -68,7 +68,7 @@ final readonly class ObserveOAuthTokenRequest
                 'error_code' => $errorCode,
                 'status' => $response->getStatusCode(),
                 'requested_scopes' => $this->requestedScopes($request),
-                'refresh_token_issued' => $this->refreshTokenIssued($response),
+                'refresh_token_issued' => $this->refreshTokenIssued($request, $response),
                 'recovered' => $recovered,
             ]);
         } catch (Throwable) {
@@ -96,18 +96,15 @@ final readonly class ObserveOAuthTokenRequest
         return array_values(array_unique(array_intersect($requested, $supported)));
     }
 
-    private function refreshTokenIssued(Response $response): ?bool
+    private function refreshTokenIssued(Request $request, Response $response): ?bool
     {
         if (! $response->isSuccessful()) {
             return null;
         }
 
-        $payload = json_decode((string) $response->getContent(), true);
-        if (! is_array($payload)) {
-            return null;
-        }
+        $issued = $request->attributes->get('oauth_refresh_token_issued');
 
-        return array_key_exists('refresh_token', $payload);
+        return is_bool($issued) ? $issued : null;
     }
 
     private function operation(mixed $grantType): string

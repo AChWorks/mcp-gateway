@@ -43,8 +43,22 @@ final readonly class TokenController
 
             if ($psrResponse->getHeaderLine(RecoverableBearerTokenResponse::INTERNAL_RECOVERY_HEADER) === '1') {
                 $request->attributes->set('oauth_token_recovered', true);
-                $psrResponse = $psrResponse->withoutHeader(RecoverableBearerTokenResponse::INTERNAL_RECOVERY_HEADER);
             }
+            $psrResponse = $psrResponse->withoutHeader(RecoverableBearerTokenResponse::INTERNAL_RECOVERY_HEADER);
+
+            $refreshTokenIssued = match ($psrResponse->getHeaderLine(
+                RecoverableBearerTokenResponse::INTERNAL_REFRESH_TOKEN_ISSUED_HEADER,
+            )) {
+                '1' => true,
+                '0' => false,
+                default => null,
+            };
+            if ($refreshTokenIssued !== null) {
+                $request->attributes->set('oauth_refresh_token_issued', $refreshTokenIssued);
+            }
+            $psrResponse = $psrResponse->withoutHeader(
+                RecoverableBearerTokenResponse::INTERNAL_REFRESH_TOKEN_ISSUED_HEADER,
+            );
 
             $psrResponse = $psrResponse
                 ->withHeader('Cache-Control', 'no-store')

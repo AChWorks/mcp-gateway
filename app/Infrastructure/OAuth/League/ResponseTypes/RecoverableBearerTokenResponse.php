@@ -13,9 +13,13 @@ final class RecoverableBearerTokenResponse extends BearerTokenResponse
 {
     public const INTERNAL_RECOVERY_HEADER = 'X-MCP-Gateway-Internal-OAuth-Recovery';
 
+    public const INTERNAL_REFRESH_TOKEN_ISSUED_HEADER = 'X-MCP-Gateway-Internal-OAuth-Refresh-Issued';
+
     private ?string $preparedBody = null;
 
     private bool $recovered = false;
+
+    private ?bool $recoveredRefreshTokenIssued = null;
 
     public function accessToken(): AccessTokenEntityInterface
     {
@@ -64,7 +68,7 @@ final class RecoverableBearerTokenResponse extends BearerTokenResponse
         return $this->preparedBody = $encoded;
     }
 
-    public function restorePreparedBody(string $body): self
+    public function restorePreparedBody(string $body, bool $refreshTokenIssued): self
     {
         if ($body === '' || $this->preparedBody !== null) {
             throw new RuntimeException('OAuth refresh recovery response state is invalid.');
@@ -72,6 +76,7 @@ final class RecoverableBearerTokenResponse extends BearerTokenResponse
 
         $this->preparedBody = $body;
         $this->recovered = true;
+        $this->recoveredRefreshTokenIssued = $refreshTokenIssued;
 
         return $this;
     }
@@ -82,7 +87,11 @@ final class RecoverableBearerTokenResponse extends BearerTokenResponse
             ->withStatus(200)
             ->withHeader('pragma', 'no-cache')
             ->withHeader('cache-control', 'no-store')
-            ->withHeader('content-type', 'application/json; charset=UTF-8');
+            ->withHeader('content-type', 'application/json; charset=UTF-8')
+            ->withHeader(
+                self::INTERNAL_REFRESH_TOKEN_ISSUED_HEADER,
+                $this->refreshTokenIssued() ? '1' : '0',
+            );
 
         if ($this->recovered) {
             $response = $response->withHeader(self::INTERNAL_RECOVERY_HEADER, '1');
@@ -91,5 +100,18 @@ final class RecoverableBearerTokenResponse extends BearerTokenResponse
         $response->getBody()->write($this->prepareResponseBody());
 
         return $response;
+    }
+
+    private function refreshTokenIssued(): bool
+    {
+        if ($this->recovered) {
+            if ($this->recoveredRefreshTokenIssued === null) {
+                throw new RuntimeException('OAuth refresh recovery token state is unavailable.');
+            }
+
+            return $this->recoveredRefreshTokenIssued;
+        }
+
+        return isset($this->refreshToken);
     }
 }
