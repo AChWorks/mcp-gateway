@@ -41,6 +41,7 @@ if (! preg_match('/^[a-f0-9]{64}$/', $nonce)) {
 
 $values = [
     'app_url' => SimpleWebInstaller::defaultAppUrl($_SERVER),
+    'db_connection' => 'mariadb',
     'db_host' => '127.0.0.1',
     'db_port' => '3306',
     'db_database' => '',
@@ -107,7 +108,7 @@ function installerEscape(string $value): string
         h1 { margin-top: 0; }
         h2 { margin: 26px 0 12px; font-size: 1.05rem; }
         label { display: block; margin-top: 14px; font-weight: 600; }
-        input { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px 12px; border: 1px solid #c8ced8; border-radius: 8px; background: #fff; color: #111827; }
+        input, select { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px 12px; border: 1px solid #c8ced8; border-radius: 8px; background: #fff; color: #111827; }
         button { margin-top: 22px; padding: 11px 18px; border: 0; border-radius: 8px; background: #111827; color: #fff; font-weight: 700; cursor: pointer; }
         button[disabled] { opacity: .5; cursor: not-allowed; }
         .checks { list-style: none; padding: 0; margin: 0; }
@@ -122,7 +123,7 @@ function installerEscape(string $value): string
         @media (prefers-color-scheme: dark) {
             body { background: #111827; color: #e5e7eb; }
             .card { background: #1f2937; border-color: #374151; }
-            input { background: #111827; color: #f9fafb; border-color: #4b5563; }
+            input, select { background: #111827; color: #f9fafb; border-color: #4b5563; }
             code { background: #374151; }
             .notice { background: #3b2f16; }
             .success { background: #12351f; color: #9be4ae; }
@@ -166,7 +167,15 @@ function installerEscape(string $value): string
                 </label>
                 <?php if (isset($errors['app_url'])) { ?><div class="error"><?= installerEscape($errors['app_url']) ?></div><?php } ?>
 
-                <h2>MySQL</h2>
+                <h2>Database</h2>
+                <label>Engine
+                    <select name="db_connection" required>
+                        <option value="mariadb" <?= $values['db_connection'] === 'mariadb' ? 'selected' : '' ?>>MariaDB (recommended)</option>
+                        <option value="mysql" <?= $values['db_connection'] === 'mysql' ? 'selected' : '' ?>>MySQL</option>
+                    </select>
+                </label>
+                <?php if (isset($errors['db_connection'])) { ?><div class="error"><?= installerEscape($errors['db_connection']) ?></div><?php } ?>
+
                 <label>Host
                     <input name="db_host" required value="<?= installerEscape($values['db_host']) ?>">
                 </label>
@@ -216,7 +225,7 @@ function installerEscape(string $value): string
                 <button type="submit" <?= $preflightPassed ? '' : 'disabled' ?>>Install MCP Gateway</button>
             </form>
 
-            <p><small>The selected MySQL database must be dedicated and empty. Secrets are written only to the private <code>.env</code> / key files and are never displayed by this page.</small></p>
+            <p><small>The selected MariaDB or MySQL database must be dedicated and empty. MariaDB is the primary target; MySQL remains supported. Secrets are written only to the private <code>.env</code> / key files and are never displayed by this page.</small></p>
         <?php } ?>
     </div>
 </main>
