@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -22,9 +23,14 @@ final readonly class AuthenticatedSessionController
         ]);
 
         if (! Auth::attempt($credentials)) {
-            throw ValidationException::withMessages([
-                'email' => __('The provided credentials are invalid.'),
-            ]);
+            throw $this->invalidCredentials();
+        }
+
+        $user = $request->user();
+        if (! $user instanceof User || ! $user->access_enabled) {
+            Auth::logout();
+
+            throw $this->invalidCredentials();
         }
 
         $request->session()->regenerate();
@@ -39,5 +45,12 @@ final readonly class AuthenticatedSessionController
         $request->session()->regenerateToken();
 
         return redirect()->route('login');
+    }
+
+    private function invalidCredentials(): ValidationException
+    {
+        return ValidationException::withMessages([
+            'email' => __('The provided credentials are invalid.'),
+        ]);
     }
 }
