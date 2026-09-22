@@ -56,10 +56,16 @@ final class SiteInventoryDatabaseTest extends TestCase
         self::assertSame('sites_state_display_name_site_id_index', $plans['admin_state_order']['key'] ?? null);
         self::assertSame('sites_site_id_unique', $plans['mcp_cursor']['key'] ?? null);
         self::assertSame('sites_site_id_unique', $plans['single_site']['key'] ?? null);
-        self::assertLessThanOrEqual(200, (int) ($plans['admin_order']['rows'] ?? PHP_INT_MAX));
-        self::assertLessThanOrEqual(200, (int) ($plans['admin_state_order']['rows'] ?? PHP_INT_MAX));
-        self::assertLessThanOrEqual(200, (int) ($plans['mcp_cursor']['rows'] ?? PHP_INT_MAX));
-        self::assertLessThanOrEqual(2, (int) ($plans['single_site']['rows'] ?? PHP_INT_MAX));
+
+        foreach (['admin_order', 'admin_state_order', 'mcp_cursor'] as $name) {
+            self::assertNotSame('ALL', $plans[$name]['type'] ?? null);
+            self::assertStringNotContainsString(
+                'filesort',
+                strtolower((string) ($plans[$name]['Extra'] ?? '')),
+            );
+        }
+
+        self::assertContains($plans['single_site']['type'] ?? null, ['const', 'ref']);
     }
 
     /** @return array<string,mixed> */
