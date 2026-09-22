@@ -66,16 +66,15 @@
                 </thead>
                 <tbody>
                 @foreach ($sites as $item)
-                    @php($site = $item['site'])
                     <tr>
                         <td>
-                            <strong>{{ $site->display_name }}</strong><br>
-                            <code class="small-code">{{ $site->site_id }}</code>
+                            <strong>{{ $item['site']->display_name }}</strong><br>
+                            <code class="small-code">{{ $item['site']->site_id }}</code>
                         </td>
-                        <td><a href="{{ $site->base_url }}" rel="noreferrer">{{ $site->base_url }}</a></td>
+                        <td><a href="{{ $item['site']->base_url }}" rel="noreferrer">{{ $item['site']->base_url }}</a></td>
                         <td><span class="badge badge-{{ $item['status_tone'] }}">{{ $item['status_label'] }}</span></td>
-                        <td><code>{{ $site->last_error_code ?? '—' }}</code></td>
-                        <td class="table-action"><a href="{{ route('admin.sites.show', ['site' => $site->site_id]) }}">{{ __('Manage') }}</a></td>
+                        <td><code>{{ $item['site']->last_error_code ?? '—' }}</code></td>
+                        <td class="table-action"><a href="{{ route('admin.sites.show', ['site' => $item['site']->site_id]) }}">{{ __('Manage') }}</a></td>
                     </tr>
                 @endforeach
                 </tbody>
@@ -83,24 +82,18 @@
         </div>
     @endif
 
-    @php
-        $baseQuery = array_filter([
-            'search' => $filters['search'] ?? null,
-            'connection_state' => $filters['connection_state'] ?? null,
-        ], static fn ($value) => $value !== null && $value !== '');
-    @endphp
-    @if ($pagination['page'] > 1 || $pagination['has_more'])
+    @if ($pagination['previous_url'] !== null || $pagination['next_url'] !== null)
         <nav class="pagination" aria-label="{{ __('Site pages') }}">
-            @if ($pagination['page'] > 1)
-                <a class="button button-secondary" rel="prev" href="{{ route('admin.sites.index', [...$baseQuery, 'page' => $pagination['page'] - 1]) }}">{{ __('Previous') }}</a>
+            @if ($pagination['previous_url'] !== null)
+                <a class="button button-secondary" rel="prev" href="{{ $pagination['previous_url'] }}">{{ __('Previous') }}</a>
             @else
                 <span></span>
             @endif
 
             <span>{{ __('Page :page', ['page' => $pagination['page']]) }}</span>
 
-            @if ($pagination['has_more'])
-                <a class="button button-secondary" rel="next" href="{{ route('admin.sites.index', [...$baseQuery, 'page' => $pagination['page'] + 1]) }}">{{ __('Next') }}</a>
+            @if ($pagination['next_url'] !== null)
+                <a class="button button-secondary" rel="next" href="{{ $pagination['next_url'] }}">{{ __('Next') }}</a>
             @endif
         </nav>
     @endif
