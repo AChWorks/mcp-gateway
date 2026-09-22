@@ -11,7 +11,7 @@ Use the source that owns the kind of truth you need:
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
 - [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported V1 aaPanel/OpenLiteSpeed/PHP/MySQL deployment, validation, backup, upgrade, rollback, and operational safety boundaries.
 - [GitHub Issues](https://github.com/ach1992/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
-- [Program Issue #1](https://github.com/ach1992/mcp-gateway/issues/1) — completed V1 execution program and dependency graph.
+- [Program Issue #1](https://github.com/ach1992/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.
 - Pull requests and commits — implementation identity, review history, and integrated changes.
 - GitHub Actions / CI — validation evidence tied to exact commits.
 - [GitHub Releases](https://github.com/ach1992/mcp-gateway/releases) — immutable public release identity and release notes; deployment state remains separate production truth when deployment is explicitly authorized.
@@ -20,24 +20,21 @@ Use the source that owns the kind of truth you need:
 
 ## Cross-repository dependency
 
-The initial WordPress connector depends on WP AI Bridge compatibility work tracked in:
+The initial WordPress connector compatibility work was established through:
 
-- [`ach1992/wp-ai-bridge#54`](https://github.com/ach1992/wp-ai-bridge/issues/54) — allow explicitly approved MCP Gateway OAuth clients while preserving existing direct ChatGPT behavior.
+- [`ach1992/wp-ai-bridge#54`](https://github.com/ach1992/wp-ai-bridge/issues/54) — approved MCP Gateway OAuth-client support while preserving direct ChatGPT behavior;
+- [`mcp-gateway#4`](https://github.com/ach1992/mcp-gateway/issues/4) — the completed Gateway-side site registry and secure pairing work.
 
-The Gateway-side consumer of that contract is:
-
-- [`mcp-gateway#4`](https://github.com/ach1992/mcp-gateway/issues/4) — site registry and secure WP AI Bridge pairing.
-
-If the Bridge-side contract changes materially, reconcile Issue #4 and its dependents before implementation relies on stale assumptions.
+These closed Issues are historical contract provenance, not active task owners. If the Bridge/Gateway connector contract changes materially, recover the current code/release evidence in both repositories and create/update the natural current Issue rather than treating closed Issue #4 as live state.
 
 ## Recovery path
 
 A replacement Master or developer should recover in this order:
 
-1. Read `docs/MASTER-SPEC.md` only as needed to establish or verify project-level intent and completion criteria.
+1. Read `docs/MASTER-SPEC.md` only as needed to establish or verify project-level intent, durable constraints, and completion/growth rules.
 2. Read `docs/ARCHITECTURE.md` for the current durable implementation boundaries.
-3. Open Program Issue #1 to locate the active workstream and dependency path.
-4. Read only the relevant current Issue/Task Contract and its dependencies.
+3. Inspect the repository's current open GitHub Issues to identify active work, dependencies, and acceptance criteria; use closed Program Issue #1 only when historical V1 context is specifically needed.
+4. Read only the relevant current Issue/Task Contract and its direct dependencies.
 5. Inspect the corresponding branch/PR/commit and exact CI evidence before changing or integrating implementation.
 6. Use `docs/DEPLOYMENT.md` plus the applicable GitHub Release and deployment evidence when installation, upgrade, or delivery becomes relevant.
 

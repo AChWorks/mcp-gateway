@@ -41,6 +41,8 @@ V1 topology:
 
 The Gateway is a modular monolith. There is one application process model and one database. Modules are code ownership boundaries, not separately deployed services.
 
+WordPress/WP AI Bridge is the first concrete connector path, but the long-lived core is a connector-neutral control plane over stable registered target identity, authorization, inventory, routing, activity, and future operation state. Fleet size is not encoded as a fixed architecture ceiling; capacity is proven incrementally on the supported single-host shape before auxiliary infrastructure is introduced.
+
 ## 2. Technology baseline
 
 ### Runtime
@@ -140,20 +142,25 @@ Controllers and MCP handlers must not contain raw WP AI Bridge HTTP/OAuth logic.
 
 ### Control-plane evolution boundary
 
-The application/domain layer is the long-lived control-plane boundary. MCP, the server-rendered admin UI, and any future API/automation surface are adapters over explicit site identity, lifecycle, credential, health, activity, and operation rules; transport-specific entrypoints must not become the only owner of those rules.
+The application/domain layer is the long-lived control-plane boundary. MCP, the server-rendered admin UI, and any future API/automation surface are adapters over explicit target identity, lifecycle, authorization, credential, health, activity, and operation rules; transport-specific entrypoints must not become the only owner of those rules.
 
-The current V1 code intentionally stops short of a speculative provider framework. Direct site-inventory queries in the MCP/admin adapters and concrete `WpAiBridge` dependencies in the existing site/connector flow are acceptable while there is one evidenced connector and one small-fleet deployment model. They are known extraction points, not a reason to introduce generic indirection early.
+The project still stops short of a speculative provider framework, but the current scalability evidence in Issue #53 is now a concrete trigger for the first small extraction: admin and MCP inventory consumers need one shared, bounded site-inventory/query boundary instead of independently loading or filtering the fleet. That boundary should own reusable search/filter/order/page semantics and selected projections while remaining an application query service, not a generic repository framework.
 
-Extract reusable query/connector contracts only when a concrete trigger exists, such as a second connector/provider, a non-MCP consumer needing the same inventory semantics, or measured fleet-scale pressure. Prefer the smallest extraction first (for example, a shared site inventory/query service or connector contract) and keep these invariants:
+Connector generalization remains trigger-driven. Keep the current concrete `WpAiBridge` implementation behind its connector boundary, and introduce only the smallest connector-selection/capability abstraction required by real callers. A second connector/provider is the normal trigger for broader connector contracts; do not invent empty capability methods in advance.
 
-- every target operation retains explicit `site_id`/site identity and authorization boundaries;
+Keep these invariants:
+
+- every target operation retains explicit `site_id`/target identity and authorization boundaries;
 - adapters cannot turn the Gateway into a generic privileged HTTP/shell/SQL proxy;
-- admin/API/MCP surfaces reuse common application rules rather than reimplementing authority;
-- queues/background workers remain optional scale mechanisms, not baseline dependencies;
+- admin/API/MCP surfaces reuse common inventory, authorization, and application rules rather than reimplementing them;
+- administration authorization is permission/policy based; role names are bundles rather than business-logic branches;
+- connector-specific behavior stays behind connector boundaries and shared domain rules do not require WordPress semantics;
+- inventory/list responses are bounded and deterministic; registered-but-idle targets create no mandatory outbound/background work;
+- queues/background workers remain optional workload mechanisms, not baseline dependencies;
 - simple single-host PHP/MySQL/shared-hosting deployment remains supported until evidence requires otherwise;
-- tenant/workspace, bulk-operation, provider-plugin, or microservice abstractions are introduced only for measured use cases.
+- tenant/workspace, bulk-operation, provider-plugin, external search, or microservice abstractions are introduced only for measured use cases.
 
-Large-fleet inventory behavior remains a separate scalability concern rather than a prerequisite for this architectural boundary.
+When bulk/fan-out workflows become concrete, introduce explicit operation/target execution state at the application layer rather than keeping a long synchronous HTTP request alive across many remote sites. That future operation boundary must own idempotency, partial failure, retry eligibility, and progress semantics before a queue backend becomes an implementation detail.
 
 ## 4. Core components
 
@@ -161,35 +168,71 @@ Large-fleet inventory behavior remains a separate scalability concern rather tha
 
 Owns human administration only:
 
-- administrator session;
+- authenticated local user session;
 - dashboard;
+- bounded/searchable/paged Sites inventory;
 - Sites CRUD;
 - Connect/Reconnect/Disconnect/Test actions;
-- bounded activity view;
-- Gateway connection/settings view.
+- bounded activity/audit views;
+- Gateway connection/settings view;
+- lightweight user/access management when the multi-admin workstream is implemented.
 
-Use Blade and ordinary form submissions. Add small progressive JavaScript only where it materially improves a flow. Do not introduce a frontend framework for V1.
+Use Blade and ordinary form submissions. Add small progressive JavaScript only where it materially improves a flow. Do not introduce a frontend framework merely for scale; server-side query boundaries own large-list behavior.
 
-### 4.2 Site Registry
+All mutations and protected views authorize server-side. Template visibility is a usability layer, never the permission boundary.
+
+### 4.2 Administrative Authorization Boundary
+
+Laravel authentication remains responsible for local user/session identity. Application Policies/Gates or an equivalent framework authorization boundary own whether that identity may perform a Gateway action against a resource.
+
+Authorization rules:
+
+- authorize capabilities/resources such as viewing sites, managing connections, executing operations, viewing activity, managing users, or changing settings;
+- roles are small named bundles of permissions for operator convenience, not conditionals embedded throughout controllers/services;
+- the initial role vocabulary may use names such as owner, administrator, operator, and viewer, but code should depend on permissions/policies so those bundles can evolve;
+- the first installed administrator has the recoverable owner path;
+- future per-site/site-group scopes extend policy/query constraints rather than replacing the auth system;
+- no public tenancy, organization hierarchy, billing, or enterprise identity subsystem is implied.
+
+A maintained Laravel-compatible authorization package may own role/permission persistence if dependency review shows that this removes custom security code without compromising the above application boundary. Laravel Policies/Gates remain the semantic enforcement layer regardless of storage package.
+
+### 4.3 Site Registry
 
 Owns durable target identity.
 
-A WordPress site record has at least:
+A registered site/target record has at least:
 
-- internal immutable numeric/UUID identity;
-- stable human-facing slug or short identifier suitable for MCP input;
+- internal immutable numeric/UUID/ULID identity;
+- stable human-facing slug or short identifier suitable for MCP and administration input;
 - display name;
-- canonical HTTPS base URL;
+- canonical base/target identity appropriate to the supported connector;
 - connector type (`wp_ai_bridge` in V1);
-- discovered canonical MCP resource URL;
 - current connection state metadata;
 - timestamps.
 
 The human-facing `site_id`/slug used by MCP should be stable and must not be inferred from the host on every request.
 
+The current V1 schema may contain WP AI Bridge-specific discovered endpoint fields because only that connector exists. New shared application behavior must not make those fields universal connector requirements. When a concrete second connector needs materially different durable configuration, prefer a narrow connector-owned configuration/table boundary over indefinitely widening the common `sites` row with unrelated nullable columns.
+
 Site records never contain plaintext passwords or plaintext OAuth tokens.
 
-### 4.3 Credential Store
+### 4.4 Site Inventory Query Boundary
+
+One application-level query service owns fleet discovery semantics shared by Admin, MCP, and future read-only API/automation consumers.
+
+Responsibilities:
+
+- bounded server-side search, filter, deterministic order, and pagination/cursor behavior;
+- explicit maximum page sizes and selected-column/projection choices;
+- query shapes that can be supported by measured MySQL indexes;
+- policy-aware filtering when resource-scoped administration is later introduced;
+- machine-facing continuation metadata sufficient to discover every authorized target without returning the whole fleet.
+
+The admin UI may use page-oriented navigation where that is clearer for humans. MCP/machine discovery should prefer deterministic cursor/keyset continuation when it avoids deep-offset or mutation-order ambiguity. Exact strategy remains evidence-driven, but the whole fleet must never be loaded merely to render or serialize one page.
+
+Scale fixtures and query measurements belong in tests/Issue evidence, not in this service as hard-coded product limits.
+
+### 4.5 Credential Store
 
 Owns recoverable secrets required to call target sites and any Gateway-held OAuth server state that must be confidential.
 
@@ -201,7 +244,7 @@ Rules:
 - never expose secret fields through model serialization, admin pages, logs, exceptions, or MCP results;
 - token/credential rows are bound to the exact site and OAuth client/resource relationship.
 
-### 4.4 MCP Server Adapter
+### 4.6 MCP Server Adapter
 
 Owns the single public MCP endpoint, expected initially at:
 
@@ -220,7 +263,7 @@ Responsibilities:
 
 MCP handlers call application services; they do not make raw downstream HTTP requests.
 
-### 4.5 Client Authorization Boundary
+### 4.7 Client Authorization Boundary
 
 Owns `remote MCP client -> Gateway` authorization.
 
@@ -253,7 +296,7 @@ V1 ChatGPT requirements:
 
 Do not couple administrator browser sessions to bearer-token validation simply because both use the same application database.
 
-### 4.6 WP AI Bridge Connector
+### 4.8 WP AI Bridge Connector
 
 The first connector encapsulates every WordPress-specific integration detail.
 
@@ -271,9 +314,17 @@ Responsibilities:
 
 The connector does not bypass WP AI Bridge by calling unrelated WordPress endpoints to obtain additional authority.
 
-### 4.7 Router
+### 4.9 Connector Selection Boundary
 
-The Router accepts an explicit `site_id`, loads the exact site/credential record, resolves the site's connector, and performs the requested bounded connector operation.
+Connector selection is centralized from the stored `connector_type` to a concrete, explicitly supported connector implementation. A small registry/factory or container mapping is sufficient while the connector set is small.
+
+This is not a dynamic third-party plugin loader. Callers cannot supply class names, URLs, HTTP methods, or executable connector code. Unsupported connector types fail closed.
+
+A second real connector is the trigger to extract only the common contracts/capabilities that both implementations actually share. Until then, keep `WpAiBridge` concrete rather than designing a broad theoretical provider SDK.
+
+### 4.10 Router
+
+The Router accepts an explicit `site_id`, loads the exact site/credential record, resolves the site's declared connector through the connector-selection boundary, and performs the requested bounded connector operation.
 
 Routing invariants:
 
@@ -292,6 +343,8 @@ Keep the client-facing surface deliberately small and stable. Exact naming may b
 ### `sites-list`
 
 Returns bounded non-secret identity/status information for configured sites available to the authenticated Gateway principal.
+
+The contract must support deterministic continuation once the fleet exceeds one response. Bounded search/filter fields and a capped requested limit may be exposed where they materially improve discovery. A no-argument call may preserve the simple first-page behavior for compatibility, but a truncation flag without a continuation/search path is not sufficient.
 
 No credentials, token expiry secrets, private internal paths, or sensitive configuration.
 
@@ -385,21 +438,25 @@ If future requirements include private-network sites, that is a product/security
 
 ## 8. Persistence model
 
-Initial logical tables may include:
+Initial/current logical tables may include:
 
 ```text
 users
 sessions                       # framework-dependent
+roles / permissions            # only when lightweight multi-admin authorization is enabled
 sites
+connector-specific state       # dedicated only when a connector requires durable fields beyond shared identity
 site_credentials
 mcp_authorizations             # if useful as an authorization aggregate
 mcp_access_tokens              # exact storage depends on chosen OAuth library
 mcp_refresh_tokens             # exact storage depends on chosen OAuth library
-activity_logs
+activity_events
+audit_events                   # when distinct security/admin audit semantics are required
 settings                       # only if settings do not fit config or dedicated tables
+operation / operation_targets  # only when real asynchronous/bulk workflows require durable job state
 ```
 
-Do not create a generic key/value database for domain state merely to avoid migrations.
+Do not create a generic key/value database for domain state merely to avoid migrations. Do not add speculative tables merely because they appear in this future-capable logical model; each table must be introduced by a concrete accepted feature.
 
 Use foreign keys/unique constraints where they enforce real invariants. Site deletion/disconnect semantics must deliberately handle credentials rather than leaving orphaned live tokens.
 
@@ -423,13 +480,19 @@ Activity is operator-facing audit metadata, distinct from debug logs. Record onl
 - correlation ID;
 - concise safe error category.
 
-Retention is bounded by configuration. The default policy keeps Activity for at most 30 days and at most 5,000 rows, controlled by `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`. Every Activity write applies the policy under the shared retention lock, and the daily Laravel scheduler invokes `activity:prune` so age-based retention also advances on otherwise idle installations. The command is safe to run manually and reports only deletion counts; it does not expose stored Activity content.
+Retention is bounded by configuration. The current default policy keeps Activity for at most 30 days and at most 5,000 rows, controlled by `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`.
+
+Retention enforcement must not become a fleet/concurrency bottleneck. The durable target is a cheap bounded event insert on the request hot path plus scheduled/bounded pruning. A global retention lock, full count, or overflow scan on every event is acceptable only while measurement proves it immaterial; Issue #53 explicitly re-evaluates the current implementation. Opportunistic pruning may supplement the scheduler only when it remains bounded and does not serialize unrelated routed requests.
+
+Security/admin audit may use separate retention/storage semantics when multi-user administration requires durable accountability. Do not make debug logs the authoritative audit record.
 
 ### Health
 
-Provide a cheap application health endpoint that proves the application can boot and reach required local dependencies as appropriate. Do not make it call every remote WordPress site.
+Provide a cheap application health endpoint that proves the application can boot and reach required local dependencies as appropriate. Do not make it call every remote site.
 
-Per-site health is explicit/on-demand in the panel and connector layer.
+Dashboard/list views use stored connection/last-health state. Opening an overview must never trigger synchronous fleet-wide health probes.
+
+Per-site health is explicit/on-demand in the panel and connector layer. If periodic fleet health checks become a real requirement, run them as chunked/bounded work with persisted status rather than coupling them to page rendering.
 
 ## 10. Failure semantics
 
@@ -499,7 +562,13 @@ At minimum provide:
 - cross-site isolation tests using at least two sites;
 - tests proving a denied downstream WordPress/Bridge operation remains denied;
 - tests proving mutation execution is not blindly retried;
+- scale fixtures/benchmarks that exercise realistic near-term inventories in the hundreds (including representative 200–500-site cases) and record query count, response bounding, runtime/memory, and relevant MySQL query-plan/index evidence;
+- larger synthetic inventory stress cases such as 1,000 / 3,000 / 10,000 sites when useful to expose nonlinear behavior or preserve headroom; these are diagnostics, not supported-capacity promises;
+- tests proving Admin and MCP inventory consumers do not load/serialize the full fleet and that machine continuation can discover targets beyond the first response;
+- contention/performance evidence for Activity retention changes when the write hot path is modified;
 - a production-like OpenLiteSpeed/PHP 8.4 smoke check before declaring V1 deployment-ready.
+
+Performance assertions should focus on bounded behavior, query counts/plans, memory growth, and regressions under comparable workloads rather than brittle wall-clock thresholds from unrelated CI hardware.
 
 CI should run the highest-signal repository checks that can run deterministically on GitHub-hosted infrastructure. Do not reproduce aaPanel itself in CI merely for ceremony.
 
@@ -510,21 +579,27 @@ CI should run the highest-signal repository checks that can run deterministicall
 - Review changelogs for MCP/OAuth/security-sensitive dependencies before upgrades.
 - Do not spread vendor APIs through domain code; wrap MCP SDK, OAuth-server, and target HTTP details in infrastructure boundaries.
 - Do not automatically update major protocol/auth dependencies in production without tests tied to the resulting lockfile.
+- For commodity authorization/queue/storage capabilities, evaluate maintained Laravel/framework-aligned components before custom implementations; accept a dependency only when its security, compatibility, maintenance, migration, and operational cost is lower than owning equivalent custom code.
+- Keep application Policies/Gates and application job/operation semantics as Gateway-owned boundaries even when a package/framework owns persistence or transport mechanics.
 
 ## 14. Architecture invariants for future work
 
 A future change must not casually violate these invariants:
 
-1. One Gateway deployment and one stable public MCP endpoint serve many configured sites.
-2. Site identity is explicit for every routed site operation.
+1. One Gateway deployment and one stable public MCP endpoint serve many configured targets.
+2. Site/target identity is explicit for every routed target operation.
 3. Per-site credentials are isolated.
-4. Gateway authorization cannot grant WordPress authority the target user/Bridge does not possess.
+4. Gateway authorization cannot grant downstream authority the target principal/connector does not possess.
 5. Direct WP AI Bridge operation remains independent of Gateway availability.
 6. No arbitrary HTTP/SQL/shell/filesystem proxy is introduced as a shortcut.
 7. Security-sensitive OAuth/token behavior is standards/library-backed and tested.
 8. V1 stays a normal PHP + MySQL web application with no mandatory auxiliary services.
-9. WP AI Bridge-specific behavior stays behind its connector boundary.
-10. Active task/status truth stays in GitHub Issues/PRs, not this document.
+9. WP AI Bridge-specific behavior stays behind its connector boundary; the core target/inventory/authorization model remains connector-neutral.
+10. Administrative authorization is permission/policy based; role names are replaceable bundles, not distributed business logic.
+11. Fleet discovery and administration are bounded; registered-but-idle sites do not create mandatory remote work.
+12. The Gateway scales infrastructure from measured active workload rather than from a fixed registered-site-count assumption.
+13. Heavy backup/media/export data stays off the Gateway data path by default when direct target-to-storage flow is possible.
+14. Active task/status truth stays in GitHub Issues/PRs, not this document.
 
 ## 15. Bootstrap decisions and remaining verification points
 
