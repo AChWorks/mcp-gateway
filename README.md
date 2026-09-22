@@ -120,7 +120,7 @@ Do **not** expose the package/repository root as the web document root, and do n
 The deployment ZIP/web installer can be used on shared hosting when the host provides:
 
 - PHP 8.4.1+ with the required extensions;
-- MySQL;
+- MariaDB 10.11 (recommended) or MySQL;
 - HTTPS;
 - permission to set a subdomain/addon-domain document root to the package `public/` directory;
 - writable `storage/` and `bootstrap/cache/` directories.
