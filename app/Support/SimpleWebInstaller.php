@@ -23,6 +23,9 @@ final class SimpleWebInstaller
         'sodium',
     ];
 
+    /** @var list<string> */
+    private const SUPPORTED_DATABASE_DRIVERS = ['mariadb', 'mysql'];
+
     /** @return array<string, bool> */
     public static function preflight(string $basePath, bool $https): array
     {
@@ -99,27 +102,32 @@ final class SimpleWebInstaller
             $errors['app_url'] = 'Application URL must use the same hostname as this installer.';
         }
 
+        $dbDriver = strtolower(trim((string) ($input['db_connection'] ?? 'mariadb')));
+        if (! in_array($dbDriver, self::SUPPORTED_DATABASE_DRIVERS, true)) {
+            $errors['db_connection'] = 'Select MariaDB or MySQL.';
+        }
+
         $dbHost = trim((string) ($input['db_host'] ?? ''));
         if ($dbHost === '' || strlen($dbHost) > 255 || preg_match('/^[A-Za-z0-9._:-]+$/', $dbHost) !== 1) {
-            $errors['db_host'] = 'Enter a valid MySQL host.';
+            $errors['db_host'] = 'Enter a valid database host.';
         }
 
         $dbPort = filter_var($input['db_port'] ?? null, FILTER_VALIDATE_INT, [
             'options' => ['min_range' => 1, 'max_range' => 65535],
         ]);
         if ($dbPort === false) {
-            $errors['db_port'] = 'Enter a valid MySQL port.';
+            $errors['db_port'] = 'Enter a valid database port.';
         }
 
         foreach (['db_database' => 'database name', 'db_username' => 'database username'] as $field => $label) {
             $value = trim((string) ($input[$field] ?? ''));
             if ($value === '' || strlen($value) > 64 || preg_match('/^[A-Za-z0-9_$-]+$/', $value) !== 1) {
-                $errors[$field] = 'Enter a valid MySQL '.$label.'.';
+                $errors[$field] = 'Enter a valid database '.$label.'.';
             }
         }
 
         if ((string) ($input['db_password'] ?? '') === '') {
-            $errors['db_password'] = 'Enter the MySQL password.';
+            $errors['db_password'] = 'Enter the database password.';
         }
 
         $adminName = trim((string) ($input['admin_name'] ?? ''));
@@ -218,12 +226,17 @@ final class SimpleWebInstaller
      */
     public static function buildEnvironment(string $template, array $input, string $applicationKey): string
     {
+        $databaseDriver = strtolower(trim((string) ($input['db_connection'] ?? 'mariadb')));
+        if (! in_array($databaseDriver, self::SUPPORTED_DATABASE_DRIVERS, true)) {
+            throw new RuntimeException('Unsupported database driver.');
+        }
+
         $values = [
             'APP_ENV' => 'production',
             'APP_KEY' => $applicationKey,
             'APP_DEBUG' => 'false',
             'APP_URL' => rtrim(trim((string) $input['app_url']), '/'),
-            'DB_CONNECTION' => 'mysql',
+            'DB_CONNECTION' => $databaseDriver,
             'DB_HOST' => trim((string) $input['db_host']),
             'DB_PORT' => (string) (int) $input['db_port'],
             'DB_DATABASE' => trim((string) $input['db_database']),
@@ -267,6 +280,7 @@ final class SimpleWebInstaller
     /** @param array<string, mixed> $input */
     private static function assertEmptyDatabase(array $input): void
     {
+        // MariaDB and MySQL both use the PDO MySQL transport.
         $dsn = sprintf(
             'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
             trim((string) $input['db_host']),
@@ -287,7 +301,7 @@ final class SimpleWebInstaller
         } catch (RuntimeException $exception) {
             throw $exception;
         } catch (Throwable $exception) {
-            throw new RuntimeException('Could not connect to MySQL with the supplied database details.', previous: $exception);
+            throw new RuntimeException('Could not connect to MariaDB/MySQL with the supplied database details.', previous: $exception);
         }
     }
 
@@ -393,6 +407,6 @@ final class SimpleWebInstaller
             }
         }
 
-        return 'Installation failed safely. Check PHP/MySQL permissions and the server error log, then retry with a fresh package and empty database.';
+        return 'Installation failed safely. Check PHP/database permissions and the server error log, then retry with a fresh package and empty database.';
     }
 }
