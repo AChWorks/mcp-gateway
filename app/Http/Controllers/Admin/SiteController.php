@@ -218,6 +218,7 @@ final class SiteController extends Controller
             default => [(string) __('Needs attention'), 'danger'],
         };
     }
+
     private function nullableTrim(mixed $value): ?string
     {
         if (! is_string($value)) {
@@ -228,5 +229,4 @@ final class SiteController extends Controller
 
         return $value === '' ? null : $value;
     }
-
 }
