@@ -93,6 +93,28 @@ final class AdminAuthorizationTest extends TestCase
         $this->assertGuest();
     }
 
+    public function test_disabled_user_existing_browser_session_is_terminated_for_admin_and_oauth(): void
+    {
+        $user = $this->user(GatewayRole::Administrator, SiteScopeMode::All);
+
+        $this->actingAs($user)
+            ->get('/admin')
+            ->assertOk();
+
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->actingAs($user)
+            ->get('/admin')
+            ->assertRedirect('/admin/login');
+        $this->assertGuest();
+
+        $this->actingAs($user)
+            ->get('/oauth/authorize')
+            ->assertUnauthorized()
+            ->assertSee('Administrator sign-in required');
+        $this->assertGuest();
+    }
+
     public function test_selected_scope_activity_excludes_other_sites_and_gateway_global_events(): void
     {
         $operator = $this->user(GatewayRole::Operator, SiteScopeMode::Selected);
