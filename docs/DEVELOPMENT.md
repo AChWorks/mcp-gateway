@@ -81,6 +81,20 @@ During implementation:
 - keep the pull request closed until the implementation is functionally complete and self-review is clean, unless PR-based evidence is specifically needed earlier;
 - avoid independent review while the implementation is still moving materially.
 
+Useful targeted commands include:
+
+```bash
+# One test file or one test method while iterating.
+composer test -- tests/Feature/Admin/AdminSiteManagementTest.php
+composer test -- --filter=test_specific_behavior
+
+# Changed PHP files only when a whole-project pass adds no signal yet.
+vendor/bin/pint --test app/Http/Controllers/Admin/SiteController.php tests/Feature/Admin/AdminSiteManagementTest.php
+vendor/bin/phpstan analyse app/Http/Controllers/Admin/SiteController.php --memory-limit=1G
+```
+
+Use the normal broader commands at candidate freeze when their evidence is required. Do not add custom wrappers merely to hide standard Laravel/PHPUnit/Pint/PHPStan syntax.
+
 At candidate freeze:
 
 - inspect the full effective diff and acceptance criteria;
@@ -116,7 +130,9 @@ composer analyse
 composer test
 ```
 
-`composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting MySQL. The dedicated path-filtered `MySQL Concurrency` workflow owns MySQL 8.4 `migrate:fresh` and the `mysql-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The `Update Package` workflow independently owns the MySQL-backed released-package-to-candidate browser update proof. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate. Draft pull requests skip these heavy jobs until they are marked ready for review.
+`composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting MySQL. The dedicated path-filtered `MySQL Concurrency` workflow owns MySQL 8.4 `migrate:fresh` and the `mysql-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The `Update Package` workflow independently owns the MySQL-backed released-package-to-candidate browser update proof and runs only for updater/package/schema/dependency surfaces that can invalidate that proof; ordinary application-code edits rely on normal application tests plus package build/verification and receive the full browser-update proof at the applicable release gate. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate for Bridge-facing MCP/site-connection/client-identity behavior rather than every Gateway OAuth/internal HTTP edit. Draft pull requests skip these heavy jobs until they are marked ready for review.
+
+Do not shard a retained long-running suite by default. First compare fixed runner/service/setup cost with the test body. Introduce shards only when non-overlapping isolated shards materially shorten the same-workload critical path after trigger/duplication cleanup, and verify aggregate completeness and isolation. Keep exact timing evidence in the active optimization Issue/PR rather than hard-coding transient runner measurements into this durable workflow guide.
 
 ## Release package validation
 

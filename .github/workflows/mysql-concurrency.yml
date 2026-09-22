@@ -7,7 +7,6 @@ on:
     paths:
       - 'app/Application/Sites/**'
       - 'app/Domain/Sites/**'
-      - 'app/Infrastructure/Activity/**'
       - 'app/Infrastructure/OAuth/**'
       - 'config/bridge.php'
       - 'config/database.php'
@@ -15,6 +14,7 @@ on:
       - 'database/migrations/**'
       - 'tests/Feature/OAuth/**'
       - 'tests/Feature/Sites/**'
+      - 'tests/Support/oauth_concurrent_token_request.php'
       - 'tests/Support/site_lifecycle_concurrent_action.php'
       - 'composer.json'
       - 'composer.lock'
@@ -28,7 +28,6 @@ on:
     paths:
       - 'app/Application/Sites/**'
       - 'app/Domain/Sites/**'
-      - 'app/Infrastructure/Activity/**'
       - 'app/Infrastructure/OAuth/**'
       - 'config/bridge.php'
       - 'config/database.php'
@@ -36,6 +35,7 @@ on:
       - 'database/migrations/**'
       - 'tests/Feature/OAuth/**'
       - 'tests/Feature/Sites/**'
+      - 'tests/Support/oauth_concurrent_token_request.php'
       - 'tests/Support/site_lifecycle_concurrent_action.php'
       - 'composer.json'
       - 'composer.lock'
