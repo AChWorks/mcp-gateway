@@ -3,9 +3,9 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Sites\SiteConnectionException;
-use App\Domain\Access\GatewayPermission;
 use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteRegistry;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
 use App\Http\Controllers\Controller;
 use App\Support\Admin\SiteOperationMessage;
