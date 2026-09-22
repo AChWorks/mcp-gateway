@@ -183,18 +183,32 @@ All mutations and protected views authorize server-side. Template visibility is 
 
 ### 4.2 Administrative Authorization Boundary
 
-Laravel authentication remains responsible for local user/session identity. Application Policies/Gates or an equivalent framework authorization boundary own whether that identity may perform a Gateway action against a resource.
+Laravel authentication owns local user/session identity. Gateway permissions registered through Laravel Gates own whether that identity may perform an action, and the shared `AccessControl` application service owns the resource-scope calculation used by both Admin and MCP. Blade visibility mirrors those decisions for usability but is never the enforcement boundary.
 
-Authorization rules:
+The implemented role vocabulary is `owner`, `administrator`, `operator`, and `viewer`. These names are operator-facing bundles only: application behavior checks explicit permissions rather than branching on role names. A role is the maximum permission ceiling. User-level and site-level rules are denial-only narrowing layers and can never manufacture authority absent from the role.
 
-- authorize capabilities/resources such as viewing sites, managing connections, executing operations, viewing activity, managing users, or changing settings;
-- roles are small named bundles of permissions for operator convenience, not conditionals embedded throughout controllers/services;
-- the initial role vocabulary may use names such as owner, administrator, operator, and viewer, but code should depend on permissions/policies so those bundles can evolve;
-- the first installed administrator has the recoverable owner path;
-- future per-site/site-group scopes extend policy/query constraints rather than replacing the auth system;
-- no public tenancy, organization hierarchy, billing, or enterprise identity subsystem is implied.
+Site authorization is deliberately split into two questions:
 
-A maintained Laravel-compatible authorization package may own role/permission persistence if dependency review shows that this removes custom security code without compromising the above application boundary. Laravel Policies/Gates remain the semantic enforcement layer regardless of storage package.
+1. is the site in the principal's scope; and
+2. is the requested capability allowed on that site?
+
+A non-owner principal may use `all` scope with explicit site exclusions or `selected` scope with explicit site inclusions. Direct per-site permission denials are evaluated after scope membership. This separation permits cases such as an Operator who may mutate one selected site while read/catalog access is denied on that same site. The effective rule is:
+
+```text
+effective capability
+= role permission ceiling
+AND no global permission denial
+AND site belongs to principal scope
+AND no site-specific permission denial
+```
+
+The first installed/CLI-created account is the recoverable Owner. Owners always retain enabled all-site authority without global/site denials; the access-management transaction prevents demoting or disabling the last enabled Owner. Subsequent CLI-created administrators use the Administrator bundle. Security-sensitive user/permission/site-rule changes require the acting administrator's current password and write required bounded Activity evidence in the same database transaction; an audit persistence failure rolls back the local security change. Ordinary routed-operation Activity remains best-effort so observability failure can never change an already-authoritative remote result.
+
+Disabling a local user terminates new Admin authentication, invalidates an existing authenticated Admin/OAuth-consent browser session when it is next used, and causes bearer-protected MCP requests to reject existing access tokens because the current user row is re-evaluated on every MCP request. Site-scope and permission changes likewise affect existing MCP access tokens without minting broader replacement credentials.
+
+The Gateway evaluated `spatie/laravel-permission` against the Laravel 13/PHP 8.4 baseline. Because site scope and per-site denial semantics are Gateway domain rules, package-global RBAC would still require a second custom authorization state model. The current implementation therefore uses Laravel Gates plus the smallest explicit Gateway-owned persistence model rather than two competing semantic authorization systems.
+
+Future site groups may contribute another source of site membership without replacing this boundary. Direct per-site rules remain the final narrowing layer so a broad group can later be restricted for one site. This does not imply public tenancy, organization hierarchy, billing, or an enterprise policy engine.
 
 ### 4.3 Site Registry
 
