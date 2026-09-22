@@ -214,21 +214,23 @@ The rest of `.env.example` provides bounded timeout/size defaults. Change them o
 
 ### Activity retention scheduling
 
-Activity storage is bounded even without a scheduler: every new Activity record applies the configured age and row-count policy. Defaults are 30 days and 5,000 rows through `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`.
+Activity recording stays off the retention hot path: a routed operation writes one bounded metadata event, while `activity:prune` applies the configured age and row-count policy separately. Defaults are 30 days and 5,000 rows through `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`. Because pruning is scheduled rather than synchronous with every write, the row count can temporarily exceed the configured target between prune runs.
 
-To ensure age-based retention also advances while the Gateway is otherwise idle, configure the host's cron/scheduled-task facility to run Laravel's scheduler once per minute from the application root:
+Configure the host's cron/scheduled-task facility to run Laravel's scheduler once per minute from the application root:
 
 ```cron
 * * * * * cd <APP_ROOT> && php artisan schedule:run >> /dev/null 2>&1
 ```
 
-Use the PHP 8.4 CLI that belongs to the deployed site when `php` is not that binary. The application schedules `activity:prune` once per day with overlap protection. Operators may also apply the same configured policy on demand:
+Use the PHP 8.4 CLI that belongs to the deployed site when `php` is not that binary. The application schedules `activity:prune` once per day with overlap protection. If the Laravel scheduler is unavailable, run the same command from an equivalent host scheduler at least daily; without scheduled or manual pruning, the configured age/row targets are not enforced.
+
+Operators may also apply the configured policy on demand:
 
 ```bash
 php artisan activity:prune
 ```
 
-The command reports only expired/overflow deletion counts and the remaining row count. It does not dump Activity records or credentials.
+Pruning serializes only competing prune runs and deletes expired/overflow records in fixed-size batches; ordinary Activity writers do not acquire the retention lock. The command reports only expired/overflow deletion counts and the remaining row count. It does not dump Activity records or credentials.
 
 ## 6. Generate signing keys (advanced path)
 
