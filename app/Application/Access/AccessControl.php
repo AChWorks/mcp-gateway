@@ -111,6 +111,12 @@ final readonly class AccessControl
         });
     }
 
+    public function hasUnrestrictedSiteScope(User $user): bool
+    {
+        return (bool) $user->getAttribute('access_enabled')
+            && $this->role($user) === GatewayRole::Owner;
+    }
+
     public function hasAllSiteScope(User $user): bool
     {
         if (! (bool) $user->getAttribute('access_enabled')) {
