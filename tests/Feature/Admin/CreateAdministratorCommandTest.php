@@ -44,6 +44,34 @@ final class CreateAdministratorCommandTest extends TestCase
         $this->assertTrue($user->access_enabled);
     }
 
+    public function test_command_creates_later_cli_accounts_as_all_site_administrators(): void
+    {
+        User::query()->create([
+            'name' => 'Existing Owner',
+            'email' => 'owner@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+        ]);
+
+        $password = 'DifferentHorse!234';
+
+        $this->artisan('gateway:admin:create', [
+            '--name' => 'Second Admin',
+            '--email' => 'SECOND@Example.Test',
+        ])
+            ->expectsQuestion('Password', $password)
+            ->expectsQuestion('Confirm password', $password)
+            ->expectsOutput('Administrator created.')
+            ->assertExitCode(0);
+
+        $user = User::query()->where('email', 'second@example.test')->firstOrFail();
+
+        $this->assertSame(GatewayRole::Administrator, $user->role);
+        $this->assertSame(SiteScopeMode::All, $user->site_scope_mode);
+        $this->assertTrue($user->access_enabled);
+    }
+
     public function test_command_rejects_a_weak_password(): void
     {
         $this->artisan('gateway:admin:create', [
