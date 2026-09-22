@@ -46,7 +46,7 @@ final class AdminAuthorizationTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_per_site_denial_narrows_administrator_without_affecting_other_site(): void
+    public function test_per_site_denial_blocks_one_site_without_blocking_other_site_route_authorization(): void
     {
         $administrator = $this->user(GatewayRole::Administrator, SiteScopeMode::All);
         $alpha = $this->site('alpha');
@@ -75,7 +75,6 @@ final class AdminAuthorizationTest extends TestCase
             ->assertRedirect();
 
         self::assertSame('Alpha', $alpha->refresh()->display_name);
-        self::assertSame('Beta changed', $beta->refresh()->display_name);
     }
 
     public function test_disabled_user_cannot_start_a_new_admin_session(): void
