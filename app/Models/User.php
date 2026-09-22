@@ -15,6 +15,13 @@ class User extends Authenticatable
 {
     use Notifiable;
 
+    /** @var array<string,mixed> */
+    protected $attributes = [
+        'role' => 'viewer',
+        'site_scope_mode' => 'selected',
+        'access_enabled' => true,
+    ];
+
     /**
      * Get the attributes that should be cast.
      *
