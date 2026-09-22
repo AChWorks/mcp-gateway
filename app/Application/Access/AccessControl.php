@@ -89,6 +89,46 @@ final readonly class AccessControl
         });
     }
 
+    public function hasAllSiteScope(User $user): bool
+    {
+        if (! (bool) $user->getAttribute('access_enabled')) {
+            return false;
+        }
+
+        $role = $this->role($user);
+        if ($role === GatewayRole::Owner) {
+            return true;
+        }
+
+        return $role instanceof GatewayRole
+            && $this->scopeMode($user) === SiteScopeMode::All;
+    }
+
+    public function includeCreatedSite(User $user, Site $site): void
+    {
+        $role = $this->role($user);
+
+        if ($role === GatewayRole::Owner || $this->scopeMode($user) === SiteScopeMode::All) {
+            return;
+        }
+
+        if (! $role instanceof GatewayRole || $this->scopeMode($user) !== SiteScopeMode::Selected) {
+            return;
+        }
+
+        DB::table('user_site_access')->updateOrInsert(
+            [
+                'user_id' => $user->getKey(),
+                'site_record_id' => $site->getKey(),
+            ],
+            [
+                'allowed' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        );
+    }
+
     private function globalAllows(
         User $user,
         ?GatewayRole $role,
