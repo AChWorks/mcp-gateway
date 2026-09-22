@@ -4,7 +4,7 @@ This document derives the current technical architecture from [`MASTER-SPEC.md`]
 
 ## 1. Architecture summary
 
-MCP Gateway is a single deployable PHP web application with a server-rendered administration panel, one public MCP endpoint, one MySQL database, and explicit connector modules.
+MCP Gateway is a single deployable PHP web application with a server-rendered administration panel, one public MCP endpoint, one MariaDB-primary/MySQL-compatible database, and explicit connector modules.
 
 V1 topology:
 
@@ -36,7 +36,7 @@ V1 topology:
 
                              |
                              v
-                           MySQL
+                     MariaDB / MySQL
 ```
 
 The Gateway is a modular monolith. There is one application process model and one database. Modules are code ownership boundaries, not separately deployed services.
@@ -50,7 +50,7 @@ WordPress/WP AI Bridge is the first concrete connector path, but the long-lived 
 - PHP 8.4.
 - Laravel 13 as the web application framework.
 - Blade for the administration UI.
-- MySQL as the primary database.
+- MariaDB 10.11 as the primary database target; MySQL remains an officially supported compatibility target.
 - Composer for dependency management with committed `composer.lock`.
 - OpenLiteSpeed/LSAPI as the production web server/runtime path under aaPanel.
 - HTTPS on a dedicated domain/subdomain.
@@ -157,7 +157,7 @@ Keep these invariants:
 - connector-specific behavior stays behind connector boundaries and shared domain rules do not require WordPress semantics;
 - inventory/list responses are bounded and deterministic; registered-but-idle targets create no mandatory outbound/background work;
 - queues/background workers remain optional workload mechanisms, not baseline dependencies;
-- simple single-host PHP/MySQL/shared-hosting deployment remains supported until evidence requires otherwise;
+- simple single-host PHP + MariaDB/MySQL shared-hosting deployment remains supported until evidence requires otherwise;
 - tenant/workspace, bulk-operation, provider-plugin, external search, or microservice abstractions are introduced only for measured use cases.
 
 When bulk/fan-out workflows become concrete, introduce explicit operation/target execution state at the application layer rather than keeping a long synchronous HTTP request alive across many remote sites. That future operation boundary must own idempotency, partial failure, retry eligibility, and progress semantics before a queue backend becomes an implementation detail.
@@ -224,7 +224,7 @@ Responsibilities:
 
 - bounded server-side search, filter, deterministic order, and pagination/cursor behavior;
 - explicit maximum page sizes and selected-column/projection choices;
-- query shapes that can be supported by measured MySQL indexes;
+- query shapes that can be supported by measured MariaDB-primary/MySQL-compatible indexes;
 - policy-aware filtering when resource-scoped administration is later introduced;
 - machine-facing continuation metadata sufficient to discover every authorized target without returning the whole fleet.
 
@@ -540,7 +540,7 @@ Production rules:
 - PHP 8.4 selected for the site;
 - Composer dependencies installed without development packages for production after validation;
 - application key generated and backed up securely;
-- MySQL user has only the privileges the application requires on its own database;
+- database user has only the privileges the application requires on its own database;
 - writable permissions limited to Laravel-required storage/cache paths and explicitly owned private key paths;
 - debug mode disabled;
 - HTTPS enforced;
@@ -562,7 +562,7 @@ At minimum provide:
 - cross-site isolation tests using at least two sites;
 - tests proving a denied downstream WordPress/Bridge operation remains denied;
 - tests proving mutation execution is not blindly retried;
-- scale fixtures/benchmarks that exercise realistic near-term inventories in the hundreds (including representative 200–500-site cases) and record query count, response bounding, runtime/memory, and relevant MySQL query-plan/index evidence;
+- scale fixtures/benchmarks that exercise realistic near-term inventories in the hundreds (including representative 200–500-site cases) and record query count, response bounding, runtime/memory, and relevant MariaDB-primary/MySQL-compatible query-plan/index evidence;
 - larger synthetic inventory stress cases such as 1,000 / 3,000 / 10,000 sites when useful to expose nonlinear behavior or preserve headroom; these are diagnostics, not supported-capacity promises;
 - tests proving Admin and MCP inventory consumers do not load/serialize the full fleet and that machine continuation can discover targets beyond the first response;
 - contention/performance evidence for Activity retention changes when the write hot path is modified;
@@ -593,7 +593,7 @@ A future change must not casually violate these invariants:
 5. Direct WP AI Bridge operation remains independent of Gateway availability.
 6. No arbitrary HTTP/SQL/shell/filesystem proxy is introduced as a shortcut.
 7. Security-sensitive OAuth/token behavior is standards/library-backed and tested.
-8. V1 stays a normal PHP + MySQL web application with no mandatory auxiliary services.
+8. V1 stays a normal PHP + MariaDB-primary/MySQL-compatible web application with no mandatory auxiliary services.
 9. WP AI Bridge-specific behavior stays behind its connector boundary; the core target/inventory/authorization model remains connector-neutral.
 10. Administrative authorization is permission/policy based; role names are replaceable bundles, not distributed business logic.
 11. Fleet discovery and administration are bounded; registered-but-idle sites do not create mandatory remote work.

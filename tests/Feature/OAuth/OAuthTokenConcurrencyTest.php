@@ -18,7 +18,7 @@ use PHPUnit\Framework\Attributes\Group;
 use RuntimeException;
 use Tests\TestCase;
 
-#[Group('mysql-concurrency')]
+#[Group('database-concurrency')]
 final class OAuthTokenConcurrencyTest extends TestCase
 {
     private const CLIENT_ID = 'https://chatgpt.com/oauth/client.json';
@@ -36,8 +36,8 @@ final class OAuthTokenConcurrencyTest extends TestCase
     {
         parent::setUp();
 
-        if (DB::getDriverName() !== 'mysql') {
-            $this->markTestSkipped('MySQL is required for row-lock concurrency validation.');
+        if (! in_array(DB::getDriverName(), ['mariadb', 'mysql'], true)) {
+            $this->markTestSkipped('MariaDB or MySQL is required for row-lock concurrency validation.');
         }
 
         Artisan::call('migrate:fresh', ['--force' => true]);
@@ -242,9 +242,9 @@ final class OAuthTokenConcurrencyTest extends TestCase
             throw new RuntimeException('Unsupported OAuth concurrency lock target.');
         }
 
-        $connection = config('database.connections.mysql');
+        $connection = DB::connection()->getConfig();
         if (! is_array($connection)) {
-            throw new RuntimeException('MySQL test connection is unavailable.');
+            throw new RuntimeException('Database test connection is unavailable.');
         }
 
         $pdo = new PDO(

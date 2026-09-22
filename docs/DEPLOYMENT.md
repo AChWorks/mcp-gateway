@@ -1,6 +1,6 @@
 # MCP Gateway Deployment Baseline
 
-This document defines the supported **V1 deployment and validation baseline** for MCP Gateway on PHP 8.4 + MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory.
+This document defines the supported **V1 deployment and validation baseline** for MCP Gateway on PHP 8.4 + MariaDB 10.11 (primary) or MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory.
 
 GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide.
 
@@ -9,7 +9,7 @@ GitHub releases own public release identity. Production deployment remains an op
 The current repository supports a conventional single-host PHP deployment with:
 
 - PHP `>= 8.4.1` within the repository's PHP 8.4 target;
-- MySQL as the production database;
+- MariaDB 10.11 as the primary production database target, with MySQL retained as a supported compatibility target;
 - Laravel served only from the repository/package `public/` directory;
 - a deployment-ready Release ZIP with production Composer dependencies bundled, so Git/Composer are not required on the target host;
 - a separate authenticated browser-update ZIP for existing deployment-ZIP installations, also without requiring SSH, Git, or Composer;
@@ -18,7 +18,7 @@ The current repository supports a conventional single-host PHP deployment with:
 - file-backed cache and administrator sessions by default;
 - no required Redis, queue worker, broker, Docker runtime, or separate MCP daemon.
 
-Production/runtime checks require PDO MySQL, cURL with `CURLOPT_RESOLVE` DNS pinning support, OpenSSL, Sodium, a valid Laravel encryption key, MySQL as the configured database, two valid and distinct RSA signing keypairs, private storage that is not web-served, encrypted administrator sessions, and HTTPS-only sessions in production. The first signing pair owns the ChatGPT-facing Gateway OAuth server; the second owns the Gateway's `private_key_jwt` client identity when connecting to WP AI Bridge. CI also provisions `mbstring`; keep it enabled for the deployed PHP 8.4 runtime. `pdo_sqlite` is used by tests and is not a production database requirement.
+Production/runtime checks require the `pdo_mysql` extension for MariaDB/MySQL, cURL with `CURLOPT_RESOLVE` DNS pinning support, OpenSSL, Sodium, a valid Laravel encryption key, MariaDB or MySQL as the configured database, two valid and distinct RSA signing keypairs, private storage that is not web-served, encrypted administrator sessions, and HTTPS-only sessions in production. The first signing pair owns the ChatGPT-facing Gateway OAuth server; the second owns the Gateway's `private_key_jwt` client identity when connecting to WP AI Bridge. CI also provisions `mbstring`; keep it enabled for the deployed PHP 8.4 runtime. `pdo_sqlite` is used by tests and is not a production database requirement.
 
 Policy-controlled Gateway-to-Bridge HTTP requests are intentionally direct: the application explicitly disables Guzzle proxy use for those requests before applying the validated `CURLOPT_RESOLVE` target pin. Ambient `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and equivalent process settings must not become part of the Bridge transport path. Future proxy support would require a separate proxy-aware validation/pinning design; it must not be enabled by removing the direct-request invariant.
 
@@ -30,7 +30,7 @@ Before placing application code on the server, prepare:
 
 1. An aaPanel/shared-hosting site for the intended Gateway hostname or subdomain.
 2. PHP 8.4 for the website. The runtime must provide `curl`, `mbstring`, `openssl`, `pdo_mysql`, and `sodium`, and cURL must expose `CURLOPT_RESOLVE`.
-3. A dedicated **empty** MySQL database and user scoped to the Gateway database. The account must be able to create/alter/drop application tables and indexes as well as perform normal application reads/writes. Do not use a global MySQL administrator account for normal application runtime.
+3. A dedicated **empty** MariaDB (recommended) or MySQL database and user scoped to the Gateway database. The account must be able to create/alter/drop application tables and indexes as well as perform normal application reads/writes. Do not use a global database administrator account for normal application runtime.
 4. DNS resolving the Gateway hostname to the intended server before final HTTPS/OAuth verification.
 5. A valid HTTPS certificate for the exact hostname. Production OAuth identity is derived from `APP_URL`, so the hostname must be stable before installation.
 6. A hosting layout that can make the application `public/` directory the effective document root.
@@ -126,12 +126,12 @@ Procedure:
    https://gateway.example.com/install
    ```
 
-5. Provide the canonical HTTPS Gateway URL, dedicated empty MySQL database credentials, and first administrator details.
+5. Provide the canonical HTTPS Gateway URL, dedicated empty MariaDB/MySQL database credentials, and first administrator details.
 6. Complete installation once.
 
 The installer runs before Laravel is configured and does **not** invoke shell commands. It validates the runtime, writes a production `.env` with a unique `APP_KEY`, runs migrations through Laravel's console kernel, generates both signing keypairs, runs `gateway:check`, creates the first administrator, and writes a private installed marker. After successful installation, `/install` cannot be used to reinstall/reset the Gateway.
 
-The installer accepts credentials only over HTTPS and never redisplays/logs the MySQL password, `APP_KEY`, private keys, or generated authorization material.
+The installer accepts credentials only over HTTPS and never redisplays/logs the database password, `APP_KEY`, private keys, or generated authorization material.
 
 ### Advanced: Git + Composer + Artisan
 
@@ -166,7 +166,7 @@ APP_ENV=production
 APP_DEBUG=false
 APP_URL=https://gateway.example.com
 
-DB_CONNECTION=mysql
+DB_CONNECTION=mariadb
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_DATABASE=mcp_gateway
@@ -270,9 +270,9 @@ php artisan gateway:check
 Every reported item must be `[OK]`. The current application validates, among other things:
 
 - PHP `>= 8.4.1`;
-- PDO MySQL, cURL with DNS pinning support, OpenSSL and Sodium;
+- the `pdo_mysql` extension for MariaDB/MySQL, cURL with DNS pinning support, OpenSSL and Sodium;
 - a valid Laravel encryption key;
-- MySQL as the configured database driver;
+- MariaDB or MySQL as the configured database driver;
 - canonical `APP_URL` and HTTPS in production;
 - a valid/matched ChatGPT-facing Gateway OAuth signing keypair;
 - a valid/matched and distinct Bridge client signing keypair;
@@ -342,7 +342,7 @@ When escalating a problem, share only the timestamp/time zone, correlation ID, s
 
 ## 10. OpenLiteSpeed V1 validation result
 
-V1 validation completed the production-like aaPanel/OpenLiteSpeed/LSAPI proof on OpenLiteSpeed 1.8.4 with PHP 8.4 and MySQL 8.4. Modern MCP requests and the retained legacy compatibility flow worked through HTTPS/OpenLiteSpeed without an evidence-based need for custom buffering or timeout overrides beyond the normal Laravel `public/` document-root/rewrite configuration.
+Historical V1 validation completed the production-like aaPanel/OpenLiteSpeed/LSAPI proof on OpenLiteSpeed 1.8.4 with PHP 8.4 and MySQL 8.4. MariaDB 10.11 is now the primary development/CI/deployment target while MySQL compatibility remains supported. Modern MCP requests and the retained legacy compatibility flow worked through HTTPS/OpenLiteSpeed without an evidence-based need for custom buffering or timeout overrides beyond the normal Laravel `public/` document-root/rewrite configuration.
 
 Do not pre-apply nginx directives or generic buffering tweaks. If a future release introduces materially different long-lived server-to-client streaming/SSE behavior, revalidate OpenLiteSpeed/LSAPI buffering and timeout behavior for that release before prescribing a new setting.
 
@@ -350,7 +350,7 @@ Do not pre-apply nginx directives or generic buffering tweaks. If a future relea
 
 Before every migration-bearing upgrade, preserve a recoverable set containing:
 
-- a consistent MySQL database backup, including site registry, encrypted site credentials and OAuth-flow state owned by the deployed revision;
+- a consistent MariaDB/MySQL database backup, including site registry, encrypted site credentials and OAuth-flow state owned by the deployed revision;
 - the deployment `.env` / Laravel `APP_KEY` through the site's approved secret-backup mechanism;
 - `OAUTH_PRIVATE_KEY_PATH` and `OAUTH_PUBLIC_KEY_PATH` with permissions preserved;
 - `BRIDGE_CLIENT_PRIVATE_KEY_PATH` and `BRIDGE_CLIENT_PUBLIC_KEY_PATH` with permissions preserved;

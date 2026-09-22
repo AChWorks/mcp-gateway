@@ -165,9 +165,9 @@ try {
                 $row = DB::selectOne('SELECT CONNECTION_ID() AS connection_id');
                 $connectionId = is_object($row) ? (int) ($row->connection_id ?? 0) : 0;
                 if ($connectionId <= 0) {
-                    throw new RuntimeException('Could not resolve the active MySQL connection id.');
+                    throw new RuntimeException('Could not resolve the active database connection id.');
                 }
-                killMysqlConnection($connectionId);
+                killDatabaseConnection($connectionId);
                 $killLog = is_string($payload['kill_log'] ?? null) ? $payload['kill_log'] : null;
                 if ($killLog !== null) {
                     file_put_contents($killLog, $connectionId."\n", FILE_APPEND | LOCK_EX);
@@ -302,11 +302,11 @@ try {
     exit(1);
 }
 
-function killMysqlConnection(int $connectionId): void
+function killDatabaseConnection(int $connectionId): void
 {
-    $connection = config('database.connections.mysql');
+    $connection = DB::connection()->getConfig();
     if (! is_array($connection)) {
-        throw new RuntimeException('MySQL test connection is unavailable.');
+        throw new RuntimeException('Database test connection is unavailable.');
     }
 
     $pdo = new PDO(

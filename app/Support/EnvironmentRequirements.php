@@ -11,12 +11,12 @@ final class EnvironmentRequirements
     {
         return [
             'PHP >= 8.4.1' => version_compare((string) phpversion(), '8.4.1', '>='),
-            'PDO MySQL extension' => extension_loaded('pdo_mysql'),
+            'PDO MariaDB/MySQL extension (pdo_mysql)' => extension_loaded('pdo_mysql'),
             'cURL extension with DNS pinning support' => extension_loaded('curl') && defined('CURLOPT_RESOLVE'),
             'OpenSSL extension' => extension_loaded('openssl'),
             'Sodium extension' => extension_loaded('sodium'),
             'Valid Laravel encryption key' => $this->validEncryptionKey($applicationKey, $cipher),
-            'MySQL is the configured database driver' => $databaseDriver === 'mysql',
+            'MariaDB or MySQL is the configured database driver' => in_array($databaseDriver, ['mariadb', 'mysql'], true),
         ];
     }
 

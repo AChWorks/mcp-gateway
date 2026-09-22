@@ -16,7 +16,7 @@ The Gateway is a routing and connection layer. WordPress and WP AI Bridge remain
 - stable Gateway tools for listing sites, reading site context, inspecting Ability contracts, and executing an exact Ability;
 - bounded outbound HTTP behavior with HTTPS validation, DNS pinning, redirect restrictions, timeouts, and response-size limits;
 - deployment/runtime diagnostics through `php artisan gateway:check`;
-- validated PHP 8.4 + MySQL + OpenLiteSpeed deployment shape;
+- PHP 8.4 + MariaDB 10.11 primary deployment target with retained MySQL compatibility and OpenLiteSpeed/shared-hosting support;
 - a deployment-ready ZIP and one-page web installer for aaPanel/shared hosting;
 - a one-time browser updater for deployment-ZIP installations, with no SSH, Git, or Composer required on the target host;
 - documented backup and recovery requirements.
@@ -30,7 +30,7 @@ Required runtime:
 - PHP `>= 8.4.1`;
 - PHP extensions: `curl`, `mbstring`, `openssl`, `pdo_mysql`, and `sodium`;
 - cURL with `CURLOPT_RESOLVE` support;
-- MySQL;
+- MariaDB 10.11 (recommended/primary) or MySQL;
 - HTTPS on a stable domain or subdomain;
 - a web server/hosting panel that can point the domain document root to the package `public/` directory.
 
@@ -45,7 +45,7 @@ Normal operation does **not** require Redis, Docker, Node.js, a queue worker, a 
 This is the easiest installation method for aaPanel and compatible shared hosting.
 
 1. Create a dedicated HTTPS domain/subdomain, for example `gateway.example.com`.
-2. Create a dedicated **empty** MySQL database and database user.
+2. Create a dedicated **empty** MariaDB (recommended) or MySQL database and database user.
 3. Open the [latest stable GitHub Release](https://github.com/ach1992/mcp-gateway/releases/latest) and download its named deployment asset `mcp-gateway-vX.Y.Z.zip`.
 4. Upload and extract the ZIP on the host. The archive contains only deployment/runtime files and already includes production Composer dependencies in `vendor/`.
 5. Point the domain document root / aaPanel running directory to the extracted package's `public/` directory. Example:
@@ -70,7 +70,7 @@ This is the easiest installation method for aaPanel and compatible shared hostin
 
 9. Enter:
    - the canonical Gateway HTTPS URL;
-   - MySQL host/port/database/user/password;
+   - database engine plus host/port/database/user/password;
    - the first administrator name/email/password.
 10. Select **Install MCP Gateway**.
 
@@ -79,7 +79,7 @@ The named deployment ZIP is assembled in a clean staging tree from the committed
 The installer automatically:
 
 - checks PHP/extensions, HTTPS, bundled dependencies, and writable paths;
-- requires a dedicated empty MySQL database;
+- requires a dedicated empty MariaDB or MySQL database;
 - writes a production `.env` and unique `APP_KEY`;
 - runs the database migrations without shell command execution;
 - generates the Gateway OAuth keypair and the separate Gateway-to-WP-AI-Bridge keypair;
@@ -93,7 +93,7 @@ After success, continue to:
 https://gateway.example.com/admin/login
 ```
 
-The installer never displays the MySQL password, `APP_KEY`, private keys, access tokens, or other generated secret material.
+The installer never displays the database password, `APP_KEY`, private keys, access tokens, or other generated secret material.
 
 > The regular GitHub **Source code (zip)** archive is not the deployment package because it does not include production `vendor/`. Use the named `mcp-gateway-vX.Y.Z.zip` asset from the intended GitHub Release.
 
@@ -104,7 +104,7 @@ A typical aaPanel setup is:
 ```text
 Domain:          gateway.example.com
 PHP:             8.4
-Database:        dedicated MySQL database/user
+Database:        dedicated MariaDB (primary) or MySQL database/user
 Application:     /www/wwwroot/mcp-gateway
 Running directory/document root:
                  /www/wwwroot/mcp-gateway/public
@@ -120,7 +120,7 @@ Do **not** expose the package/repository root as the web document root, and do n
 The deployment ZIP/web installer can be used on shared hosting when the host provides:
 
 - PHP 8.4.1+ with the required extensions;
-- MySQL;
+- MariaDB 10.11 (recommended) or MySQL;
 - HTTPS;
 - permission to set a subdomain/addon-domain document root to the package `public/` directory;
 - writable `storage/` and `bootstrap/cache/` directories.
@@ -149,7 +149,7 @@ APP_ENV=production
 APP_DEBUG=false
 APP_URL=https://gateway.example.com
 
-DB_CONNECTION=mysql
+DB_CONNECTION=mariadb
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_DATABASE=mcp_gateway
@@ -370,8 +370,8 @@ For the ZIP installer, start with the server checks shown on `/install`. Common 
 - the domain points at the application root instead of `public/`;
 - PHP is older than 8.4.1 or a required extension is missing;
 - `storage/` or `bootstrap/cache/` is not writable by the PHP process;
-- the selected MySQL database is not empty;
-- MySQL credentials/permissions are incorrect.
+- the selected MariaDB/MySQL database is not empty;
+- database credentials/permissions are incorrect.
 
 If the installer stops after creating `.env`, use a fresh extracted package and an empty database for the next attempt. Do not remove the private installed marker from a completed installation to force a reinstall.
 

@@ -31,17 +31,17 @@ jobs:
     timeout-minutes: 20
 
     services:
-      mysql:
-        image: mysql:8.4
+      mariadb:
+        image: mariadb:10.11
         env:
-          MYSQL_DATABASE: mcp_gateway_test
-          MYSQL_USER: mcp_gateway
-          MYSQL_PASSWORD: test-password
-          MYSQL_ROOT_PASSWORD: root-password
+          MARIADB_DATABASE: mcp_gateway_test
+          MARIADB_USER: mcp_gateway
+          MARIADB_PASSWORD: test-password
+          MARIADB_ROOT_PASSWORD: root-password
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot-password"
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -umcp_gateway -ptest-password --silent"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
@@ -179,7 +179,7 @@ jobs:
 
           ## Fresh installation
 
-          Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
+          Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MariaDB 10.11 (recommended) or MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
 
           ## Simple browser update
 

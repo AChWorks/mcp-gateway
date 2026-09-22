@@ -13,6 +13,7 @@ final class SimpleWebInstallerTest extends TestCase
     {
         $errors = SimpleWebInstaller::validateInput([
             'app_url' => 'https://gateway.example.com',
+            'db_connection' => 'mariadb',
             'db_host' => '127.0.0.1',
             'db_port' => '3306',
             'db_database' => 'mcp_gateway',
@@ -42,7 +43,7 @@ final class SimpleWebInstallerTest extends TestCase
     }
 
     #[Test]
-    public function it_rejects_mysql_dsn_injection_characters_in_the_host(): void
+    public function it_rejects_database_dsn_injection_characters_in_the_host(): void
     {
         $errors = SimpleWebInstaller::validateInput($this->validInput([
             'db_host' => '127.0.0.1;unix_socket=/tmp/mysql.sock',
@@ -75,13 +76,35 @@ final class SimpleWebInstallerTest extends TestCase
         self::assertStringContainsString("APP_DEBUG=false\n", $environment);
         self::assertStringContainsString("APP_URL=https://gateway.example.com\n", $environment);
         self::assertStringContainsString("APP_KEY=base64:test-key\n", $environment);
-        self::assertStringContainsString("DB_CONNECTION=mysql\n", $environment);
+        self::assertStringContainsString("DB_CONNECTION=mariadb\n", $environment);
         self::assertStringContainsString('DB_PASSWORD="a password#with special chars"', $environment);
         self::assertStringContainsString("SESSION_SECURE_COOKIE=true\n", $environment);
         self::assertStringContainsString("SESSION_HTTP_ONLY=true\n", $environment);
         self::assertStringContainsString("SESSION_SAME_SITE=lax\n", $environment);
         self::assertStringContainsString("MCP_BOOTSTRAP_FIXTURE_ENABLED=false\n", $environment);
         self::assertStringContainsString("MCP_BOOTSTRAP_FIXTURE_TOKEN=\"\"\n", $environment);
+    }
+
+    #[Test]
+    public function it_can_build_a_mysql_environment_when_explicitly_selected(): void
+    {
+        $template = "DB_CONNECTION=mariadb\nDB_HOST=127.0.0.1\nDB_PORT=3306\nDB_DATABASE=old\nDB_USERNAME=old\nDB_PASSWORD=\n";
+
+        $environment = SimpleWebInstaller::buildEnvironment($template, $this->validInput([
+            'db_connection' => 'mysql',
+        ]), 'base64:test-key');
+
+        self::assertStringContainsString("DB_CONNECTION=mysql\n", $environment);
+    }
+
+    #[Test]
+    public function it_rejects_an_unsupported_database_driver(): void
+    {
+        $errors = SimpleWebInstaller::validateInput($this->validInput([
+            'db_connection' => 'sqlite',
+        ]), 'gateway.example.com');
+
+        self::assertArrayHasKey('db_connection', $errors);
     }
 
     #[Test]
@@ -132,6 +155,7 @@ final class SimpleWebInstallerTest extends TestCase
     {
         return [
             'app_url' => 'https://gateway.example.com',
+            'db_connection' => 'mariadb',
             'db_host' => '127.0.0.1',
             'db_port' => '3306',
             'db_database' => 'mcp_gateway',

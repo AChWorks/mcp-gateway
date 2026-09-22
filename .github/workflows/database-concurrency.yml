@@ -1,4 +1,4 @@
-name: MySQL Concurrency
+name: MariaDB Concurrency
 
 on:
   push:
@@ -18,7 +18,7 @@ on:
       - 'tests/Support/site_lifecycle_concurrent_action.php'
       - 'composer.json'
       - 'composer.lock'
-      - '.github/workflows/mysql-concurrency.yml'
+      - '.github/workflows/database-concurrency.yml'
   pull_request:
     types:
       - opened
@@ -39,33 +39,33 @@ on:
       - 'tests/Support/site_lifecycle_concurrent_action.php'
       - 'composer.json'
       - 'composer.lock'
-      - '.github/workflows/mysql-concurrency.yml'
+      - '.github/workflows/database-concurrency.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: mysql-concurrency-${{ github.workflow }}-${{ github.ref }}
+  group: database-concurrency-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  mysql-concurrency:
+  database-concurrency:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     services:
-      mysql:
-        image: mysql:8.4
+      mariadb:
+        image: mariadb:10.11
         env:
-          MYSQL_DATABASE: mcp_gateway_test
-          MYSQL_USER: mcp_gateway
-          MYSQL_PASSWORD: test-password
-          MYSQL_ROOT_PASSWORD: root-password
+          MARIADB_DATABASE: mcp_gateway_test
+          MARIADB_USER: mcp_gateway
+          MARIADB_PASSWORD: test-password
+          MARIADB_ROOT_PASSWORD: root-password
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot-password"
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -umcp_gateway -ptest-password --silent"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
@@ -85,11 +85,11 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: Validate MySQL migration path
+      - name: Validate MariaDB migration path
         env:
           APP_ENV: testing
           APP_KEY: base64:a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=
-          DB_CONNECTION: mysql
+          DB_CONNECTION: mariadb
           DB_HOST: 127.0.0.1
           DB_PORT: 3306
           DB_DATABASE: mcp_gateway_test
@@ -97,14 +97,14 @@ jobs:
           DB_PASSWORD: test-password
         run: php artisan migrate:fresh --force
 
-      - name: Run MySQL OAuth and site-lifecycle concurrency tests
+      - name: Run MariaDB OAuth and site-lifecycle concurrency tests
         env:
           APP_ENV: testing
           APP_KEY: base64:a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=
-          DB_CONNECTION: mysql
+          DB_CONNECTION: mariadb
           DB_HOST: 127.0.0.1
           DB_PORT: 3306
           DB_DATABASE: mcp_gateway_test
           DB_USERNAME: mcp_gateway
           DB_PASSWORD: test-password
-        run: php artisan test --group=mysql-concurrency
+        run: php artisan test --group=database-concurrency
