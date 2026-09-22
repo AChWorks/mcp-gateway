@@ -2,14 +2,13 @@
 
 namespace App\Infrastructure\Activity;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
 
 final class ActivityRecorder
 {
-    public function __construct(private readonly ActivityRetention $retention) {}
-
     public function record(
         string $correlationId,
         string $operation,
@@ -26,7 +25,7 @@ final class ActivityRecorder
         try {
             [$actorType, $actorId, $clientHash] = $this->actor();
 
-            $this->retention->store([
+            DB::table('activity_events')->insert([
                 'id' => (string) Str::ulid(),
                 'correlation_id' => $correlationId,
                 'actor_type' => $actorType,
