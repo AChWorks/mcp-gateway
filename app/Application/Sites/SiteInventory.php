@@ -27,18 +27,11 @@ final class SiteInventory
         $search = $this->search($search);
         $connectionState = $this->connectionState($connectionState);
 
-        $query = Site::query()
-            ->select([
-                'id',
-                'site_id',
-                'display_name',
-                'base_url',
-                'connector_type',
-                'connection_state',
-                'last_error_code',
-                'last_tested_at',
-                'connected_at',
-            ]);
+        $query = Site::query()->select([
+            'id',
+            'site_id',
+            'display_name',
+        ]);
 
         $this->applyFilters($query, $search, $connectionState);
 
@@ -49,9 +42,36 @@ final class SiteInventory
             ->limit(self::ADMIN_PAGE_SIZE + 1)
             ->get();
         $hasMore = $rows->count() > self::ADMIN_PAGE_SIZE;
+        $pageRows = $rows->take(self::ADMIN_PAGE_SIZE)->values();
+
+        if ($pageRows->isEmpty()) {
+            $items = [];
+        } else {
+            $sitesById = Site::query()
+                ->select([
+                    'id',
+                    'site_id',
+                    'display_name',
+                    'base_url',
+                    'connector_type',
+                    'connection_state',
+                    'last_error_code',
+                    'last_tested_at',
+                    'connected_at',
+                ])
+                ->whereIn('id', $pageRows->pluck('id')->all())
+                ->get()
+                ->keyBy('id');
+
+            $items = $pageRows
+                ->map(static fn (Site $row): ?Site => $sitesById->get($row->id))
+                ->filter(static fn (?Site $site): bool => $site instanceof Site)
+                ->values()
+                ->all();
+        }
 
         return [
-            'items' => $rows->take(self::ADMIN_PAGE_SIZE)->values()->all(),
+            'items' => $items,
             'page' => $page,
             'per_page' => self::ADMIN_PAGE_SIZE,
             'has_more' => $hasMore,
