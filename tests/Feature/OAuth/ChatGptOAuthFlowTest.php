@@ -505,6 +505,18 @@ final class ChatGptOAuthFlowTest extends TestCase
         $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
     }
 
+    public function test_refresh_recovery_rejects_a_user_disabled_after_rotation(): void
+    {
+        $user = $this->operator();
+        [$refreshToken] = $this->issueRefreshableToken($user);
+        $this->rotateRefreshToken($refreshToken);
+
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
+        self::assertSame(1, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+    }
+
     public function test_refresh_recovery_window_expiry_restores_normal_replay_rejection(): void
     {
         [$refreshToken] = $this->issueRefreshableToken();
