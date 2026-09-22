@@ -16,7 +16,7 @@ final class EnvironmentRequirements
             'OpenSSL extension' => extension_loaded('openssl'),
             'Sodium extension' => extension_loaded('sodium'),
             'Valid Laravel encryption key' => $this->validEncryptionKey($applicationKey, $cipher),
-            'MySQL is the configured database driver' => $databaseDriver === 'mysql',
+            'MariaDB or MySQL is the configured database driver' => in_array($databaseDriver, ['mariadb', 'mysql'], true),
         ];
     }
 
