@@ -2,13 +2,18 @@
 
 namespace App\Application\Sites;
 
+use App\Application\Access\AccessControl;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
+use App\Models\User;
 use App\Domain\Sites\SiteConnectionState;
 use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
 
 final class SiteInventory
 {
+    public function __construct(private readonly AccessControl $access) {}
+
     public const ADMIN_PAGE_SIZE = 50;
 
     public const MCP_DEFAULT_LIMIT = 100;
@@ -19,6 +24,7 @@ final class SiteInventory
      * @return array{items:list<Site>,page:int,per_page:int,has_more:bool}
      */
     public function adminPage(
+        User $user,
         int $page = 1,
         ?string $search = null,
         ?string $connectionState = null,
@@ -27,11 +33,15 @@ final class SiteInventory
         $search = $this->search($search);
         $connectionState = $this->connectionState($connectionState);
 
-        $query = Site::query()->select([
-            'id',
-            'site_id',
-            'display_name',
-        ]);
+        $query = $this->access->scopeSites(
+            Site::query()->select([
+                'id',
+                'site_id',
+                'display_name',
+            ]),
+            $user,
+            GatewayPermission::SitesView,
+        );
 
         $this->applyFilters($query, $search, $connectionState);
 
@@ -47,18 +57,19 @@ final class SiteInventory
         if ($pageRows->isEmpty()) {
             $items = [];
         } else {
-            $sitesById = Site::query()
-                ->select([
-                    'id',
-                    'site_id',
-                    'display_name',
-                    'base_url',
-                    'connector_type',
-                    'connection_state',
-                    'last_error_code',
-                    'last_tested_at',
-                    'connected_at',
-                ])
+            $detailQuery = Site::query()->select([
+                'id',
+                'site_id',
+                'display_name',
+                'base_url',
+                'connector_type',
+                'connection_state',
+                'last_error_code',
+                'last_tested_at',
+                'connected_at',
+            ]);
+            $sitesById = $this->access
+                ->scopeSites($detailQuery, $user, GatewayPermission::SitesView)
                 ->whereIn('id', $pageRows->pluck('id')->all())
                 ->get()
                 ->keyBy('id');
