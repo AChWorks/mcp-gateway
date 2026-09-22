@@ -13,6 +13,9 @@ use App\Infrastructure\Activity\ActivityFeed;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\SiteCredentialVault;
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
+use App\Models\User;
 use App\Support\BoundedLogDefaults;
 use App\Support\CorrelationId;
 use DateTimeImmutable;
@@ -85,7 +88,14 @@ final class IntegratedSafeguardsTest extends TestCase
         $this->artisan('activity:prune')->assertSuccessful();
         self::assertSame(3, DB::table('activity_events')->count());
 
-        $page = app(ActivityFeed::class)->page(1, 50);
+        $user = User::query()->create([
+            'name' => 'Activity Owner',
+            'email' => 'activity-owner@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+        ]);
+        $page = app(ActivityFeed::class)->page($user, 1, 50);
         self::assertSame(2, $page['per_page']);
         self::assertCount(2, $page['items']);
         self::assertTrue($page['has_more']);
