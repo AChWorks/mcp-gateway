@@ -16,6 +16,7 @@ enum GatewayRole: string
             self::Owner => GatewayPermission::cases(),
             self::Administrator => [
                 GatewayPermission::DashboardView,
+                GatewayPermission::ConnectionView,
                 GatewayPermission::SitesView,
                 GatewayPermission::SitesCreate,
                 GatewayPermission::SitesUpdate,
@@ -33,6 +34,7 @@ enum GatewayRole: string
             ],
             self::Operator => [
                 GatewayPermission::DashboardView,
+                GatewayPermission::ConnectionView,
                 GatewayPermission::SitesView,
                 GatewayPermission::ConnectionsTest,
                 GatewayPermission::AbilitiesInspect,
@@ -42,6 +44,7 @@ enum GatewayRole: string
             ],
             self::Viewer => [
                 GatewayPermission::DashboardView,
+                GatewayPermission::ConnectionView,
                 GatewayPermission::SitesView,
                 GatewayPermission::AbilitiesInspect,
                 GatewayPermission::AbilitiesExecuteReadonly,
