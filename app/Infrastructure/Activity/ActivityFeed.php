@@ -51,15 +51,20 @@ final readonly class ActivityFeed
                 'outcome',
                 'error_code',
                 'created_at',
-            ])
-            ->where(function ($query) use ($user, $allowedSites): void {
+            ]);
+
+        if (! $this->access->hasUnrestrictedSiteScope($user)) {
+            $query->where(function ($query) use ($user, $allowedSites): void {
                 if ($this->access->hasAllSiteScope($user)) {
                     $query->whereNull('site_id')
                         ->orWhereIn('site_id', $allowedSites);
                 } else {
                     $query->whereIn('site_id', $allowedSites);
                 }
-            })
+            });
+        }
+
+        $query
             ->when($siteId !== null, fn ($query) => $query->where('site_id', $siteId))
             ->when($operation !== null, fn ($query) => $query->where('operation', $operation))
             ->orderByDesc('created_at')
