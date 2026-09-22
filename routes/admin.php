@@ -5,6 +5,8 @@ use App\Http\Controllers\Admin\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\SiteConnectionController;
 use App\Http\Controllers\Admin\SiteController;
+use App\Http\Controllers\Admin\UserController;
+use App\Http\Controllers\Admin\UserSiteAccessController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/admin/login', static fn () => view('admin.login'))
@@ -28,6 +30,15 @@ Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): v
     Route::post('/sites/{site:site_id}/reconnect', [SiteConnectionController::class, 'reconnect'])->name('sites.reconnect');
     Route::post('/sites/{site:site_id}/disconnect', [SiteConnectionController::class, 'disconnect'])->name('sites.disconnect');
     Route::post('/sites/{site:site_id}/test', [SiteConnectionController::class, 'test'])->name('sites.test');
+
+    Route::get('/users', [UserController::class, 'index'])->name('users.index');
+    Route::get('/users/create', [UserController::class, 'create'])->name('users.create');
+    Route::post('/users', [UserController::class, 'store'])->name('users.store');
+    Route::get('/users/{user}/edit', [UserController::class, 'edit'])->name('users.edit');
+    Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
+    Route::get('/users/{user}/sites', [UserSiteAccessController::class, 'index'])->name('users.sites.index');
+    Route::get('/users/{user}/sites/{site:site_id}/edit', [UserSiteAccessController::class, 'edit'])->name('users.sites.edit');
+    Route::put('/users/{user}/sites/{site:site_id}', [UserSiteAccessController::class, 'update'])->name('users.sites.update');
 
     Route::get('/activity', ActivityController::class)->name('activity');
     Route::view('/connection', 'admin.connection')
