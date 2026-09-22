@@ -155,6 +155,7 @@ final class SimpleWebInstallerTest extends TestCase
     {
         return [
             'app_url' => 'https://gateway.example.com',
+            'db_connection' => 'mariadb',
             'db_host' => '127.0.0.1',
             'db_port' => '3306',
             'db_database' => 'mcp_gateway',
