@@ -31,6 +31,15 @@ final class SiteController extends Controller
         $connectionState = $this->nullableTrim($validated['connection_state'] ?? null);
         $page = (int) ($validated['page'] ?? 1);
         $inventoryPage = $inventory->adminPage($page, $search, $connectionState);
+        $baseQuery = [];
+
+        if ($search !== null) {
+            $baseQuery['search'] = $search;
+        }
+
+        if ($connectionState !== null) {
+            $baseQuery['connection_state'] = $connectionState;
+        }
 
         return view('admin.sites.index', [
             'sites' => collect($inventoryPage['items'])
@@ -39,6 +48,12 @@ final class SiteController extends Controller
                 'page' => $inventoryPage['page'],
                 'per_page' => $inventoryPage['per_page'],
                 'has_more' => $inventoryPage['has_more'],
+                'previous_url' => $page > 1
+                    ? route('admin.sites.index', array_merge($baseQuery, ['page' => $page - 1]))
+                    : null,
+                'next_url' => $inventoryPage['has_more']
+                    ? route('admin.sites.index', array_merge($baseQuery, ['page' => $page + 1]))
+                    : null,
             ],
             'filters' => [
                 'search' => $search,
