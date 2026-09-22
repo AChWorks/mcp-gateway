@@ -36,6 +36,51 @@ final readonly class AccessControl
     }
 
     /**
+     * Applies principal site membership only. Functional permission is deliberately separate so
+     * a selected site can be write-only, read-only, or otherwise narrowed by capability.
+     *
+     * @param  Builder<Site>  $query
+     * @return Builder<Site>
+     */
+    public function scopePrincipalSites(Builder $query, User $user): Builder
+    {
+        $role = $this->role($user);
+
+        if (! (bool) $user->getAttribute('access_enabled') || ! $role instanceof GatewayRole) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        if ($role === GatewayRole::Owner) {
+            return $query;
+        }
+
+        $scope = $this->scopeMode($user);
+        if (! $scope instanceof SiteScopeMode) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        if ($scope === SiteScopeMode::Selected) {
+            return $query->whereExists(function ($subquery) use ($user): void {
+                $subquery
+                    ->selectRaw('1')
+                    ->from('user_site_access')
+                    ->whereColumn('user_site_access.site_record_id', 'sites.id')
+                    ->where('user_site_access.user_id', $user->getKey())
+                    ->where('user_site_access.allowed', true);
+            });
+        }
+
+        return $query->whereNotExists(function ($subquery) use ($user): void {
+            $subquery
+                ->selectRaw('1')
+                ->from('user_site_access')
+                ->whereColumn('user_site_access.site_record_id', 'sites.id')
+                ->where('user_site_access.user_id', $user->getKey())
+                ->where('user_site_access.allowed', false);
+        });
+    }
+
+    /**
      * @param  Builder<Site>  $query
      * @return Builder<Site>
      */
@@ -50,33 +95,10 @@ final readonly class AccessControl
             return $query->whereRaw('1 = 0');
         }
 
+        $query = $this->scopePrincipalSites($query, $user);
+
         if ($role === GatewayRole::Owner) {
             return $query;
-        }
-
-        $scope = $this->scopeMode($user);
-        if (! $scope instanceof SiteScopeMode) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        if ($scope === SiteScopeMode::Selected) {
-            $query->whereExists(function ($subquery) use ($user): void {
-                $subquery
-                    ->selectRaw('1')
-                    ->from('user_site_access')
-                    ->whereColumn('user_site_access.site_record_id', 'sites.id')
-                    ->where('user_site_access.user_id', $user->getKey())
-                    ->where('user_site_access.allowed', true);
-            });
-        } else {
-            $query->whereNotExists(function ($subquery) use ($user): void {
-                $subquery
-                    ->selectRaw('1')
-                    ->from('user_site_access')
-                    ->whereColumn('user_site_access.site_record_id', 'sites.id')
-                    ->where('user_site_access.user_id', $user->getKey())
-                    ->where('user_site_access.allowed', false);
-            });
         }
 
         return $query->whereNotExists(function ($subquery) use ($user, $permission): void {
