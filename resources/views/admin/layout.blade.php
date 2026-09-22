@@ -16,10 +16,18 @@
 
         @auth
             <nav class="admin-nav" aria-label="{{ __('Administration') }}">
-                <a @class(['nav-link', 'is-active' => request()->routeIs('admin.dashboard')]) href="{{ route('admin.dashboard') }}">{{ __('Dashboard') }}</a>
-                <a @class(['nav-link', 'is-active' => request()->routeIs('admin.sites.*')]) href="{{ route('admin.sites.index') }}">{{ __('Sites') }}</a>
-                <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>
-                <a @class(['nav-link', 'is-active' => request()->routeIs('admin.connection')]) href="{{ route('admin.connection') }}">{{ __('Connection') }}</a>
+                @can('dashboard.view')
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.dashboard')]) href="{{ route('admin.dashboard') }}">{{ __('Dashboard') }}</a>
+                @endcan
+                @can('sites.view')
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.sites.*')]) href="{{ route('admin.sites.index') }}">{{ __('Sites') }}</a>
+                @endcan
+                @can('activity.view')
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>
+                @endcan
+                @can('connection.view')
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.connection')]) href="{{ route('admin.connection') }}">{{ __('Connection') }}</a>
+                @endcan
             </nav>
 
             <form method="post" action="{{ route('admin.logout') }}">
