@@ -5,7 +5,6 @@ namespace Tests\Feature\Security;
 use App\Infrastructure\Activity\ActivityRecorder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
@@ -24,9 +23,8 @@ final class ActivityWriteDatabaseTest extends TestCase
         }
     }
 
-    public function test_activity_write_is_a_single_insert_even_when_retention_state_is_unavailable(): void
+    public function test_activity_write_is_a_single_insert_without_retention_queries(): void
     {
-        Schema::drop('activity_retention_state');
         DB::flushQueryLog();
         DB::enableQueryLog();
 
