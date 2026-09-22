@@ -3,6 +3,7 @@
 namespace App\Application\Mcp;
 
 use App\Application\Sites\SiteConnectionException;
+use App\Application\Sites\SiteInventory;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Infrastructure\Activity\ActivityRecorder;
@@ -10,30 +11,41 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
 use App\Support\CorrelationId;
 use DateTimeInterface;
+use InvalidArgumentException;
 use LogicException;
 
 final class PendingGatewayToolHandlers
 {
-    private const SITE_LIST_LIMIT = 100;
-
     public function __construct(
         private readonly WpAiBridgeMcpClient $bridge,
         private readonly ActivityRecorder $activity,
+        private readonly SiteInventory $inventory,
     ) {}
 
     /** @return array<string, mixed> */
-    public function sitesList(): array
-    {
+    public function sitesList(
+        ?string $cursor = null,
+        int $limit = SiteInventory::MCP_DEFAULT_LIMIT,
+        ?string $search = null,
+        ?string $connection_state = null,
+    ): array {
         $correlationId = CorrelationId::current();
-        $sites = Site::query()->orderBy('site_id')->limit(self::SITE_LIST_LIMIT + 1)->get();
-        $truncated = $sites->count() > self::SITE_LIST_LIMIT;
+
+        try {
+            $page = $this->inventory->mcpPage($cursor, $limit, $search, $connection_state);
+        } catch (InvalidArgumentException $exception) {
+            return $this->recordedError(
+                $correlationId,
+                'sites-list',
+                null,
+                'invalid_input',
+                $exception->getMessage(),
+            );
+        }
+
         $serializedSites = [];
 
-        foreach ($sites as $index => $site) {
-            if ($index >= self::SITE_LIST_LIMIT) {
-                break;
-            }
-
+        foreach ($page['items'] as $site) {
             $serializedSites[] = [
                 'site_id' => $site->site_id,
                 'display_name' => $site->display_name,
@@ -48,7 +60,8 @@ final class PendingGatewayToolHandlers
             'ok' => true,
             'correlation_id' => $correlationId,
             'sites' => $serializedSites,
-            'truncated' => $truncated,
+            'truncated' => $page['has_more'],
+            'next_cursor' => $page['next_cursor'],
         ];
     }
 

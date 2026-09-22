@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Sites\SiteConnectionException;
+use App\Application\Sites\SiteInventory;
 use App\Application\Sites\SiteRegistry;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
@@ -11,6 +12,7 @@ use App\Support\Admin\SiteOperationMessage;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use InvalidArgumentException;
 
@@ -18,15 +20,46 @@ final class SiteController extends Controller
 {
     public function __construct(private readonly SiteOperationMessage $messages) {}
 
-    public function index(): View
+    public function index(Request $request, SiteInventory $inventory): View
     {
-        $sites = Site::query()
-            ->withExists(['credential', 'revocationIntent', 'targetReservation'])
-            ->orderBy('display_name')
-            ->get();
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:160'],
+            'connection_state' => ['nullable', 'string', Rule::enum(SiteConnectionState::class)],
+            'page' => ['nullable', 'integer', 'min:1'],
+        ]);
+        $search = $this->nullableTrim($validated['search'] ?? null);
+        $connectionState = $this->nullableTrim($validated['connection_state'] ?? null);
+        $page = (int) ($validated['page'] ?? 1);
+        $inventoryPage = $inventory->adminPage($page, $search, $connectionState);
+        $baseQuery = [];
+
+        if ($search !== null) {
+            $baseQuery['search'] = $search;
+        }
+
+        if ($connectionState !== null) {
+            $baseQuery['connection_state'] = $connectionState;
+        }
 
         return view('admin.sites.index', [
-            'sites' => $sites->map(fn (Site $site): array => $this->present($site)),
+            'sites' => collect($inventoryPage['items'])
+                ->map(fn (Site $site): array => $this->presentInventory($site)),
+            'pagination' => [
+                'page' => $inventoryPage['page'],
+                'per_page' => $inventoryPage['per_page'],
+                'has_more' => $inventoryPage['has_more'],
+                'previous_url' => $page > 1
+                    ? route('admin.sites.index', array_merge($baseQuery, ['page' => $page - 1]))
+                    : null,
+                'next_url' => $inventoryPage['has_more']
+                    ? route('admin.sites.index', array_merge($baseQuery, ['page' => $page + 1]))
+                    : null,
+            ],
+            'filters' => [
+                'search' => $search,
+                'connection_state' => $connectionState,
+            ],
+            'connectionStates' => $this->connectionStateOptions(),
         ]);
     }
 
@@ -132,6 +165,18 @@ final class SiteController extends Controller
         return $validated;
     }
 
+    /** @return array{site:Site,status_label:string,status_tone:string} */
+    private function presentInventory(Site $site): array
+    {
+        [$statusLabel, $statusTone] = $this->status($site);
+
+        return [
+            'site' => $site,
+            'status_label' => $statusLabel,
+            'status_tone' => $statusTone,
+        ];
+    }
+
     /** @return array{site:Site,status_label:string,status_tone:string,has_credential:bool,has_revocation_intent:bool,has_target_reservation:bool} */
     private function present(Site $site): array
     {
@@ -145,6 +190,25 @@ final class SiteController extends Controller
             'has_revocation_intent' => (bool) $site->getAttribute('revocation_intent_exists'),
             'has_target_reservation' => (bool) $site->getAttribute('target_reservation_exists'),
         ];
+    }
+
+    /** @return array<string,string> */
+    private function connectionStateOptions(): array
+    {
+        $options = [];
+
+        foreach (SiteConnectionState::cases() as $state) {
+            $options[$state->value] = match ($state) {
+                SiteConnectionState::Connected => (string) __('Connected'),
+                SiteConnectionState::Pending => (string) __('Authorization pending'),
+                SiteConnectionState::ReconnectRequired => (string) __('Reconnect required'),
+                SiteConnectionState::Reassigning => (string) __('Updating target'),
+                SiteConnectionState::Disconnected => (string) __('Configured'),
+                SiteConnectionState::Error => (string) __('Needs attention'),
+            };
+        }
+
+        return $options;
     }
 
     /** @return array{0:string,1:string} */
@@ -168,5 +232,16 @@ final class SiteController extends Controller
             SiteConnectionState::Disconnected->value => [(string) __('Configured'), 'neutral'],
             default => [(string) __('Needs attention'), 'danger'],
         };
+    }
+
+    private function nullableTrim(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
     }
 }

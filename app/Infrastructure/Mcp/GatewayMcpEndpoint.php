@@ -35,7 +35,22 @@ final readonly class GatewayMcpEndpoint
                 description: 'List configured Gateway sites without exposing credentials.',
                 inputSchema: [
                     'type' => 'object',
-                    'properties' => [],
+                    'properties' => [
+                        'cursor' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 100],
+                        'search' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 160],
+                        'connection_state' => [
+                            'type' => 'string',
+                            'enum' => [
+                                'disconnected',
+                                'pending',
+                                'connected',
+                                'reassigning',
+                                'reconnect_required',
+                                'error',
+                            ],
+                        ],
+                    ],
                     'required' => [],
                     'additionalProperties' => false,
                 ],

@@ -480,9 +480,9 @@ Activity is operator-facing audit metadata, distinct from debug logs. Record onl
 - correlation ID;
 - concise safe error category.
 
-Retention is bounded by configuration. The current default policy keeps Activity for at most 30 days and at most 5,000 rows, controlled by `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`.
+Retention targets are bounded by configuration. The current defaults prune Activity older than 30 days and overflow beyond 5,000 rows through `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`; because enforcement is scheduled, short-lived row-count overshoot between prune runs is expected.
 
-Retention enforcement must not become a fleet/concurrency bottleneck. The durable target is a cheap bounded event insert on the request hot path plus scheduled/bounded pruning. A global retention lock, full count, or overflow scan on every event is acceptable only while measurement proves it immaterial; Issue #53 explicitly re-evaluates the current implementation. Opportunistic pruning may supplement the scheduler only when it remains bounded and does not serialize unrelated routed requests.
+Retention enforcement must not become a fleet/concurrency bottleneck. The routed-request hot path performs one bounded Activity insert and does not acquire the global retention lock, run a full count, or scan overflow. Scheduled/manual pruning serializes only competing prune runs and processes deletion candidates in fixed-size batches, so retention maintenance remains outside unrelated routed operations.
 
 Security/admin audit may use separate retention/storage semantics when multi-user administration requires durable accountability. Do not make debug logs the authoritative audit record.
 
