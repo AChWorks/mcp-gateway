@@ -18,7 +18,7 @@ The current repository supports a conventional single-host PHP deployment with:
 - file-backed cache and administrator sessions by default;
 - no required Redis, queue worker, broker, Docker runtime, or separate MCP daemon.
 
-Production/runtime checks require PDO MySQL, cURL with `CURLOPT_RESOLVE` DNS pinning support, OpenSSL, Sodium, a valid Laravel encryption key, MariaDB or MySQL as the configured database, two valid and distinct RSA signing keypairs, private storage that is not web-served, encrypted administrator sessions, and HTTPS-only sessions in production. The first signing pair owns the ChatGPT-facing Gateway OAuth server; the second owns the Gateway's `private_key_jwt` client identity when connecting to WP AI Bridge. CI also provisions `mbstring`; keep it enabled for the deployed PHP 8.4 runtime. `pdo_sqlite` is used by tests and is not a production database requirement.
+Production/runtime checks require the `pdo_mysql` extension for MariaDB/MySQL, cURL with `CURLOPT_RESOLVE` DNS pinning support, OpenSSL, Sodium, a valid Laravel encryption key, MariaDB or MySQL as the configured database, two valid and distinct RSA signing keypairs, private storage that is not web-served, encrypted administrator sessions, and HTTPS-only sessions in production. The first signing pair owns the ChatGPT-facing Gateway OAuth server; the second owns the Gateway's `private_key_jwt` client identity when connecting to WP AI Bridge. CI also provisions `mbstring`; keep it enabled for the deployed PHP 8.4 runtime. `pdo_sqlite` is used by tests and is not a production database requirement.
 
 Policy-controlled Gateway-to-Bridge HTTP requests are intentionally direct: the application explicitly disables Guzzle proxy use for those requests before applying the validated `CURLOPT_RESOLVE` target pin. Ambient `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and equivalent process settings must not become part of the Bridge transport path. Future proxy support would require a separate proxy-aware validation/pinning design; it must not be enabled by removing the direct-request invariant.
 
@@ -270,7 +270,7 @@ php artisan gateway:check
 Every reported item must be `[OK]`. The current application validates, among other things:
 
 - PHP `>= 8.4.1`;
-- PDO MySQL, cURL with DNS pinning support, OpenSSL and Sodium;
+- the `pdo_mysql` extension for MariaDB/MySQL, cURL with DNS pinning support, OpenSSL and Sodium;
 - a valid Laravel encryption key;
 - MariaDB or MySQL as the configured database driver;
 - canonical `APP_URL` and HTTPS in production;
