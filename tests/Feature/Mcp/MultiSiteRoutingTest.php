@@ -5,6 +5,7 @@ namespace Tests\Feature\Mcp;
 use App\Application\Mcp\PendingGatewayToolHandlers;
 use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteRegistry;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\SiteScopeMode;
 use App\Domain\Sites\Site;
@@ -15,6 +16,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -155,6 +157,65 @@ final class MultiSiteRoutingTest extends TestCase
             ],
             array_column($this->toolCalls, 'authorization'),
         );
+    }
+
+    public function test_operator_site_can_be_write_only_and_unclassified_or_destructive_execution_fails_closed(): void
+    {
+        $site = $this->createSite('alpha');
+        $this->pair($site);
+        $operator = User::query()->create([
+            'name' => 'Write Only Operator',
+            'email' => 'write-only@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'site_scope_mode' => SiteScopeMode::Selected->value,
+        ]);
+
+        DB::table('user_site_access')->insert([
+            'user_id' => $operator->id,
+            'site_record_id' => $site->id,
+            'allowed' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        DB::table('user_site_permission_denials')->insert([
+            [
+                'user_id' => $operator->id,
+                'site_record_id' => $site->id,
+                'permission' => GatewayPermission::SitesView->value,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'user_id' => $operator->id,
+                'site_record_id' => $site->id,
+                'permission' => GatewayPermission::AbilitiesExecuteReadonly->value,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $handlers = app(PendingGatewayToolHandlers::class);
+
+        $context = $handlers->siteContext($operator, 'alpha');
+        self::assertFalse($context['ok']);
+        self::assertSame('site_not_found', $context['error']['code']);
+
+        $read = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/read', []);
+        self::assertFalse($read['ok']);
+        self::assertSame('forbidden', $read['error']['code']);
+
+        $write = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/write', ['value' => 'changed']);
+        self::assertTrue($write['ok']);
+        self::assertSame('write', $write['result']['kind']);
+
+        $destructive = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/delete', []);
+        self::assertFalse($destructive['ok']);
+        self::assertSame('forbidden', $destructive['error']['code']);
+
+        $unclassified = $handlers->siteAbilityExecute($operator, 'alpha', 'provider/write', []);
+        self::assertFalse($unclassified['ok']);
+        self::assertSame('forbidden', $unclassified['error']['code']);
     }
 
     public function test_default_ability_catalog_page_size_is_ten(): void
@@ -558,10 +619,12 @@ final class MultiSiteRoutingTest extends TestCase
                 'mcp_type' => 'tool',
                 'annotations' => [
                     'readonly' => $itemName === 'demo/read',
-                    'destructive' => $itemName !== 'demo/read',
+                    'destructive' => $itemName === 'demo/delete',
                     'idempotent' => true,
                 ],
-                'bridge_delegation' => 'ability_specific',
+                'bridge_delegation' => str_starts_with($itemName, 'provider/')
+                    ? 'native_abilities'
+                    : 'ability_specific',
                 'execution_permission' => 'not_evaluated',
             ];
             if ($exact) {
