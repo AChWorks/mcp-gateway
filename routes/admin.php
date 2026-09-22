@@ -30,6 +30,8 @@ Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): v
     Route::post('/sites/{site:site_id}/test', [SiteConnectionController::class, 'test'])->name('sites.test');
 
     Route::get('/activity', ActivityController::class)->name('activity');
-    Route::view('/connection', 'admin.connection')->name('connection');
+    Route::view('/connection', 'admin.connection')
+        ->middleware('can:connection.view')
+        ->name('connection');
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 });
