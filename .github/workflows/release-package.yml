@@ -179,7 +179,7 @@ jobs:
 
           ## Fresh installation
 
-          Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
+          Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MariaDB 10.11 (recommended) or MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
 
           ## Simple browser update
 
