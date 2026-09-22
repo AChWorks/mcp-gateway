@@ -93,6 +93,7 @@ final class SiteInventory
      * @return array{items:list<Site>,limit:int,has_more:bool,next_cursor:?string}
      */
     public function mcpPage(
+        User $user,
         ?string $cursor = null,
         int $limit = self::MCP_DEFAULT_LIMIT,
         ?string $search = null,
@@ -109,12 +110,16 @@ final class SiteInventory
         $search = $this->search($search);
         $connectionState = $this->connectionState($connectionState);
 
-        $query = Site::query()->select([
-            'site_id',
-            'display_name',
-            'connector_type',
-            'connection_state',
-        ]);
+        $query = $this->access->scopeSites(
+            Site::query()->select([
+                'site_id',
+                'display_name',
+                'connector_type',
+                'connection_state',
+            ]),
+            $user,
+            GatewayPermission::SitesView,
+        );
 
         $this->applyFilters($query, $search, $connectionState);
 
