@@ -9,7 +9,9 @@
         <h1>{{ __('WordPress sites') }}</h1>
         <p class="muted">{{ __('Each site has its own target, OAuth credential lifecycle and explicit routing identity.') }}</p>
     </div>
-    <a class="button button-primary" href="{{ route('admin.sites.create') }}">{{ __('Add site') }}</a>
+    @can('sites.create')
+        <a class="button button-primary" href="{{ route('admin.sites.create') }}">{{ __('Add site') }}</a>
+    @endcan
 </div>
 
 <section class="panel panel-wide" aria-label="{{ __('Configured WordPress sites') }}">
@@ -49,7 +51,9 @@
             @else
                 <h2>{{ __('No sites configured') }}</h2>
                 <p>{{ __('Add the first WordPress site to discover its WP AI Bridge endpoint.') }}</p>
-                <a class="button button-primary" href="{{ route('admin.sites.create') }}">{{ __('Add site') }}</a>
+                @can('sites.create')
+                    <a class="button button-primary" href="{{ route('admin.sites.create') }}">{{ __('Add site') }}</a>
+                @endcan
             @endif
         </div>
     @else
