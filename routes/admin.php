@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\SiteConnectionController;
 use App\Http\Controllers\Admin\SiteController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\UserSiteAccessController;
+use App\Http\Middleware\EnsureLocalUserAccessEnabled;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/admin/login', static fn () => view('admin.login'))
@@ -16,7 +17,7 @@ Route::post('/admin/login', [AuthenticatedSessionController::class, 'store'])
     ->middleware(['guest', 'throttle:admin-login'])
     ->name('admin.login.store');
 
-Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): void {
+Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin')->name('admin.')->group(function (): void {
     Route::get('/', DashboardController::class)->name('dashboard');
 
     Route::get('/sites', [SiteController::class, 'index'])->name('sites.index');
