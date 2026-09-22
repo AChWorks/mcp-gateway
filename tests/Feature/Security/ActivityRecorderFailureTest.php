@@ -15,10 +15,11 @@ final class ActivityRecorderFailureTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_activity_storage_failure_never_escapes_into_the_authoritative_operation(): void
+    public function test_activity_write_hot_path_is_one_insert_and_does_not_depend_on_retention_lock_state(): void
     {
-        Log::spy();
         Schema::drop('activity_retention_state');
+        DB::flushQueryLog();
+        DB::enableQueryLog();
 
         app(ActivityRecorder::class)->record(
             (string) Str::uuid(),
@@ -27,7 +28,31 @@ final class ActivityRecorderFailureTest extends TestCase
             'alpha',
         );
 
-        self::assertSame(0, DB::table('activity_events')->count());
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+        $activityQueries = array_values(array_filter(
+            $queries,
+            static fn (array $query): bool => str_contains(strtolower((string) $query['query']), 'activity_'),
+        ));
+
+        self::assertCount(1, $activityQueries);
+        self::assertStringContainsString('insert', strtolower((string) $activityQueries[0]['query']));
+        self::assertStringContainsString('activity_events', strtolower((string) $activityQueries[0]['query']));
+        self::assertSame(1, DB::table('activity_events')->count());
+    }
+
+    public function test_activity_storage_failure_never_escapes_into_the_authoritative_operation(): void
+    {
+        Log::spy();
+        Schema::drop('activity_events');
+
+        app(ActivityRecorder::class)->record(
+            (string) Str::uuid(),
+            'site-ability-execute',
+            'success',
+            'alpha',
+        );
+
         Log::shouldHaveReceived('warning')->once();
     }
 
@@ -68,7 +93,7 @@ final class ActivityRecorderFailureTest extends TestCase
     {
         $secretSiteId = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.signature';
         Log::spy();
-        Schema::drop('activity_retention_state');
+        Schema::drop('activity_events');
 
         $result = app(PendingGatewayToolHandlers::class)
             ->siteAbilityExecute($secretSiteId, 'demo/read', []);
