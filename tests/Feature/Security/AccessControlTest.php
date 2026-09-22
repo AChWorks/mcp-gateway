@@ -10,8 +10,10 @@ use App\Domain\Sites\Site;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
+#[Group('database-access')]
 final class AccessControlTest extends TestCase
 {
     use RefreshDatabase;
