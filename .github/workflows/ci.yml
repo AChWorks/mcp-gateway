@@ -47,13 +47,6 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: Show exact Pint diff for access manager
-        run: |
-          cp app/Application/Access/UserAccessManager.php /tmp/UserAccessManager.php
-          php vendor/bin/pint app/Application/Access/UserAccessManager.php >/dev/null
-          git diff -- app/Application/Access/UserAccessManager.php || true
-          cp /tmp/UserAccessManager.php app/Application/Access/UserAccessManager.php
-
       - name: Validate Composer metadata
         run: composer validate --strict
 
