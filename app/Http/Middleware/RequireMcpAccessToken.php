@@ -3,8 +3,8 @@
 namespace App\Http\Middleware;
 
 use App\Infrastructure\OAuth\OAuthHttpBridge;
-use App\Models\User;
 use App\Infrastructure\OAuth\OAuthServerManager;
+use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
 use League\OAuth2\Server\Exception\OAuthServerException;
