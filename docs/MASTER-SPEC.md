@@ -10,7 +10,9 @@ MCP Gateway is a small self-hosted web application that lets one remote MCP clie
 
 The immediate problem is operational: connecting ChatGPT directly to many WordPress sites creates one ChatGPT custom App per site. MCP Gateway provides one stable public MCP endpoint and a small administration panel so sites can be added, removed, connected, tested, and routed without creating another ChatGPT App for every site.
 
-The project must remain simple enough to deploy on an ordinary aaPanel host or compatible shared PHP hosting while keeping clean extension boundaries so future clients and backend connector types can be added without rewriting the core.
+The project must remain simple enough to deploy on an ordinary aaPanel host or compatible shared PHP hosting while keeping clean extension boundaries so future clients, administration/automation surfaces, and backend connector types can be added without rewriting the core.
+
+The Gateway is intended to grow as a lightweight control plane rather than a permanently WordPress-specific proxy. Growth must preserve simple operation and low idle cost: a larger registered fleet must not by itself require proportionally more application workers, remote connections, background polling, or auxiliary infrastructure.
 
 ## 2. Primary outcome
 
@@ -67,11 +69,43 @@ The Gateway must not require a site owner to disable the site's direct MCP endpo
 
 ### 4.4 Simple now, extensible later
 
-V1 implements only the abstractions that the current product needs. Internal boundaries must nevertheless avoid hard-coding the entire application to ChatGPT or WordPress.
+V1 implements only the abstractions that the current product needs. Internal boundaries must nevertheless avoid hard-coding the entire application to ChatGPT, WordPress, or WP AI Bridge.
 
-The first backend connector is WP AI Bridge. Future connector types may be added later through explicit connector implementations. Future MCP clients may also be supported without changing stored site connections or core routing semantics.
+The first backend connector is WP AI Bridge. Future connector types may include other MCP servers or deliberately supported APIs/services. Future MCP clients and non-MCP administration/automation surfaces may also reuse the same application rules without changing durable target identity or bypassing connector authorization.
 
-Do not build a plugin marketplace, generic integration framework, workflow engine, or universal API proxy in V1.
+Do not build a plugin marketplace, generic integration framework, workflow engine, or universal API proxy in V1. Introduce abstractions only when a current consumer, measured scale pressure, or a concrete second implementation makes them useful.
+
+### 4.5 Scale with active work, not registered inventory
+
+The Gateway has no fixed product-level maximum site count. Capacity is an engineering property to be measured against the supported deployment profile, not a marketing promise inferred from a synthetic fixture.
+
+Registered but idle targets should have near-zero dynamic cost beyond durable database storage. Site inventory queries, client responses, administration pages, activity views, and future management surfaces must remain bounded rather than loading or rendering the whole fleet by default.
+
+Near-term validation should prove comfortable operation for the fleet sizes that are realistically expected next (currently hundreds of registered sites). Larger synthetic fixtures may be used to expose query, memory, response-size, or indexing limits and preserve growth headroom, but they do not create a supported-site-count guarantee.
+
+Infrastructure should scale only when active workload justifies it. Redis, dedicated queue workers, search services, extra application nodes, or similar components remain optional escalation mechanisms rather than prerequisites for storing a larger inventory.
+
+### 4.6 Permission-first administration
+
+Administrative authorization must be expressed through explicit permissions/policies at the application boundary. Named roles are convenience bundles of permissions, not hard-coded business rules.
+
+The initial product may remain operationally simple, but the architecture must permit multiple local administrator/operator accounts and a small number of understandable access levels without replacing the authentication model. Future resource scoping such as site groups or per-site access must be addable through the same policy boundary rather than by rewriting controllers and application services.
+
+Complex organization hierarchies, public tenancy, billing, and enterprise identity governance are not implied by this requirement.
+
+### 4.7 Connector-neutral control plane
+
+A registered site/target has stable Gateway identity independent of its connector implementation. WordPress and WP AI Bridge are the first target/connector pair, not the definition of the core domain.
+
+Connector-specific discovery, credentials, protocol details, health semantics, and execution logic must remain behind explicit connector boundaries. Shared application rules may depend on connector capabilities, but must not silently assume that every future target exposes WordPress concepts or WP AI Bridge Abilities.
+
+The Gateway remains a control plane by default. Large backup archives, media, exports, and similar data-plane payloads should normally move directly between the target and an appropriate storage/destination when the downstream system supports that pattern; the Gateway should retain bounded status/metadata rather than becoming an unnecessary bandwidth or storage bottleneck.
+
+### 4.8 Prefer maintained building blocks where they fit
+
+Use Laravel/framework facilities and mature maintained libraries for security-sensitive or commodity capabilities when they fit the required semantics and reduce custom code without creating disproportionate lock-in or operational burden.
+
+Examples include authentication/authorization primitives, queue abstractions, storage adapters, and protocol libraries. Third-party adoption must still be justified by compatibility, maintenance quality, security posture, migration cost, and the actual product need. Do not add a dependency merely because it exists, and do not reimplement a mature capability merely to avoid a small well-bounded dependency.
 
 ## 5. V1 scope
 
@@ -89,7 +123,7 @@ Provide a small server-rendered web panel with:
 - view the Gateway MCP endpoint and client connection information;
 - minimal application settings that are genuinely required.
 
-V1 does not require complex role management. The data model may leave room for more users later, but the interface should optimize for one trusted administrator.
+V1 does not require complex role management or organization hierarchy. The current interface may remain optimized for one trusted administrator, but near-term evolution must support multiple local users with lightweight permission-based access levels through the same server-side authorization boundary.
 
 ### 5.2 WP AI Bridge site registration
 
@@ -145,7 +179,9 @@ Every target-specific call must identify the site explicitly. Write or destructi
 
 WordPress-specific protocol knowledge belongs in one WP AI Bridge connector boundary rather than being spread through controllers, UI, OAuth code, and MCP handlers.
 
-The internal connector contract should remain small and evidence-driven. It may cover capabilities such as discovery, connection health, schema inspection, execution, and disconnect/revocation where the backend supports them.
+The durable Gateway identity is the registered site/target plus its declared connector type. Shared site inventory, authorization, routing, activity, and future operation-management rules must remain usable without requiring WordPress-specific fields or semantics from every connector.
+
+The internal connector contract should remain small and evidence-driven. It may cover capabilities such as discovery, connection health, schema/capability inspection, execution, and disconnect/revocation where the backend supports them. Do not invent capability methods for future systems until an actual connector or consumer requires them.
 
 Do not expose arbitrary connector-supplied URLs, HTTP methods, database queries, shell commands, or filesystem paths as a generic Gateway operation.
 
@@ -181,6 +217,14 @@ The Gateway may refresh an expired site credential when the site's authorization
 
 The Gateway is not a WordPress superuser. If the authorizing WordPress principal or WP AI Bridge access settings deny an operation, the Gateway must report that denial and must not seek a lower-level bypass.
 
+### 6.4 Administrative authorization
+
+Administrator authentication answers who is signed in; authorization independently decides which Gateway action that principal may perform.
+
+Server-side application policies/permissions are authoritative. UI visibility may reflect those decisions but must never be the enforcement boundary. Role names may provide convenient default bundles such as owner, administrator, operator, or viewer, but application code should authorize capabilities/resources rather than branching on those names.
+
+The first installed administrator must retain a recoverable ownership path. Changes to users, roles/permissions, security settings, credentials, and other high-impact administration state require appropriate authorization and bounded audit evidence when multi-user administration is enabled.
+
 ## 7. Security requirements
 
 Security is part of the V1 behavior, not a post-release hardening phase.
@@ -203,6 +247,8 @@ At minimum:
 - target identifiers, credentials, and responses from one site must not leak into another site's request;
 - errors returned to MCP clients are useful but do not expose secrets or unnecessary internal stack/configuration data;
 - destructive administration actions in the web panel require deliberate user interaction and preserve recoverable target-side state when the downstream system supports revocation rather than silent deletion;
+- every administration mutation is authorized server-side through the applicable permission/policy boundary; hiding a button is not authorization;
+- changes to administrative users, permission assignments, credentials, and security-sensitive configuration must produce bounded non-secret audit evidence when those features are enabled;
 - the fresh-install web installer accepts secrets only over HTTPS, does not log or redisplay them, only writes outside-public-root secret material, requires a dedicated empty database, and locks itself after successful installation;
 - the temporary browser updater requires HTTPS plus the existing administrator session and CSRF boundary before mutation, keeps the full update payload outside the document root, uses only a minimal temporary public entrypoint, validates exact package identity before mutation, and removes/disables its temporary staging and web entry after successful completion.
 
@@ -213,10 +259,11 @@ Use MySQL migrations for durable schema changes.
 V1 needs only the data required for:
 
 - administrator users/sessions as required by the framework;
-- registered sites and connector metadata;
+- lightweight administrative role/permission assignments when multi-user administration is enabled;
+- registered sites/targets, connector identity, and only the connector metadata required by supported implementations;
 - encrypted per-site authorization credentials and expiry state;
 - Gateway OAuth/client authorization state required for authenticated MCP access;
-- bounded activity/audit metadata;
+- bounded operational activity and security/audit metadata appropriate to their distinct purposes;
 - minimal application settings.
 
 Do not persist full MCP request or response payloads by default.
@@ -236,6 +283,10 @@ The operator must be able to distinguish at least:
 
 Activity records should contain bounded metadata such as time, actor/client identity when available, site ID, operation identity, outcome, and a correlation/request identifier. They must not contain access tokens, refresh tokens, authorization codes, private keys, passwords, or full arbitrary content/tool payloads.
 
+Operational activity and administrative/security audit have different purposes and may require different retention/query behavior. As the administration model grows, the implementation must preserve that distinction instead of turning one ever-growing table or log stream into the authoritative record for every concern.
+
+Dashboard and health views must use stored/bounded state and cheap local queries. Merely opening an administration page must not fan out live requests to every registered target.
+
 V1 does not require an external monitoring stack or metrics service.
 
 ## 10. Compatibility and protocol policy
@@ -248,7 +299,29 @@ V1 does not require an external monitoring stack or metrics service.
 - Adding a site must not change the public Gateway tool list.
 - Adding a future connector family may intentionally add new tools and may require client tool refresh; do not distort V1 WordPress contracts solely to avoid every future MCP schema change.
 
-## 11. Non-goals for V1
+## 11. Scalability, capacity, and cost policy
+
+There is intentionally no fixed fleet-size promise in this specification. The supported capacity of a release must be derived from representative evidence on the supported deployment shape and the actual workload mix.
+
+The near-term engineering goal is that ordinary inventory and administration remain comfortably usable for hundreds of registered sites (roughly the 200–500 range is a practical current planning workload, not a product ceiling). Tests may additionally exercise 1,000, 3,000, 10,000, or other larger synthetic inventories when useful for identifying headroom and nonlinear behavior. Those fixtures are diagnostic evidence, not an assertion that every shared host can sustain the same count or concurrent workload.
+
+Scale-sensitive implementation must follow these rules:
+
+- list/search/filter/sort paths are server-side, bounded, and supported by query/index evidence appropriate to their real access patterns;
+- MCP and other machine-facing inventory responses are bounded and deterministically pageable/searchable so every authorized target remains discoverable without oversized responses;
+- ordinary single-target lookup and credential routing use indexed stable identities and do not scan the fleet;
+- inactive registered targets require no persistent outbound connection and no mandatory per-target polling/background job;
+- dashboard/overview requests do not synchronously contact the entire fleet;
+- memory and response size should scale primarily with the requested page/work unit rather than total registered inventory;
+- query counts, representative latency, memory, and database behavior are measured before introducing structural performance dependencies;
+- bulk/fan-out work that cannot safely fit one bounded request should move behind explicit operation/job state when a real workflow requires it, with idempotency, partial-failure, retry, and progress semantics designed for that workflow;
+- Laravel/database-backed background execution is a valid first escalation when it satisfies measured workload; Redis or additional workers/nodes become requirements only when evidence shows the simpler supported shape is no longer sufficient;
+- external search infrastructure is introduced only when indexed MySQL/query-layer search cannot meet evidenced product needs;
+- large backup/media/export payloads should avoid transiting or residing in the Gateway by default when target-to-storage transfer is feasible.
+
+Performance improvements must not weaken authorization, connector isolation, correctness, recoverability, or deployment simplicity merely to achieve a benchmark number.
+
+## 12. Non-goals for V1
 
 V1 deliberately does not provide:
 
@@ -270,21 +343,25 @@ V1 deliberately does not provide:
 - a marketplace or dynamic third-party code loader;
 - a generic hosting control panel or reusable arbitrary-command facility in the installer.
 
-## 12. Future evolution
+## 13. Future evolution
 
-The architecture must permit, without requiring V1 implementation:
+The architecture must permit, without requiring all of this in V1:
 
-- additional remote MCP clients beyond ChatGPT;
-- multiple Gateway administrator accounts and scoped access;
-- site grouping/tags;
-- additional backend connector types such as other MCP servers or deliberately supported services;
-- more detailed health/usage reporting;
+- additional remote MCP clients beyond ChatGPT and non-MCP administration/API/automation consumers that reuse the same application authorization and target rules;
+- multiple Gateway administrator/operator accounts with lightweight permission-based roles, followed by site/group-scoped access only when a concrete workflow requires it;
+- site grouping/tags and other bounded inventory organization;
+- additional backend connector types such as other MCP servers, non-WordPress systems, or deliberately supported APIs/services;
+- connector capability discovery without forcing every connector into WordPress/WP AI Bridge semantics;
+- more detailed stored health/usage reporting without synchronous fleet-wide fan-out;
+- explicit bulk-operation/job orchestration when publishing, editing, backup, maintenance, or similar multi-target workflows justify asynchronous work;
+- storage integrations for backup/media/export workflows where the Gateway should coordinate rather than become the data path;
 - webhooks or automation where a concrete use case justifies them;
-- horizontal/runtime scaling if actual load later requires it.
+- optional queue/cache/search infrastructure and additional application nodes when measured active workload requires them;
+- horizontal/runtime scaling without changing stable target identity or weakening authorization boundaries.
 
-Future features must preserve the core trust rule: the Gateway routes explicitly authorized capabilities; it does not silently convert connector access into unrestricted infrastructure access.
+Future features must preserve the core trust rule: the Gateway routes explicitly authorized capabilities; it does not silently convert connector access into unrestricted infrastructure access. They must also preserve the preference for the smallest reliable deployment that satisfies measured workload.
 
-## 13. V1 success criteria
+## 14. V1 success criteria
 
 V1 is successful when all of the following are demonstrated against supported test/deployment environments:
 
@@ -301,7 +378,9 @@ V1 is successful when all of the following are demonstrated against supported te
 11. A fresh developer/Master can recover project intent, architecture, current work, and validation expectations from the repository and GitHub without relying on prior chat history.
 12. An existing deployment-ZIP installation can be upgraded with the official update ZIP through the authenticated one-time browser flow without SSH, Git, or Composer while preserving `.env` and persistent private state, removing stale managed files, exercising migrations/postflight validation against a real older packaged release, and removing/disabling the temporary updater after success.
 
-## 14. Source-of-truth model
+V1 success criteria intentionally do not claim a fixed maximum fleet size. Capacity and growth evidence are governed by Section 11 and the current scalability work tracked in GitHub.
+
+## 15. Source-of-truth model
 
 Use these sources for different kinds of truth:
 
@@ -315,7 +394,7 @@ Use these sources for different kinds of truth:
 
 Conversation history is not an authoritative project source.
 
-## 15. Change rule
+## 16. Change rule
 
 Change this specification only when accepted project-level intent, supported deployment constraints, security boundaries, non-goals, or completion criteria materially change.
 
