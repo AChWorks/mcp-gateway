@@ -99,7 +99,7 @@ final readonly class UserAccessManager
         string $accessRule,
         array $deniedPermissions,
     ): void {
-        if (! in_array($accessRule, ['inherit', 'allow', 'deny'], true)) {
+        if (in_array($accessRule, ['inherit', 'allow', 'deny'], true) === false) {
             throw new DomainException('invalid_site_rule');
         }
 
@@ -294,14 +294,14 @@ final readonly class UserAccessManager
         $result = [];
 
         foreach (array_unique($values) as $value) {
-            if (! is_string($value)) {
+            if (is_string($value) === false) {
                 continue;
             }
 
             $permission = GatewayPermission::tryFrom($value);
-            if (! $permission instanceof GatewayPermission
-                || ! in_array($permission, $rolePermissions, true)
-                || ($sitePermissions !== null && ! in_array($permission, $sitePermissions, true))) {
+            if (($permission instanceof GatewayPermission) === false
+                || in_array($permission, $rolePermissions, true) === false
+                || ($sitePermissions !== null && in_array($permission, $sitePermissions, true) === false)) {
                 continue;
             }
 
