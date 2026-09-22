@@ -16,7 +16,10 @@ final readonly class UserAccessManager
 {
     public function __construct(private ActivityRecorder $activity) {}
 
-    /** @param list<string> $deniedPermissions */
+    /**
+     * @param  array{name:string,email:string,password:string,role:string,site_scope_mode:string,access_enabled:bool}  $attributes
+     * @param  list<string>  $deniedPermissions
+     */
     public function create(array $attributes, array $deniedPermissions): User
     {
         $role = GatewayRole::from((string) $attributes['role']);
@@ -44,7 +47,10 @@ final readonly class UserAccessManager
         return $user;
     }
 
-    /** @param list<string> $deniedPermissions */
+    /**
+     * @param  array{name:string,email:string,password?:string|null,role:string,site_scope_mode:string,access_enabled:bool}  $attributes
+     * @param  list<string>  $deniedPermissions
+     */
     public function update(User $user, array $attributes, array $deniedPermissions): User
     {
         $role = GatewayRole::from((string) $attributes['role']);
@@ -197,10 +203,10 @@ final readonly class UserAccessManager
      */
     public function siteRuleSummaries(User $user, array $sites): array
     {
-        $ids = array_values(array_map(
+        $ids = array_map(
             static fn (Site $site): string => (string) $site->getKey(),
             $sites,
-        ));
+        );
 
         if ($ids === []) {
             return [];
@@ -251,6 +257,7 @@ final readonly class UserAccessManager
         ];
     }
 
+    /** @param  list<string>  $deniedPermissions */
     private function replaceGlobalDenials(
         User $user,
         GatewayRole $role,
@@ -294,12 +301,8 @@ final readonly class UserAccessManager
         $result = [];
 
         foreach (array_unique($values) as $value) {
-            if (is_string($value) === false) {
-                continue;
-            }
-
             $permission = GatewayPermission::tryFrom($value);
-            if (($permission instanceof GatewayPermission) === false
+            if ($permission === null
                 || in_array($permission, $rolePermissions, true) === false
                 || ($sitePermissions !== null && in_array($permission, $sitePermissions, true) === false)) {
                 continue;
@@ -326,9 +329,7 @@ final readonly class UserAccessManager
 
     private function role(User $user): GatewayRole
     {
-        $role = $user->role;
-
-        return $role instanceof GatewayRole ? $role : GatewayRole::from((string) $role);
+        return GatewayRole::from((string) $user->role);
     }
 
     private function recordRequired(string $operation): void
