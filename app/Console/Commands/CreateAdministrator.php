@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Models\User;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Validator;
@@ -46,13 +48,22 @@ final class CreateAdministrator extends Command
             return self::FAILURE;
         }
 
+        $role = User::query()->exists()
+            ? GatewayRole::Administrator
+            : GatewayRole::Owner;
+
         User::query()->create([
             'name' => $name,
             'email' => $email,
             'password' => $password,
+            'role' => $role->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+            'access_enabled' => true,
         ]);
 
-        $this->info('Administrator created.');
+        $this->info($role === GatewayRole::Owner
+            ? 'Owner administrator created.'
+            : 'Administrator created.');
 
         return self::SUCCESS;
     }
