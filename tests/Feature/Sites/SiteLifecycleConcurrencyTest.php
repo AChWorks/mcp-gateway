@@ -20,7 +20,7 @@ use PHPUnit\Framework\Attributes\Group;
 use RuntimeException;
 use Tests\TestCase;
 
-#[Group('mysql-concurrency')]
+#[Group('database-concurrency')]
 final class SiteLifecycleConcurrencyTest extends TestCase
 {
     private const CLIENT_ID = 'https://gateway.example.test/oauth/client.json';
@@ -29,8 +29,8 @@ final class SiteLifecycleConcurrencyTest extends TestCase
     {
         parent::setUp();
 
-        if (DB::getDriverName() !== 'mysql') {
-            $this->markTestSkipped('MySQL is required for site lifecycle row-lock concurrency validation.');
+        if (! in_array(DB::getDriverName(), ['mariadb', 'mysql'], true)) {
+            $this->markTestSkipped('MariaDB or MySQL is required for site lifecycle row-lock concurrency validation.');
         }
 
         config()->set('bridge.client.id', self::CLIENT_ID);
@@ -573,9 +573,9 @@ final class SiteLifecycleConcurrencyTest extends TestCase
 
     private function lockSiteRow(string $siteRecordId): PDO
     {
-        $connection = config('database.connections.mysql');
+        $connection = DB::connection()->getConfig();
         if (! is_array($connection)) {
-            throw new RuntimeException('MySQL test connection is unavailable.');
+            throw new RuntimeException('Database test connection is unavailable.');
         }
 
         $pdo = new PDO(
