@@ -5,6 +5,7 @@ namespace App\Domain\Access;
 enum GatewayPermission: string
 {
     case DashboardView = 'dashboard.view';
+    case ConnectionView = 'connection.view';
     case SitesView = 'sites.view';
     case SitesCreate = 'sites.create';
     case SitesUpdate = 'sites.update';
