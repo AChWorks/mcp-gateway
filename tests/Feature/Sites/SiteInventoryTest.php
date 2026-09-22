@@ -4,6 +4,8 @@ namespace Tests\Feature\Sites;
 
 use App\Application\Mcp\PendingGatewayToolHandlers;
 use App\Application\Sites\SiteInventory;
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -18,13 +20,14 @@ final class SiteInventoryTest extends TestCase
     public function test_admin_inventory_uses_two_bounded_queries_at_representative_fleet_sizes(): void
     {
         $inventory = app(SiteInventory::class);
+        $user = $this->owner();
 
         foreach ([[1, 100], [101, 200], [201, 500]] as [$from, $to]) {
             $this->seedSites($from, $to);
 
             DB::flushQueryLog();
             DB::enableQueryLog();
-            $page = $inventory->adminPage();
+            $page = $inventory->adminPage($user);
             $queries = DB::getQueryLog();
             DB::disableQueryLog();
 
@@ -41,13 +44,14 @@ final class SiteInventoryTest extends TestCase
     {
         $this->seedSites(1, 120);
         $inventory = app(SiteInventory::class);
+        $user = $this->owner();
 
-        $secondPage = $inventory->adminPage(2);
+        $secondPage = $inventory->adminPage($user, 2);
         self::assertSame('site-00051', $secondPage['items'][0]->site_id);
         self::assertSame('site-00100', $secondPage['items'][49]->site_id);
         self::assertTrue($secondPage['has_more']);
 
-        $filtered = $inventory->adminPage(1, 'Site 001', 'connected');
+        $filtered = $inventory->adminPage($user, 1, 'Site 001', 'connected');
         self::assertNotSame([], $filtered['items']);
         self::assertFalse($filtered['has_more']);
 
@@ -64,6 +68,8 @@ final class SiteInventoryTest extends TestCase
             'name' => 'Gateway Admin',
             'email' => 'inventory-admin@example.test',
             'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
         ]));
 
         $first = $this->get('/admin/sites');
@@ -155,6 +161,17 @@ final class SiteInventoryTest extends TestCase
         $result = app(PendingGatewayToolHandlers::class)->sitesList(connection_state: 'unknown');
         self::assertFalse($result['ok']);
         self::assertSame('invalid_input', $result['error']['code']);
+    }
+
+    private function owner(): User
+    {
+        return User::query()->create([
+            'name' => 'Inventory Owner',
+            'email' => 'inventory-owner-'.uniqid().'@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+        ]);
     }
 
     private function seedSites(int $from, int $to): void
