@@ -146,9 +146,7 @@ final class UserSiteAccessController extends Controller
 
     private function role(User $user): GatewayRole
     {
-        $role = $user->role;
-
-        return $role instanceof GatewayRole ? $role : GatewayRole::from((string) $role);
+        return GatewayRole::from((string) $user->role);
     }
 
     private function nullableTrim(mixed $value): ?string
