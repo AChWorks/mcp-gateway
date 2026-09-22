@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthServerManager;
+use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
 use League\OAuth2\Server\Exception\OAuthServerException;
@@ -35,6 +36,7 @@ final readonly class RequireMcpAccessToken
         }
 
         $clientId = $validated->getAttribute('oauth_client_id');
+        $userId = $validated->getAttribute('oauth_user_id');
         $scopes = $validated->getAttribute('oauth_scopes');
 
         if (! is_string($clientId)
@@ -46,8 +48,20 @@ final readonly class RequireMcpAccessToken
             return $this->challenge(403, 'insufficient_scope');
         }
 
+        if ((! is_string($userId) && ! is_int($userId))
+            || (string) $userId === ''
+            || ! ctype_digit((string) $userId)) {
+            return $this->challenge(401, 'invalid_token');
+        }
+
+        $user = User::query()->find((int) $userId);
+        if (! $user instanceof User || ! $user->access_enabled) {
+            return $this->challenge(401, 'invalid_token');
+        }
+
         $request->attributes->set('oauth_client_id', $clientId);
-        $request->attributes->set('oauth_user_id', $validated->getAttribute('oauth_user_id'));
+        $request->attributes->set('oauth_user_id', (string) $user->getAuthIdentifier());
+        $request->attributes->set('oauth_user', $user);
         $request->attributes->set('oauth_access_token_id', $validated->getAttribute('oauth_access_token_id'));
         $request->attributes->set('oauth_scopes', $scopes);
 

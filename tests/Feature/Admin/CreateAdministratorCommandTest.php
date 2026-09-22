@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -29,7 +31,7 @@ final class CreateAdministratorCommandTest extends TestCase
         ])
             ->expectsQuestion('Password', $password)
             ->expectsQuestion('Confirm password', $password)
-            ->expectsOutput('Administrator created.')
+            ->expectsOutput('Owner administrator created.')
             ->assertExitCode(0);
 
         $user = User::query()->where('email', 'admin@example.test')->firstOrFail();
@@ -37,6 +39,37 @@ final class CreateAdministratorCommandTest extends TestCase
         $this->assertSame('Gateway Admin', $user->name);
         $this->assertNotSame($password, $user->getRawOriginal('password'));
         $this->assertTrue(Hash::check($password, (string) $user->getRawOriginal('password')));
+        $this->assertSame(GatewayRole::Owner, $user->role);
+        $this->assertSame(SiteScopeMode::All, $user->site_scope_mode);
+        $this->assertTrue($user->access_enabled);
+    }
+
+    public function test_command_creates_later_cli_accounts_as_all_site_administrators(): void
+    {
+        User::query()->create([
+            'name' => 'Existing Owner',
+            'email' => 'owner@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+        ]);
+
+        $password = 'DifferentHorse!234';
+
+        $this->artisan('gateway:admin:create', [
+            '--name' => 'Second Admin',
+            '--email' => 'SECOND@Example.Test',
+        ])
+            ->expectsQuestion('Password', $password)
+            ->expectsQuestion('Confirm password', $password)
+            ->expectsOutput('Administrator created.')
+            ->assertExitCode(0);
+
+        $user = User::query()->where('email', 'second@example.test')->firstOrFail();
+
+        $this->assertSame(GatewayRole::Administrator, $user->role);
+        $this->assertSame(SiteScopeMode::All, $user->site_scope_mode);
+        $this->assertTrue($user->access_enabled);
     }
 
     public function test_command_rejects_a_weak_password(): void

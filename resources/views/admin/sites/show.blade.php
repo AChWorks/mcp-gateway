@@ -41,28 +41,37 @@
 
         <div class="action-row" aria-label="{{ __('Connection actions') }}">
             @if ($siteView['has_credential'])
-                <form method="post" action="{{ route('admin.sites.reconnect', ['site' => $site->site_id]) }}">
-                    @csrf
-                    <button class="button button-primary" type="submit">{{ __('Reconnect') }}</button>
-                </form>
-                <form method="post" action="{{ route('admin.sites.disconnect', ['site' => $site->site_id]) }}">
-                    @csrf
-                    <button class="button button-secondary" type="submit">{{ __('Disconnect') }}</button>
-                </form>
+                @can('connections.reconnect', $site)
+                    <form method="post" action="{{ route('admin.sites.reconnect', ['site' => $site->site_id]) }}">
+                        @csrf
+                        <button class="button button-primary" type="submit">{{ __('Reconnect') }}</button>
+                    </form>
+                @endcan
+                @can('connections.disconnect', $site)
+                    <form method="post" action="{{ route('admin.sites.disconnect', ['site' => $site->site_id]) }}">
+                        @csrf
+                        <button class="button button-secondary" type="submit">{{ __('Disconnect') }}</button>
+                    </form>
+                @endcan
             @else
-                <form method="post" action="{{ route('admin.sites.connect', ['site' => $site->site_id]) }}">
-                    @csrf
-                    <button class="button button-primary" type="submit">{{ __('Connect') }}</button>
-                </form>
+                @can('connections.connect', $site)
+                    <form method="post" action="{{ route('admin.sites.connect', ['site' => $site->site_id]) }}">
+                        @csrf
+                        <button class="button button-primary" type="submit">{{ __('Connect') }}</button>
+                    </form>
+                @endcan
             @endif
 
-            <form method="post" action="{{ route('admin.sites.test', ['site' => $site->site_id]) }}">
-                @csrf
-                <button class="button button-secondary" type="submit">{{ __('Test connection') }}</button>
-            </form>
+            @can('connections.test', $site)
+                <form method="post" action="{{ route('admin.sites.test', ['site' => $site->site_id]) }}">
+                    @csrf
+                    <button class="button button-secondary" type="submit">{{ __('Test connection') }}</button>
+                </form>
+            @endcan
         </div>
     </section>
 
+    @can('sites.update', $site)
     <section class="panel" aria-labelledby="edit-site-title">
         <div class="eyebrow">{{ __('Configuration') }}</div>
         <h2 id="edit-site-title">{{ __('Edit site') }}</h2>
@@ -87,8 +96,10 @@
             <button class="button button-primary" type="submit">{{ __('Save changes') }}</button>
         </form>
     </section>
+    @endcan
 </div>
 
+@can('sites.remove', $site)
 <section class="panel panel-danger" aria-labelledby="remove-site-title">
     <div class="eyebrow">{{ __('Danger zone') }}</div>
     <h2 id="remove-site-title">{{ __('Remove site') }}</h2>
@@ -104,4 +115,5 @@
         <button class="button button-danger" type="submit">{{ __('Remove site') }}</button>
     </form>
 </section>
+@endcan
 @endsection

@@ -9,7 +9,9 @@
         <h1>{{ __('Gateway dashboard') }}</h1>
         <p class="muted">{{ __('A bounded operational summary. Credentials and MCP payloads are never shown here.') }}</p>
     </div>
-    <a class="button button-primary" href="{{ route('admin.sites.create') }}">{{ __('Add site') }}</a>
+    @can('sites.create')
+        <a class="button button-primary" href="{{ route('admin.sites.create') }}">{{ __('Add site') }}</a>
+    @endcan
 </div>
 
 <section class="stats-grid" aria-label="{{ __('Gateway summary') }}">
@@ -28,6 +30,7 @@
 </section>
 
 <div class="content-grid">
+    @can('activity.view')
     <section class="panel panel-wide" aria-labelledby="recent-activity-title">
         <div class="section-heading">
             <div>
@@ -64,12 +67,15 @@
             </div>
         @endif
     </section>
+    @endcan
 
+    @can('connection.view')
     <aside class="panel" aria-labelledby="gateway-info-title">
         <div class="eyebrow">{{ __('Gateway') }}</div>
         <h2 id="gateway-info-title">{{ __('Connection information') }}</h2>
         <p class="muted">{{ __('Public endpoint and non-secret setup details for the ChatGPT MCP App.') }}</p>
         <p><a href="{{ route('admin.connection') }}">{{ __('View connection information') }}</a></p>
     </aside>
+    @endcan
 </div>
 @endsection

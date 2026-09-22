@@ -68,7 +68,11 @@ php artisan gateway:admin:create --name="Gateway Admin" --email="admin@example.t
 
 The password is always requested interactively through a hidden prompt and is never accepted as a command-line option. It must contain at least 12 characters with mixed case, a number, and a symbol. The command normalizes the email address and relies on the `User` model's framework hashing cast; there is no committed/default administrator password, public registration route, or password-reset flow in V1.
 
-Once the application is running, administrator sign-in is available at `/admin/login`. The admin routes use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
+The first local account created by the installer or `gateway:admin:create` is an enabled `owner` with all-site recovery authority. Later CLI-created accounts are enabled `administrator` users with all-site scope; use the Admin access-control UI for least-privilege Operator/Viewer accounts and site-specific restrictions.
+
+Once the application is running, administrator sign-in is available at `/admin/login`. Owner-only user/access management is under `/admin/users`. Roles are permission ceilings; global permission checkboxes and per-site rules only narrow authority. Site access is edited through a bounded, paginated fleet view, so access administration does not load the entire site fleet into one request. Per-site rules support inherit/allow/deny scope plus capability denials, including read-only or write-only-style exceptions beneath the role ceiling.
+
+Access-control mutations require the acting Owner's current password, preserve at least one enabled recoverable Owner, and record required bounded Activity evidence transactionally. Disabling a user blocks new login, invalidates existing Admin/OAuth-consent sessions on their next request, and makes existing MCP bearer tokens unusable because current user state is rechecked. The admin routes continue to use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
 ## Proportional validation and review cadence
 

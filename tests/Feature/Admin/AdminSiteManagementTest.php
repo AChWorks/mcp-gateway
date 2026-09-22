@@ -4,6 +4,8 @@ namespace Tests\Feature\Admin;
 
 use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteRegistry;
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Infrastructure\Http\DnsResolver;
@@ -253,6 +255,8 @@ final class AdminSiteManagementTest extends TestCase
             'name' => 'Gateway Admin',
             'email' => 'admin@example.test',
             'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Administrator->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
         ]);
     }
 

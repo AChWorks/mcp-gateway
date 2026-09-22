@@ -70,6 +70,7 @@ final readonly class AuthCodeRepository implements AuthCodeRepositoryInterface
     {
         $row = DB::table('oauth_auth_codes as codes')
             ->join('oauth_authorizations as authorizations', 'authorizations.id', '=', 'codes.authorization_id')
+            ->join('users', 'users.id', '=', 'codes.user_id')
             ->where('codes.id', $codeId)
             ->select([
                 'codes.client_id',
@@ -77,6 +78,7 @@ final readonly class AuthCodeRepository implements AuthCodeRepositoryInterface
                 'codes.expires_at',
                 'codes.revoked_at',
                 'authorizations.revoked_at as authorization_revoked_at',
+                'users.access_enabled as user_access_enabled',
             ])
             ->lockForUpdate()
             ->first();
@@ -84,6 +86,7 @@ final readonly class AuthCodeRepository implements AuthCodeRepositoryInterface
         return $row === null
             || $row->revoked_at !== null
             || $row->authorization_revoked_at !== null
+            || ! (bool) $row->user_access_enabled
             || (string) $row->client_id !== (string) config('oauth.client.id')
             || (string) $row->resource !== (string) config('oauth.resource')
             || now()->gte($row->expires_at);

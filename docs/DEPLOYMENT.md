@@ -261,6 +261,8 @@ php artisan gateway:admin:create
 
 The administrator password is accepted only through hidden interactive prompts. Do not add it to a shell command, deployment script, environment variable, or process argument.
 
+The first account created by the installer or CLI bootstrap is the recoverable `owner` with all-site authority. Later CLI-created accounts are `administrator` users. On an existing installation receiving the access-control migration, all already-present local users are preserved as enabled `administrator` / all-site principals and the oldest existing account becomes `owner`; newly created users retain the least-privilege defaults unless an administrator explicitly assigns broader access. After bootstrap, use the authenticated `/admin/users` access-control UI to create least-privilege Operators/Viewers, choose all-sites vs selected-sites scope, and apply direct per-site capability restrictions. The system prevents disabling or demoting the last enabled Owner. Security-sensitive access changes require the acting Owner's current password and are transactionally audited. Disabling a user also invalidates their browser access on the next request and prevents existing MCP access tokens from being used.
+
 ## 8. Run the repository-owned environment gate
 
 The web installer runs this gate automatically before creating the administrator. CLI operators must run:

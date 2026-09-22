@@ -2,12 +2,17 @@
 
 namespace App\Providers;
 
+use App\Application\Access\AccessControl;
+use App\Domain\Access\GatewayPermission;
+use App\Domain\Sites\Site;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\SystemDnsResolver;
+use App\Models\User;
 use App\Support\CorrelationId;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
@@ -21,6 +26,14 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        foreach (GatewayPermission::cases() as $permission) {
+            Gate::define(
+                $permission->value,
+                static fn (User $user, ?Site $site = null): bool => app(AccessControl::class)
+                    ->allows($user, $permission, $site),
+            );
+        }
+
         RateLimiter::for('oauth-token', static function (Request $request): Limit {
             return Limit::perMinute(30)->by('oauth-token:'.$request->ip());
         });

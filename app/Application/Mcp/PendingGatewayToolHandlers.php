@@ -2,13 +2,16 @@
 
 namespace App\Application\Mcp;
 
+use App\Application\Access\AccessControl;
 use App\Application\Sites\SiteConnectionException;
 use App\Application\Sites\SiteInventory;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
+use App\Models\User;
 use App\Support\CorrelationId;
 use DateTimeInterface;
 use InvalidArgumentException;
@@ -20,10 +23,12 @@ final class PendingGatewayToolHandlers
         private readonly WpAiBridgeMcpClient $bridge,
         private readonly ActivityRecorder $activity,
         private readonly SiteInventory $inventory,
+        private readonly AccessControl $access,
     ) {}
 
     /** @return array<string, mixed> */
     public function sitesList(
+        User $user,
         ?string $cursor = null,
         int $limit = SiteInventory::MCP_DEFAULT_LIMIT,
         ?string $search = null,
@@ -31,8 +36,12 @@ final class PendingGatewayToolHandlers
     ): array {
         $correlationId = CorrelationId::current();
 
+        if (! $this->access->allows($user, GatewayPermission::SitesView)) {
+            return $this->forbidden($correlationId, 'sites-list');
+        }
+
         try {
-            $page = $this->inventory->mcpPage($cursor, $limit, $search, $connection_state);
+            $page = $this->inventory->mcpPage($user, $cursor, $limit, $search, $connection_state);
         } catch (InvalidArgumentException $exception) {
             return $this->recordedError(
                 $correlationId,
@@ -66,10 +75,10 @@ final class PendingGatewayToolHandlers
     }
 
     /** @return array<string, mixed> */
-    public function siteContext(string $site_id): array
+    public function siteContext(User $user, string $site_id): array
     {
         $correlationId = CorrelationId::current();
-        $site = $this->findSite($site_id);
+        $site = $this->findSite($user, $site_id, GatewayPermission::SitesView);
         if (! $site instanceof Site) {
             return $this->siteNotFound($correlationId, 'site-context');
         }
@@ -94,6 +103,7 @@ final class PendingGatewayToolHandlers
 
     /** @return array<string, mixed> */
     public function siteAbilitiesRead(
+        User $user,
         string $site_id,
         ?string $ability = null,
         int $page = 1,
@@ -102,7 +112,7 @@ final class PendingGatewayToolHandlers
         ?string $search = null,
     ): array {
         $correlationId = CorrelationId::current();
-        $site = $this->findSite($site_id);
+        $site = $this->findSite($user, $site_id, GatewayPermission::AbilitiesInspect);
         if (! $site instanceof Site) {
             return $this->siteNotFound($correlationId, 'site-abilities-read');
         }
@@ -147,10 +157,10 @@ final class PendingGatewayToolHandlers
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
      */
-    public function siteAbilityExecute(string $site_id, string $ability, array $input): array
+    public function siteAbilityExecute(User $user, string $site_id, string $ability, array $input): array
     {
         $correlationId = CorrelationId::current();
-        $site = $this->findSite($site_id);
+        $site = $this->findScopedSite($user, $site_id);
         if (! $site instanceof Site) {
             return $this->siteNotFound($correlationId, 'site-ability-execute');
         }
@@ -160,8 +170,23 @@ final class PendingGatewayToolHandlers
             return $this->recordedError($correlationId, 'site-ability-execute', $site->site_id, 'invalid_input', 'ability must be a non-empty string of at most 255 characters.');
         }
 
+        if (! $this->hasAnyExecutionPermission($user, $site)) {
+            return $this->forbidden($correlationId, 'site-ability-execute', $site->site_id);
+        }
+
         try {
-            $result = $this->bridge->executeAbility($site, $ability, $input, $correlationId);
+            $executionClass = $this->bridge->classifyAbility($site, $ability, $correlationId);
+            if (! $this->access->allows($user, $executionClass->permission(), $site)) {
+                return $this->forbidden($correlationId, 'site-ability-execute', $site->site_id);
+            }
+
+            $result = $this->bridge->executeAbility(
+                $site,
+                $ability,
+                $input,
+                $correlationId,
+                $executionClass,
+            );
         } catch (SiteConnectionException $exception) {
             $this->recordFailure($correlationId, 'site-ability-execute', $site->site_id, $exception->reason);
 
@@ -183,14 +208,56 @@ final class PendingGatewayToolHandlers
         ];
     }
 
-    private function findSite(string $siteId): ?Site
-    {
-        $siteId = trim($siteId);
-        if ($siteId === '' || mb_strlen($siteId) > 128) {
+    private function findSite(
+        User $user,
+        string $siteId,
+        GatewayPermission $permission,
+    ): ?Site {
+        $siteId = $this->siteId($siteId);
+        if ($siteId === null) {
             return null;
         }
 
-        return Site::query()->where('site_id', $siteId)->first();
+        return $this->access
+            ->scopeSites(Site::query(), $user, $permission)
+            ->where('site_id', $siteId)
+            ->first();
+    }
+
+    private function findScopedSite(User $user, string $siteId): ?Site
+    {
+        $siteId = $this->siteId($siteId);
+        if ($siteId === null) {
+            return null;
+        }
+
+        return $this->access
+            ->scopePrincipalSites(Site::query(), $user)
+            ->where('site_id', $siteId)
+            ->first();
+    }
+
+    private function siteId(string $siteId): ?string
+    {
+        $siteId = trim($siteId);
+
+        return $siteId === '' || mb_strlen($siteId) > 128 ? null : $siteId;
+    }
+
+    private function hasAnyExecutionPermission(User $user, Site $site): bool
+    {
+        foreach ([
+            GatewayPermission::AbilitiesExecuteReadonly,
+            GatewayPermission::AbilitiesExecuteMutating,
+            GatewayPermission::AbilitiesExecuteDestructive,
+            GatewayPermission::AbilitiesExecuteUnclassified,
+        ] as $permission) {
+            if ($this->access->allows($user, $permission, $site)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function connectionState(Site $site): string
@@ -230,6 +297,18 @@ final class PendingGatewayToolHandlers
     private function tooLong(?string $value, int $max): bool
     {
         return $value !== null && mb_strlen($value) > $max;
+    }
+
+    /** @return array<string, mixed> */
+    private function forbidden(string $correlationId, string $operation, ?string $siteId = null): array
+    {
+        return $this->recordedError(
+            $correlationId,
+            $operation,
+            $siteId,
+            'forbidden',
+            'The current Gateway user is not allowed to perform this operation.',
+        );
     }
 
     /** @return array<string, mixed> */

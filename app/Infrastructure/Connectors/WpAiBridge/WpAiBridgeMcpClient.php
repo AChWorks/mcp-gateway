@@ -5,6 +5,7 @@ namespace App\Infrastructure\Connectors\WpAiBridge;
 use App\Application\Sites\SiteConnectionException;
 use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteLifecycleLock;
+use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteCredential;
 use App\Infrastructure\Http\OutboundRequestException;
@@ -54,18 +55,44 @@ final readonly class WpAiBridgeMcpClient
         return $result;
     }
 
-    /** @param array<string, mixed> $input */
-    public function executeAbility(Site $site, string $ability, array $input, string $correlationId): mixed
-    {
-        $routing = $this->routingContext($site);
-        $mutationRisk = $this->abilityMutationRisk($routing, $ability, $correlationId);
+    public function classifyAbility(
+        Site $site,
+        string $ability,
+        string $correlationId,
+    ): AbilityExecutionClass {
+        return $this->abilityExecutionClass(
+            $this->routingContext($site),
+            $ability,
+            $correlationId,
+        );
+    }
 
-        return $this->callAbilityOnRouting($routing, $ability, $input, $mutationRisk, $correlationId);
+    /** @param array<string, mixed> $input */
+    public function executeAbility(
+        Site $site,
+        string $ability,
+        array $input,
+        string $correlationId,
+        ?AbilityExecutionClass $executionClass = null,
+    ): mixed {
+        $routing = $this->routingContext($site);
+        $executionClass ??= $this->abilityExecutionClass($routing, $ability, $correlationId);
+
+        return $this->callAbilityOnRouting(
+            $routing,
+            $ability,
+            $input,
+            $executionClass->hasMutationRisk(),
+            $correlationId,
+        );
     }
 
     /** @param array{resource_url:string,access_token:string} $routing */
-    private function abilityMutationRisk(array $routing, string $ability, string $correlationId): bool
-    {
+    private function abilityExecutionClass(
+        array $routing,
+        string $ability,
+        string $correlationId,
+    ): AbilityExecutionClass {
         try {
             $catalog = $this->callAbilityOnRouting(
                 $routing,
@@ -75,29 +102,46 @@ final readonly class WpAiBridgeMcpClient
                 $correlationId,
             );
         } catch (WpAiBridgeMcpException) {
-            return true;
+            return AbilityExecutionClass::Unclassified;
         }
 
         if (! is_array($catalog)) {
-            return true;
+            return AbilityExecutionClass::Unclassified;
         }
 
         $items = $catalog['items'] ?? null;
         if (! is_array($items) || count($items) !== 1 || ! is_array($items[0] ?? null)) {
-            return true;
+            return AbilityExecutionClass::Unclassified;
         }
 
         $contract = $items[0];
-        if (($contract['name'] ?? null) !== $ability || ($contract['mcp_type'] ?? 'tool') !== 'tool') {
-            return true;
+        if (($contract['name'] ?? null) !== $ability
+            || ($contract['mcp_type'] ?? null) !== 'tool'
+            || ($contract['bridge_delegation'] ?? null) !== 'ability_specific') {
+            return AbilityExecutionClass::Unclassified;
         }
 
         $annotations = $contract['annotations'] ?? null;
         if (! is_array($annotations)) {
-            return true;
+            return AbilityExecutionClass::Unclassified;
         }
 
-        return ($annotations['readonly'] ?? null) !== true || ($annotations['destructive'] ?? null) === true;
+        $readonly = $annotations['readonly'] ?? null;
+        $destructive = $annotations['destructive'] ?? null;
+
+        if ($destructive === true) {
+            return AbilityExecutionClass::Destructive;
+        }
+
+        if ($readonly === true && $destructive === false) {
+            return AbilityExecutionClass::Readonly;
+        }
+
+        if ($readonly === false && $destructive === false) {
+            return AbilityExecutionClass::Mutating;
+        }
+
+        return AbilityExecutionClass::Unclassified;
     }
 
     /** @param array<string, mixed> $input */

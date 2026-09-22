@@ -5,13 +5,18 @@ namespace Tests\Feature\Mcp;
 use App\Application\Mcp\PendingGatewayToolHandlers;
 use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteRegistry;
+use App\Domain\Access\GatewayPermission;
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Domain\Sites\Site;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -22,9 +27,19 @@ final class MultiSiteRoutingTest extends TestCase
     /** @var list<array{host:string,ability:string,authorization:string}> */
     private array $toolCalls = [];
 
+    private User $principal;
+
     protected function setUp(): void
     {
         parent::setUp();
+
+        $this->principal = User::query()->create([
+            'name' => 'Gateway MCP Owner',
+            'email' => 'mcp-owner@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+        ]);
 
         config()->set('bridge.client.id', 'https://gateway.example.test/oauth/client.json');
         config()->set('bridge.client.name', 'MCP Gateway Test');
@@ -50,8 +65,8 @@ final class MultiSiteRoutingTest extends TestCase
         $this->createSite('beta');
 
         $handlers = app(PendingGatewayToolHandlers::class);
-        $list = $handlers->sitesList();
-        $context = $handlers->siteContext('alpha');
+        $list = $handlers->sitesList($this->principal);
+        $context = $handlers->siteContext($this->principal, 'alpha');
 
         self::assertTrue($list['ok']);
         self::assertSame(['alpha', 'beta'], array_column($list['sites'], 'site_id'));
@@ -80,8 +95,8 @@ final class MultiSiteRoutingTest extends TestCase
         $this->pair($beta);
 
         $handlers = app(PendingGatewayToolHandlers::class);
-        $alphaList = $handlers->siteAbilitiesRead('alpha', null, 2, 1, 'alpha-space', 'needle');
-        $betaExact = $handlers->siteAbilitiesRead('beta', 'beta/demo');
+        $alphaList = $handlers->siteAbilitiesRead($this->principal, 'alpha', null, 2, 1, 'alpha-space', 'needle');
+        $betaExact = $handlers->siteAbilitiesRead($this->principal, 'beta', 'beta/demo');
 
         self::assertTrue($alphaList['ok']);
         self::assertSame('alpha/demo', $alphaList['catalog']['items'][0]['name']);
@@ -106,9 +121,9 @@ final class MultiSiteRoutingTest extends TestCase
         $this->pair($beta);
 
         $handlers = app(PendingGatewayToolHandlers::class);
-        $read = $handlers->siteAbilityExecute('alpha', 'demo/read', ['id' => 7]);
-        $write = $handlers->siteAbilityExecute('beta', 'demo/write', ['value' => 'changed']);
-        $denied = $handlers->siteAbilityExecute('alpha', 'demo/denied', []);
+        $read = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/read', ['id' => 7]);
+        $write = $handlers->siteAbilityExecute($this->principal, 'beta', 'demo/write', ['value' => 'changed']);
+        $denied = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/denied', []);
 
         self::assertTrue($read['ok']);
         self::assertSame(['site' => 'alpha', 'kind' => 'read'], $read['result']);
@@ -144,12 +159,82 @@ final class MultiSiteRoutingTest extends TestCase
         );
     }
 
+    public function test_operator_site_can_be_write_only_and_unclassified_or_destructive_execution_fails_closed(): void
+    {
+        $site = $this->createSite('alpha');
+        $this->pair($site);
+        $operator = User::query()->create([
+            'name' => 'Write Only Operator',
+            'email' => 'write-only@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'site_scope_mode' => SiteScopeMode::Selected->value,
+        ]);
+
+        DB::table('user_site_access')->insert([
+            'user_id' => $operator->id,
+            'site_record_id' => $site->id,
+            'allowed' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        DB::table('user_site_permission_denials')->insert([
+            [
+                'user_id' => $operator->id,
+                'site_record_id' => $site->id,
+                'permission' => GatewayPermission::SitesView->value,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'user_id' => $operator->id,
+                'site_record_id' => $site->id,
+                'permission' => GatewayPermission::AbilitiesInspect->value,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'user_id' => $operator->id,
+                'site_record_id' => $site->id,
+                'permission' => GatewayPermission::AbilitiesExecuteReadonly->value,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $handlers = app(PendingGatewayToolHandlers::class);
+
+        $context = $handlers->siteContext($operator, 'alpha');
+        self::assertFalse($context['ok']);
+        self::assertSame('site_not_found', $context['error']['code']);
+
+        $catalog = $handlers->siteAbilitiesRead($operator, 'alpha');
+        self::assertFalse($catalog['ok']);
+        self::assertSame('site_not_found', $catalog['error']['code']);
+
+        $read = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/read', []);
+        self::assertFalse($read['ok']);
+        self::assertSame('forbidden', $read['error']['code']);
+
+        $write = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/write', ['value' => 'changed']);
+        self::assertTrue($write['ok']);
+        self::assertSame('write', $write['result']['kind']);
+
+        $destructive = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/delete', []);
+        self::assertFalse($destructive['ok']);
+        self::assertSame('forbidden', $destructive['error']['code']);
+
+        $unclassified = $handlers->siteAbilityExecute($operator, 'alpha', 'provider/write', []);
+        self::assertFalse($unclassified['ok']);
+        self::assertSame('forbidden', $unclassified['error']['code']);
+    }
+
     public function test_default_ability_catalog_page_size_is_ten(): void
     {
         $alpha = $this->createSite('alpha');
         $this->pair($alpha);
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead('alpha');
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead($this->principal, 'alpha');
 
         self::assertTrue($result['ok']);
         self::assertSame(10, $result['catalog']['per_page']);
@@ -199,7 +284,7 @@ final class MultiSiteRoutingTest extends TestCase
             return $this->bridgeResponse($request);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute('alpha', 'demo/read', []);
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute($this->principal, 'alpha', 'demo/read', []);
 
         self::assertFalse($result['ok']);
         self::assertSame('network_failure', $result['error']['code']);
@@ -260,6 +345,7 @@ final class MultiSiteRoutingTest extends TestCase
             'HTTP_MCP_NAME' => 'site-ability-execute',
         ], $body);
 
+        $request->attributes->set('oauth_user', $this->principal);
         $response = app(GatewayMcpEndpoint::class)->handle($request);
 
         self::assertSame(200, $response->getStatusCode());
@@ -279,8 +365,8 @@ final class MultiSiteRoutingTest extends TestCase
         });
 
         $handlers = app(PendingGatewayToolHandlers::class);
-        $unknown = $handlers->siteAbilitiesRead('missing');
-        $disconnected = $handlers->siteAbilityExecute('alpha', 'demo/write', []);
+        $unknown = $handlers->siteAbilitiesRead($this->principal, 'missing');
+        $disconnected = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/write', []);
 
         self::assertFalse($unknown['ok']);
         self::assertSame('site_not_found', $unknown['error']['code']);
@@ -334,7 +420,7 @@ final class MultiSiteRoutingTest extends TestCase
         });
 
         $result = app(PendingGatewayToolHandlers::class)
-            ->siteAbilityExecute('alpha', 'demo/write', ['value' => 'ambiguous']);
+            ->siteAbilityExecute($this->principal, 'alpha', 'demo/write', ['value' => 'ambiguous']);
 
         self::assertFalse($result['ok']);
         self::assertSame('outcome_unknown', $result['error']['code']);
@@ -351,7 +437,7 @@ final class MultiSiteRoutingTest extends TestCase
 
         app(SiteConnectionService::class)->disconnect($alpha);
         $result = app(PendingGatewayToolHandlers::class)
-            ->siteAbilityExecute('beta', 'demo/read', []);
+            ->siteAbilityExecute($this->principal, 'beta', 'demo/read', []);
 
         self::assertTrue($result['ok']);
         self::assertSame('beta', $result['result']['site']);
@@ -387,7 +473,7 @@ final class MultiSiteRoutingTest extends TestCase
             return Http::response(str_repeat('x', 2048), 200, ['Content-Type' => 'application/json']);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead('alpha', null, 1, 25);
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead($this->principal, 'alpha', null, 1, 25);
 
         self::assertFalse($result['ok']);
         self::assertSame('response_too_large', $result['error']['code']);
@@ -544,10 +630,12 @@ final class MultiSiteRoutingTest extends TestCase
                 'mcp_type' => 'tool',
                 'annotations' => [
                     'readonly' => $itemName === 'demo/read',
-                    'destructive' => $itemName !== 'demo/read',
+                    'destructive' => $itemName === 'demo/delete',
                     'idempotent' => true,
                 ],
-                'bridge_delegation' => 'native_abilities',
+                'bridge_delegation' => str_starts_with($itemName, 'provider/')
+                    ? 'native_abilities'
+                    : 'ability_specific',
                 'execution_permission' => 'not_evaluated',
             ];
             if ($exact) {

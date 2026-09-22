@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\OAuth;
 
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use App\Infrastructure\OAuth\RefreshTokenInspector;
@@ -503,6 +505,18 @@ final class ChatGptOAuthFlowTest extends TestCase
         $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
     }
 
+    public function test_refresh_recovery_rejects_a_user_disabled_after_rotation(): void
+    {
+        $user = $this->operator();
+        [$refreshToken] = $this->issueRefreshableToken($user);
+        $this->rotateRefreshToken($refreshToken);
+
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
+        self::assertSame(1, (int) \DB::table('oauth_refresh_recoveries')->value('uses_remaining'));
+    }
+
     public function test_refresh_recovery_window_expiry_restores_normal_replay_rejection(): void
     {
         [$refreshToken] = $this->issueRefreshableToken();
@@ -749,6 +763,44 @@ final class ChatGptOAuthFlowTest extends TestCase
         ])->assertStatus(400);
     }
 
+    public function test_disabled_user_cannot_exchange_preexisting_authorization_code(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])
+            ->assertStatus(400)
+            ->assertJsonPath('error', 'invalid_grant');
+    }
+
+    public function test_disabled_user_cannot_rotate_preexisting_refresh_token(): void
+    {
+        $user = $this->operator();
+        [$refreshToken] = $this->issueRefreshableToken($user);
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])
+            ->assertStatus(400)
+            ->assertJsonPath('error', 'invalid_grant');
+    }
+
     public function test_expired_authorization_code_is_rejected(): void
     {
         config()->set('oauth.ttl.authorization_code_seconds', 1);
@@ -812,6 +864,85 @@ final class ChatGptOAuthFlowTest extends TestCase
     }
 
     /** @return array{0:string,1:string} */
+    public function test_existing_access_token_rechecks_current_user_and_site_scope(): void
+    {
+        $user = $this->operator();
+        $siteRecordId = (string) Str::ulid();
+        $baseUrl = 'https://alpha.example.test';
+
+        \DB::table('sites')->insert([
+            'id' => $siteRecordId,
+            'site_id' => 'alpha',
+            'display_name' => 'Alpha',
+            'base_url' => $baseUrl,
+            'base_url_hash' => hash('sha256', $baseUrl),
+            'connector_type' => 'wp_ai_bridge',
+            'mcp_resource_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/mcp',
+            'oauth_issuer_url' => $baseUrl,
+            'oauth_authorization_url' => $baseUrl.'/wp-ai-bridge/oauth/authorize',
+            'oauth_token_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/oauth/token',
+            'oauth_revocation_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
+            'connection_state' => 'disconnected',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        \DB::table('user_site_access')->insert([
+            'user_id' => $user->id,
+            'site_record_id' => $siteRecordId,
+            'allowed' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        [, $accessToken] = $this->issueRefreshableToken($user);
+        $headers = [
+            'Authorization' => 'Bearer '.$accessToken,
+            'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+            'Mcp-Name' => 'sites-list',
+        ];
+        $payload = [
+            'jsonrpc' => '2.0',
+            'id' => 90,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'sites-list',
+                'arguments' => (object) [],
+                '_meta' => [
+                    'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                    'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                    'io.modelcontextprotocol/clientInfo' => ['name' => 'scope-test', 'version' => '1.0.0'],
+                ],
+            ],
+        ];
+
+        $this->withHeaders($headers)
+            ->postJson('/mcp', $payload)
+            ->assertOk()
+            ->assertJsonPath('result.structuredContent.sites.0.site_id', 'alpha');
+
+        \DB::table('user_site_access')
+            ->where('user_id', $user->id)
+            ->where('site_record_id', $siteRecordId)
+            ->update(['allowed' => false, 'updated_at' => now()]);
+
+        $this->withHeaders($headers)
+            ->postJson('/mcp', $payload)
+            ->assertOk()
+            ->assertJsonPath('result.structuredContent.sites', []);
+
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->withHeaders($headers)
+            ->postJson('/mcp', $payload)
+            ->assertUnauthorized()
+            ->assertHeader(
+                'WWW-Authenticate',
+                'Bearer resource_metadata="'.rtrim((string) config('oauth.issuer'), '/').'/.well-known/oauth-protected-resource/mcp", scope="mcp", error="invalid_token"',
+            );
+    }
+
     private function issueRefreshableToken(?User $user = null): array
     {
         $user ??= $this->operator();
@@ -944,6 +1075,9 @@ final class ChatGptOAuthFlowTest extends TestCase
             'name' => 'Gateway Operator',
             'email' => 'operator@example.test',
             'password' => Hash::make('test-password-not-used-for-oauth'),
+            'role' => GatewayRole::Operator->value,
+            'site_scope_mode' => SiteScopeMode::Selected->value,
+            'access_enabled' => true,
         ]);
     }
 

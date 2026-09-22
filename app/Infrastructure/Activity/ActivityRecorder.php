@@ -16,27 +16,16 @@ final class ActivityRecorder
         ?string $siteId = null,
         ?string $errorCode = null,
     ): void {
-        $correlationId = $this->correlationId($correlationId);
-        $operation = $this->safeIdentifier($operation, 128) ?? 'unknown';
-        $outcome = $this->safeIdentifier($outcome, 32) ?? 'unknown';
-        $siteId = $this->safeIdentifier($siteId, 128);
-        $errorCode = $this->safeIdentifier($errorCode, 64);
+        [$correlationId, $operation, $outcome, $siteId, $errorCode] = $this->normalized(
+            $correlationId,
+            $operation,
+            $outcome,
+            $siteId,
+            $errorCode,
+        );
 
         try {
-            [$actorType, $actorId, $clientHash] = $this->actor();
-
-            DB::table('activity_events')->insert([
-                'id' => (string) Str::ulid(),
-                'correlation_id' => $correlationId,
-                'actor_type' => $actorType,
-                'actor_id' => $actorId,
-                'client_id_hash' => $clientHash,
-                'site_id' => $siteId,
-                'operation' => $operation,
-                'outcome' => $outcome,
-                'error_code' => $errorCode,
-                'created_at' => now(),
-            ]);
+            $this->persist($correlationId, $operation, $outcome, $siteId, $errorCode);
         } catch (Throwable) {
             // Activity persistence must never change the authoritative outcome of a
             // routed operation, especially after a remote mutation may have executed.
@@ -52,6 +41,64 @@ final class ActivityRecorder
                 // Diagnostics are best-effort and must not change the routed result.
             }
         }
+    }
+
+    public function recordRequired(
+        string $correlationId,
+        string $operation,
+        string $outcome,
+        ?string $siteId = null,
+        ?string $errorCode = null,
+    ): void {
+        $this->persist(...$this->normalized(
+            $correlationId,
+            $operation,
+            $outcome,
+            $siteId,
+            $errorCode,
+        ));
+    }
+
+    /**
+     * @return array{string,string,string,?string,?string}
+     */
+    private function normalized(
+        string $correlationId,
+        string $operation,
+        string $outcome,
+        ?string $siteId,
+        ?string $errorCode,
+    ): array {
+        return [
+            $this->correlationId($correlationId),
+            $this->safeIdentifier($operation, 128) ?? 'unknown',
+            $this->safeIdentifier($outcome, 32) ?? 'unknown',
+            $this->safeIdentifier($siteId, 128),
+            $this->safeIdentifier($errorCode, 64),
+        ];
+    }
+
+    private function persist(
+        string $correlationId,
+        string $operation,
+        string $outcome,
+        ?string $siteId,
+        ?string $errorCode,
+    ): void {
+        [$actorType, $actorId, $clientHash] = $this->actor();
+
+        DB::table('activity_events')->insert([
+            'id' => (string) Str::ulid(),
+            'correlation_id' => $correlationId,
+            'actor_type' => $actorType,
+            'actor_id' => $actorId,
+            'client_id_hash' => $clientHash,
+            'site_id' => $siteId,
+            'operation' => $operation,
+            'outcome' => $outcome,
+            'error_code' => $errorCode,
+            'created_at' => now(),
+        ]);
     }
 
     /** @return array{string,?string,?string} */

@@ -224,6 +224,39 @@ p {
     font-size: 0.9rem;
 }
 
+.permission-fieldset {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 1rem;
+    border: 1px solid #d9dee5;
+    border-radius: 0.8rem;
+}
+
+.permission-fieldset legend {
+    padding-inline: 0.35rem;
+    font-weight: 700;
+}
+
+.checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem 1rem;
+}
+
+.checkbox-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    line-height: 1.4;
+}
+
+.checkbox-option input {
+    width: auto;
+    min-height: 0;
+    margin-top: 0.2rem;
+}
+
 .field-error {
     color: #b42318;
 }
@@ -430,7 +463,8 @@ th {
 
     .content-grid,
     .stats-grid,
-    .filter-grid {
+    .filter-grid,
+    .checkbox-grid {
         grid-template-columns: 1fr;
     }
 
@@ -466,6 +500,7 @@ th {
     .auth-card,
     .panel,
     .stat-card,
+    .permission-fieldset,
     .summary-list div,
     th,
     td {
