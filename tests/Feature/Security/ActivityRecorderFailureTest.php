@@ -3,7 +3,10 @@
 namespace Tests\Feature\Security;
 
 use App\Application\Mcp\PendingGatewayToolHandlers;
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -60,11 +63,12 @@ final class ActivityRecorderFailureTest extends TestCase
     {
         $secretSiteId = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.signature';
         $handlers = app(PendingGatewayToolHandlers::class);
+        $principal = $this->owner();
 
         $results = [
-            $handlers->siteContext($secretSiteId),
-            $handlers->siteAbilitiesRead($secretSiteId),
-            $handlers->siteAbilityExecute($secretSiteId, 'demo/read', []),
+            $handlers->siteContext($principal, $secretSiteId),
+            $handlers->siteAbilitiesRead($principal, $secretSiteId),
+            $handlers->siteAbilityExecute($principal, $secretSiteId, 'demo/read', []),
         ];
 
         foreach ($results as $result) {
@@ -89,6 +93,17 @@ final class ActivityRecorderFailureTest extends TestCase
         self::assertStringNotContainsString($secretSiteId, json_encode($events->all(), JSON_THROW_ON_ERROR));
     }
 
+    private function owner(): User
+    {
+        return User::query()->create([
+            'name' => 'Activity Test Owner',
+            'email' => 'activity-test-owner-'.uniqid().'@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+        ]);
+    }
+
     public function test_secret_shaped_unknown_site_id_is_not_written_to_fallback_log_context(): void
     {
         $secretSiteId = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.signature';
@@ -96,7 +111,7 @@ final class ActivityRecorderFailureTest extends TestCase
         Schema::drop('activity_events');
 
         $result = app(PendingGatewayToolHandlers::class)
-            ->siteAbilityExecute($secretSiteId, 'demo/read', []);
+            ->siteAbilityExecute($this->owner(), $secretSiteId, 'demo/read', []);
 
         self::assertFalse($result['ok']);
         self::assertSame('site_not_found', $result['error']['code']);
