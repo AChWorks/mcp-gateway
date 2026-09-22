@@ -426,14 +426,14 @@ final class SiteConnectionService
 
     private function currentDatabaseSessionId(): ?int
     {
-        if (DB::connection()->getDriverName() !== 'mysql') {
+        if (! in_array(DB::connection()->getDriverName(), ['mariadb', 'mysql'], true)) {
             return null;
         }
 
         $row = DB::selectOne('SELECT CONNECTION_ID() AS connection_id');
         $connectionId = is_object($row) ? (int) ($row->connection_id ?? 0) : 0;
         if ($connectionId <= 0) {
-            throw new RuntimeException('Could not resolve the active MySQL session for durable revocation fencing.');
+            throw new RuntimeException('Could not resolve the active database session for durable revocation fencing.');
         }
 
         return $connectionId;
@@ -447,7 +447,7 @@ final class SiteConnectionService
 
         $currentSessionId = $this->currentDatabaseSessionId();
         if ($currentSessionId !== $expectedSessionId) {
-            throw new RuntimeException('The MySQL session changed after remote revocation; durable local finalization requires an explicit retry.');
+            throw new RuntimeException('The database session changed after remote revocation; durable local finalization requires an explicit retry.');
         }
     }
 
