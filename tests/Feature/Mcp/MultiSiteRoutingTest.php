@@ -348,7 +348,7 @@ final class MultiSiteRoutingTest extends TestCase
         });
 
         $result = app(PendingGatewayToolHandlers::class)
-            ->siteAbilityExecute('alpha', 'demo/write', ['value' => 'ambiguous']);
+            ->siteAbilityExecute($this->principal, 'alpha', 'demo/write', ['value' => 'ambiguous']);
 
         self::assertFalse($result['ok']);
         self::assertSame('outcome_unknown', $result['error']['code']);
@@ -365,7 +365,7 @@ final class MultiSiteRoutingTest extends TestCase
 
         app(SiteConnectionService::class)->disconnect($alpha);
         $result = app(PendingGatewayToolHandlers::class)
-            ->siteAbilityExecute('beta', 'demo/read', []);
+            ->siteAbilityExecute($this->principal, 'beta', 'demo/read', []);
 
         self::assertTrue($result['ok']);
         self::assertSame('beta', $result['result']['site']);
