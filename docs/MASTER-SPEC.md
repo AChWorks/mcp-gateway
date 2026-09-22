@@ -28,7 +28,7 @@ Primary deployment target:
 
 - aaPanel-managed Linux host with OpenLiteSpeed, or compatible shared PHP hosting;
 - PHP 8.4;
-- MySQL-compatible database, with MySQL as the primary target;
+- MariaDB 10.11 as the primary database target, with MySQL retained as an officially supported compatibility target;
 - a dedicated HTTPS domain or subdomain such as `gateway.example.com`;
 - a deployment-ready fresh-install ZIP with production Composer dependencies bundled as the recommended operator installation path;
 - a separate release update ZIP for existing deployment-ZIP installations, runnable through a temporary authenticated browser updater without SSH, Git, or Composer on the target host;
@@ -39,7 +39,7 @@ Primary deployment target:
 
 The application must remain usable on a conventional shared-style PHP request lifecycle. Long-running daemons must not be required for normal V1 operation.
 
-The recommended fresh-install experience should remain intentionally small: upload/extract the official deployment ZIP, point the HTTPS domain at `public/`, open the one-page installer, provide an empty MySQL database plus first-administrator details, and finish. The installer must not become a general hosting control plane or command runner, and after a successful installation it must fail closed against reinstallation.
+The recommended fresh-install experience should remain intentionally small: upload/extract the official deployment ZIP, point the HTTPS domain at `public/`, open the one-page installer, provide an empty MariaDB database (recommended) or MySQL-compatible database plus first-administrator details, and finish. The installer must not become a general hosting control plane or command runner, and after a successful installation it must fail closed against reinstallation.
 
 The recommended manual-update experience should likewise remain small: upload the named update ZIP into the existing application root, extract it there without overwriting the running application, open a temporary `/update/` page, authenticate with the existing Gateway administrator session, review the preflight, and confirm the update. The updater must validate before mutation, preserve `.env` and persistent `storage/`, use the release-bundled dependency tree, replace managed files deterministically, run required migrations/postflight checks, and remove/disable its temporary web/staging surface after success so it cannot be reused. It must fail closed without pretending that an unknown or partial database migration can be rolled back automatically. Because `public/` is shared with the hosting layer, updater ownership there is file-scoped: only explicitly declared Gateway-owned public paths may be replaced/restored, historical owned paths must remain declared for stale cleanup, and unknown/host-managed public state must survive update and pre-migration recovery unchanged without requiring filesystem ownership/protection changes.
 
@@ -254,7 +254,7 @@ At minimum:
 
 ## 8. Data and persistence requirements
 
-Use MySQL migrations for durable schema changes.
+Use Laravel migrations that remain compatible with MariaDB (primary) and MySQL for durable schema changes.
 
 V1 needs only the data required for:
 
@@ -316,7 +316,7 @@ Scale-sensitive implementation must follow these rules:
 - query counts, representative latency, memory, and database behavior are measured before introducing structural performance dependencies;
 - bulk/fan-out work that cannot safely fit one bounded request should move behind explicit operation/job state when a real workflow requires it, with idempotency, partial-failure, retry, and progress semantics designed for that workflow;
 - Laravel/database-backed background execution is a valid first escalation when it satisfies measured workload; Redis or additional workers/nodes become requirements only when evidence shows the simpler supported shape is no longer sufficient;
-- external search infrastructure is introduced only when indexed MySQL/query-layer search cannot meet evidenced product needs;
+- external search infrastructure is introduced only when indexed MariaDB/MySQL query-layer search cannot meet evidenced product needs;
 - large backup/media/export payloads should avoid transiting or residing in the Gateway by default when target-to-storage transfer is feasible.
 
 Performance improvements must not weaken authorization, connector isolation, correctness, recoverability, or deployment simplicity merely to achieve a benchmark number.
@@ -365,7 +365,7 @@ Future features must preserve the core trust rule: the Gateway routes explicitly
 
 V1 is successful when all of the following are demonstrated against supported test/deployment environments:
 
-1. The application installs on the target PHP 8.4 + OpenLiteSpeed/shared-PHP + MySQL deployment model using the official deployment ZIP and simple web installer; the Git/Composer/Artisan installation path remains supported for advanced operators.
+1. The application installs on the target PHP 8.4 + OpenLiteSpeed/shared-PHP + MariaDB-primary/MySQL-compatible deployment model using the official deployment ZIP and simple web installer; the Git/Composer/Artisan installation path remains supported for advanced operators.
 2. The administration panel can securely create an administrator session and manage multiple site records.
 3. At least two independent WP AI Bridge sites can be authorized and remain separately revocable.
 4. One ChatGPT custom MCP App can authenticate to the Gateway and discover the stable Gateway tools.
