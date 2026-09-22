@@ -36,11 +36,10 @@ final readonly class UserAccessManager
 
             $this->replaceGlobalDenials($user, $role, $deniedPermissions);
             $this->normalizeOwnerState($user, $role);
+            $this->recordRequired('user-access-create:'.$user->id);
 
             return $user->refresh();
         });
-
-        $this->record('user-access-create:'.$user->id);
 
         return $user;
     }
@@ -54,16 +53,24 @@ final readonly class UserAccessManager
             ? SiteScopeMode::All
             : SiteScopeMode::from((string) $attributes['site_scope_mode']);
 
-        $currentRole = $this->role($user);
-        $removesRecoverableOwner = $currentRole === GatewayRole::Owner
-            && (bool) $user->access_enabled
-            && ($role !== GatewayRole::Owner || ! $enabled);
-
-        if ($removesRecoverableOwner && $this->enabledOwnerCount() <= 1) {
-            throw new DomainException('last_owner');
-        }
-
         DB::transaction(function () use ($user, $attributes, $role, $enabled, $scope, $deniedPermissions): void {
+            $enabledOwners = User::query()
+                ->where('role', GatewayRole::Owner->value)
+                ->where('access_enabled', true)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get(['id']);
+
+            $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            $currentRole = $this->role($lockedUser);
+            $removesRecoverableOwner = $currentRole === GatewayRole::Owner
+                && (bool) $lockedUser->access_enabled
+                && ($role !== GatewayRole::Owner || ! $enabled);
+
+            if ($removesRecoverableOwner && $enabledOwners->count() <= 1) {
+                throw new DomainException('last_owner');
+            }
+
             $values = [
                 'name' => (string) $attributes['name'],
                 'email' => (string) $attributes['email'],
@@ -76,12 +83,11 @@ final readonly class UserAccessManager
                 $values['password'] = $attributes['password'];
             }
 
-            $user->fill($values)->save();
-            $this->replaceGlobalDenials($user, $role, $deniedPermissions);
-            $this->normalizeOwnerState($user, $role);
+            $lockedUser->fill($values)->save();
+            $this->replaceGlobalDenials($lockedUser, $role, $deniedPermissions);
+            $this->normalizeOwnerState($lockedUser, $role);
+            $this->recordRequired('user-access-update:'.$lockedUser->id);
         });
-
-        $this->record('user-access-update:'.$user->id);
 
         return $user->refresh();
     }
@@ -93,17 +99,18 @@ final readonly class UserAccessManager
         string $accessRule,
         array $deniedPermissions,
     ): void {
-        if ($this->role($user) === GatewayRole::Owner) {
-            throw new DomainException('owner_unrestricted');
-        }
-
         if (! in_array($accessRule, ['inherit', 'allow', 'deny'], true)) {
             throw new DomainException('invalid_site_rule');
         }
 
         DB::transaction(function () use ($user, $site, $accessRule, $deniedPermissions): void {
+            $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            if ($this->role($lockedUser) === GatewayRole::Owner) {
+                throw new DomainException('owner_unrestricted');
+            }
+
             $identity = [
-                'user_id' => $user->getKey(),
+                'user_id' => $lockedUser->getKey(),
                 'site_record_id' => $site->getKey(),
             ];
 
@@ -123,7 +130,7 @@ final readonly class UserAccessManager
             DB::table('user_site_permission_denials')->where($identity)->delete();
 
             $permissions = $this->normalizedDenials(
-                $this->role($user),
+                $this->role($lockedUser),
                 $deniedPermissions,
                 true,
             );
@@ -140,9 +147,13 @@ final readonly class UserAccessManager
             if ($rows !== []) {
                 DB::table('user_site_permission_denials')->insert($rows);
             }
-        });
 
-        $this->record(sprintf('user-site-access-update:%d:%s', $user->id, $site->site_id));
+            $this->recordRequired(sprintf(
+                'user-site-access-update:%d:%s',
+                $lockedUser->id,
+                $site->site_id,
+            ));
+        });
     }
 
     /** @return list<string> */
@@ -313,14 +324,6 @@ final readonly class UserAccessManager
         DB::table('user_site_permission_denials')->where('user_id', $user->getKey())->delete();
     }
 
-    private function enabledOwnerCount(): int
-    {
-        return User::query()
-            ->where('role', GatewayRole::Owner->value)
-            ->where('access_enabled', true)
-            ->count();
-    }
-
     private function role(User $user): GatewayRole
     {
         $role = $user->role;
@@ -328,9 +331,9 @@ final readonly class UserAccessManager
         return $role instanceof GatewayRole ? $role : GatewayRole::from((string) $role);
     }
 
-    private function record(string $operation): void
+    private function recordRequired(string $operation): void
     {
-        $this->activity->record(
+        $this->activity->recordRequired(
             CorrelationId::current(),
             $operation,
             'success',
