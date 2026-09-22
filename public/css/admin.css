@@ -16,7 +16,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
     font: inherit;
 }
 
@@ -206,7 +207,8 @@ p {
     font-weight: 650;
 }
 
-.field input {
+.field input,
+.field select {
     width: 100%;
     min-height: 2.8rem;
     padding: 0.7rem 0.8rem;
@@ -257,6 +259,7 @@ p {
 }
 
 .field input:focus-visible,
+.field select:focus-visible,
 .button:focus-visible,
 .brand:focus-visible,
 .nav-link:focus-visible,
@@ -453,6 +456,7 @@ th {
     .panel,
     .stat-card,
     .field input,
+    .field select,
     .button-secondary {
         background: #171d24;
         color: #edf1f5;
@@ -469,6 +473,7 @@ th {
     }
 
     .field input,
+    .field select,
     .button-secondary {
         border-color: #596575;
     }
