@@ -85,6 +85,7 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
     {
         $row = DB::table('oauth_access_tokens as tokens')
             ->join('oauth_authorizations as authorizations', 'authorizations.id', '=', 'tokens.authorization_id')
+            ->join('users', 'users.id', '=', 'tokens.user_id')
             ->where('tokens.id', $tokenId)
             ->select([
                 'tokens.client_id',
@@ -92,12 +93,14 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
                 'tokens.expires_at',
                 'tokens.revoked_at',
                 'authorizations.revoked_at as authorization_revoked_at',
+                'users.access_enabled as user_access_enabled',
             ])
             ->first();
 
         return $row === null
             || $row->revoked_at !== null
             || $row->authorization_revoked_at !== null
+            || ! (bool) $row->user_access_enabled
             || (string) $row->client_id !== (string) config('oauth.client.id')
             || (string) $row->resource !== (string) config('oauth.resource')
             || now()->gte($row->expires_at);
