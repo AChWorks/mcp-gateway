@@ -2,15 +2,19 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Application\Access\AccessControl;
 use App\Application\Sites\SiteConnectionException;
 use App\Application\Sites\SiteInventory;
 use App\Application\Sites\SiteRegistry;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Support\Admin\SiteOperationMessage;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -22,6 +26,9 @@ final class SiteController extends Controller
 
     public function index(Request $request, SiteInventory $inventory): View
     {
+        Gate::authorize(GatewayPermission::SitesView->value);
+        $user = $this->user($request);
+
         $validated = $request->validate([
             'search' => ['nullable', 'string', 'max:160'],
             'connection_state' => ['nullable', 'string', Rule::enum(SiteConnectionState::class)],
@@ -30,7 +37,7 @@ final class SiteController extends Controller
         $search = $this->nullableTrim($validated['search'] ?? null);
         $connectionState = $this->nullableTrim($validated['connection_state'] ?? null);
         $page = (int) ($validated['page'] ?? 1);
-        $inventoryPage = $inventory->adminPage($page, $search, $connectionState);
+        $inventoryPage = $inventory->adminPage($user, $page, $search, $connectionState);
         $baseQuery = [];
 
         if ($search !== null) {
@@ -65,11 +72,15 @@ final class SiteController extends Controller
 
     public function create(): View
     {
+        Gate::authorize(GatewayPermission::SitesCreate->value);
+
         return view('admin.sites.create');
     }
 
-    public function store(Request $request, SiteRegistry $registry): RedirectResponse
+    public function store(Request $request, SiteRegistry $registry, AccessControl $access): RedirectResponse
     {
+        Gate::authorize(GatewayPermission::SitesCreate->value);
+        $user = $this->user($request);
         $validated = $this->validatedSite($request);
 
         try {
@@ -88,6 +99,8 @@ final class SiteController extends Controller
                 ->withErrors(['site' => $this->messages->invalidSiteDetails()]);
         }
 
+        $access->includeCreatedSite($user, $site);
+
         return redirect()
             ->route('admin.sites.show', ['site' => $site->site_id])
             ->with('status', __('Site added. You can now authorize its WP AI Bridge connection.'));
@@ -95,6 +108,7 @@ final class SiteController extends Controller
 
     public function show(Site $site): View
     {
+        Gate::authorize(GatewayPermission::SitesView->value, $site);
         $site->loadExists(['credential', 'revocationIntent', 'targetReservation']);
 
         return view('admin.sites.show', [
@@ -104,6 +118,7 @@ final class SiteController extends Controller
 
     public function update(Request $request, Site $site, SiteRegistry $registry): RedirectResponse
     {
+        Gate::authorize(GatewayPermission::SitesUpdate->value, $site);
         $validated = $this->validatedSite($request);
 
         try {
@@ -129,6 +144,7 @@ final class SiteController extends Controller
 
     public function destroy(Request $request, Site $site, SiteRegistry $registry): RedirectResponse
     {
+        Gate::authorize(GatewayPermission::SitesRemove->value, $site);
         $validated = $request->validate([
             'confirm_site_id' => ['required', 'string', 'max:64'],
         ]);
@@ -232,6 +248,14 @@ final class SiteController extends Controller
             SiteConnectionState::Disconnected->value => [(string) __('Configured'), 'neutral'],
             default => [(string) __('Needs attention'), 'danger'],
         };
+    }
+
+    private function user(Request $request): User
+    {
+        $user = $request->user();
+        abort_unless($user instanceof User, 401);
+
+        return $user;
     }
 
     private function nullableTrim(mixed $value): ?string
