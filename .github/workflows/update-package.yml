@@ -6,13 +6,7 @@ on:
       - main
     paths:
       - VERSION
-      - 'app/**'
-      - 'bootstrap/**'
-      - 'config/**'
       - 'database/migrations/**'
-      - 'public/**'
-      - 'resources/**'
-      - 'routes/**'
       - composer.json
       - composer.lock
       - 'bin/build-release-package.sh'
@@ -33,13 +27,7 @@ on:
       - ready_for_review
     paths:
       - VERSION
-      - 'app/**'
-      - 'bootstrap/**'
-      - 'config/**'
       - 'database/migrations/**'
-      - 'public/**'
-      - 'resources/**'
-      - 'routes/**'
       - composer.json
       - composer.lock
       - 'bin/build-release-package.sh'
