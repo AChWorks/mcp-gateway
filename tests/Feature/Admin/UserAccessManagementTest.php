@@ -122,6 +122,7 @@ final class UserAccessManagementTest extends TestCase
                 'access_rule' => 'allow',
                 'denied_permissions' => [
                     GatewayPermission::SitesView->value,
+                    GatewayPermission::AbilitiesInspect->value,
                     GatewayPermission::AbilitiesExecuteReadonly->value,
                 ],
                 'current_password' => 'CorrectHorse!234',
@@ -131,6 +132,7 @@ final class UserAccessManagementTest extends TestCase
         $access = app(AccessControl::class);
 
         self::assertFalse($access->allows($operator, GatewayPermission::SitesView, $site));
+        self::assertFalse($access->allows($operator, GatewayPermission::AbilitiesInspect, $site));
         self::assertFalse($access->allows($operator, GatewayPermission::AbilitiesExecuteReadonly, $site));
         self::assertTrue($access->allows($operator, GatewayPermission::AbilitiesExecuteMutating, $site));
         self::assertFalse($access->allows($operator, GatewayPermission::AbilitiesExecuteDestructive, $site));
