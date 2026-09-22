@@ -38,8 +38,12 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::get('/users/{user}/edit', [UserController::class, 'edit'])->name('users.edit');
     Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
     Route::get('/users/{user}/sites', [UserSiteAccessController::class, 'index'])->name('users.sites.index');
-    Route::get('/users/{user}/sites/{site:site_id}/edit', [UserSiteAccessController::class, 'edit'])->name('users.sites.edit');
-    Route::put('/users/{user}/sites/{site:site_id}', [UserSiteAccessController::class, 'update'])->name('users.sites.update');
+    Route::get('/users/{user}/sites/{site:site_id}/edit', [UserSiteAccessController::class, 'edit'])
+        ->withoutScopedBindings()
+        ->name('users.sites.edit');
+    Route::put('/users/{user}/sites/{site:site_id}', [UserSiteAccessController::class, 'update'])
+        ->withoutScopedBindings()
+        ->name('users.sites.update');
 
     Route::get('/activity', ActivityController::class)->name('activity');
     Route::view('/connection', 'admin.connection')
