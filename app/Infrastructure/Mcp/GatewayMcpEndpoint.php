@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Mcp;
 
 use App\Application\Mcp\PendingGatewayToolHandlers;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Mcp\Server;
 use Mcp\Server\Session\FileSessionStore;
@@ -30,7 +31,18 @@ final readonly class GatewayMcpEndpoint
                 ttl: max(60, (int) config('oauth.mcp.session_ttl_seconds')),
             ))
             ->addTool(
-                handler: [$this->handlers, 'sitesList'],
+                handler: fn (
+                    ?string $cursor = null,
+                    int $limit = 100,
+                    ?string $search = null,
+                    ?string $connection_state = null,
+                ): array => $this->handlers->sitesList(
+                    $this->user($request),
+                    $cursor,
+                    $limit,
+                    $search,
+                    $connection_state,
+                ),
                 name: 'sites-list',
                 description: 'List configured Gateway sites without exposing credentials.',
                 inputSchema: [
@@ -56,7 +68,10 @@ final readonly class GatewayMcpEndpoint
                 ],
             )
             ->addTool(
-                handler: [$this->handlers, 'siteContext'],
+                handler: fn (string $site_id): array => $this->handlers->siteContext(
+                    $this->user($request),
+                    $site_id,
+                ),
                 name: 'site-context',
                 description: 'Inspect the context and connection state of one explicit site.',
                 inputSchema: [
@@ -69,7 +84,22 @@ final readonly class GatewayMcpEndpoint
                 ],
             )
             ->addTool(
-                handler: [$this->handlers, 'siteAbilitiesRead'],
+                handler: fn (
+                    string $site_id,
+                    ?string $ability = null,
+                    int $page = 1,
+                    int $per_page = 10,
+                    ?string $namespace = null,
+                    ?string $search = null,
+                ): array => $this->handlers->siteAbilitiesRead(
+                    $this->user($request),
+                    $site_id,
+                    $ability,
+                    $page,
+                    $per_page,
+                    $namespace,
+                    $search,
+                ),
                 name: 'site-abilities-read',
                 description: 'List or inspect current WP AI Bridge Ability contracts for one explicit site.',
                 inputSchema: [
@@ -87,7 +117,8 @@ final readonly class GatewayMcpEndpoint
                 ],
             )
             ->addTool(
-                handler: [$this->handlers, 'siteAbilityExecute'],
+                handler: fn (string $site_id, string $ability, array $input): array => $this->handlers
+                    ->siteAbilityExecute($this->user($request), $site_id, $ability, $input),
                 name: 'site-ability-execute',
                 description: 'Execute one exact downstream Ability against one explicit site.',
                 inputSchema: [
@@ -125,5 +156,15 @@ final readonly class GatewayMcpEndpoint
         $psrResponse = $server->run($transport);
 
         return (new HttpFoundationFactory)->createResponse($psrResponse, true);
+    }
+
+    private function user(Request $request): User
+    {
+        $user = $request->attributes->get('oauth_user');
+        if (! $user instanceof User) {
+            abort(401);
+        }
+
+        return $user;
     }
 }
