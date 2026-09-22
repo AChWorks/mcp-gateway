@@ -85,7 +85,7 @@ final readonly class UserAccessManager
                 'access_enabled' => $enabled,
             ];
 
-            if (isset($attributes['password']) && is_string($attributes['password']) && $attributes['password'] !== '') {
+            if (isset($attributes['password']) && $attributes['password'] !== '') {
                 $values['password'] = $attributes['password'];
             }
 
@@ -329,7 +329,11 @@ final readonly class UserAccessManager
 
     private function role(User $user): GatewayRole
     {
-        return GatewayRole::from((string) $user->role);
+        $role = $user->getAttribute('role');
+
+        return $role instanceof GatewayRole
+            ? $role
+            : GatewayRole::from((string) $role);
     }
 
     private function recordRequired(string $operation): void
