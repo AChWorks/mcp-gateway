@@ -189,6 +189,13 @@ final class MultiSiteRoutingTest extends TestCase
             [
                 'user_id' => $operator->id,
                 'site_record_id' => $site->id,
+                'permission' => GatewayPermission::AbilitiesInspect->value,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'user_id' => $operator->id,
+                'site_record_id' => $site->id,
                 'permission' => GatewayPermission::AbilitiesExecuteReadonly->value,
                 'created_at' => now(),
                 'updated_at' => now(),
@@ -200,6 +207,10 @@ final class MultiSiteRoutingTest extends TestCase
         $context = $handlers->siteContext($operator, 'alpha');
         self::assertFalse($context['ok']);
         self::assertSame('site_not_found', $context['error']['code']);
+
+        $catalog = $handlers->siteAbilitiesRead($operator, 'alpha');
+        self::assertFalse($catalog['ok']);
+        self::assertSame('site_not_found', $catalog['error']['code']);
 
         $read = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/read', []);
         self::assertFalse($read['ok']);
