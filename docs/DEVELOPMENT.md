@@ -25,10 +25,10 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-Edit only the database values in `.env` for the local MariaDB database and account you created (use `DB_CONNECTION=mariadb` instead when explicitly testing MySQL compatibility):
+Edit only the database values in `.env` for the local MariaDB database and account you created (use `DB_CONNECTION=mysql` instead when explicitly testing MySQL compatibility):
 
 ```dotenv
-DB_CONNECTION=mysql
+DB_CONNECTION=mariadb
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_DATABASE=mcp_gateway
