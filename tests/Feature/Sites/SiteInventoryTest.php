@@ -98,6 +98,7 @@ final class SiteInventoryTest extends TestCase
     {
         $this->seedSites(1, 500);
         $inventory = app(SiteInventory::class);
+        $user = $this->owner();
         $cursor = null;
         $discovered = [];
         $queries = 0;
@@ -105,7 +106,7 @@ final class SiteInventoryTest extends TestCase
         do {
             DB::flushQueryLog();
             DB::enableQueryLog();
-            $page = $inventory->mcpPage($cursor, 73);
+            $page = $inventory->mcpPage($user, $cursor, 73);
             $queryLog = DB::getQueryLog();
             DB::disableQueryLog();
 
@@ -131,14 +132,15 @@ final class SiteInventoryTest extends TestCase
     {
         $this->seedSites(1, 150);
         $handlers = app(PendingGatewayToolHandlers::class);
+        $user = $this->owner();
 
-        $first = $handlers->sitesList();
+        $first = $handlers->sitesList($user);
         self::assertTrue($first['ok']);
         self::assertCount(100, $first['sites']);
         self::assertTrue($first['truncated']);
         self::assertSame('site-00100', $first['next_cursor']);
 
-        $second = $handlers->sitesList(cursor: $first['next_cursor']);
+        $second = $handlers->sitesList($user, cursor: $first['next_cursor']);
         self::assertTrue($second['ok']);
         self::assertCount(50, $second['sites']);
         self::assertFalse($second['truncated']);
@@ -150,15 +152,16 @@ final class SiteInventoryTest extends TestCase
     public function test_inventory_rejects_unbounded_or_unknown_machine_filters(): void
     {
         $inventory = app(SiteInventory::class);
+        $user = $this->owner();
 
         try {
-            $inventory->mcpPage(limit: SiteInventory::MCP_MAX_LIMIT + 1);
+            $inventory->mcpPage($user, limit: SiteInventory::MCP_MAX_LIMIT + 1);
             self::fail('An oversized MCP inventory limit must be rejected.');
         } catch (InvalidArgumentException $exception) {
             self::assertSame('limit must be between 1 and 100.', $exception->getMessage());
         }
 
-        $result = app(PendingGatewayToolHandlers::class)->sitesList(connection_state: 'unknown');
+        $result = app(PendingGatewayToolHandlers::class)->sitesList($user, connection_state: 'unknown');
         self::assertFalse($result['ok']);
         self::assertSame('invalid_input', $result['error']['code']);
     }
