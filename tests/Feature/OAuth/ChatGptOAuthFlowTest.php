@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\OAuth;
 
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use App\Infrastructure\OAuth\RefreshTokenInspector;
@@ -812,6 +814,85 @@ final class ChatGptOAuthFlowTest extends TestCase
     }
 
     /** @return array{0:string,1:string} */
+    public function test_existing_access_token_rechecks_current_user_and_site_scope(): void
+    {
+        $user = $this->operator();
+        $siteRecordId = (string) Str::ulid();
+        $baseUrl = 'https://alpha.example.test';
+
+        \DB::table('sites')->insert([
+            'id' => $siteRecordId,
+            'site_id' => 'alpha',
+            'display_name' => 'Alpha',
+            'base_url' => $baseUrl,
+            'base_url_hash' => hash('sha256', $baseUrl),
+            'connector_type' => 'wp_ai_bridge',
+            'mcp_resource_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/mcp',
+            'oauth_issuer_url' => $baseUrl,
+            'oauth_authorization_url' => $baseUrl.'/wp-ai-bridge/oauth/authorize',
+            'oauth_token_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/oauth/token',
+            'oauth_revocation_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
+            'connection_state' => 'disconnected',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        \DB::table('user_site_access')->insert([
+            'user_id' => $user->id,
+            'site_record_id' => $siteRecordId,
+            'allowed' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        [, $accessToken] = $this->issueRefreshableToken($user);
+        $headers = [
+            'Authorization' => 'Bearer '.$accessToken,
+            'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+            'Mcp-Name' => 'sites-list',
+        ];
+        $payload = [
+            'jsonrpc' => '2.0',
+            'id' => 90,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'sites-list',
+                'arguments' => (object) [],
+                '_meta' => [
+                    'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                    'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                    'io.modelcontextprotocol/clientInfo' => ['name' => 'scope-test', 'version' => '1.0.0'],
+                ],
+            ],
+        ];
+
+        $this->withHeaders($headers)
+            ->postJson('/mcp', $payload)
+            ->assertOk()
+            ->assertJsonPath('result.structuredContent.sites.0.site_id', 'alpha');
+
+        \DB::table('user_site_access')
+            ->where('user_id', $user->id)
+            ->where('site_record_id', $siteRecordId)
+            ->update(['allowed' => false, 'updated_at' => now()]);
+
+        $this->withHeaders($headers)
+            ->postJson('/mcp', $payload)
+            ->assertOk()
+            ->assertJsonPath('result.structuredContent.sites', []);
+
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->withHeaders($headers)
+            ->postJson('/mcp', $payload)
+            ->assertUnauthorized()
+            ->assertHeader(
+                'WWW-Authenticate',
+                'Bearer resource_metadata="'.rtrim((string) config('oauth.issuer'), '/').'/.well-known/oauth-protected-resource/mcp", scope="mcp", error="invalid_token"',
+            );
+    }
+
     private function issueRefreshableToken(?User $user = null): array
     {
         $user ??= $this->operator();
@@ -944,6 +1025,9 @@ final class ChatGptOAuthFlowTest extends TestCase
             'name' => 'Gateway Operator',
             'email' => 'operator@example.test',
             'password' => Hash::make('test-password-not-used-for-oauth'),
+            'role' => GatewayRole::Operator->value,
+            'site_scope_mode' => SiteScopeMode::Selected->value,
+            'access_enabled' => true,
         ]);
     }
 
