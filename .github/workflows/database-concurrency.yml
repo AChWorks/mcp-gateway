@@ -5,16 +5,24 @@ on:
     branches:
       - main
     paths:
+      - 'app/Application/Access/**'
+      - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
+      - 'app/Domain/Access/**'
       - 'app/Domain/Sites/**'
+      - 'app/Http/Controllers/Admin/**'
+      - 'app/Http/Middleware/RequireMcpAccessToken.php'
       - 'app/Infrastructure/OAuth/**'
       - 'app/Infrastructure/Activity/**'
+      - 'app/Models/User.php'
+      - 'routes/admin.php'
       - 'config/bridge.php'
       - 'config/database.php'
       - 'config/oauth.php'
       - 'database/migrations/**'
       - 'tests/Feature/OAuth/**'
       - 'tests/Feature/Sites/**'
+      - 'tests/Feature/Security/Access*'
       - 'tests/Feature/Security/Activity*'
       - 'tests/Support/oauth_concurrent_token_request.php'
       - 'tests/Support/site_lifecycle_concurrent_action.php'
@@ -28,16 +36,24 @@ on:
       - reopened
       - ready_for_review
     paths:
+      - 'app/Application/Access/**'
+      - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
+      - 'app/Domain/Access/**'
       - 'app/Domain/Sites/**'
+      - 'app/Http/Controllers/Admin/**'
+      - 'app/Http/Middleware/RequireMcpAccessToken.php'
       - 'app/Infrastructure/OAuth/**'
       - 'app/Infrastructure/Activity/**'
+      - 'app/Models/User.php'
+      - 'routes/admin.php'
       - 'config/bridge.php'
       - 'config/database.php'
       - 'config/oauth.php'
       - 'database/migrations/**'
       - 'tests/Feature/OAuth/**'
       - 'tests/Feature/Sites/**'
+      - 'tests/Feature/Security/Access*'
       - 'tests/Feature/Security/Activity*'
       - 'tests/Support/oauth_concurrent_token_request.php'
       - 'tests/Support/site_lifecycle_concurrent_action.php'
@@ -136,3 +152,15 @@ jobs:
           DB_USERNAME: mcp_gateway
           DB_PASSWORD: test-password
         run: php artisan test --group=database-inventory
+
+      - name: Run MariaDB access-control tests
+        env:
+          APP_ENV: testing
+          APP_KEY: base64:a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=
+          DB_CONNECTION: mariadb
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: mcp_gateway_test
+          DB_USERNAME: mcp_gateway
+          DB_PASSWORD: test-password
+        run: php artisan test --group=database-access
