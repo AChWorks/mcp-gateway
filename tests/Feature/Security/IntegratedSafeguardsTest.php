@@ -71,7 +71,7 @@ final class IntegratedSafeguardsTest extends TestCase
         self::assertStringNotContainsString('password', $serialized);
     }
 
-    public function test_activity_retention_and_feed_are_bounded_and_metadata_only(): void
+    public function test_activity_storage_scheduled_retention_and_feed_are_bounded_and_metadata_only(): void
     {
         config()->set('activity.max_rows', 3);
         config()->set('activity.page_size_max', 2);
@@ -81,6 +81,8 @@ final class IntegratedSafeguardsTest extends TestCase
             $recorder->record((string) Str::uuid(), 'site-ability-execute', 'success', 'site-'.$index);
         }
 
+        self::assertSame(5, DB::table('activity_events')->count());
+        $this->artisan('activity:prune')->assertSuccessful();
         self::assertSame(3, DB::table('activity_events')->count());
 
         $page = app(ActivityFeed::class)->page(1, 50);
