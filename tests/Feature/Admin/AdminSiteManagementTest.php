@@ -3,9 +3,9 @@
 namespace Tests\Feature\Admin;
 
 use App\Application\Sites\SiteConnectionService;
+use App\Application\Sites\SiteRegistry;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\SiteScopeMode;
-use App\Application\Sites\SiteRegistry;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Infrastructure\Http\DnsResolver;
