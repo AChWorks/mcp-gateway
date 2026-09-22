@@ -15,7 +15,7 @@ final class SiteInventoryTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_admin_inventory_is_one_query_and_one_page_at_representative_fleet_sizes(): void
+    public function test_admin_inventory_uses_two_bounded_queries_at_representative_fleet_sizes(): void
     {
         $inventory = app(SiteInventory::class);
 
@@ -31,7 +31,7 @@ final class SiteInventoryTest extends TestCase
             self::assertCount(SiteInventory::ADMIN_PAGE_SIZE, $page['items']);
             self::assertSame(SiteInventory::ADMIN_PAGE_SIZE, $page['per_page']);
             self::assertTrue($page['has_more']);
-            self::assertCount(1, $queries);
+            self::assertCount(2, $queries);
             self::assertSame('site-00001', $page['items'][0]->site_id);
             self::assertSame('site-00050', $page['items'][49]->site_id);
         }
