@@ -192,7 +192,7 @@ final readonly class UserAccessManager
     }
 
     /**
-     * @param list<Site> $sites
+     * @param  list<Site>  $sites
      * @return array<string,array{access_rule:string,denied_count:int}>
      */
     public function siteRuleSummaries(User $user, array $sites): array
@@ -277,7 +277,7 @@ final readonly class UserAccessManager
     }
 
     /**
-     * @param list<string> $values
+     * @param  list<string>  $values
      * @return list<GatewayPermission>
      */
     private function normalizedDenials(
