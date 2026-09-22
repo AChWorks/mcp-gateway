@@ -46,6 +46,12 @@ return new class extends Migration
             $table->index(['user_id', 'permission']);
         });
 
+        DB::table('users')->update([
+            'role' => 'administrator',
+            'site_scope_mode' => 'all',
+            'access_enabled' => true,
+        ]);
+
         $firstUserId = DB::table('users')->orderBy('id')->value('id');
         if ($firstUserId !== null) {
             DB::table('users')
