@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Admin;
 
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Group;
@@ -14,6 +15,7 @@ final class AccessControlMigrationTest extends TestCase
 
     public function test_existing_local_users_keep_administrator_site_access_and_oldest_becomes_owner(): void
     {
+        /** @var Migration $migration */
         $migration = require database_path('migrations/2026_09_23_000000_add_access_control_foundation.php');
         $migration->down();
 
