@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Sites\SiteConnectionException;
+use App\Domain\Access\GatewayPermission;
 use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteRegistry;
 use App\Domain\Sites\Site;
 use App\Http\Controllers\Controller;
 use App\Support\Admin\SiteOperationMessage;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Gate;
 
 final class SiteConnectionController extends Controller
 {
@@ -16,6 +18,7 @@ final class SiteConnectionController extends Controller
 
     public function connect(Site $site, SiteConnectionService $connections): RedirectResponse
     {
+        Gate::authorize(GatewayPermission::ConnectionsConnect->value, $site);
         try {
             return redirect()->away($connections->begin($site));
         } catch (SiteConnectionException $exception) {
@@ -25,6 +28,7 @@ final class SiteConnectionController extends Controller
 
     public function reconnect(Site $site, SiteConnectionService $connections): RedirectResponse
     {
+        Gate::authorize(GatewayPermission::ConnectionsReconnect->value, $site);
         try {
             if ($site->credential()->exists()) {
                 $connections->disconnect($site);
@@ -38,6 +42,7 @@ final class SiteConnectionController extends Controller
 
     public function disconnect(Site $site, SiteConnectionService $connections): RedirectResponse
     {
+        Gate::authorize(GatewayPermission::ConnectionsDisconnect->value, $site);
         try {
             $connections->disconnect($site);
         } catch (SiteConnectionException $exception) {
@@ -51,6 +56,7 @@ final class SiteConnectionController extends Controller
 
     public function test(Site $site, SiteRegistry $registry): RedirectResponse
     {
+        Gate::authorize(GatewayPermission::ConnectionsTest->value, $site);
         try {
             $registry->test($site);
         } catch (SiteConnectionException $exception) {
