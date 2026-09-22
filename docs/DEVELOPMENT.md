@@ -9,11 +9,11 @@ The current bootstrap is intentionally a conventional PHP application:
 - PHP 8.4.1 or newer within the PHP 8.4-compatible dependency range;
 - Laravel 13;
 - Composer 2;
-- MySQL as the production database;
+- MariaDB 10.11 as the primary production/development database target, with MySQL retained as a supported compatibility target;
 - Blade/server-rendered frontend;
 - no required Node.js build, Redis, queue worker, Docker, broker, or separate MCP daemon.
 
-Common application tests may use SQLite in memory when the test does not depend on MySQL-specific behavior. MySQL 8.4 is used by dedicated workflows where the evidence depends on production database semantics, including the path-filtered concurrency gate and the real packaged browser-update integration gate.
+Common application tests may use SQLite in memory when the test does not depend on MariaDB/MySQL database semantics. MariaDB 10.11 is the primary CI database for database-sensitive evidence, including the path-filtered concurrency gate and the real packaged browser-update/release integration gates. MySQL remains a supported compatibility target and must not be broken by MariaDB-first implementation choices.
 
 ## Install a development checkout
 
@@ -25,7 +25,7 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-Edit only the database values in `.env` for the local MySQL database and account you created:
+Edit only the database values in `.env` for the local MariaDB database and account you created (use `DB_CONNECTION=mariadb` instead when explicitly testing MySQL compatibility):
 
 ```dotenv
 DB_CONNECTION=mysql
@@ -130,7 +130,7 @@ composer analyse
 composer test
 ```
 
-`composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting MySQL. The dedicated path-filtered `MySQL Concurrency` workflow owns MySQL 8.4 `migrate:fresh` and the `mysql-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The `Update Package` workflow independently owns the MySQL-backed released-package-to-candidate browser update proof and runs only for updater/package/schema/dependency surfaces that can invalidate that proof; ordinary application-code edits rely on normal application tests plus package build/verification and receive the full browser-update proof at the applicable release gate. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate for Bridge-facing MCP/site-connection/client-identity behavior rather than every Gateway OAuth/internal HTTP edit. Draft pull requests skip these heavy jobs until they are marked ready for review.
+`composer check` runs style, static analysis, and tests together. Common CI runs these broad application checks plus runtime-readiness checks without starting a database service. The dedicated path-filtered `MariaDB Concurrency` workflow owns MariaDB 10.11 `migrate:fresh` and the `database-concurrency` test group only when persistence/OAuth/site-lifecycle surfaces can invalidate that evidence. The `Update Package` workflow independently owns the MariaDB-backed released-package-to-candidate browser update proof and runs only for updater/package/schema/dependency surfaces that can invalidate that proof; the historical released baseline may still use Laravel's `mysql` driver against the MariaDB server so backward compatibility is exercised honestly. Ordinary application-code edits rely on normal application tests plus package build/verification and receive the full browser-update proof at the applicable release gate. MySQL remains a supported compatibility target. The exact WP AI Bridge contract remains a separate path-filtered compatibility gate for Bridge-facing MCP/site-connection/client-identity behavior rather than every Gateway OAuth/internal HTTP edit. Draft pull requests skip these heavy jobs until they are marked ready for review.
 
 Do not shard a retained long-running suite by default. First compare fixed runner/service/setup cost with the test body. Introduce shards only when non-overlapping isolated shards materially shorten the same-workload critical path after trigger/duplication cleanup, and verify aggregate completeness and isolation. Keep exact timing evidence in the active optimization Issue/PR rather than hard-coding transient runner measurements into this durable workflow guide.
 
@@ -158,7 +158,7 @@ The update ZIP must contain only private root `update/` staging and the minimal 
 
 `bin/update-managed-public-paths.txt` is the canonical, append-only ownership list for normal public runtime files. Add every newly shipped `public/` file to it. Do not remove an old Gateway-owned file path merely because the current payload no longer ships that file; retaining the path lets later updaters remove stale Gateway files without claiming the rest of `public/`.
 
-The MySQL-backed `Update Package` workflow downloads the real released `v1.1.2` deployment artifact, installs it, stages the candidate update ZIP exactly as an operator would, authenticates through the real administrator login, obtains normal CSRF state, and exercises `/update/` through both browser-update phases. The integration test verifies:
+The MariaDB-backed `Update Package` workflow downloads the real released `v1.1.2` deployment artifact, installs it, stages the candidate update ZIP exactly as an operator would, authenticates through the real administrator login, obtains normal CSRF state, and exercises `/update/` through both browser-update phases. The integration test verifies:
 
 - the live application remains unchanged immediately after ZIP extraction;
 - guest `/update/` access cannot trigger mutation and is redirected to administrator login;
