@@ -39,18 +39,19 @@ final class IntegratedSafeguardsTest extends TestCase
 
     public function test_mcp_correlation_id_is_shared_with_safe_activity_and_response_header(): void
     {
+        $principal = $this->owner('correlation-owner@example.test');
         $request = Request::create('/mcp', 'POST', [
             'access_token' => 'must-not-be-recorded',
             'password' => 'must-not-be-recorded-either',
         ]);
         $request->attributes->set('oauth_client_id', 'https://chatgpt.com/oauth/client.json');
-        $request->attributes->set('oauth_user_id', '42');
+        $request->attributes->set('oauth_user_id', (string) $principal->id);
         $this->app->instance('request', $request);
 
         $response = app(EnsureCorrelationId::class)->handle(
             $request,
-            function (): Response {
-                return response()->json(app(PendingGatewayToolHandlers::class)->sitesList());
+            function () use ($principal): Response {
+                return response()->json(app(PendingGatewayToolHandlers::class)->sitesList($principal));
             },
         );
 
@@ -64,7 +65,7 @@ final class IntegratedSafeguardsTest extends TestCase
         self::assertNotNull($activity);
         self::assertSame($correlationId, $activity->correlation_id);
         self::assertSame('oauth_user', $activity->actor_type);
-        self::assertSame('42', $activity->actor_id);
+        self::assertSame((string) $principal->id, $activity->actor_id);
         self::assertSame(hash('sha256', 'https://chatgpt.com/oauth/client.json'), $activity->client_id_hash);
         self::assertSame('sites-list', $activity->operation);
         self::assertSame('success', $activity->outcome);
@@ -150,9 +151,11 @@ final class IntegratedSafeguardsTest extends TestCase
         Crypt::swap(new Encrypter(random_bytes(32), 'AES-256-CBC'));
         Http::preventStrayRequests();
 
+        $principal = $this->owner('recovery-owner@example.test');
+
         try {
             $result = app(PendingGatewayToolHandlers::class)
-                ->siteAbilityExecute('recovery', 'demo/read', []);
+                ->siteAbilityExecute($principal, 'recovery', 'demo/read', []);
         } finally {
             Crypt::swap($originalEncrypter);
         }
@@ -213,7 +216,7 @@ final class IntegratedSafeguardsTest extends TestCase
             ], 200);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute('alpha', 'demo/denied', []);
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute($this->owner('redaction-owner@example.test'), 'alpha', 'demo/denied', []);
 
         self::assertFalse($result['ok']);
         self::assertSame('downstream_rejected', $result['error']['code']);
@@ -239,8 +242,9 @@ final class IntegratedSafeguardsTest extends TestCase
         $seen = [];
         $triggered = false;
         $handlers = app(PendingGatewayToolHandlers::class);
+        $principal = $this->owner('interleaved-owner@example.test');
 
-        Http::fake(function (ClientRequest $request) use (&$seen, &$triggered, $handlers) {
+        Http::fake(function (ClientRequest $request) use (&$seen, &$triggered, $handlers, $principal) {
             $host = (string) parse_url($request->url(), PHP_URL_HOST);
             $path = (string) parse_url($request->url(), PHP_URL_PATH);
             if ($path !== '/wp-json/wp-ai-bridge/v1/mcp') {
@@ -262,7 +266,7 @@ final class IntegratedSafeguardsTest extends TestCase
             if (($payload['method'] ?? null) === 'initialize') {
                 if ($siteId === 'alpha' && ! $triggered) {
                     $triggered = true;
-                    $beta = $handlers->siteAbilityExecute('beta', 'demo/read', []);
+                    $beta = $handlers->siteAbilityExecute($principal, 'beta', 'demo/read', []);
                     self::assertTrue($beta['ok']);
                     self::assertSame('beta', $beta['result']['site']);
                 }
@@ -284,7 +288,7 @@ final class IntegratedSafeguardsTest extends TestCase
             ], 200);
         });
 
-        $alphaResult = $handlers->siteAbilityExecute('alpha', 'demo/read', []);
+        $alphaResult = $handlers->siteAbilityExecute($principal, 'alpha', 'demo/read', []);
         self::assertTrue($alphaResult['ok']);
         self::assertSame('alpha', $alphaResult['result']['site']);
         self::assertTrue($triggered);
@@ -318,6 +322,17 @@ final class IntegratedSafeguardsTest extends TestCase
         $login = Route::getRoutes()->getByName('admin.login.store');
         self::assertNotNull($login);
         self::assertContains('throttle:admin-login', $login->middleware());
+    }
+
+    private function owner(string $email): User
+    {
+        return User::query()->create([
+            'name' => 'Gateway Owner',
+            'email' => $email,
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+        ]);
     }
 
     private function prepareBridgeEnvironment(): void
