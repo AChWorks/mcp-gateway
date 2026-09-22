@@ -208,13 +208,13 @@ final readonly class RefreshTokenRecoveryStore
                 return null;
             }
 
-            $userEnabled = DB::table('users')
+            $enabledUser = DB::table('users')
                 ->where('id', $recovery->user_id)
                 ->where('access_enabled', true)
                 ->lockForUpdate()
-                ->exists();
+                ->first(['id']);
 
-            if (! $userEnabled) {
+            if ($enabledUser === null) {
                 return null;
             }
 
