@@ -751,6 +751,44 @@ final class ChatGptOAuthFlowTest extends TestCase
         ])->assertStatus(400);
     }
 
+    public function test_disabled_user_cannot_exchange_preexisting_authorization_code(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])
+            ->assertStatus(400)
+            ->assertJsonPath('error', 'invalid_grant');
+    }
+
+    public function test_disabled_user_cannot_rotate_preexisting_refresh_token(): void
+    {
+        $user = $this->operator();
+        [$refreshToken] = $this->issueRefreshableToken($user);
+        $user->forceFill(['access_enabled' => false])->save();
+
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => $refreshToken,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])
+            ->assertStatus(400)
+            ->assertJsonPath('error', 'invalid_grant');
+    }
+
     public function test_expired_authorization_code_is_rejected(): void
     {
         config()->set('oauth.ttl.authorization_code_seconds', 1);
