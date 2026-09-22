@@ -2,6 +2,8 @@
 
 namespace App\Support;
 
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Models\User;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Application;
@@ -199,6 +201,9 @@ final class SimpleWebInstaller
                     'name' => trim((string) $input['admin_name']),
                     'email' => strtolower(trim((string) $input['admin_email'])),
                     'password' => (string) $input['admin_password'],
+                    'role' => GatewayRole::Owner->value,
+                    'site_scope_mode' => SiteScopeMode::All->value,
+                    'access_enabled' => true,
                 ]);
 
                 $marker = json_encode([
