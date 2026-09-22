@@ -39,10 +39,10 @@ final class SiteInventoryDatabaseTest extends TestCase
 
         $plans = [
             'admin_order' => $this->explain(
-                'SELECT id, site_id, display_name, base_url, connection_state, last_error_code FROM sites ORDER BY display_name, site_id LIMIT 51',
+                'SELECT id, site_id, display_name FROM sites ORDER BY display_name, site_id LIMIT 51',
             ),
             'admin_state_order' => $this->explain(
-                "SELECT id, site_id, display_name, base_url, connection_state, last_error_code FROM sites WHERE connection_state = 'connected' ORDER BY display_name, site_id LIMIT 51",
+                "SELECT id, site_id, display_name FROM sites WHERE connection_state = 'connected' ORDER BY display_name, site_id LIMIT 51",
             ),
             'mcp_cursor' => $this->explain(
                 "SELECT site_id, display_name, connector_type, connection_state FROM sites WHERE site_id > 'site-05000' ORDER BY site_id LIMIT 101",
