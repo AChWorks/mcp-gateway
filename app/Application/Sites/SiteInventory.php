@@ -5,8 +5,8 @@ namespace App\Application\Sites;
 use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
-use App\Models\User;
 use App\Domain\Sites\SiteConnectionState;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
 
