@@ -5,9 +5,12 @@ namespace Tests\Feature\Mcp;
 use App\Application\Mcp\PendingGatewayToolHandlers;
 use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteRegistry;
+use App\Domain\Access\GatewayRole;
+use App\Domain\Access\SiteScopeMode;
 use App\Domain\Sites\Site;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
@@ -22,9 +25,19 @@ final class MultiSiteRoutingTest extends TestCase
     /** @var list<array{host:string,ability:string,authorization:string}> */
     private array $toolCalls = [];
 
+    private User $principal;
+
     protected function setUp(): void
     {
         parent::setUp();
+
+        $this->principal = User::query()->create([
+            'name' => 'Gateway MCP Owner',
+            'email' => 'mcp-owner@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+        ]);
 
         config()->set('bridge.client.id', 'https://gateway.example.test/oauth/client.json');
         config()->set('bridge.client.name', 'MCP Gateway Test');
@@ -50,8 +63,8 @@ final class MultiSiteRoutingTest extends TestCase
         $this->createSite('beta');
 
         $handlers = app(PendingGatewayToolHandlers::class);
-        $list = $handlers->sitesList();
-        $context = $handlers->siteContext('alpha');
+        $list = $handlers->sitesList($this->principal);
+        $context = $handlers->siteContext($this->principal, 'alpha');
 
         self::assertTrue($list['ok']);
         self::assertSame(['alpha', 'beta'], array_column($list['sites'], 'site_id'));
@@ -80,8 +93,8 @@ final class MultiSiteRoutingTest extends TestCase
         $this->pair($beta);
 
         $handlers = app(PendingGatewayToolHandlers::class);
-        $alphaList = $handlers->siteAbilitiesRead('alpha', null, 2, 1, 'alpha-space', 'needle');
-        $betaExact = $handlers->siteAbilitiesRead('beta', 'beta/demo');
+        $alphaList = $handlers->siteAbilitiesRead($this->principal, 'alpha', null, 2, 1, 'alpha-space', 'needle');
+        $betaExact = $handlers->siteAbilitiesRead($this->principal, 'beta', 'beta/demo');
 
         self::assertTrue($alphaList['ok']);
         self::assertSame('alpha/demo', $alphaList['catalog']['items'][0]['name']);
@@ -106,9 +119,9 @@ final class MultiSiteRoutingTest extends TestCase
         $this->pair($beta);
 
         $handlers = app(PendingGatewayToolHandlers::class);
-        $read = $handlers->siteAbilityExecute('alpha', 'demo/read', ['id' => 7]);
-        $write = $handlers->siteAbilityExecute('beta', 'demo/write', ['value' => 'changed']);
-        $denied = $handlers->siteAbilityExecute('alpha', 'demo/denied', []);
+        $read = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/read', ['id' => 7]);
+        $write = $handlers->siteAbilityExecute($this->principal, 'beta', 'demo/write', ['value' => 'changed']);
+        $denied = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/denied', []);
 
         self::assertTrue($read['ok']);
         self::assertSame(['site' => 'alpha', 'kind' => 'read'], $read['result']);
@@ -149,7 +162,7 @@ final class MultiSiteRoutingTest extends TestCase
         $alpha = $this->createSite('alpha');
         $this->pair($alpha);
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead('alpha');
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead($this->principal, 'alpha');
 
         self::assertTrue($result['ok']);
         self::assertSame(10, $result['catalog']['per_page']);
@@ -199,7 +212,7 @@ final class MultiSiteRoutingTest extends TestCase
             return $this->bridgeResponse($request);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute('alpha', 'demo/read', []);
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute($this->principal, 'alpha', 'demo/read', []);
 
         self::assertFalse($result['ok']);
         self::assertSame('network_failure', $result['error']['code']);
@@ -260,6 +273,7 @@ final class MultiSiteRoutingTest extends TestCase
             'HTTP_MCP_NAME' => 'site-ability-execute',
         ], $body);
 
+        $request->attributes->set('oauth_user', $this->principal);
         $response = app(GatewayMcpEndpoint::class)->handle($request);
 
         self::assertSame(200, $response->getStatusCode());
@@ -279,8 +293,8 @@ final class MultiSiteRoutingTest extends TestCase
         });
 
         $handlers = app(PendingGatewayToolHandlers::class);
-        $unknown = $handlers->siteAbilitiesRead('missing');
-        $disconnected = $handlers->siteAbilityExecute('alpha', 'demo/write', []);
+        $unknown = $handlers->siteAbilitiesRead($this->principal, 'missing');
+        $disconnected = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/write', []);
 
         self::assertFalse($unknown['ok']);
         self::assertSame('site_not_found', $unknown['error']['code']);
@@ -387,7 +401,7 @@ final class MultiSiteRoutingTest extends TestCase
             return Http::response(str_repeat('x', 2048), 200, ['Content-Type' => 'application/json']);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead('alpha', null, 1, 25);
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead($this->principal, 'alpha', null, 1, 25);
 
         self::assertFalse($result['ok']);
         self::assertSame('response_too_large', $result['error']['code']);
@@ -547,7 +561,7 @@ final class MultiSiteRoutingTest extends TestCase
                     'destructive' => $itemName !== 'demo/read',
                     'idempotent' => true,
                 ],
-                'bridge_delegation' => 'native_abilities',
+                'bridge_delegation' => 'ability_specific',
                 'execution_permission' => 'not_evaluated',
             ];
             if ($exact) {
