@@ -8,6 +8,7 @@ use App\Domain\Access\SiteScopeMode;
 use App\Domain\Sites\Site;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Facades\DB;
 
 final readonly class AccessControl
@@ -28,6 +29,10 @@ final readonly class AccessControl
             return false;
         }
 
+        if ($this->groupDenies($user, $site, $permission)) {
+            return false;
+        }
+
         return ! DB::table('user_site_permission_denials')
             ->where('user_id', $user->getKey())
             ->where('site_record_id', $site->getKey())
@@ -38,6 +43,10 @@ final readonly class AccessControl
     /**
      * Applies principal site membership only. Functional permission is deliberately separate so
      * a selected site can be write-only, read-only, or otherwise narrowed by capability.
+     *
+     * Direct site deny always wins. For selected-scope users, a direct allow or membership in at
+     * least one assigned site group supplies reachability. All-scope users remain all-site unless
+     * a direct site deny excludes the target. Owners bypass every narrowing layer for recovery.
      *
      * @param  Builder<Site>  $query
      * @return Builder<Site>
@@ -59,24 +68,42 @@ final readonly class AccessControl
             return $query->whereRaw('1 = 0');
         }
 
-        if ($scope === SiteScopeMode::Selected) {
-            return $query->whereExists(function ($subquery) use ($user): void {
-                $subquery
-                    ->selectRaw('1')
-                    ->from('user_site_access')
-                    ->whereColumn('user_site_access.site_record_id', 'sites.id')
-                    ->where('user_site_access.user_id', $user->getKey())
-                    ->where('user_site_access.allowed', true);
-            });
-        }
-
-        return $query->whereNotExists(function ($subquery) use ($user): void {
+        $query->whereNotExists(function (QueryBuilder $subquery) use ($user): void {
             $subquery
                 ->selectRaw('1')
                 ->from('user_site_access')
                 ->whereColumn('user_site_access.site_record_id', 'sites.id')
                 ->where('user_site_access.user_id', $user->getKey())
                 ->where('user_site_access.allowed', false);
+        });
+
+        if ($scope === SiteScopeMode::All) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $membership) use ($user): void {
+            $membership
+                ->whereExists(function (QueryBuilder $subquery) use ($user): void {
+                    $subquery
+                        ->selectRaw('1')
+                        ->from('user_site_access')
+                        ->whereColumn('user_site_access.site_record_id', 'sites.id')
+                        ->where('user_site_access.user_id', $user->getKey())
+                        ->where('user_site_access.allowed', true);
+                })
+                ->orWhereExists(function (QueryBuilder $subquery) use ($user): void {
+                    $subquery
+                        ->selectRaw('1')
+                        ->from('site_group_users')
+                        ->join(
+                            'site_group_sites',
+                            'site_group_sites.site_group_id',
+                            '=',
+                            'site_group_users.site_group_id',
+                        )
+                        ->where('site_group_users.user_id', $user->getKey())
+                        ->whereColumn('site_group_sites.site_record_id', 'sites.id');
+                });
         });
     }
 
@@ -101,7 +128,28 @@ final readonly class AccessControl
             return $query;
         }
 
-        return $query->whereNotExists(function ($subquery) use ($user, $permission): void {
+        $query->whereNotExists(function (QueryBuilder $subquery) use ($user, $permission): void {
+            $subquery
+                ->selectRaw('1')
+                ->from('site_group_users')
+                ->join(
+                    'site_group_sites',
+                    'site_group_sites.site_group_id',
+                    '=',
+                    'site_group_users.site_group_id',
+                )
+                ->join(
+                    'site_group_permission_denials',
+                    'site_group_permission_denials.site_group_id',
+                    '=',
+                    'site_group_users.site_group_id',
+                )
+                ->where('site_group_users.user_id', $user->getKey())
+                ->whereColumn('site_group_sites.site_record_id', 'sites.id')
+                ->where('site_group_permission_denials.permission', $permission->value);
+        });
+
+        return $query->whereNotExists(function (QueryBuilder $subquery) use ($user, $permission): void {
             $subquery
                 ->selectRaw('1')
                 ->from('user_site_permission_denials')
@@ -190,11 +238,45 @@ final readonly class AccessControl
             ->where('site_record_id', $site->getKey())
             ->value('allowed');
 
-        if ($scope === SiteScopeMode::Selected) {
-            return $explicit !== null && (bool) $explicit;
+        if ($explicit !== null && ! (bool) $explicit) {
+            return false;
         }
 
-        return $explicit === null || (bool) $explicit;
+        if ($scope === SiteScopeMode::All || ($explicit !== null && (bool) $explicit)) {
+            return true;
+        }
+
+        return DB::table('site_group_users')
+            ->join(
+                'site_group_sites',
+                'site_group_sites.site_group_id',
+                '=',
+                'site_group_users.site_group_id',
+            )
+            ->where('site_group_users.user_id', $user->getKey())
+            ->where('site_group_sites.site_record_id', $site->getKey())
+            ->exists();
+    }
+
+    private function groupDenies(User $user, Site $site, GatewayPermission $permission): bool
+    {
+        return DB::table('site_group_users')
+            ->join(
+                'site_group_sites',
+                'site_group_sites.site_group_id',
+                '=',
+                'site_group_users.site_group_id',
+            )
+            ->join(
+                'site_group_permission_denials',
+                'site_group_permission_denials.site_group_id',
+                '=',
+                'site_group_users.site_group_id',
+            )
+            ->where('site_group_users.user_id', $user->getKey())
+            ->where('site_group_sites.site_record_id', $site->getKey())
+            ->where('site_group_permission_denials.permission', $permission->value)
+            ->exists();
     }
 
     private function role(User $user): ?GatewayRole

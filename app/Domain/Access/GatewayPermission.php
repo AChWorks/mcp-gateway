@@ -23,4 +23,23 @@ enum GatewayPermission: string
     case UsersView = 'users.view';
     case UsersManage = 'users.manage';
     case SecurityManage = 'security.manage';
+
+    /** @return list<self> */
+    public static function siteScoped(): array
+    {
+        return [
+            self::SitesView,
+            self::SitesUpdate,
+            self::SitesRemove,
+            self::ConnectionsConnect,
+            self::ConnectionsReconnect,
+            self::ConnectionsDisconnect,
+            self::ConnectionsTest,
+            self::AbilitiesInspect,
+            self::AbilitiesExecuteReadonly,
+            self::AbilitiesExecuteMutating,
+            self::AbilitiesExecuteDestructive,
+            self::AbilitiesExecuteUnclassified,
+        ];
+    }
 }
