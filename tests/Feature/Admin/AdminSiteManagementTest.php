@@ -11,6 +11,7 @@ use App\Domain\Sites\SiteConnectionState;
 use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -131,6 +132,8 @@ final class AdminSiteManagementTest extends TestCase
         $this->actingAs($this->administrator());
         $site = app(SiteRegistry::class)->create('alpha', 'Alpha', 'https://alpha.example.test');
 
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
         Http::fake(function (Request $request) {
             if ((string) parse_url($request->url(), PHP_URL_PATH) === '/.well-known/oauth-protected-resource') {
                 return Http::response([], 404);
