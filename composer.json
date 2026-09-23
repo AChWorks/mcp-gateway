@@ -1,6 +1,6 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "ach1992/mcp-gateway",
+    "name": "achworks/mcp-gateway",
     "type": "project",
     "description": "Self-hosted MCP gateway for explicitly paired backend systems, starting with WP AI Bridge.",
     "keywords": [

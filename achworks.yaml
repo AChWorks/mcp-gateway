@@ -1,0 +1,48 @@
+schemaVersion: achworks.dev/v1alpha1
+kind: Component
+
+metadata:
+  name: mcp-gateway
+  title: MCP Gateway
+  description: Self-hosted MCP control plane for explicitly connected backend systems with bounded routing, authorization, and connector isolation.
+
+spec:
+  type: integration-control-plane
+  lifecycle: active
+  system: achworks-mcp-integration
+  ownership: AChWorks
+
+  technology:
+    languages: [php]
+    frameworks: [laravel]
+    runtimes: [php-8.4]
+
+  capabilities:
+    provides:
+      - mcp-gateway
+      - multi-target-mcp-routing
+      - connector-control-plane
+      - oauth-authorization
+    consumes:
+      - lifecycle-contract
+
+  interfaces:
+    - type: https-mcp
+      name: client-facing-mcp
+    - type: https-oauth
+      name: client-and-connector-oauth
+
+  dependencies:
+    - wp-ai-bridge
+
+  documentation:
+    path: docs/
+
+  source:
+    repository: AChWorks/mcp-gateway
+    url: https://github.com/AChWorks/mcp-gateway
+
+  extensions:
+    achworks:
+      ecosystemPlatform: AChWorks/platform
+      applicationFoundationConsumption: none-currently

@@ -140,7 +140,7 @@ For development or operators who explicitly prefer source deployment:
 ```bash
 cd /www/wwwroot
 RELEASE_TAG=vX.Y.Z
-git clone --branch "$RELEASE_TAG" --depth 1 https://github.com/ach1992/mcp-gateway.git mcp-gateway
+git clone --branch "$RELEASE_TAG" --depth 1 https://github.com/AChWorks/mcp-gateway.git mcp-gateway
 cd mcp-gateway
 composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 composer check-platform-reqs --no-dev
