@@ -3,6 +3,7 @@
 use App\Http\Controllers\Admin\ActivityController;
 use App\Http\Controllers\Admin\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\DashboardController;
+use App\Http\Controllers\Admin\SiteCheckOperationController;
 use App\Http\Controllers\Admin\SiteConnectionController;
 use App\Http\Controllers\Admin\SiteController;
 use App\Http\Controllers\Admin\SiteGroupController;
@@ -34,6 +35,11 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::post('/sites/{site:site_id}/reconnect', [SiteConnectionController::class, 'reconnect'])->name('sites.reconnect');
     Route::post('/sites/{site:site_id}/disconnect', [SiteConnectionController::class, 'disconnect'])->name('sites.disconnect');
     Route::post('/sites/{site:site_id}/test', [SiteConnectionController::class, 'test'])->name('sites.test');
+
+    Route::post('/site-checks', [SiteCheckOperationController::class, 'store'])->name('site-checks.store');
+    Route::get('/site-checks/{operation}', [SiteCheckOperationController::class, 'show'])->name('site-checks.show');
+    Route::post('/site-checks/{operation}/advance', [SiteCheckOperationController::class, 'advance'])->name('site-checks.advance');
+    Route::post('/site-checks/{operation}/targets/{target}/retry', [SiteCheckOperationController::class, 'retry'])->name('site-checks.retry');
 
     Route::get('/users', [UserController::class, 'index'])->name('users.index');
     Route::get('/users/create', [UserController::class, 'create'])->name('users.create');
