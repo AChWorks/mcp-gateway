@@ -34,8 +34,7 @@ final class SiteController extends Controller
         Request $request,
         SiteInventory $inventory,
         SiteCheckOperationService $siteChecks,
-    ): View
-    {
+    ): View {
         Gate::authorize(GatewayPermission::SitesView->value);
         $user = $this->user($request);
 

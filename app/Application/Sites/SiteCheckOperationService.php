@@ -31,7 +31,7 @@ final readonly class SiteCheckOperationService
     ) {}
 
     /**
-     * @param list<string> $siteIds
+     * @param  list<string>  $siteIds
      */
     public function start(User $creator, array $siteIds, string $idempotencyKey): SiteCheckOperation
     {
@@ -537,7 +537,7 @@ final readonly class SiteCheckOperationService
     }
 
     /**
-     * @param list<string> $siteIds
+     * @param  list<string>  $siteIds
      * @return list<string>
      */
     private function normalizedSiteIds(array $siteIds): array

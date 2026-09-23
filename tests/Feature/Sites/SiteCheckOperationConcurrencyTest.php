@@ -6,7 +6,6 @@ use App\Application\Sites\SiteCheckOperationService;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\SiteScopeMode;
 use App\Domain\Sites\Site;
-use App\Domain\Sites\SiteCheckOperation;
 use App\Domain\Sites\SiteCheckOperationStatus;
 use App\Domain\Sites\SiteCheckTargetStatus;
 use App\Domain\Sites\SiteConnectionState;

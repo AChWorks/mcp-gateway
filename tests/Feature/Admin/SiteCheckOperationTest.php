@@ -12,6 +12,7 @@ use App\Domain\Sites\SiteCheckOperationStatus;
 use App\Domain\Sites\SiteCheckOperationTarget;
 use App\Domain\Sites\SiteCheckTargetStatus;
 use App\Domain\Sites\SiteConnectionState;
+use App\Http\Middleware\EnsureLocalUserAccessEnabled;
 use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -465,7 +466,7 @@ final class SiteCheckOperationTest extends TestCase
             self::assertContains('web', $route->middleware(), $name);
             self::assertContains('auth', $route->middleware(), $name);
             self::assertContains(
-                \App\Http\Middleware\EnsureLocalUserAccessEnabled::class,
+                EnsureLocalUserAccessEnabled::class,
                 $route->middleware(),
                 $name,
             );
