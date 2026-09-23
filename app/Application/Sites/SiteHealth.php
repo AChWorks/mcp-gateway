@@ -33,23 +33,24 @@ final class SiteHealth
             return $this->failureState($site->last_error_code ?? $site->last_failure_code);
         }
 
-        $latestSuccess = $this->latestSuccessAt($site);
+        $latestOperationSuccess = $this->latestOperationSuccessAt($site);
+        $latestEvidenceSuccess = $this->latestEvidenceSuccessAt($site);
         $latestFailure = $this->timestamp($site, 'last_failure_at');
-        if ($latestFailure !== null && ($latestSuccess === null || $latestFailure->greaterThan($latestSuccess))) {
+        if ($latestFailure !== null && ($latestEvidenceSuccess === null || $latestFailure->greaterThan($latestEvidenceSuccess))) {
             return $this->failureState($site->last_failure_code);
         }
 
         if ($connectionState === SiteConnectionState::Disconnected) {
-            return $latestSuccess === null
+            return $latestOperationSuccess === null
                 ? SiteHealthState::NeverConnected
                 : SiteHealthState::Disconnected;
         }
 
-        if ($connectionState !== SiteConnectionState::Connected || $latestSuccess === null) {
+        if ($connectionState !== SiteConnectionState::Connected || $latestEvidenceSuccess === null) {
             return SiteHealthState::Unknown;
         }
 
-        return $latestSuccess->lessThan($this->staleCutoff())
+        return $latestEvidenceSuccess->lessThan($this->staleCutoff())
             ? SiteHealthState::Stale
             : SiteHealthState::Healthy;
     }
@@ -61,7 +62,24 @@ final class SiteHealth
         return CarbonImmutable::instance(now())->subHours($hours);
     }
 
-    public function latestSuccessAt(Site $site): ?CarbonImmutable
+    public function latestEvidenceSuccessAt(Site $site): ?CarbonImmutable
+    {
+        $latest = $this->latestOperationSuccessAt($site);
+        $lastTested = $site->last_error_code === null
+            ? $this->timestamp($site, 'last_tested_at')
+            : null;
+
+        if ($latest === null) {
+            return $lastTested;
+        }
+        if ($lastTested === null) {
+            return $latest;
+        }
+
+        return $lastTested->greaterThan($latest) ? $lastTested : $latest;
+    }
+
+    private function latestOperationSuccessAt(Site $site): ?CarbonImmutable
     {
         $lastSuccess = $this->timestamp($site, 'last_success_at');
         $connectedAt = $this->timestamp($site, 'connected_at');

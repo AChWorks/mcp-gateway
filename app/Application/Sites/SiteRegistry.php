@@ -187,7 +187,6 @@ final class SiteRegistry
                 'oauth_revocation_url' => $discovery->revocationUrl,
                 'last_error_code' => null,
                 'last_tested_at' => $checkedAt,
-                'last_success_at' => $checkedAt,
             ])->save();
 
             return $discovery;
