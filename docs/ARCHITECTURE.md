@@ -160,7 +160,9 @@ Keep these invariants:
 - simple single-host PHP + MariaDB/MySQL shared-hosting deployment remains supported until evidence requires otherwise;
 - tenant/workspace, bulk-operation, provider-plugin, external search, or microservice abstractions are introduced only for measured use cases.
 
-When bulk/fan-out workflows become concrete, introduce explicit operation/target execution state at the application layer rather than keeping a long synchronous HTTP request alive across many remote sites. That future operation boundary must own idempotency, partial failure, retry eligibility, and progress semantics before a queue backend becomes an implementation detail.
+The first concrete bulk/fan-out workflow is the Admin selected-site WP AI Bridge connection/health check. It uses dedicated `site_check_operations` and `site_check_operation_targets` state for an immutable 2–50-site selection, creator-bound authorization re-evaluation, per-target progress/outcomes, explicit retry eligibility, and one-target-per-request execution. A page view never probes remote sites, and the workflow requires no queue worker, Redis, scheduler, or long synchronous fan-out request.
+
+Those tables and application rules are intentionally workflow-specific rather than a connector-wide bulk contract or generic job engine. Future multi-target workflows must establish their own connector capability and product semantics first; extract shared operation mechanics only after another concrete workflow proves that the semantics are genuinely common. A queue backend remains an optional transport/execution detail behind owned operation semantics if measured workload later requires it.
 
 ## 4. Core components
 
@@ -481,7 +483,8 @@ mcp_refresh_tokens             # exact storage depends on chosen OAuth library
 activity_events
 audit_events                   # when distinct security/admin audit semantics are required
 settings                       # only if settings do not fit config or dedicated tables
-operation / operation_targets  # only when real asynchronous/bulk workflows require durable job state
+site_check_operations          # durable state for the concrete selected-site health-check workflow
+site_check_operation_targets   # immutable selected targets plus per-target progress/outcomes
 ```
 
 Do not create a generic key/value database for domain state merely to avoid migrations. Do not add speculative tables merely because they appear in this future-capable logical model; each table must be introduced by a concrete accepted feature.

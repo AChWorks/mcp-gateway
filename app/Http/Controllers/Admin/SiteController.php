@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
+use App\Application\Sites\SiteCheckOperationService;
 use App\Application\Sites\SiteConnectionException;
 use App\Application\Sites\SiteHealth;
 use App\Application\Sites\SiteInventory;
@@ -29,7 +30,11 @@ final class SiteController extends Controller
         private readonly SiteHealth $health,
     ) {}
 
-    public function index(Request $request, SiteInventory $inventory): View
+    public function index(
+        Request $request,
+        SiteInventory $inventory,
+        SiteCheckOperationService $siteChecks,
+    ): View
     {
         Gate::authorize(GatewayPermission::SitesView->value);
         $user = $this->user($request);
@@ -72,6 +77,8 @@ final class SiteController extends Controller
                 'connection_state' => $connectionState,
             ],
             'connectionStates' => $this->connectionStateOptions(),
+            'bulkCheckIdempotencyKey' => (string) Str::uuid(),
+            'activeBulkCheck' => $siteChecks->activeFor($user),
         ]);
     }
 

@@ -14,6 +14,23 @@
     @endcan
 </div>
 
+@can('connections.test')
+    @if ($activeBulkCheck !== null)
+        <section class="panel panel-wide" aria-label="{{ __('Active bulk site check') }}">
+            <div class="section-heading">
+                <div>
+                    <div class="eyebrow">{{ __('Bulk site check') }}</div>
+                    <h2>{{ __('A bulk check is still active') }}</h2>
+                    <p class="muted">{{ __('Resume it before starting another selected-site check.') }}</p>
+                </div>
+                <a class="button button-primary" href="{{ route('admin.site-checks.show', ['operation' => $activeBulkCheck->getKey()]) }}">
+                    {{ __('Resume check') }}
+                </a>
+            </div>
+        </section>
+    @endif
+@endcan
+
 <section class="panel panel-wide" aria-label="{{ __('Configured WordPress sites') }}">
     <form class="filter-grid" method="get" action="{{ route('admin.sites.index') }}">
         <div class="field">
@@ -42,6 +59,13 @@
         </div>
     </form>
 
+    @error('bulk_check')
+        <p class="field-error" role="alert">{{ $message }}</p>
+    @enderror
+    @error('site_ids')
+        <p class="field-error" role="alert">{{ $message }}</p>
+    @enderror
+
     @if ($sites->isEmpty())
         <div class="empty-state">
             @if (($filters['search'] ?? null) !== null || ($filters['connection_state'] ?? null) !== null)
@@ -57,10 +81,19 @@
             @endif
         </div>
     @else
+        @can('connections.test')
+            <form method="post" action="{{ route('admin.site-checks.store') }}">
+                @csrf
+                <input type="hidden" name="idempotency_key" value="{{ $bulkCheckIdempotencyKey }}">
+        @endcan
+
         <div class="table-wrap">
             <table>
                 <thead>
                 <tr>
+                    @can('connections.test')
+                        <th scope="col">{{ __('Check') }}</th>
+                    @endcan
                     <th scope="col">{{ __('Site') }}</th>
                     <th scope="col">{{ __('WordPress URL') }}</th>
                     <th scope="col">{{ __('Status') }}</th>
@@ -71,6 +104,22 @@
                 <tbody>
                 @foreach ($sites as $item)
                     <tr>
+                        @can('connections.test')
+                            <td>
+                                @can('connections.test', $item['site'])
+                                    <input
+                                        type="checkbox"
+                                        name="site_ids[]"
+                                        value="{{ $item['site']->site_id }}"
+                                        aria-label="{{ __('Select :site for bulk check', ['site' => $item['site']->display_name]) }}"
+                                        @checked(in_array($item['site']->site_id, old('site_ids', []), true))
+                                        @disabled($activeBulkCheck !== null)
+                                    >
+                                @else
+                                    <span class="muted" aria-label="{{ __('Connection test not authorized') }}">—</span>
+                                @endcan
+                            </td>
+                        @endcan
                         <td>
                             <strong>{{ $item['site']->display_name }}</strong><br>
                             <code class="small-code">{{ $item['site']->site_id }}</code>
@@ -94,6 +143,16 @@
                 </tbody>
             </table>
         </div>
+
+        @can('connections.test')
+                <div class="action-row">
+                    <p class="muted">{{ __('Select 2–50 sites from this page. Checks run one target per request and can be resumed.') }}</p>
+                    <button class="button button-primary" type="submit" @disabled($activeBulkCheck !== null)>
+                        {{ __('Start bulk check') }}
+                    </button>
+                </div>
+            </form>
+        @endcan
     @endif
 
     @if ($pagination['previous_url'] !== null || $pagination['next_url'] !== null)
