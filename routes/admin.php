@@ -5,6 +5,9 @@ use App\Http\Controllers\Admin\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\SiteConnectionController;
 use App\Http\Controllers\Admin\SiteController;
+use App\Http\Controllers\Admin\SiteGroupController;
+use App\Http\Controllers\Admin\SiteGroupSiteController;
+use App\Http\Controllers\Admin\SiteGroupUserController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\UserSiteAccessController;
 use App\Http\Middleware\EnsureLocalUserAccessEnabled;
@@ -44,6 +47,25 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::put('/users/{user}/sites/{site:site_id}', [UserSiteAccessController::class, 'update'])
         ->withoutScopedBindings()
         ->name('users.sites.update');
+
+    Route::get('/site-groups', [SiteGroupController::class, 'index'])->name('site-groups.index');
+    Route::get('/site-groups/create', [SiteGroupController::class, 'create'])->name('site-groups.create');
+    Route::post('/site-groups', [SiteGroupController::class, 'store'])->name('site-groups.store');
+    Route::get('/site-groups/{siteGroup}/edit', [SiteGroupController::class, 'edit'])->name('site-groups.edit');
+    Route::put('/site-groups/{siteGroup}', [SiteGroupController::class, 'update'])->name('site-groups.update');
+    Route::delete('/site-groups/{siteGroup}', [SiteGroupController::class, 'destroy'])->name('site-groups.destroy');
+
+    Route::get('/site-groups/{siteGroup}/sites', [SiteGroupSiteController::class, 'index'])->name('site-groups.sites.index');
+    Route::get('/site-groups/{siteGroup}/sites/{site:site_id}/edit', [SiteGroupSiteController::class, 'edit'])
+        ->withoutScopedBindings()
+        ->name('site-groups.sites.edit');
+    Route::put('/site-groups/{siteGroup}/sites/{site:site_id}', [SiteGroupSiteController::class, 'update'])
+        ->withoutScopedBindings()
+        ->name('site-groups.sites.update');
+
+    Route::get('/site-groups/{siteGroup}/users', [SiteGroupUserController::class, 'index'])->name('site-groups.users.index');
+    Route::get('/site-groups/{siteGroup}/users/{user}/edit', [SiteGroupUserController::class, 'edit'])->name('site-groups.users.edit');
+    Route::put('/site-groups/{siteGroup}/users/{user}', [SiteGroupUserController::class, 'update'])->name('site-groups.users.update');
 
     Route::get('/activity', ActivityController::class)->name('activity');
     Route::view('/connection', 'admin.connection')
