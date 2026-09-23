@@ -2,7 +2,7 @@
 
 MCP Gateway is a small self-hosted PHP application that exposes one stable MCP endpoint for multiple independently authorized backend sites.
 
-V1 ships with the [WP AI Bridge](https://github.com/ach1992/wp-ai-bridge) connector. It lets one ChatGPT custom MCP App work with multiple WordPress sites without creating a separate ChatGPT App for every site.
+V1 ships with the [WP AI Bridge](https://github.com/AChWorks/wp-ai-bridge) connector. It lets one ChatGPT custom MCP App work with multiple WordPress sites without creating a separate ChatGPT App for every site.
 
 The Gateway is a routing and connection layer. WordPress and WP AI Bridge remain authoritative for WordPress permissions. MCP Gateway does not grant capabilities that the connected WordPress account or WP AI Bridge access policy denies.
 

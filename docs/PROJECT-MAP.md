@@ -24,7 +24,7 @@ Use the source that owns the kind of truth you need:
 
 The initial WordPress connector compatibility work was established through:
 
-- [`ach1992/wp-ai-bridge#54`](https://github.com/ach1992/wp-ai-bridge/issues/54) — approved MCP Gateway OAuth-client support while preserving direct ChatGPT behavior;
+- [`AChWorks/wp-ai-bridge#54`](https://github.com/AChWorks/wp-ai-bridge/issues/54) — approved MCP Gateway OAuth-client support while preserving direct ChatGPT behavior;
 - [`mcp-gateway#4`](https://github.com/AChWorks/mcp-gateway/issues/4) — the completed Gateway-side site registry and secure pairing work.
 
 These closed Issues are historical contract provenance, not active task owners. If the Bridge/Gateway connector contract changes materially, recover the current code/release evidence in both repositories and create/update the natural current Issue rather than treating closed Issue #4 as live state.
