@@ -185,7 +185,7 @@ All mutations and protected views authorize server-side. Template visibility is 
 
 Laravel authentication owns local user/session identity. Gateway permissions registered through Laravel Gates own whether that identity may perform an action, and the shared `AccessControl` application service owns the resource-scope calculation used by both Admin and MCP. Blade visibility mirrors those decisions for usability but is never the enforcement boundary.
 
-The implemented role vocabulary is `owner`, `administrator`, `operator`, and `viewer`. These names are operator-facing bundles only: application behavior checks explicit permissions rather than branching on role names. A role is the maximum permission ceiling. User-level, Site Group, and direct per-site rules are denial-only narrowing layers and can never manufacture authority absent from the role/global ceiling.
+The implemented role vocabulary is `owner`, `administrator`, `operator`, and `viewer`. These names are operator-facing bundles only: application behavior checks explicit permissions rather than branching on role names. A role is the maximum permission ceiling. Global, Site Group, and direct per-site capability restrictions are denial-only narrowing layers. Site Group membership may add site reachability for a selected-scope user, but it can never manufacture a capability absent from the role/global ceiling.
 
 Site authorization is deliberately split into two questions:
 
