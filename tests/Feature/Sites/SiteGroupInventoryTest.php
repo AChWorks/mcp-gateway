@@ -56,7 +56,8 @@ final class SiteGroupInventoryTest extends TestCase
         self::assertTrue($first['has_more']);
         self::assertSame('site-00001', $first['items'][0]->site_id);
         self::assertSame('site-00050', $first['items'][49]->site_id);
-        self::assertCount(2, $adminQueries);
+        // Two bounded inventory queries plus the existing global-denial check for each scopeSites() call.
+        self::assertCount(4, $adminQueries);
 
         $second = $inventory->adminPage($operator, 2);
         self::assertCount(20, $second['items']);
@@ -72,7 +73,8 @@ final class SiteGroupInventoryTest extends TestCase
 
         self::assertCount(70, $mcp['items']);
         self::assertFalse($mcp['has_more']);
-        self::assertCount(1, $mcpQueries);
+        // One bounded inventory query plus the existing global-denial check.
+        self::assertCount(2, $mcpQueries);
     }
 
     private function seedSites(int $count): void

@@ -56,8 +56,8 @@ final class SiteGroupDatabaseTest extends TestCase
     }
 
     /**
-     * @param array<string,list<string>> $indexes
-     * @param list<string> $columns
+     * @param  array<string,list<string>>  $indexes
+     * @param  list<string>  $columns
      */
     private function hasColumns(array $indexes, array $columns): bool
     {

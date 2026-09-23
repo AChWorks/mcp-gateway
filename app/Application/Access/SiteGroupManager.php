@@ -123,7 +123,7 @@ final readonly class SiteGroupManager
     }
 
     /**
-     * @param list<Site> $sites
+     * @param  list<Site>  $sites
      * @return array<string,bool>
      */
     public function siteMembershipSummaries(SiteGroup $group, array $sites): array
@@ -151,7 +151,7 @@ final readonly class SiteGroupManager
     }
 
     /**
-     * @param list<User> $users
+     * @param  list<User>  $users
      * @return array<int,bool>
      */
     public function userAssignmentSummaries(SiteGroup $group, array $users): array
