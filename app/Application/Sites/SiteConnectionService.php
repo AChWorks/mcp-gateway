@@ -200,10 +200,14 @@ final class SiteConnectionService
 
         if ($error !== null && $error !== '') {
             $flow->delete();
+            $failedAt = now();
+            $failureCode = 'oauth_'.$this->safeErrorCode($error);
             $site->forceFill([
                 'connection_state' => SiteConnectionState::Disconnected,
-                'last_error_code' => 'oauth_'.$this->safeErrorCode($error),
+                'last_error_code' => $failureCode,
                 'connected_at' => null,
+                'last_failure_at' => $failedAt,
+                'last_failure_code' => $failureCode,
             ])->save();
 
             throw new SiteConnectionException('authorization_denied', 'The WordPress authorization was not completed.');
@@ -245,10 +249,12 @@ final class SiteConnectionService
         $this->persistCredential($site, $context, $token);
         $flow->delete();
 
+        $connectedAt = now();
         $site->forceFill([
             'connection_state' => SiteConnectionState::Connected,
             'last_error_code' => null,
-            'connected_at' => now(),
+            'connected_at' => $connectedAt,
+            'last_success_at' => $connectedAt,
         ])->save();
 
         return $site->refresh();
@@ -414,12 +420,16 @@ final class SiteConnectionService
     {
         $this->lifecycle->runForId($siteRecordId, function (Site $lockedSite) use ($reason): void {
             $hasIntent = $lockedSite->revocationIntent()->exists();
+            $failedAt = now();
+            $failureCode = Str::limit($this->safeErrorCode($reason), 64, '');
             $lockedSite->forceFill([
                 'connection_state' => ! $hasIntent && $lockedSite->targetReservation()->exists()
                     ? SiteConnectionState::Reassigning
                     : SiteConnectionState::Error,
-                'last_error_code' => Str::limit($this->safeErrorCode($reason), 64, ''),
+                'last_error_code' => $failureCode,
                 'connected_at' => null,
+                'last_failure_at' => $failedAt,
+                'last_failure_code' => $failureCode,
             ])->save();
         });
     }
@@ -511,6 +521,7 @@ final class SiteConnectionService
         $site->forceFill([
             'connection_state' => SiteConnectionState::Connected,
             'last_error_code' => null,
+            'last_success_at' => now(),
         ])->save();
 
         return $token['access_token'];
@@ -521,14 +532,18 @@ final class SiteConnectionService
         try {
             $discovery = $this->discovery->discover($site->base_url);
         } catch (BridgeDiscoveryException $exception) {
+            $checkedAt = now();
             $site->forceFill([
                 'connection_state' => SiteConnectionState::Error,
                 'last_error_code' => $exception->reason,
-                'last_tested_at' => now(),
+                'last_tested_at' => $checkedAt,
+                'last_failure_at' => $checkedAt,
+                'last_failure_code' => $exception->reason,
             ])->save();
             throw new SiteConnectionException($exception->reason, $exception->getMessage());
         }
 
+        $checkedAt = now();
         $site->forceFill([
             'base_url' => $discovery->baseUrl,
             'base_url_hash' => hash('sha256', $discovery->baseUrl),
@@ -538,7 +553,7 @@ final class SiteConnectionService
             'oauth_token_url' => $discovery->tokenUrl,
             'oauth_revocation_url' => $discovery->revocationUrl,
             'last_error_code' => null,
-            'last_tested_at' => now(),
+            'last_tested_at' => $checkedAt,
         ])->save();
 
         return $discovery;
@@ -610,18 +625,26 @@ final class SiteConnectionService
 
     private function markRecoverableError(Site $site, string $code): void
     {
+        $failedAt = now();
+        $failureCode = Str::limit($this->safeErrorCode($code), 64, '');
         $site->forceFill([
             'connection_state' => SiteConnectionState::Error,
-            'last_error_code' => Str::limit($this->safeErrorCode($code), 64, ''),
+            'last_error_code' => $failureCode,
+            'last_failure_at' => $failedAt,
+            'last_failure_code' => $failureCode,
         ])->save();
     }
 
     private function requireReconnect(Site $site, string $code): void
     {
+        $failedAt = now();
+        $failureCode = Str::limit($this->safeErrorCode($code), 64, '');
         $site->forceFill([
             'connection_state' => SiteConnectionState::ReconnectRequired,
-            'last_error_code' => Str::limit($this->safeErrorCode($code), 64, ''),
+            'last_error_code' => $failureCode,
             'connected_at' => null,
+            'last_failure_at' => $failedAt,
+            'last_failure_code' => $failureCode,
         ])->save();
     }
 

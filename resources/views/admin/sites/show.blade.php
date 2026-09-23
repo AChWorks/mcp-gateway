@@ -27,8 +27,18 @@
         <dl class="summary-list">
             <div><dt>{{ __('WordPress URL') }}</dt><dd><a href="{{ $site->base_url }}" rel="noreferrer">{{ $site->base_url }}</a></dd></div>
             <div><dt>{{ __('MCP resource') }}</dt><dd><code>{{ $site->mcp_resource_url }}</code></dd></div>
-            <div><dt>{{ __('Last tested') }}</dt><dd>{{ $site->last_tested_at?->format('Y-m-d H:i:s') ?? __('Never') }}</dd></div>
-            <div><dt>{{ __('Last error code') }}</dt><dd><code>{{ $site->last_error_code ?? '—' }}</code></dd></div>
+            <div><dt>{{ __('Connection state') }}</dt><dd><code>{{ $site->connection_state->value }}</code></dd></div>
+            <div><dt>{{ __('Connected at') }}</dt><dd>{{ $site->connected_at?->format('Y-m-d H:i:s') ?? __('Never') }}</dd></div>
+            <div><dt>{{ __('Last successful operation') }}</dt><dd>{{ $site->last_success_at?->format('Y-m-d H:i:s') ?? __('Never') }}</dd></div>
+            <div><dt>{{ __('Last explicit check') }}</dt><dd>{{ $site->last_tested_at?->format('Y-m-d H:i:s') ?? __('Never') }}</dd></div>
+            <div><dt>{{ __('Latest failure') }}</dt><dd>
+                @if ($site->last_failure_at !== null)
+                    {{ $site->last_failure_at->format('Y-m-d H:i:s') }} — <code>{{ $site->last_failure_code ?? 'failure' }}</code>
+                @else
+                    {{ __('None recorded') }}
+                @endif
+            </dd></div>
+            <div><dt>{{ __('Current lifecycle error') }}</dt><dd><code>{{ $site->last_error_code ?? '—' }}</code></dd></div>
         </dl>
 
         @if ($siteView['has_revocation_intent'])

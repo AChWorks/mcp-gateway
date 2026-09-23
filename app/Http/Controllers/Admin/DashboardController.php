@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
+use App\Application\Sites\SiteHealth;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
@@ -15,8 +16,12 @@ use Illuminate\View\View;
 
 final class DashboardController extends Controller
 {
-    public function __invoke(Request $request, AccessControl $access, ActivityFeed $activity): View
-    {
+    public function __invoke(
+        Request $request,
+        AccessControl $access,
+        ActivityFeed $activity,
+        SiteHealth $health,
+    ): View {
         Gate::authorize(GatewayPermission::DashboardView->value);
 
         $user = $request->user();
@@ -27,6 +32,8 @@ final class DashboardController extends Controller
             $user,
             GatewayPermission::SitesView,
         );
+
+        $staleCutoff = $health->staleCutoff();
 
         return view('admin.dashboard', [
             'siteCount' => (clone $sites)->count(),
@@ -39,6 +46,25 @@ final class DashboardController extends Controller
                     SiteConnectionState::Error->value,
                     SiteConnectionState::Reassigning->value,
                 ])
+                ->count(),
+            'staleCount' => (clone $sites)
+                ->where('connection_state', SiteConnectionState::Connected->value)
+                ->where(function ($query) use ($staleCutoff): void {
+                    $query
+                        ->where(function ($query) use ($staleCutoff): void {
+                            $query->whereNull('last_success_at')
+                                ->orWhere('last_success_at', '<', $staleCutoff);
+                        })
+                        ->where(function ($query) use ($staleCutoff): void {
+                            $query->whereNull('connected_at')
+                                ->orWhere('connected_at', '<', $staleCutoff);
+                        })
+                        ->where(function ($query) use ($staleCutoff): void {
+                            $query->whereNotNull('last_error_code')
+                                ->orWhereNull('last_tested_at')
+                                ->orWhere('last_tested_at', '<', $staleCutoff);
+                        });
+                })
                 ->count(),
             'recentActivity' => Gate::allows(GatewayPermission::ActivityView->value)
                 ? $activity->page($user, 1, 5)['items']

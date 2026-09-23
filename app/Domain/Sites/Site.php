@@ -2,6 +2,7 @@
 
 namespace App\Domain\Sites;
 
+use App\Support\Database\MicrosecondImmutableDateTimeCast;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -27,6 +28,9 @@ final class Site extends Model
         'last_error_code',
         'last_tested_at',
         'connected_at',
+        'last_success_at',
+        'last_failure_at',
+        'last_failure_code',
     ];
 
     /** @return array<string, string> */
@@ -34,8 +38,10 @@ final class Site extends Model
     {
         return [
             'connection_state' => SiteConnectionState::class,
-            'last_tested_at' => 'immutable_datetime',
+            'last_tested_at' => MicrosecondImmutableDateTimeCast::class,
             'connected_at' => 'immutable_datetime',
+            'last_success_at' => MicrosecondImmutableDateTimeCast::class,
+            'last_failure_at' => MicrosecondImmutableDateTimeCast::class,
         ];
     }
 

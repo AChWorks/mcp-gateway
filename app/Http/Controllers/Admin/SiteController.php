@@ -4,11 +4,13 @@ namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
 use App\Application\Sites\SiteConnectionException;
+use App\Application\Sites\SiteHealth;
 use App\Application\Sites\SiteInventory;
 use App\Application\Sites\SiteRegistry;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
+use App\Domain\Sites\SiteHealthState;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Support\Admin\SiteOperationMessage;
@@ -22,7 +24,10 @@ use InvalidArgumentException;
 
 final class SiteController extends Controller
 {
-    public function __construct(private readonly SiteOperationMessage $messages) {}
+    public function __construct(
+        private readonly SiteOperationMessage $messages,
+        private readonly SiteHealth $health,
+    ) {}
 
     public function index(Request $request, SiteInventory $inventory): View
     {
@@ -230,23 +235,18 @@ final class SiteController extends Controller
     /** @return array{0:string,1:string} */
     private function status(Site $site): array
     {
-        $state = (string) $site->getRawOriginal('connection_state');
-
-        if ($state === SiteConnectionState::Error->value) {
-            return match ($site->last_error_code) {
-                'network_failure', 'tls_failure' => [(string) __('Unreachable'), 'danger'],
-                'missing_bridge', 'incompatible_metadata' => [(string) __('Incompatible'), 'danger'],
-                default => [(string) __('Needs attention'), 'danger'],
-            };
-        }
-
-        return match ($state) {
-            SiteConnectionState::Connected->value => [(string) __('Connected'), 'success'],
-            SiteConnectionState::Pending->value => [(string) __('Authorization pending'), 'warning'],
-            SiteConnectionState::ReconnectRequired->value => [(string) __('Reconnect required'), 'warning'],
-            SiteConnectionState::Reassigning->value => [(string) __('Updating target'), 'warning'],
-            SiteConnectionState::Disconnected->value => [(string) __('Configured'), 'neutral'],
-            default => [(string) __('Needs attention'), 'danger'],
+        return match ($this->health->state($site)) {
+            SiteHealthState::Healthy => [(string) __('Healthy'), 'success'],
+            SiteHealthState::Stale => [(string) __('Stale'), 'warning'],
+            SiteHealthState::NeverConnected => [(string) __('Never connected'), 'neutral'],
+            SiteHealthState::Disconnected => [(string) __('Disconnected'), 'neutral'],
+            SiteHealthState::ReconnectRequired => [(string) __('Reconnect required'), 'warning'],
+            SiteHealthState::Unreachable => [(string) __('Unreachable'), 'danger'],
+            SiteHealthState::Incompatible => [(string) __('Incompatible'), 'danger'],
+            SiteHealthState::Failed => [(string) __('Recent failure'), 'danger'],
+            SiteHealthState::Pending => [(string) __('Authorization pending'), 'warning'],
+            SiteHealthState::UpdatingTarget => [(string) __('Updating target'), 'warning'],
+            SiteHealthState::Unknown => [(string) __('Unknown'), 'warning'],
         };
     }
 

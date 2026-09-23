@@ -25,7 +25,11 @@
     </article>
     <article class="stat-card">
         <span class="stat-value">{{ $attentionCount }}</span>
-        <span class="stat-label">{{ __('Needs attention') }}</span>
+        <span class="stat-label">{{ __('Lifecycle attention') }}</span>
+    </article>
+    <article class="stat-card">
+        <span class="stat-value">{{ $staleCount }}</span>
+        <span class="stat-label">{{ __('Stale or unknown evidence') }}</span>
     </article>
 </section>
 

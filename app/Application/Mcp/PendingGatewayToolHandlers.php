@@ -4,6 +4,7 @@ namespace App\Application\Mcp;
 
 use App\Application\Access\AccessControl;
 use App\Application\Sites\SiteConnectionException;
+use App\Application\Sites\SiteHealth;
 use App\Application\Sites\SiteInventory;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
@@ -24,6 +25,7 @@ final class PendingGatewayToolHandlers
         private readonly ActivityRecorder $activity,
         private readonly SiteInventory $inventory,
         private readonly AccessControl $access,
+        private readonly SiteHealth $health,
     ) {}
 
     /** @return array<string, mixed> */
@@ -134,15 +136,18 @@ final class PendingGatewayToolHandlers
         try {
             $catalog = $this->bridge->readAbilities($site, $correlationId, $ability, $page, $per_page, $namespace, $search);
         } catch (SiteConnectionException $exception) {
+            $this->health->recordOperationFailure($site, $exception->reason);
             $this->recordFailure($correlationId, 'site-abilities-read', $site->site_id, $exception->reason);
 
             return $this->connectionError($correlationId, $exception);
         } catch (WpAiBridgeMcpException $exception) {
+            $this->health->recordOperationFailure($site, $exception->reason);
             $this->recordFailure($correlationId, 'site-abilities-read', $site->site_id, $exception->reason);
 
             return $this->error($correlationId, $exception->reason, $exception->getMessage());
         }
 
+        $this->health->recordOperationSuccess($site);
         $this->activity->record($correlationId, 'site-abilities-read', 'success', $site->site_id);
 
         return [
@@ -177,6 +182,8 @@ final class PendingGatewayToolHandlers
         try {
             $executionClass = $this->bridge->classifyAbility($site, $ability, $correlationId);
             if (! $this->access->allows($user, $executionClass->permission(), $site)) {
+                $this->health->recordOperationSuccess($site);
+
                 return $this->forbidden($correlationId, 'site-ability-execute', $site->site_id);
             }
 
@@ -188,15 +195,18 @@ final class PendingGatewayToolHandlers
                 $executionClass,
             );
         } catch (SiteConnectionException $exception) {
+            $this->health->recordOperationFailure($site, $exception->reason);
             $this->recordFailure($correlationId, 'site-ability-execute', $site->site_id, $exception->reason);
 
             return $this->connectionError($correlationId, $exception);
         } catch (WpAiBridgeMcpException $exception) {
+            $this->health->recordOperationFailure($site, $exception->reason);
             $this->recordFailure($correlationId, 'site-ability-execute', $site->site_id, $exception->reason);
 
             return $this->error($correlationId, $exception->reason, $exception->getMessage());
         }
 
+        $this->health->recordOperationSuccess($site);
         $this->activity->record($correlationId, 'site-ability-execute', 'success', $site->site_id);
 
         return [

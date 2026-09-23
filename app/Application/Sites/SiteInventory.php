@@ -67,6 +67,9 @@ final class SiteInventory
                 'last_error_code',
                 'last_tested_at',
                 'connected_at',
+                'last_success_at',
+                'last_failure_at',
+                'last_failure_code',
             ]);
             $sitesById = $this->access
                 ->scopeSites($detailQuery, $user, GatewayPermission::SitesView)
