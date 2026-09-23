@@ -29,6 +29,16 @@ final class SiteGroupManagementTest extends TestCase
         ])->assertRedirect();
 
         $group = SiteGroup::query()->where('name', 'Production')->firstOrFail();
+
+        $this->actingAs($owner)
+            ->get('/admin/site-groups')
+            ->assertOk()
+            ->assertSee('Production');
+        $this->actingAs($owner)
+            ->get('/admin/site-groups/'.$group->id.'/edit')
+            ->assertOk()
+            ->assertSee('Production');
+
         $this->assertDatabaseHas('site_group_permission_denials', [
             'site_group_id' => $group->id,
             'permission' => GatewayPermission::AbilitiesExecuteDestructive->value,
@@ -116,6 +126,30 @@ final class SiteGroupManagementTest extends TestCase
         $this->assertDatabaseHas('activity_events', [
             'operation' => 'site-group-user-update:'.$group->id.':'.$operator->id,
             'outcome' => 'success',
+        ]);
+
+        $this->actingAs($owner)->put(route('admin.site-groups.sites.update', [
+            'siteGroup' => $group->id,
+            'site' => $site->site_id,
+        ], false), [
+            'assigned' => '0',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        $this->assertDatabaseMissing('site_group_sites', [
+            'site_group_id' => $group->id,
+            'site_record_id' => $site->id,
+        ]);
+
+        $this->actingAs($owner)->put(route('admin.site-groups.users.update', [
+            'siteGroup' => $group->id,
+            'user' => $operator->id,
+        ], false), [
+            'assigned' => '0',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        $this->assertDatabaseMissing('site_group_users', [
+            'site_group_id' => $group->id,
+            'user_id' => $operator->id,
         ]);
 
         $this->actingAs($owner)->put(route('admin.site-groups.users.update', [
