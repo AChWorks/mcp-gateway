@@ -46,7 +46,7 @@ final class SiteHealth
                 : SiteHealthState::Disconnected;
         }
 
-        if ($connectionState !== SiteConnectionState::Connected || $latestEvidenceSuccess === null) {
+        if ($latestEvidenceSuccess === null) {
             return SiteHealthState::Unknown;
         }
 
