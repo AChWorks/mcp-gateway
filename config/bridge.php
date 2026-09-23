@@ -32,4 +32,7 @@ return [
         'request_timeout_seconds' => (int) env('BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS', 5),
         'max_response_bytes' => (int) env('BRIDGE_REMOTE_MAX_RESPONSE_BYTES', 65536),
     ],
+    'health' => [
+        'stale_after_hours' => 24,
+    ],
 ];
