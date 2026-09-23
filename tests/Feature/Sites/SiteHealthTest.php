@@ -6,6 +6,7 @@ use App\Application\Sites\SiteHealth;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteConnectionState;
 use App\Domain\Sites\SiteHealthState;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -39,6 +40,47 @@ final class SiteHealthTest extends TestCase
             'last_error_code' => 'invalid_grant',
         ])->save();
         self::assertSame(SiteHealthState::ReconnectRequired, $health->state($site->refresh()));
+    }
+
+    public function test_unknown_and_recovery_order_use_microsecond_evidence(): void
+    {
+        $health = app(SiteHealth::class);
+        $site = $this->site();
+        $site->forceFill([
+            'connection_state' => SiteConnectionState::Connected,
+            'last_success_at' => CarbonImmutable::parse('2026-09-23 10:00:00.100000'),
+            'last_failure_at' => CarbonImmutable::parse('2026-09-23 10:00:00.200000'),
+            'last_failure_code' => 'outcome_unknown',
+        ])->save();
+
+        $unknown = $site->refresh();
+        self::assertSame('2026-09-23 10:00:00.100000', $unknown->getRawOriginal('last_success_at'));
+        self::assertSame('2026-09-23 10:00:00.200000', $unknown->getRawOriginal('last_failure_at'));
+        self::assertSame(SiteHealthState::Unknown, $health->state($unknown));
+
+        $unknown->forceFill([
+            'last_success_at' => CarbonImmutable::parse('2026-09-23 10:00:00.300000'),
+        ])->save();
+
+        $recovered = $site->refresh();
+        self::assertSame('2026-09-23 10:00:00.300000', $recovered->getRawOriginal('last_success_at'));
+        self::assertSame(SiteHealthState::Healthy, $health->state($recovered));
+    }
+
+    public function test_successful_check_after_failure_stays_never_connected_without_stale_failure(): void
+    {
+        $health = app(SiteHealth::class);
+        $site = $this->site();
+        $site->forceFill([
+            'last_tested_at' => CarbonImmutable::parse('2026-09-23 10:00:00.300000'),
+            'last_error_code' => null,
+            'last_failure_at' => CarbonImmutable::parse('2026-09-23 10:00:00.200000'),
+            'last_failure_code' => 'network_failure',
+        ])->save();
+
+        $checked = $site->refresh();
+        self::assertSame('2026-09-23 10:00:00.300000', $checked->getRawOriginal('last_tested_at'));
+        self::assertSame(SiteHealthState::NeverConnected, $health->state($checked));
     }
 
     public function test_health_evidence_keeps_only_latest_bounded_success_and_failure_metadata(): void

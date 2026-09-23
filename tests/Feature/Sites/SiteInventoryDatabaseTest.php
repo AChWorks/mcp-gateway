@@ -26,6 +26,11 @@ final class SiteInventoryDatabaseTest extends TestCase
     {
         $this->seedSites(10000);
 
+        $columns = collect(DB::select('SHOW COLUMNS FROM sites'))->keyBy('Field');
+        self::assertSame('timestamp(6)', strtolower((string) ($columns['last_tested_at']->Type ?? '')));
+        self::assertSame('timestamp(6)', strtolower((string) ($columns['last_success_at']->Type ?? '')));
+        self::assertSame('timestamp(6)', strtolower((string) ($columns['last_failure_at']->Type ?? '')));
+
         $indexes = collect(DB::select('SHOW INDEX FROM sites'))
             ->pluck('Key_name')
             ->map(static fn (mixed $name): string => (string) $name)

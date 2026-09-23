@@ -97,7 +97,7 @@ final class SiteHealth
     public function recordOperationSuccess(Site $site): void
     {
         $this->persistOperationEvidence($site, [
-            'last_success_at' => now(),
+            'last_success_at' => $this->microsecondNow(),
         ], 'success');
     }
 
@@ -110,7 +110,7 @@ final class SiteHealth
 
         $safeCode = $this->safeFailureCode($code);
         $this->persistOperationEvidence($site, [
-            'last_failure_at' => now(),
+            'last_failure_at' => $this->microsecondNow(),
             'last_failure_code' => $safeCode,
         ], 'failure', $safeCode);
     }
@@ -161,6 +161,11 @@ final class SiteHealth
         }
 
         return $value;
+    }
+
+    private function microsecondNow(): string
+    {
+        return now()->format('Y-m-d H:i:s.u');
     }
 
     private function safeFailureCode(string $code): string
