@@ -61,7 +61,7 @@ jobs:
       - name: Check out exact WP AI Bridge contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ach1992/wp-ai-bridge
+          repository: AChWorks/wp-ai-bridge
           ref: 1bc3693b21072d2a23aa9f7e534eff39591642c9
           path: .contract/wp-ai-bridge
           persist-credentials: false
