@@ -242,7 +242,7 @@ final readonly class AccessControl
             return false;
         }
 
-        if ($scope === SiteScopeMode::All || ($explicit !== null && (bool) $explicit)) {
+        if ($scope === SiteScopeMode::All || $explicit !== null) {
             return true;
         }
 

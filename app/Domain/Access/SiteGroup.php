@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
+/** @property string $id */
 final class SiteGroup extends Model
 {
     use HasUlids;
