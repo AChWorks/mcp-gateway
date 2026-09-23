@@ -113,7 +113,13 @@ final class SiteGroupController extends Controller
                 Rule::unique('site_groups', 'name')->ignore($siteGroup?->getKey()),
             ],
             'denied_permissions' => ['nullable', 'array'],
-            'denied_permissions.*' => ['string', Rule::enum(GatewayPermission::class)],
+            'denied_permissions.*' => [
+                'string',
+                Rule::in(array_map(
+                    static fn (GatewayPermission $permission): string => $permission->value,
+                    GatewayPermission::siteScoped(),
+                )),
+            ],
         ]);
     }
 
