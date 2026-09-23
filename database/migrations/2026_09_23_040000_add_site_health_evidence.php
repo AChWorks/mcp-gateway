@@ -9,8 +9,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('sites', function (Blueprint $table): void {
-            $table->timestamp('last_success_at')->nullable();
-            $table->timestamp('last_failure_at')->nullable();
+            $table->timestamp('last_success_at', 6)->nullable();
+            $table->timestamp('last_failure_at', 6)->nullable();
             $table->string('last_failure_code', 64)->nullable();
             $table->index(
                 ['connection_state', 'last_success_at'],

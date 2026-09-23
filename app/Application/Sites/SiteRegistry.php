@@ -168,13 +168,17 @@ final class SiteRegistry
             try {
                 $discovery = $this->discovery->discover($lockedSite->base_url);
             } catch (BridgeDiscoveryException $exception) {
+                $checkedAt = now();
                 $lockedSite->forceFill([
                     'last_error_code' => $exception->reason,
-                    'last_tested_at' => now(),
+                    'last_tested_at' => $checkedAt,
+                    'last_failure_at' => $checkedAt,
+                    'last_failure_code' => $exception->reason,
                 ])->save();
                 throw new SiteConnectionException($exception->reason, $exception->getMessage());
             }
 
+            $checkedAt = now();
             $lockedSite->forceFill([
                 'mcp_resource_url' => $discovery->resourceUrl,
                 'oauth_issuer_url' => $discovery->issuerUrl,
@@ -182,7 +186,8 @@ final class SiteRegistry
                 'oauth_token_url' => $discovery->tokenUrl,
                 'oauth_revocation_url' => $discovery->revocationUrl,
                 'last_error_code' => null,
-                'last_tested_at' => now(),
+                'last_tested_at' => $checkedAt,
+                'last_success_at' => $checkedAt,
             ])->save();
 
             return $discovery;
