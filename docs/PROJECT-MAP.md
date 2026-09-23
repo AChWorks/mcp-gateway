@@ -10,11 +10,13 @@ Use the source that owns the kind of truth you need:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — current technical architecture, component boundaries, protocol flows, persistence, deployment shape, and testing direction.
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
 - [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported V1 aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
-- [GitHub Issues](https://github.com/ach1992/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
-- [Program Issue #1](https://github.com/ach1992/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.
+- [`../achworks.yaml`](../achworks.yaml) — stable machine-readable AChWorks component identity, capabilities, interfaces, and source pointers; it must not mirror live work/runtime state.
+- [`AChWorks/platform`](https://github.com/AChWorks/platform) — ecosystem-level governance, discovery, and generic cross-project contracts; it is not an MCP Gateway runtime dependency.
+- [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
+- [Program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.
 - Pull requests and commits — implementation identity, review history, and integrated changes.
 - GitHub Actions / CI — validation evidence tied to exact commits.
-- [GitHub Releases](https://github.com/ach1992/mcp-gateway/releases) — immutable public release identity and release notes; deployment state remains separate production truth when deployment is explicitly authorized.
+- [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases) — immutable public release identity and release notes; deployment state remains separate production truth when deployment is explicitly authorized.
 
 `README.md` is not a project-state, architecture, or recovery source. It is the public/user-facing project page.
 
@@ -23,7 +25,7 @@ Use the source that owns the kind of truth you need:
 The initial WordPress connector compatibility work was established through:
 
 - [`ach1992/wp-ai-bridge#54`](https://github.com/ach1992/wp-ai-bridge/issues/54) — approved MCP Gateway OAuth-client support while preserving direct ChatGPT behavior;
-- [`mcp-gateway#4`](https://github.com/ach1992/mcp-gateway/issues/4) — the completed Gateway-side site registry and secure pairing work.
+- [`mcp-gateway#4`](https://github.com/AChWorks/mcp-gateway/issues/4) — the completed Gateway-side site registry and secure pairing work.
 
 These closed Issues are historical contract provenance, not active task owners. If the Bridge/Gateway connector contract changes materially, recover the current code/release evidence in both repositories and create/update the natural current Issue rather than treating closed Issue #4 as live state.
 
