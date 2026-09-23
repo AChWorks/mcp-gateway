@@ -97,7 +97,7 @@ final class AdminSiteManagementTest extends TestCase
             ->assertOk()
             ->assertSee('Alpha WordPress')
             ->assertSee($site->site_id)
-            ->assertSee('Configured')
+            ->assertSee('Never connected')
             ->assertDontSee('access_token')
             ->assertDontSee('refresh_token');
 
