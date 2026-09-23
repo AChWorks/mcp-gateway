@@ -117,6 +117,16 @@ final class SiteCheckOperationTest extends TestCase
         self::assertSame(2, SiteCheckOperationTarget::query()->count());
         self::assertSame([], $this->checkedHosts);
 
+        $gamma = $this->site('gamma');
+        $this->post(route('admin.site-checks.store', [], false), [
+            'site_ids' => [$alpha->site_id, $gamma->site_id],
+            'idempotency_key' => $key,
+        ])->assertSessionHasErrors('bulk_check');
+
+        self::assertSame(1, SiteCheckOperation::query()->count());
+        self::assertSame(2, SiteCheckOperationTarget::query()->count());
+        self::assertSame([], $this->checkedHosts);
+
         $this->get(route('admin.site-checks.show', ['operation' => $operation->getKey()], false))
             ->assertOk()
             ->assertSee('Alpha')

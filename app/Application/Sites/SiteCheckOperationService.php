@@ -53,6 +53,19 @@ final readonly class SiteCheckOperationService
                 ->where('idempotency_key', $idempotencyKey)
                 ->first();
             if ($existing instanceof SiteCheckOperation) {
+                $existingSiteIds = $existing->targets()
+                    ->orderBy('position')
+                    ->pluck('site_id_snapshot')
+                    ->map(static fn ($siteId): string => (string) $siteId)
+                    ->all();
+
+                if ($existingSiteIds !== $siteIds) {
+                    throw new SiteCheckOperationException(
+                        'idempotency_conflict',
+                        'The bulk-check request identity was already used for a different target selection.',
+                    );
+                }
+
                 return $existing;
             }
 
@@ -432,21 +445,13 @@ final readonly class SiteCheckOperationService
         ?string $errorCode,
     ): void {
         $errorCode = $this->safeErrorCode($errorCode);
-        $this->activity->record(
-            $claim['operation_id'],
-            'bulk-site-connection-test',
-            $activityOutcome,
-            $claim['site_id'],
-            $errorCode,
-        );
-
-        DB::transaction(function () use ($claim, $status, $errorCode): void {
+        $applied = DB::transaction(function () use ($claim, $status, $errorCode): bool {
             $operation = SiteCheckOperation::query()
                 ->whereKey($claim['operation_id'])
                 ->lockForUpdate()
                 ->first();
             if (! $operation instanceof SiteCheckOperation) {
-                return;
+                return false;
             }
 
             $target = SiteCheckOperationTarget::query()
@@ -458,7 +463,7 @@ final readonly class SiteCheckOperationService
                 || $target->statusValue() !== SiteCheckTargetStatus::Running
                 || ! is_string($target->attempt_token)
                 || ! hash_equals($target->attempt_token, $claim['attempt_token'])) {
-                return;
+                return false;
             }
 
             $target->forceFill([
@@ -469,7 +474,19 @@ final readonly class SiteCheckOperationService
             ])->save();
 
             $this->finalizeIfIdle($operation);
+
+            return true;
         }, 3);
+
+        if ($applied) {
+            $this->activity->record(
+                $claim['operation_id'],
+                'bulk-site-connection-test',
+                $activityOutcome,
+                $claim['site_id'],
+                $errorCode,
+            );
+        }
     }
 
     private function finalizeIfIdle(SiteCheckOperation $operation): void
@@ -548,10 +565,17 @@ final readonly class SiteCheckOperationService
 
     private function pruneCompleted(): void
     {
-        SiteCheckOperation::query()
+        $operationIds = SiteCheckOperation::query()
             ->whereNotNull('completed_at')
             ->where('completed_at', '<', now()->subDays(self::RETENTION_DAYS))
-            ->delete();
+            ->orderBy('completed_at')
+            ->orderBy('id')
+            ->limit(100)
+            ->pluck('id');
+
+        if ($operationIds->isNotEmpty()) {
+            SiteCheckOperation::query()->whereIn('id', $operationIds)->delete();
+        }
     }
 
     private function safeErrorCode(?string $value): ?string
