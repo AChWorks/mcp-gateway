@@ -126,6 +126,36 @@ final class AdminSiteManagementTest extends TestCase
             ->assertSee('Never connected');
     }
 
+    public function test_explicit_site_check_persists_bounded_failure_evidence(): void
+    {
+        $this->actingAs($this->administrator());
+        $site = app(SiteRegistry::class)->create('alpha', 'Alpha', 'https://alpha.example.test');
+
+        Http::fake(function (Request $request) {
+            if ((string) parse_url($request->url(), PHP_URL_PATH) === '/.well-known/oauth-protected-resource') {
+                return Http::response([], 404);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $this->post(route('admin.sites.test', ['site' => $site->site_id], false))
+            ->assertRedirect(route('admin.sites.show', ['site' => $site->site_id], false))
+            ->assertSessionHasErrors('site');
+
+        $site->refresh();
+        self::assertNotNull($site->last_tested_at);
+        self::assertNotNull($site->last_failure_at);
+        self::assertSame('missing_bridge', $site->last_failure_code);
+        self::assertSame('missing_bridge', $site->last_error_code);
+        self::assertNull($site->last_success_at);
+
+        $this->get(route('admin.sites.show', ['site' => $site->site_id], false))
+            ->assertOk()
+            ->assertSee('Incompatible')
+            ->assertSee('missing_bridge');
+    }
+
     public function test_connect_reconnect_disconnect_and_remove_use_real_site_lifecycle(): void
     {
         $this->actingAs($this->administrator());
