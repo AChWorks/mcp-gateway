@@ -185,30 +185,36 @@ All mutations and protected views authorize server-side. Template visibility is 
 
 Laravel authentication owns local user/session identity. Gateway permissions registered through Laravel Gates own whether that identity may perform an action, and the shared `AccessControl` application service owns the resource-scope calculation used by both Admin and MCP. Blade visibility mirrors those decisions for usability but is never the enforcement boundary.
 
-The implemented role vocabulary is `owner`, `administrator`, `operator`, and `viewer`. These names are operator-facing bundles only: application behavior checks explicit permissions rather than branching on role names. A role is the maximum permission ceiling. User-level and site-level rules are denial-only narrowing layers and can never manufacture authority absent from the role.
+The implemented role vocabulary is `owner`, `administrator`, `operator`, and `viewer`. These names are operator-facing bundles only: application behavior checks explicit permissions rather than branching on role names. A role is the maximum permission ceiling. Global, Site Group, and direct per-site capability restrictions are denial-only narrowing layers. Site Group membership may add site reachability for a selected-scope user, but it can never manufacture a capability absent from the role/global ceiling.
 
 Site authorization is deliberately split into two questions:
 
 1. is the site in the principal's scope; and
 2. is the requested capability allowed on that site?
 
-A non-owner principal may use `all` scope with explicit site exclusions or `selected` scope with explicit site inclusions. Direct per-site permission denials are evaluated after scope membership. This separation permits cases such as an Operator who may mutate one selected site while read/catalog access is denied on that same site. The effective rule is:
+For non-owners, `all` scope reaches every site except an explicit direct site deny. `selected` scope reaches a site through either an explicit direct site allow or membership in any Site Group assigned to the user. A direct site deny is authoritative even when a Group would otherwise contribute membership. Site Groups are deliberately flat many-to-many sets: there is no nesting, organization/tenant hierarchy, or second policy engine.
+
+Capability narrowing is monotonic. Global user denials apply before resource scope. If a user is assigned to multiple Groups that contain the same site, every matching Group permission denial accumulates, so the most restrictive result wins. Direct per-site permission denials are evaluated last and remain the final capability-narrowing layer. The effective rule is:
 
 ```text
 effective capability
 = role permission ceiling
 AND no global permission denial
-AND site belongs to principal scope
-AND no site-specific permission denial
+AND site is reachable through direct/group scope
+AND no direct site membership deny
+AND no applicable assigned-group permission denial
+AND no direct site permission denial
 ```
 
-The first installed/CLI-created account is the recoverable Owner. An enabled Owner always has all-site authority without global/site denials, and the access-management transaction prevents demoting or disabling the last enabled Owner. Subsequent CLI-created administrators use the Administrator bundle. During the upgrade that introduces this model, every pre-existing local user is preserved as an enabled all-site Administrator and the oldest existing user is promoted to Owner, so the migration does not silently remove access that authenticated users had before authorization was introduced. Fresh post-migration users still start from the least-privilege defaults unless created through an explicit administrator flow. Security-sensitive user/permission/site-rule changes require the acting administrator's current password and write required bounded Activity evidence in the same database transaction; an audit persistence failure rolls back the local security change. Ordinary routed-operation Activity remains best-effort so observability failure can never change an already-authoritative remote result.
+The first installed/CLI-created account is the recoverable Owner. An enabled Owner always has all-site authority without global/group/site denials; Group assignment is rejected for Owners and Owner normalization removes stale Group assignments. The access-management transaction prevents demoting or disabling the last enabled Owner. Subsequent CLI-created administrators use the Administrator bundle. During the upgrade that introduces the underlying access-control model, every pre-existing local user is preserved as an enabled all-site Administrator and the oldest existing user is promoted to Owner. The Site Group migration itself is additive and empty, so it does not silently change existing direct-site-only effective access.
 
-Disabling a local user terminates new Admin authentication, invalidates an existing authenticated Admin/OAuth-consent browser session when it is next used, and causes bearer-protected MCP requests to reject existing access tokens because the current user row is re-evaluated on every MCP request. Site-scope and permission changes likewise affect existing MCP access tokens without minting broader replacement credentials.
+Security-sensitive user, permission, direct-site-rule, Site Group, Group-site-membership, and Group-user-assignment changes require the acting administrator's current password and write required bounded Activity evidence in the same database transaction; an audit persistence failure rolls back the local security change. Ordinary routed-operation Activity remains best-effort so observability failure can never change an already-authoritative remote result.
 
-The Gateway evaluated `spatie/laravel-permission` against the Laravel 13/PHP 8.4 baseline. Because site scope and per-site denial semantics are Gateway domain rules, package-global RBAC would still require a second custom authorization state model. The current implementation therefore uses Laravel Gates plus the smallest explicit Gateway-owned persistence model rather than two competing semantic authorization systems.
+Disabling a local user terminates new Admin authentication, invalidates an existing authenticated Admin/OAuth-consent browser session when it is next used, and causes bearer-protected MCP requests to reject existing access tokens because the current user row is re-evaluated on every MCP request. Site-scope, Group, and permission changes likewise affect existing MCP access tokens without minting broader replacement credentials.
 
-Future site groups may contribute another source of site membership without replacing this boundary. Direct per-site rules remain the final narrowing layer so a broad group can later be restricted for one site. This does not imply public tenancy, organization hierarchy, billing, or an enterprise policy engine.
+The Gateway evaluated `spatie/laravel-permission` against the Laravel 13/PHP 8.4 baseline. Because site scope, Group membership, and denial semantics are Gateway domain rules, package-global RBAC would still require a second custom authorization state model. The implementation therefore continues to use Laravel Gates plus the smallest explicit Gateway-owned persistence model rather than two competing semantic authorization systems.
+
+Deleting a Site Group deletes only Group membership and Group denial rows. It never deletes Sites or Users, and it does not alter direct per-site rules. Group-aware authorization is expressed in bounded SQL predicates inside the existing `AccessControl`/inventory boundary so filtering happens before pagination/serialization and does not require per-site application queries.
 
 ### 4.3 Site Registry
 

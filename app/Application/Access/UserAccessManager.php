@@ -241,20 +241,7 @@ final readonly class UserAccessManager
     /** @return list<GatewayPermission> */
     public function sitePermissions(): array
     {
-        return [
-            GatewayPermission::SitesView,
-            GatewayPermission::SitesUpdate,
-            GatewayPermission::SitesRemove,
-            GatewayPermission::ConnectionsConnect,
-            GatewayPermission::ConnectionsReconnect,
-            GatewayPermission::ConnectionsDisconnect,
-            GatewayPermission::ConnectionsTest,
-            GatewayPermission::AbilitiesInspect,
-            GatewayPermission::AbilitiesExecuteReadonly,
-            GatewayPermission::AbilitiesExecuteMutating,
-            GatewayPermission::AbilitiesExecuteDestructive,
-            GatewayPermission::AbilitiesExecuteUnclassified,
-        ];
+        return GatewayPermission::siteScoped();
     }
 
     /** @param  list<string>  $deniedPermissions */
@@ -325,6 +312,7 @@ final readonly class UserAccessManager
         DB::table('user_permission_denials')->where('user_id', $user->getKey())->delete();
         DB::table('user_site_access')->where('user_id', $user->getKey())->delete();
         DB::table('user_site_permission_denials')->where('user_id', $user->getKey())->delete();
+        DB::table('site_group_users')->where('user_id', $user->getKey())->delete();
     }
 
     private function role(User $user): GatewayRole

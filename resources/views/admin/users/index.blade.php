@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Access control') }}</div>
         <h1>{{ __('Local users') }}</h1>
-        <p class="muted">{{ __('Roles define the permission ceiling. Global and per-site rules can only narrow that authority.') }}</p>
+        <p class="muted">{{ __('Roles define the permission ceiling. Global, group, and direct per-site rules can only narrow that authority.') }}</p>
     </div>
     @can('users.manage')
         <a class="button button-primary" href="{{ route('admin.users.create') }}">{{ __('Add user') }}</a>
