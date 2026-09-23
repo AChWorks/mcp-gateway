@@ -17,7 +17,7 @@
 
 <section class="panel panel-wide">
     @if ($managedUser->role->value === 'owner')
-        <div class="alert alert-success" role="status">{{ __('Owners retain unrestricted all-site authority for recovery. Global and per-site denials are cleared for this role.') }}</div>
+        <div class="alert alert-success" role="status">{{ __('Owners retain unrestricted all-site authority for recovery. Global/per-site denials and site-group assignments are cleared for this role.') }}</div>
     @endif
 
     <form class="form-stack" method="post" action="{{ route('admin.users.update', ['user' => $managedUser->id]) }}">
@@ -53,7 +53,7 @@
                         <option value="{{ $mode->value }}" @selected(old('site_scope_mode', $managedUser->site_scope_mode->value) === $mode->value)>{{ $mode->value }}</option>
                     @endforeach
                 </select>
-                <p class="field-help">{{ __('Per-site rules can further allow, exclude, or narrow capabilities. Owners are always all-sites.') }}</p>
+                <p class="field-help">{{ __('Direct site rules and assigned groups contribute site scope; direct and group denials can only narrow capabilities. Owners are always all-sites.') }}</p>
             </div>
         </div>
 

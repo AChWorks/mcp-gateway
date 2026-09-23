@@ -57,7 +57,7 @@
                         <option value="{{ $mode->value }}" @selected(old('site_scope_mode', 'selected') === $mode->value)>{{ $mode->value }}</option>
                     @endforeach
                 </select>
-                <p class="field-help">{{ __('Selected starts with no sites until explicit site rules are added. Owners are always all-sites.') }}</p>
+                <p class="field-help">{{ __('Selected can receive sites through direct allow rules or assigned site groups. Owners are always all-sites.') }}</p>
             </div>
         </div>
 
