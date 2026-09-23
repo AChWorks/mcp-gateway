@@ -64,7 +64,7 @@
                     <th scope="col">{{ __('Site') }}</th>
                     <th scope="col">{{ __('WordPress URL') }}</th>
                     <th scope="col">{{ __('Status') }}</th>
-                    <th scope="col">{{ __('Last error') }}</th>
+                    <th scope="col">{{ __('Latest evidence') }}</th>
                     <th scope="col"><span class="sr-only">{{ __('Actions') }}</span></th>
                 </tr>
                 </thead>
@@ -77,7 +77,17 @@
                         </td>
                         <td><a href="{{ $item['site']->base_url }}" rel="noreferrer">{{ $item['site']->base_url }}</a></td>
                         <td><span class="badge badge-{{ $item['status_tone'] }}">{{ $item['status_label'] }}</span></td>
-                        <td><code>{{ $item['site']->last_error_code ?? '—' }}</code></td>
+                        <td>
+                            <span class="muted">{{ __('Success') }}:</span>
+                            {{ $item['site']->last_success_at?->format('Y-m-d H:i:s') ?? __('Never') }}<br>
+                            <span class="muted">{{ __('Check') }}:</span>
+                            {{ $item['site']->last_tested_at?->format('Y-m-d H:i:s') ?? __('Never') }}
+                            @if ($item['site']->last_failure_at !== null)
+                                <br><span class="muted">{{ __('Failure') }}:</span>
+                                {{ $item['site']->last_failure_at->format('Y-m-d H:i:s') }}
+                                <code>{{ $item['site']->last_failure_code ?? 'failure' }}</code>
+                            @endif
+                        </td>
                         <td class="table-action"><a href="{{ route('admin.sites.show', ['site' => $item['site']->site_id]) }}">{{ __('Manage') }}</a></td>
                     </tr>
                 @endforeach

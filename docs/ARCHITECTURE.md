@@ -252,6 +252,14 @@ The admin UI may use page-oriented navigation where that is clearer for humans. 
 
 Scale fixtures and query measurements belong in tests/Issue evidence, not in this service as hard-coded product limits.
 
+#### Stored site-health evidence
+
+Operator health is derived from bounded stored evidence; it is not a second independently mutable connection state. The site row retains current connection lifecycle fields plus the latest successful connected/routed-operation timestamp, the latest explicit discovery/check timestamp, and the latest bounded failure timestamp/code. Admin inventory/detail views and Dashboard summaries read only that local evidence and never fan out remote probes during ordinary rendering.
+
+A configured site with no successful connected/routed operation remains distinguishable as never connected even after discovery/check success. Connected sites become stale when all successful evidence is older than the configured bounded threshold. Explicit single-site checks and real routed operations refresh their respective evidence, while failure codes remain bounded and non-secret. Historical per-operation detail continues to belong to Activity retention rather than being duplicated into an unbounded health log.
+
+Health storage and rendering introduce no required scheduler, queue, Redis, WebSocket, Prometheus, or fleet polling dependency. Query/index changes must remain justified by measured MariaDB-primary inventory/dashboard access patterns.
+
 ### 4.5 Credential Store
 
 Owns recoverable secrets required to call target sites and any Gateway-held OAuth server state that must be confidential.

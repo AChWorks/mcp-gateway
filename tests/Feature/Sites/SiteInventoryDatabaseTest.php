@@ -35,6 +35,7 @@ final class SiteInventoryDatabaseTest extends TestCase
 
         self::assertContains('sites_display_name_site_id_index', $indexes);
         self::assertContains('sites_state_display_name_site_id_index', $indexes);
+        self::assertContains('sites_state_last_success_at_index', $indexes);
         self::assertContains('sites_site_id_unique', $indexes);
 
         $plans = [
@@ -50,14 +51,18 @@ final class SiteInventoryDatabaseTest extends TestCase
             'single_site' => $this->explain(
                 "SELECT * FROM sites WHERE site_id = 'site-05000' LIMIT 1",
             ),
+            'stale_health' => $this->explain(
+                "SELECT id FROM sites WHERE connection_state = 'connected' AND last_success_at < '2030-01-01 00:00:00' LIMIT 51",
+            ),
         ];
 
         self::assertSame('sites_display_name_site_id_index', $plans['admin_order']['key'] ?? null);
         self::assertSame('sites_state_display_name_site_id_index', $plans['admin_state_order']['key'] ?? null);
         self::assertSame('sites_site_id_unique', $plans['mcp_cursor']['key'] ?? null);
         self::assertSame('sites_site_id_unique', $plans['single_site']['key'] ?? null);
+        self::assertSame('sites_state_last_success_at_index', $plans['stale_health']['key'] ?? null);
 
-        foreach (['admin_order', 'admin_state_order', 'mcp_cursor'] as $name) {
+        foreach (['admin_order', 'admin_state_order', 'mcp_cursor', 'stale_health'] as $name) {
             self::assertNotSame('ALL', $plans[$name]['type'] ?? null);
             self::assertStringNotContainsString(
                 'filesort',
@@ -102,6 +107,9 @@ final class SiteInventoryDatabaseTest extends TestCase
                 'last_error_code' => null,
                 'last_tested_at' => null,
                 'connected_at' => $index % 2 === 0 ? $now : null,
+                'last_success_at' => $index % 2 === 0 ? $now : null,
+                'last_failure_at' => null,
+                'last_failure_code' => null,
                 'created_at' => $now,
                 'updated_at' => $now,
             ];

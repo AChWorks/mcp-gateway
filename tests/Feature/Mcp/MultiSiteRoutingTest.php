@@ -93,6 +93,8 @@ final class MultiSiteRoutingTest extends TestCase
         $beta = $this->createSite('beta');
         $this->pair($alpha);
         $this->pair($beta);
+        $alpha->forceFill(['last_success_at' => null])->save();
+        $beta->forceFill(['last_success_at' => null])->save();
 
         $handlers = app(PendingGatewayToolHandlers::class);
         $alphaList = $handlers->siteAbilitiesRead($this->principal, 'alpha', null, 2, 1, 'alpha-space', 'needle');
@@ -107,6 +109,8 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertTrue($betaExact['ok']);
         self::assertSame('beta/demo', $betaExact['catalog']['items'][0]['name']);
         self::assertSame('object', $betaExact['catalog']['items'][0]['input_schema']['type']);
+        self::assertNotNull($alpha->refresh()->last_success_at);
+        self::assertNotNull($beta->refresh()->last_success_at);
 
         self::assertSame(['alpha.example.test', 'beta.example.test'], array_column($this->toolCalls, 'host'));
         self::assertSame(['wp-ai-bridge/abilities-read', 'wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'));
@@ -134,6 +138,8 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertFalse($denied['ok']);
         self::assertSame('downstream_rejected', $denied['error']['code']);
         self::assertStringContainsString('Permission denied', $denied['error']['message']);
+        self::assertNotNull($alpha->refresh()->last_failure_at);
+        self::assertSame('downstream_rejected', $alpha->last_failure_code);
 
         self::assertSame(
             [
@@ -291,6 +297,8 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertStringContainsString('downstream read', $result['error']['message']);
         self::assertSame(1, $catalogCalls);
         self::assertSame(1, $targetCalls);
+        self::assertNotNull($alpha->refresh()->last_failure_at);
+        self::assertSame('network_failure', $alpha->last_failure_code);
     }
 
     public function test_real_mcp_transport_accepts_nested_empty_object_and_preserves_object_identity_downstream(): void
@@ -426,6 +434,8 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertSame('outcome_unknown', $result['error']['code']);
         self::assertSame(1, $catalogCalls);
         self::assertSame(1, $targetCalls);
+        self::assertNotNull($alpha->refresh()->last_failure_at);
+        self::assertSame('outcome_unknown', $alpha->last_failure_code);
     }
 
     public function test_disconnect_of_one_site_does_not_break_other_site_routing(): void

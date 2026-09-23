@@ -117,11 +117,13 @@ final class AdminSiteManagementTest extends TestCase
         $site->refresh();
         self::assertNotNull($site->last_tested_at);
         self::assertNull($site->last_error_code);
+        self::assertNull($site->last_success_at);
+        self::assertNull($site->last_failure_at);
 
         $this->get('/admin/sites')
             ->assertOk()
             ->assertSee('Alpha Production Mirror')
-            ->assertSee('Configured');
+            ->assertSee('Never connected');
     }
 
     public function test_connect_reconnect_disconnect_and_remove_use_real_site_lifecycle(): void
@@ -179,7 +181,11 @@ final class AdminSiteManagementTest extends TestCase
         $unreachable = $registry->create('beta', 'Beta', 'https://beta.example.test');
         $incompatible = $registry->create('gamma', 'Gamma', 'https://gamma.example.test');
 
-        $connected->forceFill(['connection_state' => SiteConnectionState::Connected])->save();
+        $connected->forceFill([
+            'connection_state' => SiteConnectionState::Connected,
+            'connected_at' => now(),
+            'last_success_at' => now(),
+        ])->save();
         $unreachable->forceFill([
             'connection_state' => SiteConnectionState::Error,
             'last_error_code' => 'network_failure',
@@ -210,6 +216,7 @@ final class AdminSiteManagementTest extends TestCase
             ->assertSee('3')
             ->assertSee('1')
             ->assertSee('2')
+            ->assertSee('Stale or unknown evidence')
             ->assertDontSee($privateClientHash)
             ->assertDontSee('operator-29');
 
