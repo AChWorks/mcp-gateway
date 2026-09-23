@@ -49,6 +49,8 @@ final class SiteHealthPresentationTest extends TestCase
             ->assertSee('Unreachable')
             ->assertSee('Latest evidence');
 
+        $this->get('/admin/activity')->assertOk();
+
         $this->get(route('admin.sites.show', ['site' => $healthy->site_id], false))
             ->assertOk()
             ->assertSee('Last successful operation')

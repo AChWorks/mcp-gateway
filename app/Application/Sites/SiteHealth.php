@@ -103,6 +103,11 @@ final class SiteHealth
 
     public function recordOperationFailure(Site $site, string $code): void
     {
+        $connectionState = $site->getAttribute('connection_state');
+        if ($code === 'missing_credential' && $connectionState === SiteConnectionState::Disconnected) {
+            return;
+        }
+
         $safeCode = $this->safeFailureCode($code);
         $this->persistOperationEvidence($site, [
             'last_failure_at' => now(),

@@ -381,6 +381,7 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertFalse($disconnected['ok']);
         self::assertSame('missing_credential', $disconnected['error']['code']);
         self::assertSame(0, $mcpRequests);
+        self::assertNull(Site::query()->where('site_id', 'alpha')->sole()->last_failure_at);
     }
 
     public function test_ambiguous_mutation_transport_failure_is_not_retried(): void
