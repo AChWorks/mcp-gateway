@@ -181,8 +181,9 @@ final class PendingGatewayToolHandlers
 
         try {
             $executionClass = $this->bridge->classifyAbility($site, $ability, $correlationId);
-            $this->health->recordOperationSuccess($site);
             if (! $this->access->allows($user, $executionClass->permission(), $site)) {
+                $this->health->recordOperationSuccess($site);
+
                 return $this->forbidden($correlationId, 'site-ability-execute', $site->site_id);
             }
 
