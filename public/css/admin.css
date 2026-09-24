@@ -463,6 +463,7 @@ input[type="radio"]:checked::before {
 .permission-option > input:checked {
     border-color: #b42318;
     background: #b42318;
+    color: #ffffff;
 }
 
 .permission-fieldset .checkbox-option code {

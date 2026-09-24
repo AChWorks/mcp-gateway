@@ -45,7 +45,7 @@ enum GatewayPermission: string
             self::ActivityView => 'View activity',
             self::UsersView => 'View users',
             self::UsersManage => 'Manage users and site groups',
-            self::SecurityManage => 'Manage security settings',
+            self::SecurityManage => 'Manage security settings (reserved)',
         };
     }
 
