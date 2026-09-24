@@ -69,7 +69,7 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Global permission restrictions') }}</legend>
-            <p class="field-help">{{ __('Checked permissions are denied. The scope badge describes what the permission acts on; checking a Site-scoped permission here denies it on every site in the user's effective scope. Restrictions never add authority beyond the selected role.') }}</p>
+            <p class="field-help">{{ __('Checked permissions are denied. The scope badge describes what the permission acts on; checking a Site-scoped permission here denies it on every site in the user\'s effective scope. Restrictions never add authority beyond the selected role.') }}</p>
             <div class="checkbox-grid">
                 @foreach ($permissions as $permission)
                     @include('admin.partials.permission-option', [
