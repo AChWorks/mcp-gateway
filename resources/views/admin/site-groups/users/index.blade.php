@@ -34,7 +34,7 @@
                 @foreach ($users as $user)
                     <tr>
                         <td><strong>{{ $user->name }}</strong><br><span class="muted">{{ $user->email }}</span></td>
-                        <td><code>{{ $user->role->value }}</code></td>
+                        <td><span class="badge badge-neutral">{{ \Illuminate\Support\Str::headline($user->role->value) }}</span></td>
                         <td>
                             @if ($user->role->value === 'owner')
                                 <span class="badge badge-neutral">{{ __('Owner unrestricted') }}</span>

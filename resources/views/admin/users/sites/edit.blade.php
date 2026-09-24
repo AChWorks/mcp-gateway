@@ -24,7 +24,7 @@
                 <label for="access_rule">{{ __('Explicit scope rule') }}</label>
                 <select id="access_rule" name="access_rule" required>
                     @foreach (['inherit', 'allow', 'deny'] as $rule)
-                        <option value="{{ $rule }}" @selected(old('access_rule', $siteRule['access_rule']) === $rule)>{{ $rule }}</option>
+                        <option value="{{ $rule }}" @selected(old('access_rule', $siteRule['access_rule']) === $rule)>{{ \Illuminate\Support\Str::headline($rule) }}</option>
                     @endforeach
                 </select>
                 <p class="field-help">{{ __('inherit follows the user scope mode; allow/deny records a direct site rule. Direct denials remain the final narrowing layer for future group support.') }}</p>
@@ -37,15 +37,10 @@
                 @php($selectedDenials = old('denied_permissions', $siteRule['denied_permissions']))
                 <div class="checkbox-grid">
                     @foreach ($sitePermissions as $permission)
-                        <label class="checkbox-option">
-                            <input
-                                type="checkbox"
-                                name="denied_permissions[]"
-                                value="{{ $permission->value }}"
-                                @checked(in_array($permission->value, $selectedDenials, true))
-                            >
-                            <code>{{ $permission->value }}</code>
-                        </label>
+                        @include('admin.partials.permission-option', [
+                            'permission' => $permission,
+                            'checked' => in_array($permission->value, $selectedDenials, true),
+                        ])
                     @endforeach
                 </div>
             </fieldset>

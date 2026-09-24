@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title>@yield('title', __('Administration')) · {{ config('app.name') }}</title>
-    <link rel="stylesheet" href="{{ asset('css/admin.css') }}">
+    <link rel="stylesheet" href="{{ asset('css/admin.css').'?v='.rawurlencode((string) config('app.release_version', 'dev')) }}">
 </head>
 <body>
 <header class="site-header">

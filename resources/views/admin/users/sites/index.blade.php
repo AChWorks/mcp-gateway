@@ -27,7 +27,7 @@
             <select id="connection_state" name="connection_state">
                 <option value="">{{ __('All states') }}</option>
                 @foreach ($connectionStates as $state)
-                    <option value="{{ $state->value }}" @selected(($filters['connection_state'] ?? null) === $state->value)>{{ $state->value }}</option>
+                    <option value="{{ $state->value }}" @selected(($filters['connection_state'] ?? null) === $state->value)>{{ \Illuminate\Support\Str::headline(str_replace('_', ' ', $state->value)) }}</option>
                 @endforeach
             </select>
         </div>
@@ -58,7 +58,7 @@
                             <strong>{{ $site->display_name }}</strong><br>
                             <code class="small-code">{{ $site->site_id }}</code>
                         </td>
-                        <td><code>{{ $rule['access_rule'] }}</code></td>
+                        <td><span class="badge badge-{{ $rule['access_rule'] === 'allow' ? 'success' : ($rule['access_rule'] === 'deny' ? 'danger' : 'neutral') }}">{{ \Illuminate\Support\Str::headline($rule['access_rule']) }}</span></td>
                         <td>{{ $rule['denied_count'] }}</td>
                         <td class="table-action">
                             @unless ($isOwner)

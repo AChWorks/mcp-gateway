@@ -107,14 +107,16 @@
                         @can('connections.test')
                             <td>
                                 @can('connections.test', $item['site'])
-                                    <input
-                                        type="checkbox"
-                                        name="site_ids[]"
-                                        value="{{ $item['site']->site_id }}"
-                                        aria-label="{{ __('Select :site for bulk check', ['site' => $item['site']->display_name]) }}"
-                                        @checked(in_array($item['site']->site_id, old('site_ids', []), true))
-                                        @disabled($activeBulkCheck !== null)
-                                    >
+                                    <label class="selection-control" title="{{ __('Select :site for bulk check', ['site' => $item['site']->display_name]) }}">
+                                        <input
+                                            type="checkbox"
+                                            name="site_ids[]"
+                                            value="{{ $item['site']->site_id }}"
+                                            aria-label="{{ __('Select :site for bulk check', ['site' => $item['site']->display_name]) }}"
+                                            @checked(in_array($item['site']->site_id, old('site_ids', []), true))
+                                            @disabled($activeBulkCheck !== null)
+                                        >
+                                    </label>
                                 @else
                                     <span class="muted" aria-label="{{ __('Connection test not authorized') }}">—</span>
                                 @endcan
@@ -145,7 +147,7 @@
         </div>
 
         @can('connections.test')
-                <div class="action-row">
+                <div class="table-footer">
                     <p class="muted">{{ __('Select 2–50 sites from this page. Checks run one target per request and can be resumed.') }}</p>
                     <button class="button button-primary" type="submit" @disabled($activeBulkCheck !== null)>
                         {{ __('Start bulk check') }}

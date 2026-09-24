@@ -74,6 +74,24 @@ Once the application is running, administrator sign-in is available at `/admin/l
 
 Access-control mutations require the acting Owner's current password, preserve at least one enabled recoverable Owner, and record required bounded Activity evidence transactionally. Disabling a user blocks new login, invalidates existing Admin/OAuth-consent sessions on their next request, and makes existing MCP bearer tokens unusable because current user state is rechecked. The admin routes continue to use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
+## Admin UI foundation
+
+The administration panel uses one small server-rendered visual system in `public/css/admin.css`. New Admin views must reuse this foundation rather than falling back to browser-native controls or creating a second page-specific design system.
+
+Use these shared conventions:
+
+- design values belong in the existing `--ui-*` tokens; avoid one-off colors, borders, radii, focus treatments, or control heights when an existing token fits;
+- normal two-column form rows use `.form-grid`; `.content-grid` is reserved for intentionally asymmetric content/aside layouts;
+- text/select controls belong in `.field`; selects use the shared custom appearance and must not rely on the browser-default arrow/chrome;
+- boolean choices use the shared `.checkbox-option` treatment so the full label is the click target and checked/focus/disabled states remain consistent;
+- permission-denial lists use `admin.partials.permission-option`. Human title, scope, and behavioral help come from `GatewayPermission`; do not duplicate permission explanations in individual Blade views;
+- permission help must explain whether the permission is Gateway-wide or site-scoped and, for site-scoped permissions, that the effective site scope comes from the user's scope mode, direct site rules, and assigned groups. Permission descriptions must not imply creator ownership unless the authorization model actually enforces it;
+- filters use `.filter-grid` + `.filter-actions`; tabular fleet/access views use `.table-wrap`, shared badges, and `.table-footer` for explanatory text plus actions;
+- keyboard focus must remain visible, label/control hit targets must remain usable at narrow widths, and light/dark plus reduced-motion behavior must be preserved;
+- the admin stylesheet URL is versioned from `VERSION`, so an application update cannot intentionally serve new Blade markup with a stale cached pre-update stylesheet.
+
+Prefer a small markup adjustment that lets multiple pages share an existing component over adding view-specific CSS. A new reusable Admin interaction should extend this section and the shared stylesheet/partial at the same time.
+
 ## Proportional validation and review cadence
 
 Optimize for finished, verified changes rather than repeated ceremony.
