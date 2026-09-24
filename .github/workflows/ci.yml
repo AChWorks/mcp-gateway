@@ -50,6 +50,16 @@ jobs:
       - name: Validate Composer metadata
         run: composer validate --strict
 
+      - name: Validate release-note identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          grep -Fqx "# MCP Gateway v$version" RELEASE_NOTES.md || {
+            echo "RELEASE_NOTES.md must identify the exact VERSION ($version)." >&2
+            exit 1
+          }
+
       - name: Audit dependencies
         run: composer audit --locked
 

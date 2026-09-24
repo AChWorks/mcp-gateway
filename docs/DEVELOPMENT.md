@@ -74,6 +74,24 @@ Once the application is running, administrator sign-in is available at `/admin/l
 
 Access-control mutations require the acting Owner's current password, preserve at least one enabled recoverable Owner, and record required bounded Activity evidence transactionally. Disabling a user blocks new login, invalidates existing Admin/OAuth-consent sessions on their next request, and makes existing MCP bearer tokens unusable because current user state is rechecked. The admin routes continue to use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
+## Admin UI foundation
+
+The administration panel uses one small server-rendered visual system in `public/css/admin.css`. New Admin views must reuse this foundation rather than falling back to browser-native controls or creating a second page-specific design system.
+
+Use these shared conventions:
+
+- design values belong in the existing `--ui-*` tokens; avoid one-off colors, borders, radii, focus treatments, or control heights when an existing token fits;
+- normal two-column form rows use `.form-grid`; `.content-grid` is reserved for intentionally asymmetric content/aside layouts;
+- text/select controls belong in `.field`; selects use the shared custom appearance and must not rely on the browser-default arrow/chrome;
+- boolean choices use the shared `.checkbox-option` treatment so the full label is the click target and checked/focus/disabled states remain consistent;
+- permission-denial lists use `admin.partials.permission-option`. Human title, scope, and behavioral help come from `GatewayPermission`; do not duplicate permission explanations in individual Blade views;
+- permission help must explain whether the permission is Gateway-wide or site-scoped and, for site-scoped permissions, that the effective site scope comes from the user's scope mode, direct site rules, and assigned groups. Permission descriptions must not imply creator ownership unless the authorization model actually enforces it;
+- filters use `.filter-grid` + `.filter-actions`; tabular fleet/access views use `.table-wrap`, shared badges, and `.table-footer` for explanatory text plus actions;
+- keyboard focus must remain visible, label/control hit targets must remain usable at narrow widths, and light/dark plus reduced-motion behavior must be preserved;
+- the admin stylesheet URL is versioned from `VERSION`, so an application update cannot intentionally serve new Blade markup with a stale cached pre-update stylesheet.
+
+Prefer a small markup adjustment that lets multiple pages share an existing component over adding view-specific CSS. A new reusable Admin interaction should extend this section and the shared stylesheet/partial at the same time.
+
 ## Proportional validation and review cadence
 
 Optimize for finished, verified changes rather than repeated ceremony.
@@ -162,7 +180,7 @@ The update ZIP must contain only private root `update/` staging and the minimal 
 
 `bin/update-managed-public-paths.txt` is the canonical, append-only ownership list for normal public runtime files. Add every newly shipped `public/` file to it. Do not remove an old Gateway-owned file path merely because the current payload no longer ships that file; retaining the path lets later updaters remove stale Gateway files without claiming the rest of `public/`.
 
-The MariaDB-backed `Update Package` workflow downloads the real released `v1.1.2` deployment artifact, installs it, stages the candidate update ZIP exactly as an operator would, authenticates through the real administrator login, obtains normal CSRF state, and exercises `/update/` through both browser-update phases. The integration test verifies:
+The MariaDB-backed `Update Package` workflow downloads the real released `v1.1.2` and `v1.1.10` deployment artifacts, installs each baseline independently, stages the candidate update ZIP exactly as an operator would, authenticates through the real administrator login, obtains normal CSRF state, and exercises `/update/` through both browser-update phases. The historical `v1.1.2` path preserves broad released-baseline compatibility evidence while `v1.1.10` proves the current production upgrade path. The integration test verifies:
 
 - the live application remains unchanged immediately after ZIP extraction;
 - guest `/update/` access cannot trigger mutation and is redirected to administrator login;
@@ -180,7 +198,9 @@ The MariaDB-backed `Update Package` workflow downloads the real released `v1.1.2
 
 The fresh-install verifier also boots Laravel from the extracted package, rebuilds the Laravel package manifest, checks routes and Composer runtime identities, runs the web-installer preflight, and performs a migration smoke test. Dependency license/notice files and runtime resources are intentionally retained even when they add size.
 
-Normal CI runs both artifact builders/verifiers after the application test steps. Release publication must repeat **both** the real `v1.1.2` browser-update integration (`bin/test-update-package.sh`) and the backup-integrity fail-safe regression (`bin/test-update-backup-integrity.sh`) against the exact candidate artifacts before publishing a new release. This is deliberate: tests generate ephemeral keys/cache/session state in the development checkout, release packaging must prove that none of that state can leak into operator artifacts, and the updater's recovery boundary must remain fail-safe when its own backup is missing or corrupted.
+Normal CI runs both artifact builders/verifiers after the application test steps. Release publication must repeat the real browser-update integration (`bin/test-update-package.sh`) and the backup-integrity fail-safe regression (`bin/test-update-backup-integrity.sh`) against **both** released baselines and the exact candidate artifacts before publishing a new release. This is deliberate: tests generate ephemeral keys/cache/session state in the development checkout, release packaging must prove that none of that state can leak into operator artifacts, the current production upgrade path must be exercised directly, and the updater's recovery boundary must remain fail-safe when its own backup is missing or corrupted.
+
+`RELEASE_NOTES.md` owns the operator-visible notes for the version currently declared in `VERSION`. CI and release publication require its heading to identify that exact version so a future VERSION bump cannot silently publish stale release highlights.
 
 The browser-updater recovery semantics are one state machine across implementation, tests, operator documentation, and release notes. Any change to that state machine must update `README.md`, `docs/DEPLOYMENT.md`, the relevant repository-owned updater regressions, and release-note behavior in the same reviewed change. Any future change that alters application runtime files, Composer dependencies, updater logic, package scripts, or release packaging must keep the applicable gates green at the candidate/release boundary that owns that proof. Ordinary runtime-code iteration does not require the full released-package browser-update integration on every synchronization when updater/package/schema/dependency behavior is unchanged; release publication still requires the exact-candidate browser-update and backup-integrity proofs. If a new legitimate runtime file is required, update the builder/verifier intentionally in the same reviewed change rather than weakening the hygiene checks broadly.
 

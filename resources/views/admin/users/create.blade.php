@@ -16,7 +16,7 @@
     <form class="form-stack" method="post" action="{{ route('admin.users.store') }}">
         @csrf
 
-        <div class="content-grid">
+        <div class="form-grid">
             <div class="field">
                 <label for="name">{{ __('Name') }}</label>
                 <input id="name" name="name" type="text" maxlength="255" required value="{{ old('name') }}">
@@ -29,7 +29,7 @@
             </div>
         </div>
 
-        <div class="content-grid">
+        <div class="form-grid">
             <div class="field">
                 <label for="password">{{ __('Password') }}</label>
                 <input id="password" name="password" type="password" maxlength="255" required autocomplete="new-password">
@@ -41,12 +41,12 @@
             </div>
         </div>
 
-        <div class="content-grid">
+        <div class="form-grid">
             <div class="field">
                 <label for="role">{{ __('Role') }}</label>
                 <select id="role" name="role" required>
                     @foreach ($roles as $role)
-                        <option value="{{ $role->value }}" @selected(old('role', 'operator') === $role->value)>{{ $role->value }}</option>
+                        <option value="{{ $role->value }}" @selected(old('role', 'operator') === $role->value)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
                     @endforeach
                 </select>
             </div>
@@ -54,7 +54,7 @@
                 <label for="site_scope_mode">{{ __('Site scope') }}</label>
                 <select id="site_scope_mode" name="site_scope_mode" required>
                     @foreach ($siteScopeModes as $mode)
-                        <option value="{{ $mode->value }}" @selected(old('site_scope_mode', 'selected') === $mode->value)>{{ $mode->value }}</option>
+                        <option value="{{ $mode->value }}" @selected(old('site_scope_mode', 'selected') === $mode->value)>{{ $mode->title() }}</option>
                     @endforeach
                 </select>
                 <p class="field-help">{{ __('Selected can receive sites through direct allow rules or assigned site groups. Owners are always all-sites.') }}</p>
@@ -69,18 +69,13 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Global permission restrictions') }}</legend>
-            <p class="field-help">{{ __('Checked permissions are denied. Restrictions never add authority beyond the selected role.') }}</p>
+            <p class="field-help">{{ __('Checked permissions are denied. The scope badge describes what the permission acts on; checking a Site-scoped permission here denies it on every site in the user\'s effective scope. Restrictions never add authority beyond the selected role.') }}</p>
             <div class="checkbox-grid">
                 @foreach ($permissions as $permission)
-                    <label class="checkbox-option">
-                        <input
-                            type="checkbox"
-                            name="denied_permissions[]"
-                            value="{{ $permission->value }}"
-                            @checked(in_array($permission->value, old('denied_permissions', []), true))
-                        >
-                        <code>{{ $permission->value }}</code>
-                    </label>
+                    @include('admin.partials.permission-option', [
+                        'permission' => $permission,
+                        'checked' => in_array($permission->value, old('denied_permissions', []), true),
+                    ])
                 @endforeach
             </div>
         </fieldset>

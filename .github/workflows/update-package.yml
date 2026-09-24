@@ -49,7 +49,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  upgrade-from-v1-1-2:
+  upgrade-from-released-baselines:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 12
@@ -88,14 +88,18 @@ jobs:
           bash bin/build-update-package.sh mcp-gateway-update-ci dist/mcp-gateway-update-test-runtime
           bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip
 
-      - name: Download released v1.1.2 deployment baseline
+      - name: Download released deployment baselines
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
-          gh release download v1.1.2 --pattern 'mcp-gateway-v1.1.2.zip' --dir dist/baseline
+          for version in 1.1.2 1.1.10; do
+            gh release download "v$version" \
+              --pattern "mcp-gateway-v$version.zip" \
+              --dir dist/baseline
+          done
 
-      - name: Verify v1.1.2 to candidate browser update
+      - name: Verify released-baseline browser updates
         env:
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
@@ -103,19 +107,59 @@ jobs:
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
-        run: >-
-          bash bin/test-update-package.sh
-          dist/mcp-gateway-update-ci.zip
-          dist/baseline/mcp-gateway-v1.1.2.zip
+        run: |
+          for version in 1.1.2 1.1.10; do
+            bash bin/test-update-package.sh \
+              dist/mcp-gateway-update-ci.zip \
+              "dist/baseline/mcp-gateway-v$version.zip"
+          done
 
-      - name: Verify backup integrity fail-safe
+      - name: Verify released-baseline backup integrity fail-safe
         env:
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
           UPDATE_TEST_DB_DATABASE: mcp_gateway_test
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
-        run: >-
-          bash bin/test-update-backup-integrity.sh
-          dist/mcp-gateway-update-ci.zip
-          dist/baseline/mcp-gateway-v1.1.2.zip
+        run: |
+          for version in 1.1.2 1.1.10; do
+            bash bin/test-update-backup-integrity.sh \
+              dist/mcp-gateway-update-ci.zip \
+              "dist/baseline/mcp-gateway-v$version.zip"
+          done
+
+      - name: Prepare owner-test candidate artifacts
+        if: github.event_name == 'pull_request'
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          release_package="mcp-gateway-v$version"
+          release_zip="$release_package.zip"
+          update_zip="mcp-gateway-update-v$version.zip"
+          bash bin/build-release-package.sh "$release_package"
+          bash bin/verify-release-package.sh "dist/$release_zip" "$release_package"
+          cp dist/mcp-gateway-update-ci.zip "dist/$update_zip"
+          (
+            cd dist
+            sha256sum "$release_zip" > "$release_zip.sha256"
+            sha256sum "$update_zip" > "$update_zip.sha256"
+          )
+          bash bin/verify-update-package.sh "dist/$update_zip"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact=mcp-gateway-v$version-candidate-${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload owner-test candidate artifacts
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.candidate.outputs.artifact }}
+          path: |
+            dist/mcp-gateway-v${{ steps.candidate.outputs.version }}.zip
+            dist/mcp-gateway-v${{ steps.candidate.outputs.version }}.zip.sha256
+            dist/mcp-gateway-update-v${{ steps.candidate.outputs.version }}.zip
+            dist/mcp-gateway-update-v${{ steps.candidate.outputs.version }}.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

@@ -119,6 +119,26 @@ final class AccessControlTest extends TestCase
         );
     }
 
+    public function test_site_remove_applies_to_any_site_in_effective_scope_not_creation_ownership(): void
+    {
+        $administrator = $this->user(GatewayRole::Administrator, SiteScopeMode::Selected);
+        $alpha = $this->site('alpha');
+        $beta = $this->site('beta');
+
+        DB::table('user_site_access')->insert([
+            'user_id' => $administrator->id,
+            'site_record_id' => $beta->id,
+            'allowed' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $access = app(AccessControl::class);
+
+        self::assertFalse($access->allows($administrator, GatewayPermission::SitesRemove, $alpha));
+        self::assertTrue($access->allows($administrator, GatewayPermission::SitesRemove, $beta));
+    }
+
     public function test_disabled_user_is_denied_even_when_role_and_scope_would_allow_access(): void
     {
         $viewer = $this->user(GatewayRole::Viewer, SiteScopeMode::All, false);

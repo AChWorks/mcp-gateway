@@ -30,10 +30,10 @@
                 @php($selectedDenials = old('denied_permissions', $deniedPermissions))
                 <div class="checkbox-grid">
                     @foreach ($sitePermissions as $permission)
-                        <label class="checkbox-option">
-                            <input type="checkbox" name="denied_permissions[]" value="{{ $permission->value }}" @checked(in_array($permission->value, $selectedDenials, true))>
-                            <code>{{ $permission->value }}</code>
-                        </label>
+                        @include('admin.partials.permission-option', [
+                            'permission' => $permission,
+                            'checked' => in_array($permission->value, $selectedDenials, true),
+                        ])
                     @endforeach
                 </div>
             </fieldset>

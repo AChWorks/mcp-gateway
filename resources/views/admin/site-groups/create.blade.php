@@ -27,10 +27,10 @@
             <p class="field-help">{{ __('Checked site-scoped capabilities are denied on every site in this group for assigned users. A group can never grant authority above the user role/global ceiling.') }}</p>
             <div class="checkbox-grid">
                 @foreach ($sitePermissions as $permission)
-                    <label class="checkbox-option">
-                        <input type="checkbox" name="denied_permissions[]" value="{{ $permission->value }}" @checked(in_array($permission->value, old('denied_permissions', []), true))>
-                        <code>{{ $permission->value }}</code>
-                    </label>
+                    @include('admin.partials.permission-option', [
+                        'permission' => $permission,
+                        'checked' => in_array($permission->value, old('denied_permissions', []), true),
+                    ])
                 @endforeach
             </div>
         </fieldset>

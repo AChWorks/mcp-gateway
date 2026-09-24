@@ -36,8 +36,8 @@
                             <strong>{{ $user->name }}</strong><br>
                             <span class="muted">{{ $user->email }}</span>
                         </td>
-                        <td><code>{{ $user->role->value }}</code></td>
-                        <td><code>{{ $user->site_scope_mode->value }}</code></td>
+                        <td><span class="badge badge-neutral">{{ \Illuminate\Support\Str::headline($user->role->value) }}</span></td>
+                        <td><span class="badge badge-neutral" title="{{ $user->site_scope_mode->description() }}">{{ $user->site_scope_mode->title() }}</span></td>
                         <td>
                             <span class="badge badge-{{ $user->access_enabled ? 'success' : 'danger' }}">
                                 {{ $user->access_enabled ? __('Enabled') : __('Disabled') }}

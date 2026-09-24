@@ -23,7 +23,7 @@
             <select id="connection_state" name="connection_state">
                 <option value="">{{ __('All states') }}</option>
                 @foreach ($connectionStates as $state)
-                    <option value="{{ $state->value }}" @selected(($filters['connection_state'] ?? null) === $state->value)>{{ $state->value }}</option>
+                    <option value="{{ $state->value }}" @selected(($filters['connection_state'] ?? null) === $state->value)>{{ \Illuminate\Support\Str::headline(str_replace('_', ' ', $state->value)) }}</option>
                 @endforeach
             </select>
         </div>
