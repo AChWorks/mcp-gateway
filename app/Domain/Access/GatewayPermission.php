@@ -65,7 +65,7 @@ enum GatewayPermission: string
             self::AbilitiesInspect => 'Read the downstream ability catalog and schemas for sites inside the user\'s effective site scope.',
             self::AbilitiesExecuteReadonly => 'Execute downstream abilities classified as read-only on sites inside the user\'s effective site scope.',
             self::AbilitiesExecuteMutating => 'Execute downstream abilities classified as mutating but not destructive on sites inside the user\'s effective site scope.',
-            self::AbilitiesExecuteDestructive => 'Execute downstream abilities classified as destructive on sites inside the user\'s effective site scope. Grant this only when destructive operations are intended.',
+            self::AbilitiesExecuteDestructive => 'Execute downstream abilities classified as destructive on sites inside the user\'s effective site scope. This permission should remain unavailable unless destructive operations are intended.',
             self::AbilitiesExecuteUnclassified => 'Execute downstream abilities whose safety class cannot be determined. This is a separate high-trust fallback and is not implied by read-only or mutating execution.',
             self::ActivityView => 'Open the activity feed. Non-owner results are constrained to sites visible through sites.view and the effective site scope; owners retain unrestricted recovery visibility.',
             self::UsersView => 'View local Gateway user accounts. This is Gateway-wide and does not itself allow changing access.',

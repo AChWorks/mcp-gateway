@@ -66,7 +66,7 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Global permission restrictions') }}</legend>
-            <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. Owner restrictions are intentionally ignored and cleared.') }}</p>
+            <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. The scope badge describes what the permission acts on; a Site-scoped denial here applies across every site in the user's effective scope. Owner restrictions are intentionally ignored and cleared.') }}</p>
             @php($selectedDenials = old('denied_permissions', $deniedPermissions))
             <div class="checkbox-grid">
                 @foreach ($permissions as $permission)
