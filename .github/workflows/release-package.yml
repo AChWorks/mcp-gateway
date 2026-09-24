@@ -126,15 +126,19 @@ jobs:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
         run: bash bin/verify-update-package.sh "dist/$UPDATE_PACKAGE.zip"
 
-      - name: Download released v1.1.2 deployment baseline
+      - name: Download released deployment baselines
         if: steps.publish.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
-          gh release download v1.1.2 --pattern 'mcp-gateway-v1.1.2.zip' --dir dist/baseline
+          for version in 1.1.2 1.1.10; do
+            gh release download "v$version" \
+              --pattern "mcp-gateway-v$version.zip" \
+              --dir dist/baseline
+          done
 
-      - name: Verify released-baseline browser update
+      - name: Verify released-baseline browser updates
         if: steps.publish.outputs.needed == 'true'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
@@ -144,12 +148,14 @@ jobs:
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
-        run: >-
-          bash bin/test-update-package.sh
-          dist/$UPDATE_PACKAGE.zip
-          dist/baseline/mcp-gateway-v1.1.2.zip
+        run: |
+          for version in 1.1.2 1.1.10; do
+            bash bin/test-update-package.sh \
+              "dist/$UPDATE_PACKAGE.zip" \
+              "dist/baseline/mcp-gateway-v$version.zip"
+          done
 
-      - name: Verify backup integrity fail-safe
+      - name: Verify released-baseline backup integrity fail-safe
         if: steps.publish.outputs.needed == 'true'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
@@ -158,10 +164,12 @@ jobs:
           UPDATE_TEST_DB_DATABASE: mcp_gateway_test
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
-        run: >-
-          bash bin/test-update-backup-integrity.sh
-          dist/$UPDATE_PACKAGE.zip
-          dist/baseline/mcp-gateway-v1.1.2.zip
+        run: |
+          for version in 1.1.2 1.1.10; do
+            bash bin/test-update-backup-integrity.sh \
+              "dist/$UPDATE_PACKAGE.zip" \
+              "dist/baseline/mcp-gateway-v$version.zip"
+          done
 
       - name: Publish GitHub release
         if: steps.publish.outputs.needed == 'true'
@@ -174,7 +182,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > dist/release-notes.md <<EOF_NOTES
+          grep -Fqx "# MCP Gateway v$VERSION" RELEASE_NOTES.md || {
+            echo "RELEASE_NOTES.md must identify the exact VERSION ($VERSION)." >&2
+            exit 1
+          }
+          cp RELEASE_NOTES.md dist/release-notes.md
+          cat >> dist/release-notes.md <<EOF_NOTES
+
           MCP Gateway v$VERSION ships two verified operator artifacts built from the same production runtime tree.
 
           ## Fresh installation
