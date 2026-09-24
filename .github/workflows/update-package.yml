@@ -135,10 +135,13 @@ jobs:
         run: |
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
-          release_zip="mcp-gateway-v$version.zip"
+          release_package="mcp-gateway-v$version"
+          release_zip="$release_package.zip"
           update_zip="mcp-gateway-update-v$version.zip"
-          cp dist/mcp-gateway-update-test-runtime.zip "dist/$release_zip"
+          bash bin/build-release-package.sh "$release_package"
+          bash bin/verify-release-package.sh "dist/$release_zip" "$release_package"
           cp dist/mcp-gateway-update-ci.zip "dist/$update_zip"
+          bash bin/verify-update-package.sh "dist/$update_zip"
           (
             cd dist
             sha256sum "$release_zip" > "$release_zip.sha256"
