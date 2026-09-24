@@ -17,7 +17,7 @@ final class AdminUiPresentationTest extends TestCase
         $this->actingAs($this->owner())
             ->get('/admin/users/create')
             ->assertOk()
-            ->assertSee('css/admin.css?v=1.2.0', false);
+            ->assertSee('css/admin.css?v=1.2.1', false);
     }
 
     public function test_permission_controls_explain_title_scope_and_effective_behavior(): void
