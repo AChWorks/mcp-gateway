@@ -25,6 +25,8 @@ spec:
       - oauth-authorization
     consumes:
       - lifecycle-contract
+      - validation-evidence-contract
+      - external-effect-safety-contract
 
   interfaces:
     - type: https-mcp
