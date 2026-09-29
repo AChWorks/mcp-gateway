@@ -46,5 +46,5 @@ spec:
 
   extensions:
     achworks:
-      ecosystemPlatform: AChWorks/platform
+      ecosystemPlatform: AChWorks/koinon
       applicationFoundationConsumption: none-currently

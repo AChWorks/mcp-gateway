@@ -6,7 +6,7 @@ Repository: `AChWorks/mcp-gateway`
 
 ### AChWorks ecosystem relationship
 
-`AChWorks/platform` owns ecosystem-level governance, discovery, and generic cross-project contracts. This repository remains authoritative for MCP Gateway product intent, architecture, implementation, Issues/PRs/CI, releases, and deployment behavior.
+**Koinon** (`AChWorks/koinon`) owns ecosystem-level governance, discovery, and generic cross-project contracts. This repository remains authoritative for MCP Gateway product intent, architecture, implementation, Issues/PRs/CI, releases, and deployment behavior.
 
 **AChrix** (`AChWorks/achrix`) is not currently a runtime dependency. Any future Foundation consumption or capability promotion must be justified by current executable Foundation evidence and real multi-consumer convergence rather than by organization membership alone.
 
