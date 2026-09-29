@@ -44,6 +44,7 @@ final class SiteHealthTest extends TestCase
 
     public function test_unknown_and_recovery_order_use_microsecond_evidence(): void
     {
+        $this->travelTo(CarbonImmutable::parse('2026-09-23 10:00:01.000000'));
         $health = app(SiteHealth::class);
         $site = $this->site();
         $site->forceFill([
