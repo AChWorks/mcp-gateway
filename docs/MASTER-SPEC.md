@@ -71,11 +71,15 @@ The public MCP endpoint is stable independently of the number or connector types
 
 The Gateway exposes a deliberately bounded tool surface whose size scales with supported capability families, **not** Target inventory size. Target identity must be explicit in every Target-specific operation. A mutable implicit "active target" must not be required for correctness, especially for writes, destructive actions, or privilege-sensitive operations.
 
-### 4.3 Preserve direct WP AI Bridge operation
+### 4.3 Preserve supported direct connector operation
 
-WP AI Bridge must continue to work directly with ChatGPT exactly as it does without the Gateway. Gateway support is additive and optional.
+Gateway integration is additive where a supported backend already has a valid direct-client mode.
 
-The Gateway must not require a site owner to disable the site's direct MCP endpoint or change existing ChatGPT connections.
+WP AI Bridge must continue to work directly with ChatGPT exactly as it does without the Gateway. AI Server Agent must likewise retain its supported direct MCP connection modes when its Gateway connector is added.
+
+The Gateway must not require an operator to disable a backend's supported direct endpoint or abandon an existing supported direct connection merely to register that backend as a Target.
+
+Future connectors must state explicitly whether a direct mode exists; the core must not invent one where the downstream product has none.
 
 ### 4.4 Simple now, extensible later
 
@@ -91,7 +95,7 @@ Do not build a plugin marketplace, dynamic connector loader, workflow engine, or
 
 The Gateway has no fixed product-level maximum Target count. Capacity is an engineering property to be measured against the supported deployment profile, not a marketing promise inferred from a synthetic fixture.
 
-Registered but idle Targets should have near-zero dynamic cost beyond durable database storage. Target inventory queries, client responses, administration pages, activity views, and future management surfaces must remain bounded rather than loading or rendering the whole fleet by default.
+Registered but idle Targets should have near-zero dynamic cost beyond durable database storage. A connector may perform bounded credential/lifecycle maintenance only when its real contract requires it; that must not imply a dedicated worker, persistent connection, or continuous polling loop per Target. Target inventory queries, client responses, administration pages, activity views, and future management surfaces must remain bounded rather than loading or rendering the whole fleet by default.
 
 Near-term validation should prove comfortable operation for the fleet sizes that are realistically expected next (currently hundreds of registered Targets). Larger synthetic fixtures may be used to expose query, memory, response-size, or indexing limits and preserve growth headroom, but they do not create a universal supported-Target-count guarantee.
 
@@ -122,6 +126,8 @@ Use Laravel/framework facilities and mature maintained libraries for security-se
 Examples include authentication/authorization primitives, queue abstractions, storage adapters, and protocol libraries. Third-party adoption must still be justified by compatibility, maintenance quality, security posture, migration cost, and the actual product need. Do not add a dependency merely because it exists, and do not reimplement a mature capability merely to avoid a small well-bounded dependency.
 
 ## 5. V1 scope
+
+This section records the integrated WordPress-first V1 baseline and remains useful regression/compatibility evidence. Program #106 intentionally replaces generic Site-shaped core terminology for the next breaking foundation; the V1 nouns below are not requirements to preserve Site as the future shared domain.
 
 ### 5.1 Administration panel
 
@@ -382,6 +388,8 @@ The architecture must permit, without requiring all of this in V1:
 Future features must preserve the core trust rule: the Gateway routes explicitly authorized capabilities; it does not silently convert connector access into unrestricted infrastructure access. They must also preserve the preference for the smallest reliable deployment that satisfies measured workload.
 
 ## 14. V1 success criteria
+
+These criteria record the completed/integrated WordPress-first V1 acceptance baseline. They remain regression evidence for future releases, but they are not the completion criteria for the active connector-neutral Target program; Program #106 owns that next outcome.
 
 V1 is successful when all of the following are demonstrated against supported test/deployment environments:
 
