@@ -435,6 +435,10 @@ Connector-owned code determines:
 
 Ordinary Target list/dashboard rendering reads stored evidence only and never fans out across all Targets.
 
+Keep **endpoint compatibility/discovery** distinct from **authenticated connection health**. Registering or rediscovering a connector can prove that an endpoint speaks a compatible contract; a UI/API action named "Test connection" for an already connected Target should perform the strongest safe non-mutating end-to-end check the connector supports, including current credential use where applicable. Do not report "connected/healthy" merely because unauthenticated metadata is reachable.
+
+Stored evidence may keep bounded timestamps/error classifications for these dimensions when operators need to distinguish them, without turning health into continuous polling.
+
 ### Lifecycle concurrency and remote I/O
 
 Do not hold a database transaction, row lock, or scarce database connection open across downstream HTTP/MCP/OAuth calls.
