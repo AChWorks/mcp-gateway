@@ -143,7 +143,7 @@ Provide a small server-rendered web panel with:
 - view the Gateway MCP endpoint and client connection information;
 - minimal application settings that are genuinely required.
 
-V1 does not require complex role management or organization hierarchy. The current interface may remain optimized for one trusted administrator, but near-term evolution must support multiple local users with lightweight permission-based access levels through the same server-side authorization boundary.
+V1 does not require complex organization hierarchy or enterprise RBAC. The integrated baseline already supports multiple local users with lightweight Owner/Administrator/Operator/Viewer permission bundles plus denial-only resource narrowing through the same server-side authorization boundary; the Target transition must preserve that capability without turning it into a second policy engine.
 
 ### 5.2 WP AI Bridge site registration
 
@@ -381,19 +381,20 @@ V1 deliberately does not provide:
 
 ## 13. Future evolution
 
-The architecture must permit, without requiring all of this in V1:
+The integrated baseline already includes lightweight multi-user roles, scoped Site Groups, bounded stored health evidence, and a selected-site bulk health-check operation. Program #106 renames/generalizes those capabilities into Target semantics; they are not future promises.
 
-- additional remote MCP clients beyond ChatGPT and non-MCP administration/API/automation consumers that reuse the same application authorization and target rules;
-- multiple Gateway administrator/operator accounts with lightweight permission-based roles and Target/Target-Group-scoped access through the existing policy boundary;
-- Target grouping/tags and other bounded inventory organization;
+Beyond that current baseline, the architecture must permit:
+
+- additional remote MCP clients beyond ChatGPT and non-MCP administration/API/automation consumers that reuse the same application authorization and Target rules;
+- richer Target grouping/tags or organization aids beyond the current flat Group model when a real workflow needs them;
 - additional backend connector types beyond WP AI Bridge and AI Server Agent, such as other MCP servers or deliberately supported APIs/services;
 - connector capability discovery without forcing every connector into WordPress/WP AI Bridge semantics;
-- more detailed stored health/usage reporting without synchronous fleet-wide fan-out;
-- explicit bulk-operation/job orchestration when publishing, editing, backup, maintenance, or similar multi-target workflows justify asynchronous work;
+- richer stored health/usage reporting while preserving the no-fleet-wide-render-fan-out rule;
+- additional explicit bulk-operation/job workflows when publishing, editing, backup, maintenance, or similar multi-Target work justifies asynchronous execution;
 - storage integrations for backup/media/export workflows where the Gateway should coordinate rather than become the data path;
 - webhooks or automation where a concrete use case justifies them;
 - optional queue/cache/search infrastructure and additional application nodes when measured active workload requires them;
-- horizontal/runtime scaling without changing stable target identity or weakening authorization boundaries.
+- horizontal/runtime scaling without changing stable Target identity or weakening authorization boundaries.
 
 Future features must preserve the core trust rule: the Gateway routes explicitly authorized capabilities; it does not silently convert connector access into unrestricted infrastructure access. They must also preserve the preference for the smallest reliable deployment that satisfies measured workload.
 
