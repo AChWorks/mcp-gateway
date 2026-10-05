@@ -52,11 +52,13 @@ The core must not translate every downstream concept into Target. "Target" ident
 
 ### Target identity invariants
 
-A Target has three deliberately separate identities:
+A Target always has two core identities and may also have a connector-owned verified remote identity:
 
 1. the database primary key, used only as an internal relational identity;
 2. immutable Gateway-local `target_id`, used by Admin/MCP/application routing;
-3. connector-specific downstream identity, such as a canonical WP resource identity or AI Server Agent `instance_id`.
+3. when the connector exposes one, a connector-specific remote identity such as AI Server Agent `instance_id`.
+
+The shared core must not invent a fake immutable remote identity for a connector that does not expose one. For WP AI Bridge, canonical origin/resource metadata can remain the connector's endpoint/resource binding without pretending it is an opaque permanent instance ID.
 
 `target_id` must remain a stable, bounded human-readable machine identifier. Keep the existing 64-character lowercase slug shape unless implementation evidence proves a concrete need to widen it.
 
@@ -66,9 +68,9 @@ Never derive `target_id` from hostname, URL, IP address, WordPress site URL, Age
 
 `connector_type` is immutable for an existing Target. Changing a Target from one connector family to another means registering a new Target rather than mutating the security/credential interpretation of the old record.
 
-Downstream duplicate/reservation rules are connector-scoped. A canonical remote identity is unique only according to that connector's real semantics; do not make one global URL hash prohibit unrelated connector families that legitimately share the same origin.
+Downstream duplicate/reservation rules are connector-scoped. A canonical remote identity or connector-owned canonical target key is unique only according to that connector's real semantics; do not make one global URL hash prohibit unrelated connector families that legitimately share the same origin.
 
-Endpoint changes are explicit reassignments. After a Target has a verified downstream identity, reconnect/reassignment must fail closed if the endpoint resolves to a different downstream identity unless the operator intentionally performs the supported reassignment flow.
+Endpoint changes are explicit reassignments. When a connector exposes a trustworthy stable remote identity, reconnect/reassignment must fail closed if the endpoint resolves to a different identity unless the operator intentionally performs the supported reassignment flow. Connectors without such an identity must define an equally explicit connector-owned rebinding/reauthorization rule rather than relying on a shared guess.
 
 ## 3. Breaking compatibility decision
 
@@ -173,6 +175,8 @@ Examples:
 Connector-owned OAuth flows, refresh-recovery state, authorization metadata, or other temporary credential state do not become generic Target fields merely because WP AI Bridge needs them.
 
 Secrets never belong in Target list/context responses, normal activity, logs or UI diagnostics.
+
+Connector onboarding that accepts a secret through the Admin UI treats that field as write-only: never repopulate it through `old()`/validation session flashing, never include it in activity or request diagnostics, and never persist plaintext outside the immediate request-to-encrypted-custody flow. A validation failure must ask the operator to re-enter the secret rather than echoing it back.
 
 ## 6. Connector contract
 
@@ -447,6 +451,17 @@ Permission scope is defined by policy metadata, not inferred from the string pre
 
 Exact role bundles must be explicit and tested; adding a connector permission never becomes implicitly allowed through a wildcard. MCP tool annotations are not authorization.
 
+The accepted initial role ceiling for Agent capabilities is intentionally conservative:
+
+- Owner retains the existing recovery rule and can exercise every permission;
+- Administrator may be configured for the full Agent permission family;
+- Operator's default ceiling adds only `agent.environment.read` and `agent.command.run`;
+- Viewer adds only `agent.environment.read`.
+
+Existing non-owner accounts are migrated with explicit global denials for every newly introduced `agent.*` permission that would otherwise enter their role ceiling. New non-owner account creation must present Agent permissions visibly and default the high-risk Agent family to denied until the administrator deliberately enables it. This uses the existing denial model instead of inventing a second grant engine.
+
+Input-sensitive authorization must close privilege-composition gaps. In particular, `agent-start-job` with `root=true` requires both `agent.job.start` and `agent.root_command.run`; possession of the job-start permission must never become an alternate path to root. The same rule applies to any future tool whose arguments materially elevate the operation above its base permission.
+
 During the breaking Site -> Target migration, existing users/roles must not become more privileged accidentally. Preserve users and role identity, translate one-to-one generic permission denials where semantics remain identical, reset Target/group-specific membership with the intentionally discarded Target inventory, and leave selected-scope users with an empty Target set until explicitly reassigned. Any permission mapping whose semantics changed or are ambiguous must fail closed or require explicit administrator reconciliation rather than being silently dropped.
 
 The known one-to-one permission renames are explicit: `connection.view -> gateway.connection.view`, `sites.* -> targets.*`, Site-scoped `connections.connect/reconnect/disconnect/test -> targets.connect/reconnect/disconnect/test`, and `abilities.* -> wordpress.abilities.*`. This translation preserves existing WordPress authority while keeping new Agent permissions separate.
@@ -606,6 +621,8 @@ Adding AI Server Agent must not create a general internal-network SSRF tunnel.
 
 If a future product requires private/internal Targets, that trust/topology change is a separate explicit security decision.
 
+The first AI Server Agent connector therefore uses a public HTTPS Agent endpoint that satisfies the existing outbound policy. Agent local/private direct-client modes remain valid Agent features, but they are not implicitly Gateway-reachable and must not be used as a reason to relax RFC1918/loopback/link-local protections.
+
 ## 14a. Error and outcome contract
 
 The public Gateway error/outcome model is small and connector-neutral. Connector-specific remote text never becomes an unbounded public error contract.
@@ -738,7 +755,8 @@ A third connector should not require another generic-domain rename.
 
 Before adding one, document:
 
-- Target identity;
+- Gateway-local Target identity and any connector-owned remote identity/canonical target key;
+- supported network/topology and SSRF trust boundary;
 - connector authentication/credential lifecycle;
 - registration/discovery;
 - health;
