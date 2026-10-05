@@ -384,8 +384,8 @@ V1 deliberately does not provide:
 The architecture must permit, without requiring all of this in V1:
 
 - additional remote MCP clients beyond ChatGPT and non-MCP administration/API/automation consumers that reuse the same application authorization and target rules;
-- multiple Gateway administrator/operator accounts with lightweight permission-based roles, followed by site/group-scoped access only when a concrete workflow requires it;
-- site grouping/tags and other bounded inventory organization;
+- multiple Gateway administrator/operator accounts with lightweight permission-based roles and Target/Target-Group-scoped access through the existing policy boundary;
+- Target grouping/tags and other bounded inventory organization;
 - additional backend connector types beyond WP AI Bridge and AI Server Agent, such as other MCP servers or deliberately supported APIs/services;
 - connector capability discovery without forcing every connector into WordPress/WP AI Bridge semantics;
 - more detailed stored health/usage reporting without synchronous fleet-wide fan-out;
