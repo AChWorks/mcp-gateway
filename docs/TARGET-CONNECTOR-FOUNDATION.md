@@ -301,6 +301,10 @@ Every connector-specific tool requires explicit `target_id`. Do not expose a pub
 
 Every public tool must carry behaviorally correct MCP annotations. Read-only/destructive/idempotent/open-world hints describe **tool behavior**, not authorization level. In particular, a connector operation can be read-only yet still security-sensitive (for example reading a host file), so annotations must never substitute for Gateway permission checks.
 
+When a single tool can dispatch operations with different safety classes, its static annotation is conservative. `wordpress-ability-execute` can execute destructive/unclassified downstream Abilities, so its public MCP annotation must not advertise it as read-only or non-destructive merely because some individual Ability calls are safe. Runtime classification still controls Gateway authorization.
+
+The Agent tools follow the same rule. Arbitrary `agent-run-command` is mutation-capable even as the unprivileged worker and must carry a destructive-capable annotation; `agent-run-root-command`, job start/stop, file write, browser setup/run are likewise mutation-capable. Read/status/output/file-read tools may remain read-only annotations while still enforcing their separate security permissions.
+
 Use stable output schemas for structured Gateway-owned responses where practical. Return only user/model-relevant product data. Internal correlation/request/session/trace IDs, raw downstream endpoints, credential metadata and other implementation telemetry stay server-side by default; if a future support reference is genuinely needed, design it explicitly rather than leaking internal tracing fields.
 
 ### Core tools
