@@ -51,7 +51,7 @@ Program Issue #106 accepts a breaking redesign before AI Server Agent becomes th
 
 - shared domain/persistence/access/Admin/MCP vocabulary becomes `Target`, not `Site`;
 - current Target/connector connection data may be reset rather than preserved through a dual compatibility model;
-- immutable Gateway-local `target_id` is distinct from connector-specific downstream identity and mutable endpoint/URL;
+- immutable Gateway-local `target_id` is distinct from mutable endpoint/URL and from any connector-owned stable remote identity/canonical target key when that connector exposes one;
 - `connector_type` is immutable for one Target and downstream duplicate/reservation identity is connector-scoped;
 - generic state lives in Target-owned structures while connector-specific configuration and temporary authorization state remain connector-owned;
 - generic credential custody is purpose-aware and Target+connector bound rather than permanently one credential row per Target;
