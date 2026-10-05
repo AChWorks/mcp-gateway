@@ -51,12 +51,18 @@ Program Issue #106 accepts a breaking redesign before AI Server Agent becomes th
 
 - shared domain/persistence/access/Admin/MCP vocabulary becomes `Target`, not `Site`;
 - current Target/connector connection data may be reset rather than preserved through a dual compatibility model;
-- generic state lives in Target-owned structures while connector-specific configuration remains connector-owned;
-- connector selection uses an explicit built-in registry/factory;
-- shared downstream MCP framing moves behind a Gateway-owned remote MCP client;
-- public tool count scales with connector capability families, not Target inventory;
-- AI Server Agent remains downstream-authoritative for protected/root/approval behavior;
-- idle Targets retain near-zero dynamic runtime cost.
+- immutable Gateway-local `target_id` is distinct from mutable endpoint/URL and from any connector-owned stable remote identity/canonical target key when that connector exposes one;
+- `connector_type` is immutable for one Target and downstream duplicate/reservation identity is connector-scoped;
+- generic state lives in Target-owned structures while connector-specific configuration and temporary authorization state remain connector-owned;
+- generic credential custody is purpose-aware and Target+connector bound rather than permanently one credential row per Target;
+- connector selection uses an explicit built-in registry/factory with a small static connector descriptor;
+- connector-specific operation permissions are namespaced and never forced into WP Ability semantics;
+- shared downstream MCP framing moves behind a Gateway-owned remote MCP client that supports the real modern-stateless and legacy-session connector requirements;
+- generic outbound MCP/HTTP infrastructure uses connector-neutral bounds/configuration rather than `bridge.*` defaults;
+- public tool count scales with connector capability families, not Target inventory, and public tools expose correct annotations/bounded schemas without internal tracing telemetry;
+- remote connector I/O runs outside database row-lock transactions using short prepare/claim and finalize phases;
+- AI Server Agent remains downstream-authoritative for protected/root/approval behavior and is bound by stable non-secret Agent instance identity;
+- idle Targets retain near-zero dynamic runtime cost, allowing only bounded connector-required lifecycle maintenance rather than per-Target runtime infrastructure.
 
 The full accepted design and implementation constraints are in [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md).
 
@@ -89,6 +95,10 @@ Legacy 2025-era Streamable HTTP compatibility still spans multiple HTTP requests
 The SDK Streamable HTTP transport also applies DNS-rebinding protection with localhost-oriented defaults. The public `/mcp` implementation explicitly allows the configured canonical Gateway host while retaining that protection; do not disable host validation merely to make a deployed hostname work.
 
 The official PHP SDK acts as an OAuth Resource Server and can delegate to an authorization server; it intentionally does not mint OAuth tokens itself. MCP Gateway therefore must not assume that `mcp/sdk` is its complete authorization server.
+
+The current downstream WP AI Bridge connector still uses the 2025-era initialize/session MCP contract, while current AI Server Agent uses modern stateless Streamable HTTP. Program #106 therefore must not keep the WP-specific hand-written session flow as the universal downstream client. Prefer the maintained SDK client/transport with connector-specific compatibility selection; exact protocol revisions stay in current contract tests/release evidence.
+
+All MCP implementation/client/server version fields must come from real release/build identity. Placeholder values such as `0.1.0` are test/bootstrap implementation detail only and must not be advertised by the production Gateway after the breaking foundation is implemented.
 
 ### OAuth implementation rule
 
