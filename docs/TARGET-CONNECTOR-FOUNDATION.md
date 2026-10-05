@@ -381,11 +381,13 @@ Performance is a design requirement, not a later cleanup phase.
 
 A registered but idle Target should impose approximately durable-storage cost only.
 
+Connector-required credential/lifecycle maintenance may run as bounded shared work when a real connector contract requires it (for example, expiring renewable credentials). That exception must remain proportional and must not turn into permanent per-Target runtime infrastructure.
+
 Do not require:
 
 - one persistent connection per Target;
 - one worker per Target;
-- one recurring polling job per Target;
+- one recurring polling loop/job per Target;
 - tool registration per Target.
 
 ### Hot paths
