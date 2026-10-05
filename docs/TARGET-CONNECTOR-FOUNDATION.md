@@ -584,10 +584,12 @@ The exact implementation must still be engineered as a deterministic upgrade:
 - no hidden best-effort partial conversion;
 - no accidental loss of unrelated Admin/Gateway OAuth/signing state;
 - explicit preflight;
-- explicit operator-visible breaking note;
-- exact target-data ownership list;
-- tested updater behavior;
+- explicit operator-visible breaking note and deliberate confirmation for the Target/connection reset;
+- exact target-data ownership list and, where practical, a preflight count/summary of affected Target records;
+- tested updater behavior from the immediately preceding stable release as well as any retained historical baselines;
 - fail-closed recovery semantics.
+
+The existing browser updater's private recovery backup is a **code/files backup, not a database backup**. The major breaking update must not present it as protection for a destructive schema migration. Release/update guidance and acceptance must require a consistent operator-restorable database backup before migration starts, or introduce an independently verified database-backup mechanism if the product later chooses to automate that requirement.
 
 If a migration has started, existing updater rules about unknown database state continue to apply. Do not invent a blind rollback.
 
