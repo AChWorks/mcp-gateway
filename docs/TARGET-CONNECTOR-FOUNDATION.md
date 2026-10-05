@@ -246,6 +246,8 @@ The remote MCP client and generic outbound HTTP policy must read connector-neutr
 
 Response/request bounds need a shared absolute safety ceiling plus connector/tool-specific bounded limits. Do not copy WP AI Bridge's current 64 KiB response limit onto AI Server Agent tools whose existing direct contract can return much larger command/file output, and do not raise the global Gateway limit for every connector merely to match the largest Agent payload.
 
+Timeouts are likewise connector/tool-aware. Do not apply the current short WP metadata/request timeout blindly to Agent command/browser/setup operations. Long-running user work should prefer the Agent's persistent job mechanism; any synchronous timeout remains bounded, and a timed-out mutation with uncertain remote completion is reported as `outcome_unknown` rather than automatically retried.
+
 Prefer bounded/chunked machine contracts for potentially large Agent data. Persistent job output already has offset/limit semantics; the Agent-side Gateway contract should add similarly machine-readable bounds/truncation/range information where needed so normal Gateway calls remain memory/network efficient under concurrency.
 
 The remote MCP client must not know WordPress Ability semantics or AI Server Agent root-approval semantics.
