@@ -89,11 +89,11 @@ Do not build a plugin marketplace, dynamic connector loader, workflow engine, or
 
 ### 4.5 Scale with active work, not registered inventory
 
-The Gateway has no fixed product-level maximum site count. Capacity is an engineering property to be measured against the supported deployment profile, not a marketing promise inferred from a synthetic fixture.
+The Gateway has no fixed product-level maximum Target count. Capacity is an engineering property to be measured against the supported deployment profile, not a marketing promise inferred from a synthetic fixture.
 
-Registered but idle targets should have near-zero dynamic cost beyond durable database storage. Site inventory queries, client responses, administration pages, activity views, and future management surfaces must remain bounded rather than loading or rendering the whole fleet by default.
+Registered but idle Targets should have near-zero dynamic cost beyond durable database storage. Target inventory queries, client responses, administration pages, activity views, and future management surfaces must remain bounded rather than loading or rendering the whole fleet by default.
 
-Near-term validation should prove comfortable operation for the fleet sizes that are realistically expected next (currently hundreds of registered sites). Larger synthetic fixtures may be used to expose query, memory, response-size, or indexing limits and preserve growth headroom, but they do not create a supported-site-count guarantee.
+Near-term validation should prove comfortable operation for the fleet sizes that are realistically expected next (currently hundreds of registered Targets). Larger synthetic fixtures may be used to expose query, memory, response-size, or indexing limits and preserve growth headroom, but they do not create a universal supported-Target-count guarantee.
 
 Infrastructure should scale only when active workload justifies it. Redis, dedicated queue workers, search services, extra application nodes, or similar components remain optional escalation mechanisms rather than prerequisites for storing a larger inventory.
 
@@ -101,7 +101,7 @@ Infrastructure should scale only when active workload justifies it. Redis, dedic
 
 Administrative authorization must be expressed through explicit permissions/policies at the application boundary. Named roles are convenience bundles of permissions, not hard-coded business rules.
 
-The initial product may remain operationally simple, but the architecture must permit multiple local administrator/operator accounts and a small number of understandable access levels without replacing the authentication model. Future resource scoping such as site groups or per-site access must be addable through the same policy boundary rather than by rewriting controllers and application services.
+The initial product may remain operationally simple, but the architecture must permit multiple local administrator/operator accounts and a small number of understandable access levels without replacing the authentication model. Resource scoping through Target Groups and direct per-Target access must use the same policy boundary rather than being reimplemented by controllers, connector code, or transport adapters.
 
 Complex organization hierarchies, public tenancy, billing, and enterprise identity governance are not implied by this requirement.
 
