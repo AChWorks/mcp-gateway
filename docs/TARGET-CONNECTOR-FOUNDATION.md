@@ -406,6 +406,8 @@ Examples of connector-owned permission families include WordPress Ability inspec
 
 During the breaking Site -> Target migration, existing users/roles must not become more privileged accidentally. Preserve users and role identity, translate one-to-one generic permission denials where semantics remain identical, reset Target/group-specific membership with the intentionally discarded Target inventory, and leave selected-scope users with an empty Target set until explicitly reassigned. Any permission mapping whose semantics changed or are ambiguous must fail closed or require explicit administrator reconciliation rather than being silently dropped.
 
+New connector permissions are especially sensitive: an existing non-owner account that previously administered WordPress must not silently gain Linux command/root/file/browser authority merely because AI Server Agent was added. The migration/default-role plan must preserve equal-or-narrower effective authority for existing non-owner accounts until those new connector capabilities are explicitly enabled through the supported access-management model.
+
 Connector-specific downstream authorization remains independent:
 
 ```text
