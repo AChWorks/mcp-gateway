@@ -599,6 +599,28 @@ Adding AI Server Agent must not create a general internal-network SSRF tunnel.
 
 If a future product requires private/internal Targets, that trust/topology change is a separate explicit security decision.
 
+## 14a. Error and outcome contract
+
+The public Gateway error/outcome model is small and connector-neutral. Connector-specific remote text never becomes an unbounded public error contract.
+
+Use stable common categories where semantics are shared, including the equivalents of:
+
+```text
+target_not_found        # also used where needed to avoid unauthorized Target enumeration
+target_not_connected
+target_unavailable
+connector_incompatible
+authorization_denied
+approval_required       # with bounded structured approval details
+invalid_input
+rate_limited
+outcome_unknown         # mutation may have completed remotely; never blind-retry
+```
+
+A connector may retain a bounded namespaced diagnostic code such as `wordpress.*` or `agent.*` in server-side activity/health evidence when it materially helps diagnosis. Publicly return connector-specific detail only when it is stable, safe and actionable for the client; never forward arbitrary downstream exception strings, stack traces, host details or secret-bearing payloads.
+
+Authorization filtering preserves the existing anti-enumeration rule: an out-of-scope Target must not become distinguishable from a nonexistent Target through MCP error detail.
+
 ## 15. Observability and activity
 
 Activity must remain bounded and secret-safe.
