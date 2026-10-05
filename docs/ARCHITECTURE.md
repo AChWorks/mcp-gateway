@@ -43,6 +43,25 @@ The Gateway is a modular monolith. There is one application process model and on
 
 WordPress/WP AI Bridge is the first concrete connector path, but the long-lived core is a connector-neutral control plane over stable registered target identity, authorization, inventory, routing, activity, and future operation state. Fleet size is not encoded as a fixed architecture ceiling; capacity is proven incrementally on the supported single-host shape before auxiliary infrastructure is introduced.
 
+### Accepted breaking Target/connector foundation
+
+The diagram above and Site-named components below describe the **currently integrated V1-era implementation**. They are not the accepted naming/storage boundary for the next connector.
+
+Program Issue #106 accepts a breaking redesign before AI Server Agent becomes the second supported connector. The target-state contract is:
+
+- shared domain/persistence/access/Admin/MCP vocabulary becomes `Target`, not `Site`;
+- current Target/connector connection data may be reset rather than preserved through a dual compatibility model;
+- generic state lives in Target-owned structures while connector-specific configuration remains connector-owned;
+- connector selection uses an explicit built-in registry/factory;
+- shared downstream MCP framing moves behind a Gateway-owned remote MCP client;
+- public tool count scales with connector capability families, not Target inventory;
+- AI Server Agent remains downstream-authoritative for protected/root/approval behavior;
+- idle Targets retain near-zero dynamic runtime cost.
+
+The full accepted design and implementation constraints are in [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md).
+
+Until Program #106 is integrated, references in this document to `SiteRegistry`, `SiteInventory`, `site_id`, Site Groups, Site credentials, and the V1 WordPress-only tool surface remain descriptions of current source, not requirements to preserve those generic names.
+
 ## 2. Technology baseline
 
 ### Runtime
@@ -146,7 +165,7 @@ The application/domain layer is the long-lived control-plane boundary. MCP, the 
 
 The project still stops short of a speculative provider framework, but the current scalability evidence in Issue #53 is now a concrete trigger for the first small extraction: admin and MCP inventory consumers need one shared, bounded site-inventory/query boundary instead of independently loading or filtering the fleet. That boundary should own reusable search/filter/order/page semantics and selected projections while remaining an application query service, not a generic repository framework.
 
-Connector generalization remains trigger-driven. Keep the current concrete `WpAiBridge` implementation behind its connector boundary, and introduce only the smallest connector-selection/capability abstraction required by real callers. A second connector/provider is the normal trigger for broader connector contracts; do not invent empty capability methods in advance.
+Connector generalization remains evidence-driven. The second real connector is now accepted: AI Server Agent under Program #106. This satisfies the previous trigger for a broader but still small connector contract. Extract only semantics demonstrated by WP AI Bridge and AI Server Agent; do not turn the redesign into a speculative provider SDK or dynamic plugin system.
 
 Keep these invariants:
 
@@ -350,7 +369,9 @@ Connector selection is centralized from the stored `connector_type` to a concret
 
 This is not a dynamic third-party plugin loader. Callers cannot supply class names, URLs, HTTP methods, or executable connector code. Unsupported connector types fail closed.
 
-A second real connector is the trigger to extract only the common contracts/capabilities that both implementations actually share. Until then, keep `WpAiBridge` concrete rather than designing a broad theoretical provider SDK.
+Program #106 supplies the second real connector: AI Server Agent. The implementation may now extract the smallest common connector contracts proven by `WpAiBridge` and `AiServerAgent`, plus a shared remote MCP protocol adapter where protocol mechanics are genuinely common. Connector-specific authorization, health, capability vocabulary, mutation semantics, and safety must remain inside the connector boundary.
+
+See [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md) for the accepted breaking target-state design.
 
 ### 4.10 Router
 
@@ -617,20 +638,22 @@ CI should run the highest-signal repository checks that can run deterministicall
 
 A future change must not casually violate these invariants:
 
-1. One Gateway deployment and one stable public MCP endpoint serve many configured targets.
-2. Site/target identity is explicit for every routed target operation.
-3. Per-site credentials are isolated.
-4. Gateway authorization cannot grant downstream authority the target principal/connector does not possess.
+1. One Gateway deployment and one stable public MCP endpoint serve many configured Targets.
+2. Target identity is explicit for every routed Target operation; writes/destructive operations never depend only on implicit conversational selection.
+3. Target credentials are isolated and connector-bound.
+4. Gateway authorization can narrow but cannot grant downstream authority the Target principal/connector does not possess.
 5. Direct WP AI Bridge operation remains independent of Gateway availability.
-6. No arbitrary HTTP/SQL/shell/filesystem proxy is introduced as a shortcut.
-7. Security-sensitive OAuth/token behavior is standards/library-backed and tested.
-8. V1 stays a normal PHP + MariaDB-primary/MySQL-compatible web application with no mandatory auxiliary services.
-9. WP AI Bridge-specific behavior stays behind its connector boundary; the core target/inventory/authorization model remains connector-neutral.
-10. Administrative authorization is permission/policy based; role names are replaceable bundles, not distributed business logic.
-11. Fleet discovery and administration are bounded; registered-but-idle sites do not create mandatory remote work.
-12. The Gateway scales infrastructure from measured active workload rather than from a fixed registered-site-count assumption.
-13. Heavy backup/media/export data stays off the Gateway data path by default when direct target-to-storage flow is possible.
-14. Active task/status truth stays in GitHub Issues/PRs, not this document.
+6. Direct AI Server Agent operation remains independent of Gateway availability once that connector is supported.
+7. No generic arbitrary HTTP/SQL/shell/filesystem proxy is introduced as a shortcut; privileged downstream capabilities exist only through explicit supported connector contracts.
+8. Security-sensitive OAuth/token/credential behavior is standards/library-backed where applicable, secret-safe, and tested.
+9. The supported baseline remains a normal PHP + MariaDB-primary/MySQL-compatible web application with no mandatory auxiliary services until measured workload requires them.
+10. Connector-specific behavior stays behind connector boundaries; the shared Target/inventory/authorization model does not require WordPress, OAuth, or Linux/server semantics.
+11. Administrative authorization is permission/policy based; role names are replaceable bundles, not distributed business logic.
+12. Fleet discovery and administration are bounded; registered-but-idle Targets do not create mandatory remote work, persistent downstream sessions, per-Target workers, or per-Target public tools.
+13. Infrastructure scales from measured active workload rather than registered Target count.
+14. Heavy backup/media/export data stays off the Gateway data path by default when direct Target-to-storage flow is possible.
+15. Historical V1 Site naming does not create a compatibility obligation after the accepted Program #106 breaking transition.
+16. Active task/status truth stays in GitHub Issues/PRs, not this document.
 
 ## 15. Bootstrap decisions and remaining verification points
 
