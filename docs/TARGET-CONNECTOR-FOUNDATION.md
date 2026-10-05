@@ -482,6 +482,13 @@ Connector-owned code determines:
 - how connector-specific failures map to bounded common state;
 - what extra diagnostics are safe to persist/display.
 
+Connection removal must distinguish **local credential forgetting** from **confirmed downstream revocation**. The Gateway must never report a Target as safely disconnected/revoked merely because its encrypted local credential row was deleted while the downstream principal may still be valid. Each connector must define one of these explicit outcomes:
+
+- revocation confirmed by the downstream authority, after which local credential removal may finalize; or
+- remote revocation unavailable/unconfirmed, in which case the Gateway forgets/local-disables only under an explicit operator-visible state and continues to report that downstream revocation may still be required.
+
+For AI Server Agent, the dedicated Gateway principal is independently revocable by design. The connector/Agent contract must either provide a bounded safe way to revoke that exact principal or make the required Agent-side operator revocation explicit and verifiable before claiming a complete disconnect.
+
 Ordinary Target list/dashboard rendering reads stored evidence only and never fans out across all Targets.
 
 Keep **endpoint compatibility/discovery** distinct from **authenticated connection health**. Registering or rediscovering a connector can prove that an endpoint speaks a compatible contract; a UI/API action named "Test connection" for an already connected Target should perform the strongest safe non-mutating end-to-end check the connector supports, including current credential use where applicable. Do not report "connected/healthy" merely because unauthenticated metadata is reachable.
