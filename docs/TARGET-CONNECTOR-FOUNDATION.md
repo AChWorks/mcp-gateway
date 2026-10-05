@@ -60,6 +60,8 @@ A Target has three deliberately separate identities:
 
 `target_id` must remain a stable, bounded human-readable machine identifier. Keep the existing 64-character lowercase slug shape unless implementation evidence proves a concrete need to widen it.
 
+Public MCP/Admin validation must use the same 64-character bound; do not advertise a wider 128-character public identifier while persistence accepts only 64.
+
 Never derive `target_id` from hostname, URL, IP address, WordPress site URL, Agent label, or another mutable endpoint.
 
 `connector_type` is immutable for an existing Target. Changing a Target from one connector family to another means registering a new Target rather than mutating the security/credential interpretation of the old record.
@@ -241,6 +243,10 @@ Use the maintained MCP PHP SDK client/transport where it can provide these seman
 For Program #106, the compatibility evidence must cover both real downstream generations: the modern stateless MCP path used by current AI Server Agent and the legacy/session path still required by the pinned WP AI Bridge contract. Prefer the modern stateless path when the downstream server negotiates/supports it; do not pay an initialize/session/close round-trip tax merely because the first connector needed sessions. Exact supported MCP revisions belong in current compatibility tests/release evidence rather than being frozen forever in this architecture document.
 
 The remote MCP client and generic outbound HTTP policy must read connector-neutral timeout/body-limit/network configuration. Generic infrastructure must not depend on `bridge.*` configuration merely because WP AI Bridge was the first consumer.
+
+Response/request bounds need a shared absolute safety ceiling plus connector/tool-specific bounded limits. Do not copy WP AI Bridge's current 64 KiB response limit onto AI Server Agent tools whose existing direct contract can return much larger command/file output, and do not raise the global Gateway limit for every connector merely to match the largest Agent payload.
+
+Prefer bounded/chunked machine contracts for potentially large Agent data. Persistent job output already has offset/limit semantics; the Agent-side Gateway contract should add similarly machine-readable bounds/truncation/range information where needed so normal Gateway calls remain memory/network efficient under concurrency.
 
 The remote MCP client must not know WordPress Ability semantics or AI Server Agent root-approval semantics.
 
