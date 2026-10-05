@@ -50,6 +50,24 @@ Connector-specific nouns remain connector-specific. A WordPress connector may st
 
 The core must not translate every downstream concept into Target. "Target" identifies the routable registered backend; it does not erase connector semantics.
 
+### Target identity invariants
+
+A Target has three deliberately separate identities:
+
+1. the database primary key, used only as an internal relational identity;
+2. immutable Gateway-local `target_id`, used by Admin/MCP/application routing;
+3. connector-specific downstream identity, such as a canonical WP resource identity or AI Server Agent `instance_id`.
+
+`target_id` must remain a stable, bounded human-readable machine identifier. Keep the existing 64-character lowercase slug shape unless implementation evidence proves a concrete need to widen it.
+
+Never derive `target_id` from hostname, URL, IP address, WordPress site URL, Agent label, or another mutable endpoint.
+
+`connector_type` is immutable for an existing Target. Changing a Target from one connector family to another means registering a new Target rather than mutating the security/credential interpretation of the old record.
+
+Downstream duplicate/reservation rules are connector-scoped. A canonical remote identity is unique only according to that connector's real semantics; do not make one global URL hash prohibit unrelated connector families that legitimately share the same origin.
+
+Endpoint changes are explicit reassignments. After a Target has a verified downstream identity, reconnect/reassignment must fail closed if the endpoint resolves to a different downstream identity unless the operator intentionally performs the supported reassignment flow.
+
 ## 3. Breaking compatibility decision
 
 This redesign is a deliberate clean break.
@@ -143,10 +161,14 @@ Target credentials are encrypted at rest and bound to:
 
 Core code may own encryption/storage mechanics. It must not assume that every credential is an OAuth access/refresh token.
 
+The generic credential store must be **purpose-aware**, not permanently one-row-per-Target. A connector may currently use one credential, but the durable uniqueness boundary should support `Target + connector + credential purpose` so future rotation, signing identity, delegated principals, or another connector requirement does not force another schema redesign.
+
 Examples:
 
 - WP AI Bridge: access/refresh authorization material;
 - AI Server Agent: dedicated named Agent credential.
+
+Connector-owned OAuth flows, refresh-recovery state, authorization metadata, or other temporary credential state do not become generic Target fields merely because WP AI Bridge needs them.
 
 Secrets never belong in Target list/context responses, normal activity, logs or UI diagnostics.
 
@@ -172,6 +194,10 @@ This is **not**:
 - a generic URL/method runner.
 
 Unsupported connector types fail closed.
+
+Each registered connector should expose only the smallest static descriptor needed by shared code, such as stable connector type, operator-facing label, supported lifecycle capabilities, and connector-owned permission/tool families. This descriptor is metadata for built-in code; it is not an executable plugin manifest.
+
+Shared code must not scatter `if connector_type == ...` decisions across controllers, authorization, Admin views and MCP handlers. Selection happens at the connector boundary, while business rules that truly span connectors stay in the application layer.
 
 ### What is allowed to become common
 
@@ -210,6 +236,12 @@ Responsibilities may include:
 - secret redaction;
 - protocol error normalization.
 
+Use the maintained MCP PHP SDK client/transport where it can provide these semantics correctly instead of maintaining parallel hand-written JSON-RPC/session framing. Any remaining adapter code must stay small and protocol-focused.
+
+For Program #106, the compatibility evidence must cover both real downstream generations: the modern stateless MCP path used by current AI Server Agent and the legacy/session path still required by the pinned WP AI Bridge contract. Prefer the modern stateless path when the downstream server negotiates/supports it; do not pay an initialize/session/close round-trip tax merely because the first connector needed sessions. Exact supported MCP revisions belong in current compatibility tests/release evidence rather than being frozen forever in this architecture document.
+
+The remote MCP client and generic outbound HTTP policy must read connector-neutral timeout/body-limit/network configuration. Generic infrastructure must not depend on `bridge.*` configuration merely because WP AI Bridge was the first consumer.
+
 The remote MCP client must not know WordPress Ability semantics or AI Server Agent root-approval semantics.
 
 Connectors remain responsible for interpreting downstream tools/capabilities and mapping them into Gateway-owned product behavior.
@@ -224,42 +256,58 @@ Every Target-specific call uses explicit `target_id`.
 
 Selection of a write, destructive or privilege-sensitive Target must never rely only on conversational "current target" state.
 
-### Core tools
+### Public tool naming and metadata
 
-The breaking redesign should use Target-neutral core names, including at minimum the equivalents of:
+The breaking redesign uses a stable family prefix and explicit Target identity. The accepted initial public names are:
 
 ```text
+Core:
 targets-list
 target-context
+
+WordPress / WP AI Bridge:
+wordpress-abilities-read
+wordpress-ability-execute
+
+AI Server Agent:
+agent-environment
+agent-run-command
+agent-run-root-command
+agent-start-job
+agent-job-status
+agent-job-output
+agent-job-stop
+agent-read-file
+agent-write-file
+agent-browser-setup
+agent-browser-run
 ```
 
-No compatibility alias for `sites-list` or `site-context` is required unless a new external compatibility requirement is accepted before implementation.
+No compatibility alias for the old `sites-*` names is required unless a new external compatibility requirement is accepted before implementation.
+
+Every connector-specific tool requires explicit `target_id`. Do not expose a public `call-any-tool(target_id, name, arguments)` escape hatch: it would discard stable schemas, annotations, authorization mapping and reviewable product semantics.
+
+Every public tool must carry behaviorally correct MCP annotations. Read-only/destructive/idempotent/open-world hints describe **tool behavior**, not authorization level. In particular, a connector operation can be read-only yet still security-sensitive (for example reading a host file), so annotations must never substitute for Gateway permission checks.
+
+Use stable output schemas for structured Gateway-owned responses where practical. Return only user/model-relevant product data. Internal correlation/request/session/trace IDs, raw downstream endpoints, credential metadata and other implementation telemetry stay server-side by default; if a future support reference is genuinely needed, design it explicitly rather than leaking internal tracing fields.
+
+### Core tools
+
+`targets-list` is bounded, authorization-filtered, deterministically pageable/searchable and may filter by connector type/connection state without contacting Targets.
+
+`target-context` returns bounded common Target state plus only explicitly safe connector-specific context. It must not expose credentials, authorization endpoints, raw internal transport details, or arbitrary downstream metadata merely because those values are stored.
 
 ### WP AI Bridge family
 
-WordPress-specific operation names may remain visibly WordPress/Ability-oriented. They must accept explicit `target_id`.
+The WordPress tools keep WP Ability semantics behind the connector and use the `wordpress-*` family names above.
 
 Do not force other connectors into WP Ability vocabulary.
 
 ### AI Server Agent family
 
-The Gateway must surface the supported Agent capability set without registering copies for every Agent Target.
+The Gateway surfaces the supported Agent capability set through the `agent-*` names above without registering copies for every Agent Target.
 
-The connector must cover the Agent capability families currently represented by:
-
-- `agent_environment`;
-- `run_command`;
-- `run_root_command`;
-- `start_job`;
-- `job_status`;
-- `job_output`;
-- `job_stop`;
-- `read_file`;
-- `write_file`;
-- `browser_setup`;
-- `browser_run`.
-
-Gateway-facing naming/schema may add explicit `target_id`, but the connector must preserve downstream semantics rather than reimplementing host execution.
+The connector preserves downstream Agent semantics rather than reimplementing host execution. Extra tools that appear on a newer Agent are **not** automatically proxied; support is added deliberately through the Gateway connector contract.
 
 ## 9. AI Server Agent safety boundary
 
@@ -332,6 +380,8 @@ A Target detail page should separate:
 
 Keep Laravel/Blade/server-rendered administration. Progressive JS is acceptable where it improves a bounded interaction. Do not introduce an SPA solely because connector count increases.
 
+Client-facing Gateway OAuth and downstream connector authentication must remain visibly separate concepts in code/config/UI. WP AI Bridge's additional-client metadata, JWKS and callback are connector-owned surfaces and should move under an unambiguous WP-connector namespace during the breaking redesign rather than defining generic Gateway OAuth naming. The browser/client-facing Gateway OAuth server remains the generic edge.
+
 Accessibility, keyboard behavior, responsive layout, dark/light support and clear destructive-action confirmation remain required.
 
 ## 11. Authorization model
@@ -341,6 +391,12 @@ Authorization evaluates the user against a Target, not a WordPress site.
 Role/global/Target Group/direct Target narrowing semantics remain server-authoritative.
 
 Rename the shared domain and persistence to Target semantics rather than keeping a permanent Site abstraction underneath Target-labelled UI.
+
+Shared permissions use Target vocabulary, for example `targets.view/create/update/remove` and supported common connection-lifecycle actions. Connector operation permissions are namespaced by connector family rather than pretending every backend has WP Abilities or the same risk model.
+
+Examples of connector-owned permission families include WordPress Ability inspection/execution classes and AI Server Agent environment/command/root/job/file/browser operations. Exact role bundles must be explicit and tested; adding a connector permission never becomes implicitly allowed through a wildcard. MCP tool annotations are not authorization.
+
+During the breaking Site -> Target migration, existing users/roles must not become more privileged accidentally. Preserve users and role identity, translate one-to-one generic permission denials where semantics remain identical, reset Target/group-specific membership with the intentionally discarded Target inventory, and leave selected-scope users with an empty Target set until explicitly reassigned. Any permission mapping whose semantics changed or are ambiguous must fail closed or require explicit administrator reconciliation rather than being silently dropped.
 
 Connector-specific downstream authorization remains independent:
 
@@ -372,6 +428,23 @@ Connector-owned code determines:
 - what extra diagnostics are safe to persist/display.
 
 Ordinary Target list/dashboard rendering reads stored evidence only and never fans out across all Targets.
+
+### Lifecycle concurrency and remote I/O
+
+Do not hold a database transaction, row lock, or scarce database connection open across downstream HTTP/MCP/OAuth calls.
+
+The current Site-era implementation contains network calls inside lifecycle row-lock transactions. The Target foundation must replace that pattern with short durable phases such as:
+
+```text
+prepare / claim under lock
+        -> commit
+remote I/O outside transaction
+        -> finalize under lock using intent/generation/attempt identity
+```
+
+The exact state machine varies by connector, but it must preserve credential rotation/revocation correctness, target reassignment ownership, unknown mutation outcomes, and recovery after process interruption.
+
+Connection/health defaults that are truly generic belong in connector-neutral configuration. Connector-specific stale/refresh/discovery rules stay with the connector.
 
 ## 13. Performance and capacity invariants
 
@@ -526,8 +599,13 @@ The implementation program must prove at least:
 ### AI Server Agent
 
 - Target registration/test works;
+- stable non-secret Agent instance identity is verified and remains bound to the Target across reconnects;
 - dedicated Agent credential stays secret and Target-bound;
+- modern stateless MCP path is exercised without unnecessary session churn;
+- required Agent tool names/input-output contracts are compatibility-checked using bounded evidence;
+- extra unknown Agent tools are not automatically exposed;
 - complete supported Agent capability family routes correctly;
+- machine-readable structured Agent results are consumed rather than parsing human-readable text;
 - `approval_required` round-trip works;
 - direct Agent use remains valid;
 - no Gateway route bypasses Agent safety.
@@ -546,15 +624,22 @@ The implementation program must prove at least:
 - bounded mixed inventory;
 - tool registry independent of Target count;
 - representative query plans;
+- no N+1 connector/config/credential lookup on Target pages or routing;
 - active-work concurrency;
-- no fleet-wide page/render fan-out.
+- no fleet-wide page/render fan-out;
+- no database row lock held while waiting on downstream network I/O.
 
 ### Upgrade/release
 
 - clean fresh install;
 - supported historical update baseline(s) to the breaking release;
-- intentional Target-data reset;
+- intentional Target-data reset with fail-closed user/access translation;
 - preservation of unrelated persistent state;
+- release/server implementation versions are derived from the real release identity rather than hard-coded placeholder versions;
+- WP exact-contract CI path filters follow the new shared/connector paths after the refactor;
+- exact AI Server Agent compatibility evidence is tied to a known Agent candidate/release;
+- `achworks.yaml`, Composer metadata, README, deployment guidance and release notes are reconciled when runtime support actually lands;
+- because public MCP tools/routes/schema are intentionally breaking, release versioning must use the project's next major-version boundary rather than presenting this as a compatible 1.x minor/patch;
 - package/update integrity and recovery gates.
 
 ## 18. Future connector admission rule
