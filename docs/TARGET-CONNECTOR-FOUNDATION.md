@@ -400,11 +400,56 @@ Role/global/Target Group/direct Target narrowing semantics remain server-authori
 
 Rename the shared domain and persistence to Target semantics rather than keeping a permanent Site abstraction underneath Target-labelled UI.
 
-Shared permissions use Target vocabulary, for example `targets.view/create/update/remove` and supported common connection-lifecycle actions. Connector operation permissions are namespaced by connector family rather than pretending every backend has WP Abilities or the same risk model.
+Shared permissions use Target vocabulary and connector operation permissions are namespaced by connector family rather than pretending every backend has WP Abilities or the same risk model.
 
-Examples of connector-owned permission families include WordPress Ability inspection/execution classes and AI Server Agent environment/command/root/job/file/browser operations. Exact role bundles must be explicit and tested; adding a connector permission never becomes implicitly allowed through a wildcard. MCP tool annotations are not authorization.
+Accepted permission identifiers for the breaking foundation are:
+
+```text
+Gateway-wide/common:
+dashboard.view
+gateway.connection.view
+activity.view
+users.view
+users.manage
+security.manage
+
+Target inventory/lifecycle:
+targets.view
+targets.create
+targets.update
+targets.remove
+targets.connect
+targets.reconnect
+targets.disconnect
+targets.test
+
+WordPress:
+wordpress.abilities.inspect
+wordpress.abilities.execute.readonly
+wordpress.abilities.execute.mutating
+wordpress.abilities.execute.destructive
+wordpress.abilities.execute.unclassified
+
+AI Server Agent:
+agent.environment.read
+agent.command.run
+agent.root_command.run
+agent.job.start
+agent.job.read
+agent.job.stop
+agent.file.read
+agent.file.write
+agent.browser.setup
+agent.browser.run
+```
+
+Permission scope is defined by policy metadata, not inferred from the string prefix: for example `targets.create` is Gateway-wide because the Target does not yet exist, while `targets.update/remove/connect/test` and connector operation permissions are Target-scoped.
+
+Exact role bundles must be explicit and tested; adding a connector permission never becomes implicitly allowed through a wildcard. MCP tool annotations are not authorization.
 
 During the breaking Site -> Target migration, existing users/roles must not become more privileged accidentally. Preserve users and role identity, translate one-to-one generic permission denials where semantics remain identical, reset Target/group-specific membership with the intentionally discarded Target inventory, and leave selected-scope users with an empty Target set until explicitly reassigned. Any permission mapping whose semantics changed or are ambiguous must fail closed or require explicit administrator reconciliation rather than being silently dropped.
+
+The known one-to-one permission renames are explicit: `connection.view -> gateway.connection.view`, `sites.* -> targets.*`, Site-scoped `connections.connect/reconnect/disconnect/test -> targets.connect/reconnect/disconnect/test`, and `abilities.* -> wordpress.abilities.*`. This translation preserves existing WordPress authority while keeping new Agent permissions separate.
 
 New connector permissions are especially sensitive: an existing non-owner account that previously administered WordPress must not silently gain Linux command/root/file/browser authority merely because AI Server Agent was added. The migration/default-role plan must preserve equal-or-narrower effective authority for existing non-owner accounts until those new connector capabilities are explicitly enabled through the supported access-management model.
 
