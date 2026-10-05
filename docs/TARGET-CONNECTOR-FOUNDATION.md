@@ -458,11 +458,11 @@ Exact role bundles must be explicit and tested; adding a connector permission ne
 The accepted initial role ceiling for Agent capabilities is intentionally conservative:
 
 - Owner retains the existing recovery rule and can exercise every permission;
-- Administrator may be configured for the full Agent permission family;
-- Operator's default ceiling adds only `agent.environment.read` and `agent.command.run`;
+- Administrator's role ceiling includes the full Agent permission family, but a newly created Administrator defaults to only `agent.environment.read` and `agent.command.run` enabled; root/job/file/browser Agent permissions start as explicit global denials until deliberately enabled;
+- Operator's role ceiling adds only `agent.environment.read` and `agent.command.run`;
 - Viewer adds only `agent.environment.read`.
 
-Existing non-owner accounts are migrated with explicit global denials for every newly introduced `agent.*` permission that would otherwise enter their role ceiling. New non-owner account creation must present Agent permissions visibly and default the high-risk Agent family to denied until the administrator deliberately enables it. This uses the existing denial model instead of inventing a second grant engine.
+Existing non-owner accounts are migrated with explicit global denials for every newly introduced `agent.*` permission that would otherwise enter their role ceiling, so an upgrade never grants even a low-risk Agent capability implicitly. The access UI then lets an authorized Owner deliberately remove the relevant denials within the role ceiling. This uses the existing denial model instead of inventing a second grant engine.
 
 Input-sensitive authorization must close privilege-composition gaps. In particular, `agent-start-job` with `root=true` requires both `agent.job.start` and `agent.root_command.run`; possession of the job-start permission must never become an alternate path to root. The same rule applies to any future tool whose arguments materially elevate the operation above its base permission.
 
