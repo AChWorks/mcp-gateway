@@ -502,7 +502,7 @@ Connection removal must distinguish **local credential forgetting** from **confi
 - revocation confirmed by the downstream authority, after which local credential removal may finalize; or
 - remote revocation unavailable/unconfirmed, in which case the Gateway forgets/local-disables only under an explicit operator-visible state and continues to report that downstream revocation may still be required.
 
-For AI Server Agent, the dedicated Gateway principal is independently revocable by design. The connector/Agent contract must either provide a bounded safe way to revoke that exact principal or make the required Agent-side operator revocation explicit and verifiable before claiming a complete disconnect.
+For AI Server Agent, the accepted initial contract is narrower: the dedicated Gateway principal exposes a bounded authenticated **self-revocation** operation that can revoke only the credential authenticating that request. Gateway Disconnect/Remove calls that connector-internal lifecycle operation, verifies success, and only then deletes its encrypted local copy. It must not gain credential enumeration or arbitrary-principal revocation authority.
 
 Ordinary Target list/dashboard rendering reads stored evidence only and never fans out across all Targets.
 
