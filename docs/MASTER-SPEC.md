@@ -270,6 +270,7 @@ At minimum:
 - outbound target URLs are validated against SSRF, redirect-to-private-network, DNS rebinding, unexpected scheme, and host-change risks;
 - downstream HTTP calls have bounded connect/request timeouts and response/body limits;
 - the Gateway does not automatically retry a target mutation/tool execution whose idempotency is unknown;
+- when a downstream safety model requires explicit approval, a user approval for one Target/operation cannot be replayed onto another Target or materially different request; any Gateway approval challenge is exact-operation-bound, short-lived and replay-safe while downstream policy remains authoritative;
 - the Gateway never holds a database row lock/transaction open across remote HTTP/MCP/OAuth work; stateful connector operations use short durable prepare/claim and finalize phases around remote I/O;
 - public MCP tools expose correct behavioral annotations and bounded structured outputs; read-only annotations never replace authorization checks;
 - Target identifiers, credentials, and responses from one Target must not leak into another Target's request;
