@@ -14,7 +14,7 @@ Use the source that owns the kind of truth you need:
 - [`../achworks.yaml`](../achworks.yaml) — stable machine-readable AChWorks component identity, capabilities, interfaces, and source pointers; it must not mirror live work/runtime state.
 - [Koinon (`AChWorks/koinon`)](https://github.com/AChWorks/koinon) — ecosystem-level governance, discovery, and generic cross-project contracts; it is not an MCP Gateway runtime dependency.
 - [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
-- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — active connector-neutral Target foundation + AI Server Agent program and dependency graph.
+- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — active connector-neutral Target + client-neutral MCP edge + AI Server Agent program and dependency graph.
 - [Program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.
 - Pull requests and commits — implementation identity, review history, and integrated changes.
 - GitHub Actions / CI — validation evidence tied to exact commits.
@@ -34,6 +34,7 @@ These closed Issues are historical contract provenance, not active task owners. 
 The accepted second connector is AI Server Agent:
 
 - [`mcp-gateway#106`](https://github.com/AChWorks/mcp-gateway/issues/106) — Gateway-side breaking Target foundation and connector program;
+- [`mcp-gateway#117`](https://github.com/AChWorks/mcp-gateway/issues/117) — client-neutral MCP authorization edge; ChatGPT remains the first supported profile while future clients can be added without another core auth rewrite;
 - [`ai-server-agent#47`](https://github.com/ach1992/ai-server-agent/issues/47) — Agent-side optional Gateway integration, independent credential lifecycle, preserved direct modes, and Agent-authoritative safety.
 
 Neither repository's Issue grants mutation authority in the other repository. Recover both contracts and current exact implementation/release evidence before cross-repository compatibility work.
@@ -46,7 +47,7 @@ A replacement Master or developer should recover in this order:
 2. Read `docs/ARCHITECTURE.md` for the current integrated implementation boundaries.
 3. If Program #106 is still active, read `docs/TARGET-CONNECTOR-FOUNDATION.md` for the accepted breaking target-state design.
 4. Inspect the repository's current open GitHub Issues to identify active work, dependencies, and acceptance criteria; use closed Program Issue #1 only when historical V1 context is specifically needed.
-5. Read only the relevant current Issue/Task Contract and its direct dependencies, including AI Server Agent #47 when working on that connector.
+5. Read only the relevant current Issue/Task Contract and its direct dependencies, including AI Server Agent #47 when working on that connector and #117 when working on client-facing MCP/OAuth identity.
 6. Inspect the corresponding branch/PR/commit and exact CI evidence before changing or integrating implementation.
 7. Use `docs/DEPLOYMENT.md` plus the applicable GitHub Release and deployment evidence when installation, upgrade, or delivery becomes relevant.
 

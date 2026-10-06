@@ -3,7 +3,7 @@
 Status: Accepted pre-implementation architecture contract  
 Program owner: [Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106)
 
-This document defines the breaking foundation that MCP Gateway will implement before adding AI Server Agent as its second production connector.
+This document defines the breaking Target/connector foundation and client-neutral MCP edge that MCP Gateway will implement before adding AI Server Agent as its second production connector.
 
 It is intentionally written as a **target-state design contract**, not a claim that the current `main` implementation already matches it. Until Issue #106 and its child work are integrated, `docs/ARCHITECTURE.md` and current source remain authoritative for the running implementation.
 
@@ -307,9 +307,13 @@ The Agent tools follow the same rule. Arbitrary `agent-run-command` is mutation-
 
 Use stable output schemas for structured Gateway-owned responses where practical. Return only user/model-relevant product data. Internal correlation/request/session/trace IDs, raw downstream endpoints, credential metadata and other implementation telemetry stay server-side by default; if a future support reference is genuinely needed, design it explicitly rather than leaking internal tracing fields.
 
+For Agent Targets, public `targets-list`/`target-context` may expose the bounded server identity summary (for example hostname and Server IP) when the caller has the required Target and Agent-environment permission. The raw configured endpoint remains Admin/routing state unless a concrete client use case separately justifies exposing it.
+
 ### Core tools
 
 `targets-list` is bounded, authorization-filtered, deterministically pageable/searchable and may filter by connector type/connection state without contacting Targets.
+
+For Agent Targets, the bounded local inventory index/query may also match normalized Server IP and hostname/FQDN where known so a human or AI client can resolve “the server at X” without a remote probe. IP/hostname matches are not unique identities; return all authorized matches and keep `target_id` as the explicit routing selector.
 
 `target-context` returns bounded common Target state plus only explicitly safe connector-specific context. It must not expose credentials, authorization endpoints, raw internal transport details, or arbitrary downstream metadata merely because those values are stored.
 
@@ -348,6 +352,36 @@ Required behavior:
 - Agent errors are bounded/redacted without hiding meaningful safety state.
 
 Gateway-level authorization can deny more. It must never grant more than the Agent permits.
+
+### Server inventory identity for Agent Targets
+
+AI Server Agent Targets are servers, so authorized operators and MCP clients need enough bounded host context to distinguish them without confusing mutable network data with identity.
+
+Connector-owned Agent Target context includes the conceptual equivalent of:
+
+```text
+server:
+  instance_id       # stable Agent identity
+  hostname          # authenticated Agent-reported when available
+  primary_ip        # normalized IPv4/IPv6 inventory value when known
+  observed_addresses[] # optional bounded authenticated interface evidence
+  endpoint_url      # actual configured public HTTPS MCP endpoint
+```
+
+Rules:
+
+- `instance_id` remains the downstream continuity/security identity;
+- `primary_ip` is mutable inventory metadata and may be operator-supplied and/or reconciled against authenticated Agent-reported addresses;
+- Server IP inventory semantics are deliberately separate from outbound routing policy: a recorded host/interface IP may be private, NAT-local or otherwise non-routable from Gateway and must **not** be validated through the public-only SSRF routing policy merely because it is stored; only the configured outbound endpoint is subject to the connector's reachable-endpoint policy;
+- accept canonical IPv4/IPv6 literals for Server IP; do not overload it with hostname, CIDR or URL text;
+- a Server IP may legitimately be unknown or change, especially behind NAT, tunnels, CDN/proxy or dynamic addressing; absence of a stable public IP must not block a valid Agent Target;
+- never derive `target_id`, `instance_id`, credential binding, approval binding or routing authority from IP/hostname/MAC/DNS;
+- never label a proxy/CDN/tunnel DNS resolution as the host's own Server IP merely because it fronts the MCP endpoint;
+- IP/hostname changes are auditable metadata changes and never silently rebind a Target to another Agent instance;
+- private/interface address detail is exposed only through authenticated, authorization-filtered context;
+- no periodic network-interface polling/background job is introduced solely to keep this metadata fresh.
+
+This data belongs to `ai_server_agent` connector-owned persistence/evidence, not the shared `targets` row.
 
 ## 10. Admin and frontend foundation
 
@@ -394,12 +428,50 @@ A Target detail page should separate:
 **Connector-specific**
 
 - WordPress/WP AI Bridge connection details; or
-- AI Server Agent endpoint/instance/capability details; or
+- AI Server Agent endpoint (Admin/routing context), stable instance ID, hostname, Server IP when known, bounded observed-address evidence and capability details; or
 - another future connector's own information.
 
 Keep Laravel/Blade/server-rendered administration. Progressive JS is acceptable where it improves a bounded interaction. Do not introduce an SPA solely because connector count increases.
 
 Client-facing Gateway OAuth and downstream connector authentication must remain visibly separate concepts in code/config/UI. WP AI Bridge's additional-client metadata, JWKS and callback are connector-owned surfaces and should move under an unambiguous WP-connector namespace during the breaking redesign rather than defining generic Gateway OAuth naming. The browser/client-facing Gateway OAuth server remains the generic edge.
+
+### Client-neutral MCP authorization edge
+
+ChatGPT is the first supported remote MCP/AI client, not the permanent core identity model.
+
+The client-facing edge must distinguish:
+
+1. Gateway local user/principal;
+2. stable Gateway-supported `client_profile_key`;
+3. exact authenticated protocol/OAuth client ID;
+4. external AI account/workspace subject **only when a supported protocol actually authenticates one**.
+
+Do not infer an external ChatGPT/OpenAI/other-provider account from source IP, User-Agent, product branding or client name.
+
+Use a small explicit supported-client profile registry. A profile may define:
+
+- stable local profile key;
+- operator-facing label;
+- optional provider/product presentation labels;
+- exact protocol client ID;
+- reviewed client-authentication strategy;
+- bounded metadata/JWKS policy when that strategy needs remote metadata.
+
+The initial profile is the current ChatGPT Client ID Metadata + `private_key_jwt` / RS256 contract.
+
+Each exact protocol/OAuth `client_id` maps to exactly one supported profile; duplicate identities fail closed. Client-specific refresh/authentication quirks remain profile-owned rather than becoming universal Gateway semantics. Authorization-server metadata advertises only the grants/authentication methods/algorithms actually implemented by the active supported profile set.
+
+Provider/product labels are never authorization. Unknown clients fail closed. A future client requiring materially different authentication gets a reviewed adapter/profile rather than weakening the current boundary.
+
+The registry is not Dynamic Client Registration, an arbitrary metadata URL fetcher, a provider plugin marketplace or runtime authentication-class loader.
+
+Remote metadata/JWKS retrieval must come only from an explicit supported profile and use bounded HTTPS/origin/DNS-rebinding/redirect/size/time policies. The current single ChatGPT implementation is safe partly because its client metadata URL is fixed; generalization must not turn that constant into an SSRF input.
+
+Authorization codes, tokens, refresh state, assertion replay state, revocation and rate limits remain bound to the exact authenticated client. One client profile must not be able to replay or revoke another client's state.
+
+Authenticated request context exposes the safe client-profile identity for Activity/audit, rate limiting and exact approval binding. MCP Target permissions/tool semantics do not branch on OpenAI/ChatGPT versus another provider.
+
+Issue #117 owns this client-edge slice and must integrate before #110/#111 rely on generic authenticated client-profile context.
 
 Accessibility, keyboard behavior, responsive layout, dark/light support and clear destructive-action confirmation remain required.
 
@@ -714,6 +786,7 @@ The implementation program must prove at least:
 
 - Target registration/test works;
 - stable non-secret Agent instance identity is verified and remains bound to the Target across reconnects;
+- authorized Target inventory/context exposes bounded hostname + Server IP when known, with IPv4/IPv6 normalization and no identity/routing authority assigned to those mutable fields;
 - dedicated Agent credential stays secret and Target-bound;
 - modern stateless MCP path is exercised without unnecessary session churn;
 - required Agent tool names/input-output contracts are compatibility-checked using bounded evidence;
@@ -723,6 +796,15 @@ The implementation program must prove at least:
 - `approval_required` round-trip works;
 - direct Agent use remains valid;
 - no Gateway route bypasses Agent safety.
+
+### Client edge
+
+- current ChatGPT profile remains compatible;
+- at least one controlled second supported client profile can coexist without shared authorization/token state;
+- client-profile identity is visible in safe request/audit evidence;
+- cross-client code/access/refresh/assertion/revocation confusion fails closed;
+- arbitrary client metadata/JWKS URLs cannot become an SSRF surface;
+- no external AI account/workspace identity is invented without authenticated protocol evidence.
 
 ### Security
 
@@ -790,9 +872,10 @@ Expected implementation dependency order:
 1. Target domain/schema/access/data-reset foundation.
 2. Connector registry and shared remote MCP client.
 3. Generic Target connection/credential/health lifecycle.
-4. Target-neutral Admin + MCP surfaces.
-5. AI Server Agent connector.
-6. Mixed-connector performance/security/upgrade/release acceptance.
+4. Client-neutral MCP authorization edge (#117; may proceed in parallel where independent, but integrates before public MCP/Agent paths consume its authenticated client-profile context).
+5. Target-neutral Admin + MCP surfaces.
+6. AI Server Agent connector.
+7. Mixed-connector + mixed-client performance/security/upgrade/release acceptance.
 
 AI Server Agent side:
 https://github.com/ach1992/ai-server-agent/issues/47
@@ -810,4 +893,6 @@ The foundation is successful when a future engineer can add a third well-defined
 - registering tools per Target;
 - creating fleet-wide idle runtime work;
 - bypassing connector/downstream authority;
+- hard-coding ChatGPT as the only possible authenticated MCP client in shared authorization/request/audit code;
+- treating mutable Server IP/hostname/endpoint as Target or Agent instance identity;
 - reading chat history to understand why the architecture exists.
