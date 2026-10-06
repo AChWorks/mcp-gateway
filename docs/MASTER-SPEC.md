@@ -258,6 +258,8 @@ The Gateway may narrow authority but must never manufacture downstream authority
 
 For WP AI Bridge, a WordPress/WP-AI-Bridge denial remains denied. For AI Server Agent, Agent-side protected-resource/root-policy/`approval_required` checks remain authoritative **where they apply**, and Gateway may only narrow further. However, `agent.root_command.run` is intentionally broad root-capable authority: Agent command-pattern approval is defense-in-depth, not a complete sandbox or exhaustive shell-effect classifier. Gateway roles/UI/docs must never imply that “no approval required” makes an arbitrary root command harmless. Future connectors follow the same rule: preserve downstream authority without overstating downstream heuristics as complete containment.
 
+The current Agent file tools are also privileged host operations: `read_file` is broad root-readable file access and `write_file` is broad root-file mutation/root-capable authority. Gateway must present `agent.file.read` as high-sensitivity privileged read and require `agent.root_command.run` in addition to `agent.file.write` for file-write routing so a file permission cannot become an alternate path around root denial.
+
 ### 6.4 Administrative authorization
 
 Administrator authentication answers who is signed in; authorization independently decides which Gateway action that principal may perform.
