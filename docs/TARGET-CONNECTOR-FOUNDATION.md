@@ -349,7 +349,7 @@ Required behavior:
 - `approval_required` must round-trip to the upstream caller;
 - an approval obtained for one Target/operation must never be reusable for another Target or materially different request;
 - before the Gateway forwards downstream `approval=true`, the upstream approval must be bound to the authenticated Gateway user/client context, exact `target_id`, exact Gateway tool, canonical security-relevant arguments, short expiry, and one-time/replay-safe use;
-- that binding may be supplied by a compatible Agent exact-operation grant (ai-server-agent #40) or by an equivalent Gateway-owned narrowing challenge; either way the Agent still re-evaluates its own policy and remains the final host safety authority;
+- that binding may be supplied by a compatible Agent exact-operation grant (ai-server-agent #40) or by an equivalent Gateway-owned narrowing challenge; either way the Agent still re-evaluates its own policy. This preserves downstream authority but does **not** turn arbitrary root shell into a sandbox: `agent.root_command.run` remains broad root-capable authority and Agent pattern/approval checks are defense-in-depth;
 - a later approved retry must still pass Agent-side policy;
 - root authority is never inferred merely because the caller came through Gateway;
 - unknown mutating results are not blindly retried;
@@ -817,7 +817,7 @@ The implementation program must prove at least:
 - machine-readable structured Agent results are consumed rather than parsing human-readable text;
 - `approval_required` round-trip works;
 - direct Agent use remains valid;
-- no Gateway route bypasses Agent safety.
+- no Gateway route bypasses applicable Agent policy/approval checks, and Gateway never overstates those checks as complete containment of arbitrary root shell.
 
 ### Client edge
 

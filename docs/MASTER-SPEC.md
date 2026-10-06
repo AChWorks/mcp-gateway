@@ -256,7 +256,7 @@ A failed/revoked Target credential must fail closed for that Target without brea
 
 The Gateway may narrow authority but must never manufacture downstream authority.
 
-For WP AI Bridge, a WordPress/WP-AI-Bridge denial remains denied. For AI Server Agent, Agent-side protected-resource, root-policy, and `approval_required` semantics remain authoritative. Future connectors follow the same rule: the Gateway routes only what the downstream principal and connector contract authorize.
+For WP AI Bridge, a WordPress/WP-AI-Bridge denial remains denied. For AI Server Agent, Agent-side protected-resource/root-policy/`approval_required` checks remain authoritative **where they apply**, and Gateway may only narrow further. However, `agent.root_command.run` is intentionally broad root-capable authority: Agent command-pattern approval is defense-in-depth, not a complete sandbox or exhaustive shell-effect classifier. Gateway roles/UI/docs must never imply that “no approval required” makes an arbitrary root command harmless. Future connectors follow the same rule: preserve downstream authority without overstating downstream heuristics as complete containment.
 
 ### 6.4 Administrative authorization
 

@@ -61,7 +61,7 @@ Program Issue #106 accepts a breaking redesign before AI Server Agent becomes th
 - generic outbound MCP/HTTP infrastructure uses connector-neutral bounds/configuration rather than `bridge.*` defaults;
 - public tool count scales with connector capability families, not Target inventory, and public tools expose correct annotations/bounded schemas without internal tracing telemetry;
 - remote connector I/O runs outside database row-lock transactions using short prepare/claim and finalize phases;
-- AI Server Agent remains downstream-authoritative for protected/root/approval behavior and is bound by stable non-secret Agent instance identity;
+- AI Server Agent remains downstream-authoritative for its host-side protected-resource/root/approval checks and is bound by stable non-secret Agent instance identity; Gateway only narrows further. Arbitrary Agent root shell is still broad root-capable authority, and pattern-based approval is defense-in-depth rather than a complete sandbox;
 - Agent Target connector state includes bounded server inventory identity (hostname + normalized primary IPv4/IPv6 when known) without treating mutable network metadata as Target/Agent identity or routing authority;
 - the client-facing authorization core becomes MCP-client-neutral through explicit supported client profiles; ChatGPT remains the first profile rather than one global client constant;
 - Gateway user identity, supported client profile, exact protocol client ID and any future authenticated external AI account/workspace subject remain separate;
