@@ -179,6 +179,8 @@ The endpoint must use a current supported MCP HTTP transport and proper authenti
 
 For ChatGPT, V1 must support the current custom MCP App OAuth flow, including refreshable access when required by the current ChatGPT integration contract.
 
+For the Program #106 breaking foundation, ChatGPT remains the first supported client profile but must no longer define the shared client-authorization core. The Gateway must support an explicit registry of reviewed MCP client profiles so future supported AI/MCP clients can coexist without another authorization-domain rewrite. Provider/product labels are presentation metadata, not permission sources.
+
 The implementation must follow current MCP and client platform specifications at implementation time rather than preserving obsolete protocol assumptions in custom code.
 
 ### 5.5 Stable WordPress routing contract
@@ -227,6 +229,17 @@ Examples include Gateway-to-WP-AI-Bridge OAuth credentials and a dedicated Gatew
 
 The Gateway authenticates remote MCP clients before serving protected MCP operations. Token issuance, refresh, revocation, discovery metadata, PKCE/client authentication, and redirect validation must use maintained protocol implementations or libraries where practical; do not create an ad-hoc authentication protocol.
 
+The durable identity model separates:
+
+- the Gateway local user/principal;
+- the Gateway-supported client profile;
+- the exact authenticated protocol/OAuth client identity;
+- any external AI account/workspace subject only when the supported client protocol actually authenticates one.
+
+Current ChatGPT Client ID Metadata + `private_key_jwt` is one supported client profile, not the definition of all clients. Future client families may use different explicitly reviewed authentication adapters. Unknown/unconfigured clients fail closed, and arbitrary request-supplied client metadata/JWKS URLs are never treated as trusted onboarding input.
+
+Client application/provider labels never grant Target permissions. Authorization/token/revocation/assertion state remains exact-client bound, and one supported client must not be able to replay or revoke another client's state.
+
 Browser administrator sessions are a separate security boundary from MCP bearer authorization.
 
 ### 6.2 Gateway to Target
@@ -262,6 +275,7 @@ At minimum:
 - administrator forms use CSRF protection;
 - login and sensitive endpoints have reasonable rate limiting;
 - MCP authorization validates tokens, client/resource binding, redirect URIs, state/PKCE and applicable OAuth metadata according to the supported flow;
+- supported MCP client profiles are explicit and fail closed; client/provider labels do not authorize, cross-client token/code/refresh/assertion/revocation confusion is rejected, and client metadata/JWKS retrieval cannot become an arbitrary SSRF surface;
 - session cookies use secure production settings;
 - secrets, private keys, access tokens, refresh tokens, authorization codes, and password material are never written to normal activity logs;
 - stored target credentials are encrypted at rest with application-controlled encryption; token lookup material that does not need recovery should be one-way hashed where practical;
@@ -289,7 +303,7 @@ V1 needs only the data required for:
 
 - administrator users/sessions as required by the framework;
 - lightweight administrative role/permission assignments when multi-user administration is enabled;
-- registered Targets, connector identity, and only common metadata genuinely shared across supported implementations; connector-specific durable configuration belongs to connector-owned persistence;
+- registered Targets, connector identity, and only common metadata genuinely shared across supported implementations; connector-specific durable configuration belongs to connector-owned persistence; for AI Server Agent this includes server inventory context such as hostname and normalized primary IPv4/IPv6 when known rather than adding server-only columns to the shared Target record;
 - encrypted Target-bound connector credentials and only the lifecycle metadata needed by their supported connector contract;
 - purpose-aware credential identity so a connector can safely own more than one credential purpose without another shared-schema redesign;
 - connector-specific temporary authorization/discovery/refresh state in connector-owned persistence rather than universal OAuth columns on the shared Target row;
@@ -312,7 +326,9 @@ The operator must be able to distinguish at least:
 - a Target endpoint is unreachable or incompatible;
 - a Gateway-routed operation succeeded, failed, was denied, or has an unknown mutation outcome where applicable.
 
-Activity records should contain bounded metadata such as time, actor/client identity when available, Target ID, connector type, operation identity, outcome, and a correlation/request identifier. They must not contain access tokens, refresh tokens, bearer credentials, authorization codes, private keys, passwords, or full arbitrary content/tool payloads.
+Activity records should contain bounded metadata such as time, Gateway actor identity, stable supported client-profile identity when available, safe protocol-client evidence, Target ID, connector type, operation identity, outcome, and a correlation/request identifier. They must not contain access tokens, refresh tokens, bearer credentials, authorization codes, client assertions, private keys, passwords, or full arbitrary content/tool payloads.
+
+Do not invent or log an external AI account/workspace identity unless a supported protocol actually authenticated that subject.
 
 Correlation/request/trace identifiers are operational evidence and should remain server-side by default. Public MCP tool results should return product-relevant state rather than internal telemetry identifiers unless a separately justified user-visible support reference is deliberately designed.
 
@@ -328,7 +344,7 @@ V1 does not require an external monitoring stack or metrics service.
 - Treat the MCP PHP SDK as a replaceable protocol adapter behind a small application boundary; it is not the application's domain model.
 - Use the maintained SDK client/transport for downstream MCP where it satisfies the connector contract; keep any compatibility shim small and protocol-focused rather than maintaining a second hand-written MCP stack.
 - Pin Composer dependencies in `composer.lock` and validate compatible protocol behavior before upgrades.
-- Support the MCP protocol generations required by the current client-facing ChatGPT integration and all supported connectors. For the Program #106 foundation, validation must cover modern stateless MCP used by AI Server Agent and the legacy/session contract still required by the pinned WP AI Bridge integration.
+- Support the MCP protocol generations required by every currently supported client profile and connector. ChatGPT remains the first live client compatibility profile; Program #106 additionally requires a controlled second client-profile fixture so the shared client edge is proven non-singular without claiming an unsupported commercial provider. Downstream validation must cover modern stateless MCP used by AI Server Agent and the legacy/session contract still required by the pinned WP AI Bridge integration.
 - Prefer modern stateless downstream operation when negotiated/supported; do not require initialize/session/close churn for a stateless connector merely because another connector needs sessions.
 - Exact supported protocol revisions are compatibility/release evidence and must be revalidated when SDK/client/connector contracts change; do not hard-code one historical revision as the permanent product architecture.
 - Public Gateway server/client implementation metadata must report the actual release identity rather than a stale placeholder version.
@@ -386,7 +402,7 @@ The integrated baseline already includes lightweight multi-user roles, scoped Si
 
 Beyond that current baseline, the architecture must permit:
 
-- additional remote MCP clients beyond ChatGPT and non-MCP administration/API/automation consumers that reuse the same application authorization and Target rules;
+- additional reviewed MCP/AI client profiles beyond ChatGPT and non-MCP administration/API/automation consumers that reuse the same application authorization and Target rules without changing the Target/connector domain;
 - richer Target grouping/tags or organization aids beyond the current flat Group model when a real workflow needs them;
 - additional backend connector types beyond WP AI Bridge and AI Server Agent, such as other MCP servers or deliberately supported APIs/services;
 - connector capability discovery without forcing every connector into WordPress/WP AI Bridge semantics;
