@@ -212,7 +212,7 @@ Do not expose arbitrary connector-supplied URLs, HTTP methods, database queries,
 There are independent trust relationships at the client edge and at every downstream Target connector:
 
 ```text
-Remote MCP client (initially ChatGPT)
+Supported remote MCP client (ChatGPT first)
         |
         | OAuth / authenticated MCP
         v
