@@ -3,7 +3,7 @@
 Status: Accepted pre-implementation architecture contract  
 Program owner: [Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106)
 
-This document defines the breaking foundation that MCP Gateway will implement before adding AI Server Agent as its second production connector.
+This document defines the breaking Target/connector foundation and client-neutral MCP edge that MCP Gateway will implement before adding AI Server Agent as its second production connector.
 
 It is intentionally written as a **target-state design contract**, not a claim that the current `main` implementation already matches it. Until Issue #106 and its child work are integrated, `docs/ARCHITECTURE.md` and current source remain authoritative for the running implementation.
 
@@ -307,6 +307,8 @@ The Agent tools follow the same rule. Arbitrary `agent-run-command` is mutation-
 
 Use stable output schemas for structured Gateway-owned responses where practical. Return only user/model-relevant product data. Internal correlation/request/session/trace IDs, raw downstream endpoints, credential metadata and other implementation telemetry stay server-side by default; if a future support reference is genuinely needed, design it explicitly rather than leaking internal tracing fields.
 
+For Agent Targets, public `targets-list`/`target-context` may expose the bounded server identity summary (for example hostname and Server IP) when the caller has the required Target and Agent-environment permission. The raw configured endpoint remains Admin/routing state unless a concrete client use case separately justifies exposing it.
+
 ### Core tools
 
 `targets-list` is bounded, authorization-filtered, deterministically pageable/searchable and may filter by connector type/connection state without contacting Targets.
@@ -368,6 +370,7 @@ Rules:
 
 - `instance_id` remains the downstream continuity/security identity;
 - `primary_ip` is mutable inventory metadata and may be operator-supplied and/or reconciled against authenticated Agent-reported addresses;
+- Server IP inventory semantics are deliberately separate from outbound routing policy: a recorded host/interface IP may be private, NAT-local or otherwise non-routable from Gateway and must **not** be validated through the public-only SSRF routing policy merely because it is stored; only the configured outbound endpoint is subject to the connector's reachable-endpoint policy;
 - accept canonical IPv4/IPv6 literals for Server IP; do not overload it with hostname, CIDR or URL text;
 - a Server IP may legitimately be unknown or change, especially behind NAT, tunnels, CDN/proxy or dynamic addressing; absence of a stable public IP must not block a valid Agent Target;
 - never derive `target_id`, `instance_id`, credential binding, approval binding or routing authority from IP/hostname/MAC/DNS;
@@ -423,7 +426,7 @@ A Target detail page should separate:
 **Connector-specific**
 
 - WordPress/WP AI Bridge connection details; or
-- AI Server Agent endpoint, stable instance ID, hostname, Server IP when known, bounded observed-address evidence and capability details; or
+- AI Server Agent endpoint (Admin/routing context), stable instance ID, hostname, Server IP when known, bounded observed-address evidence and capability details; or
 - another future connector's own information.
 
 Keep Laravel/Blade/server-rendered administration. Progressive JS is acceptable where it improves a bounded interaction. Do not introduce an SPA solely because connector count increases.
@@ -453,6 +456,8 @@ Use a small explicit supported-client profile registry. A profile may define:
 - bounded metadata/JWKS policy when that strategy needs remote metadata.
 
 The initial profile is the current ChatGPT Client ID Metadata + `private_key_jwt` / RS256 contract.
+
+Each exact protocol/OAuth `client_id` maps to exactly one supported profile; duplicate identities fail closed. Client-specific refresh/authentication quirks remain profile-owned rather than becoming universal Gateway semantics. Authorization-server metadata advertises only the grants/authentication methods/algorithms actually implemented by the active supported profile set.
 
 Provider/product labels are never authorization. Unknown clients fail closed. A future client requiring materially different authentication gets a reviewed adapter/profile rather than weakening the current boundary.
 
