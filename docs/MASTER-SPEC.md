@@ -238,6 +238,8 @@ The durable identity model separates:
 
 Current ChatGPT Client ID Metadata + `private_key_jwt` is one supported client profile, not the definition of all clients. Future client families may use different explicitly reviewed authentication adapters. Unknown/unconfigured clients fail closed, and arbitrary request-supplied client metadata/JWKS URLs are never treated as trusted onboarding input.
 
+Each exact protocol/OAuth client ID resolves one supported client profile; duplicate client identities are rejected. Client-specific refresh eligibility/recovery and authentication semantics stay with that profile rather than being promoted into universal client-edge behavior. Discovery/authorization-server metadata must advertise only methods/grants/algorithms actually supported by the configured profile set.
+
 Client application/provider labels never grant Target permissions. Authorization/token/revocation/assertion state remains exact-client bound, and one supported client must not be able to replay or revoke another client's state.
 
 Browser administrator sessions are a separate security boundary from MCP bearer authorization.
@@ -304,6 +306,7 @@ V1 needs only the data required for:
 - administrator users/sessions as required by the framework;
 - lightweight administrative role/permission assignments when multi-user administration is enabled;
 - registered Targets, connector identity, and only common metadata genuinely shared across supported implementations; connector-specific durable configuration belongs to connector-owned persistence; for AI Server Agent this includes server inventory context such as hostname and normalized primary IPv4/IPv6 when known rather than adding server-only columns to the shared Target record;
+- server inventory IP metadata is not outbound routing authority: an Agent-reported/operator-supplied host/interface IP may be private/NAT-local and can be stored as connector context while the actual configured MCP endpoint remains independently subject to the outbound SSRF/TLS policy;
 - encrypted Target-bound connector credentials and only the lifecycle metadata needed by their supported connector contract;
 - purpose-aware credential identity so a connector can safely own more than one credential purpose without another shared-schema redesign;
 - connector-specific temporary authorization/discovery/refresh state in connector-owned persistence rather than universal OAuth columns on the shared Target row;
