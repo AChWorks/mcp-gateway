@@ -12,11 +12,11 @@ Repository: `AChWorks/mcp-gateway`
 
 ## 1. Purpose
 
-MCP Gateway is a small self-hosted **connector-neutral Target control plane** that lets one remote MCP client connection reach many explicitly registered backend systems through supported first-class connectors.
+MCP Gateway is a small self-hosted **connector-neutral Target control plane with a client-neutral MCP edge**. One stable Gateway endpoint can serve explicitly supported remote MCP client applications, and each authenticated client can reach many explicitly registered backend systems through supported first-class connectors.
 
 WordPress/WP AI Bridge was the first connector and proved the original operational problem: connecting ChatGPT directly to many independent backends creates one client/App connection per backend. MCP Gateway provides one stable public MCP endpoint and a bounded administration surface so Targets can be added, removed, connected, tested, authorized, and routed without creating another ChatGPT App for every Target.
 
-The accepted next foundation adds AI Server Agent as the second real connector and replaces generic Site/WordPress-shaped core concepts with Target-oriented domain, persistence, access, Admin, and MCP contracts. The detailed breaking design is owned by `docs/TARGET-CONNECTOR-FOUNDATION.md` and Program Issue #106 until implementation is integrated.
+The accepted next foundation adds AI Server Agent as the second real connector, replaces generic Site/WordPress-shaped core concepts with Target-oriented domain/persistence/access/Admin/MCP contracts, and removes the single-ChatGPT assumption from the shared client authorization boundary. ChatGPT remains the first supported client profile. The detailed breaking design is owned by `docs/TARGET-CONNECTOR-FOUNDATION.md`, Program Issue #106, and client-edge Issue #117 until implementation is integrated.
 
 The project must remain simple enough to deploy on an ordinary aaPanel host or compatible shared PHP hosting while keeping clean connector boundaries so future clients, administration/automation surfaces, and backend connector types can be added without rewriting the core.
 
@@ -24,9 +24,9 @@ The Gateway is a lightweight control plane, not a permanently WordPress-specific
 
 ## 2. Primary outcome
 
-The durable product outcome is that an operator can deploy one MCP Gateway instance, register many Targets of supported connector types, create one remote MCP client connection to the Gateway, and safely inspect or operate an explicitly selected Target through that connector's own authorization and safety boundaries.
+The durable product outcome is that an operator can deploy one MCP Gateway instance, register many Targets of supported connector types, connect one or more explicitly supported MCP/AI client applications to the same stable Gateway endpoint, and safely inspect or operate an explicitly selected Target through that connector's own authorization and safety boundaries.
 
-The completed V1 proof used multiple WP AI Bridge sites. The accepted next breaking foundation generalizes that proof into Target semantics and adds AI Server Agent as the second connector. Adding or removing a supported Target must not require creating another ChatGPT App or changing the Gateway's public MCP endpoint.
+The completed V1 proof used multiple WP AI Bridge sites through ChatGPT. The accepted next breaking foundation generalizes that proof into Target semantics, adds AI Server Agent as the second connector, and generalizes the client edge so future supported clients do not require a second Gateway authorization core. Adding/removing a Target never requires another Gateway endpoint; adding a new supported client profile likewise does not create another Target fleet.
 
 V1-specific WordPress success criteria remain historical product evidence below; they do not define the generic core domain for new development.
 
