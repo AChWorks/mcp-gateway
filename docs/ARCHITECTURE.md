@@ -62,6 +62,9 @@ Program Issue #106 accepts a breaking redesign before AI Server Agent becomes th
 - public tool count scales with connector capability families, not Target inventory, and public tools expose correct annotations/bounded schemas without internal tracing telemetry;
 - remote connector I/O runs outside database row-lock transactions using short prepare/claim and finalize phases;
 - AI Server Agent remains downstream-authoritative for protected/root/approval behavior and is bound by stable non-secret Agent instance identity;
+- Agent Target connector state includes bounded server inventory identity (hostname + normalized primary IPv4/IPv6 when known) without treating mutable network metadata as Target/Agent identity or routing authority;
+- the client-facing authorization core becomes MCP-client-neutral through explicit supported client profiles; ChatGPT remains the first profile rather than one global client constant;
+- Gateway user identity, supported client profile, exact protocol client ID and any future authenticated external AI account/workspace subject remain separate;
 - idle Targets retain near-zero dynamic runtime cost, allowing only bounded connector-required lifecycle maintenance rather than per-Target runtime infrastructure.
 
 The full accepted design and implementation constraints are in [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md).
@@ -107,6 +110,10 @@ Use `league/oauth2-server` `9.4.1` for the in-process authorization-server lifec
 The library does not natively implement the `private_key_jwt` client authentication used by the current ChatGPT/WP AI Bridge contract: its confidential-client path expects a client secret. Keep that responsibility in a narrow Gateway-owned OAuth client-authentication adapter that validates the exact client identity, Client ID Metadata/JWKS, signed client assertion, audience, expiry, and replay state at the League grant boundary. In `league/oauth2-server` `9.4.1`, the Gateway authorization-code and refresh grant adapters may additionally apply the smallest refresh-token eligibility/scope-continuity policy required by the fixed ChatGPT contract, but token generation, encryption, persistence, rotation primitives, revocation, and the rest of the grant lifecycle remain library-owned. Do not route requests through an unadapted grant, reimplement token cryptography/lifecycle in controllers, or downgrade this boundary to a shared secret or unauthenticated public client merely to fit the default library behavior.
 
 The edge adapter is an authentication boundary, not a second token issuer. Persistence adapters implement the League repository contracts so authorization artifacts remain bound to the authenticated client and can be revoked durably. `firebase/php-jwt` `7.1.x` owns JWK parsing and RS256 signature verification; the Gateway owns claim/audience/lifetime/replay policy and persists only a hash of assertion `jti` values for replay prevention.
+
+Program #106/#117 generalizes this edge without weakening it. Shared OAuth/resource code must not depend on one `oauth.client.id` or on a `ChatGptClientMetadata`-shaped singleton. Instead, a small supported-client profile registry selects an explicit reviewed client-auth adapter. The current ChatGPT CIMD/`private_key_jwt` adapter can remain provider-specific behind that boundary. Unknown profiles fail closed, client-specific metadata origins are explicit, and arbitrary request-supplied metadata/JWKS URLs never become fetch targets.
+
+A client profile has a stable local key for audit/rate-limit/approval binding, an exact protocol client identity for token security, optional provider/product labels for presentation, and an authentication strategy. Provider/product labels are never permission inputs. An external AI account/workspace identity is recorded only when a supported protocol actually authenticates one; it is not inferred from IP, User-Agent, product name or client ID.
 
 ### HTTP client
 
@@ -355,6 +362,16 @@ V1 ChatGPT requirements:
 
 Do not couple administrator browser sessions to bearer-token validation simply because both use the same application database.
 
+Program #106/#117 target-state adds these client-edge invariants:
+
+- explicit supported client-profile registry, not a single ChatGPT constant;
+- current ChatGPT profile remains first-class and receives its own live compatibility evidence;
+- at least one controlled second profile fixture proves independent authorization/token/revocation state;
+- request context carries safe `client_profile_key` + exact protocol client identity for rate limiting, Activity and approval binding;
+- target authorization/tool behavior does not branch on AI vendor/product branding;
+- client metadata/JWKS retrieval is profile-approved and SSRF/rebinding/redirect/size/time bounded;
+- adding a supported client does not add another Gateway MCP endpoint or another Target inventory.
+
 ### 4.8 WP AI Bridge Connector
 
 The first connector encapsulates every WordPress-specific integration detail.
@@ -433,13 +450,13 @@ The Gateway calls the selected site's existing WP AI Bridge execution contract. 
 
 ### Why this surface is stable
 
-Sites are data. Adding Site D changes `sites-list`, not the MCP tool registry. ChatGPT therefore keeps one Gateway App and one Gateway endpoint as the site fleet changes.
+Sites/Targets are data. Adding another Target changes inventory, not the MCP tool registry. Any supported MCP client therefore keeps one Gateway endpoint as the Target fleet changes; ChatGPT is the current first live example.
 
 A future non-WordPress connector may add a deliberately designed tool family if its semantics cannot be represented honestly by the WordPress Ability contract. Do not force every future system through `site-ability-execute` merely to avoid a future tool refresh.
 
 ## 6. OAuth flows
 
-### 6.1 ChatGPT -> Gateway
+### 6.1 Current ChatGPT client profile -> Gateway
 
 ```text
 ChatGPT
@@ -455,6 +472,8 @@ ChatGPT
 ```
 
 The implementation must verify current OpenAI client metadata/client assertion behavior rather than assuming an old ChatGPT OAuth shape forever. As verified on 2026-09-14, the configured current client identity is `https://chatgpt.com/oauth/client.json`, with the exact ChatGPT connector redirect URI, `private_key_jwt`, RS256 assertions, authorization-code + refresh-token grants, and JWKS at the metadata-advertised same-origin URI. No signing key is hard-coded; the Gateway refreshes the bounded metadata/JWKS cache when assertion verification requires current keys.
+
+This is **profile-specific compatibility evidence**, not the durable shared client identity model. #117 replaces the one-client selection assumption with an explicit supported-client registry while keeping the ChatGPT adapter and its current security checks. A future client may use a different reviewed authentication adapter without changing Target/connector authorization or the public MCP endpoint.
 
 ### 6.2 Gateway -> WP AI Bridge
 
@@ -535,8 +554,9 @@ Never log bearer tokens, refresh tokens, authorization codes, private keys, pass
 Activity is operator-facing audit metadata, distinct from debug logs. Record only what is needed to answer who/what/where/outcome:
 
 - timestamp;
-- Gateway actor/client identity when available;
-- site ID when targeted;
+- Gateway actor identity;
+- stable supported client-profile identity + safe exact protocol-client evidence when available;
+- Target/site ID when targeted;
 - Gateway operation/downstream Ability identity;
 - result class/status;
 - correlation ID;
@@ -663,7 +683,9 @@ A future change must not casually violate these invariants:
 13. Infrastructure scales from measured active workload rather than registered Target count.
 14. Heavy backup/media/export data stays off the Gateway data path by default when direct Target-to-storage flow is possible.
 15. Historical V1 Site naming does not create a compatibility obligation after the accepted Program #106 breaking transition.
-16. Active task/status truth stays in GitHub Issues/PRs, not this document.
+16. ChatGPT/OpenAI remains a supported client/integration, not the shared client-edge domain; future supported clients use explicit reviewed profiles/adapters without provider-specific authorization logic in core.
+17. Agent Server IP/hostname is bounded connector-owned inventory context only; stable Target identity and Agent `instance_id` never depend on mutable network coordinates.
+18. Active task/status truth stays in GitHub Issues/PRs, not this document.
 
 ## 15. Bootstrap decisions and remaining verification points
 
