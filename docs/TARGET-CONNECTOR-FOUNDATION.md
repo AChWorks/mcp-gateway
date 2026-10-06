@@ -331,8 +331,12 @@ The connector preserves downstream Agent semantics rather than reimplementing ho
 
 ## 9. AI Server Agent safety boundary
 
-Agent-side requirements are owned by:
+Agent-side integration requirements are owned by:
 https://github.com/ach1992/ai-server-agent/issues/47
+
+The exact Agent candidate consumed by the connector must also include the owner-activated minimum hardening slices:
+- https://github.com/ach1992/ai-server-agent/issues/41 — secret-safe structured audit/correlation/bounded retention;
+- https://github.com/ach1992/ai-server-agent/issues/42 — bounded resource governance and command/file/browser data path.
 
 The Gateway must treat AI Server Agent as an independently secured downstream authority.
 
@@ -352,6 +356,24 @@ Required behavior:
 - Agent errors are bounded/redacted without hiding meaningful safety state.
 
 Gateway-level authorization can deny more. It must never grant more than the Agent permits.
+
+### Agent data-path boundary
+
+The Gateway consumes the Agent's bounded structured data path rather than turning remote execution into an unbounded byte pipe.
+
+Common behavior:
+
+- short/ordinary command results stay one downstream request + one bounded structured response;
+- expected long/high-output work uses the Agent persistent-job path and chunked `job_output`;
+- synchronous truncation, timeout, exit code, encoding and unknown-outcome state remain explicit;
+- ranged file reads stay ranged through Gateway; non-UTF-8 bytes use explicit binary-safe encoding rather than lossy text conversion;
+- complete-file writes remain bounded and inherit Agent atomic/symlink-safe semantics;
+- browser results use the same bounded output/timeout/resource-limit contract;
+- large Agent output is not duplicated in full into both human text and structured Gateway payloads;
+- Gateway never buffers an entire persistent job log to serve a bounded chunk;
+- no automatic retry is introduced merely because output was truncated or a mutating call timed out.
+
+This keeps normal interactive work low-overhead while giving large/long work a deliberate continuation path.
 
 ### Server inventory identity for Agent Targets
 
@@ -878,9 +900,11 @@ Expected implementation dependency order:
 7. Mixed-connector + mixed-client performance/security/upgrade/release acceptance.
 
 AI Server Agent side:
-https://github.com/ach1992/ai-server-agent/issues/47
+- https://github.com/ach1992/ai-server-agent/issues/47 — Gateway integration contract;
+- https://github.com/ach1992/ai-server-agent/issues/41 — required bounded audit/correlation slice;
+- https://github.com/ach1992/ai-server-agent/issues/42 — required bounded resource/data-path slice.
 
-The Gateway connector must not claim support before the exact compatible Agent release/candidate satisfies that contract.
+The Gateway connector must not claim support before the exact compatible Agent release/candidate satisfies all three required contracts.
 
 ## 20. Completion test
 
