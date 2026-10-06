@@ -313,6 +313,8 @@ For Agent Targets, public `targets-list`/`target-context` may expose the bounded
 
 `targets-list` is bounded, authorization-filtered, deterministically pageable/searchable and may filter by connector type/connection state without contacting Targets.
 
+For Agent Targets, the bounded local inventory index/query may also match normalized Server IP and hostname/FQDN where known so a human or AI client can resolve “the server at X” without a remote probe. IP/hostname matches are not unique identities; return all authorized matches and keep `target_id` as the explicit routing selector.
+
 `target-context` returns bounded common Target state plus only explicitly safe connector-specific context. It must not expose credentials, authorization endpoints, raw internal transport details, or arbitrary downstream metadata merely because those values are stored.
 
 ### WP AI Bridge family
