@@ -115,6 +115,8 @@ Program #106/#117 generalizes this edge without weakening it. Shared OAuth/resou
 
 A client profile has a stable local key for audit/rate-limit/approval binding, an exact protocol client identity for token security, optional provider/product labels for presentation, and an authentication strategy. Provider/product labels are never permission inputs. An external AI account/workspace identity is recorded only when a supported protocol actually authenticates one; it is not inferred from IP, User-Agent, product name or client ID.
 
+One exact protocol client ID resolves one supported profile; duplicate client IDs are invalid. Refresh eligibility/recovery and other client-specific compatibility behavior remain profile-owned. Authorization-server metadata reports only the union of methods/grants/algorithms the active profile adapters really implement; it does not preserve ChatGPT-specific `private_key_jwt` as a universal claim after another authentication strategy is added.
+
 ### HTTP client
 
 Use a PSR-18-compatible HTTP client supported by the MCP SDK/framework. Outbound WP AI Bridge traffic must go through one Gateway HTTP policy layer that owns timeouts, target validation, redirect policy, size bounds, TLS verification, and safe error mapping.
@@ -515,6 +517,8 @@ Required behavior:
 - never allow MCP input to override the connector's stored endpoint with an arbitrary URL.
 
 If future requirements include private-network sites, that is a product/security change requiring an explicit supported-network design; do not silently relax V1 SSRF rules.
+
+This outbound-routing rule is separate from **inventory metadata**. An Agent Target may record an authenticated/operator-supplied server/interface IPv4/IPv6 that is private, NAT-local or otherwise not directly routable from the Gateway. Storing/displaying that address does not authorize an outbound connection to it and must not force it through the public-endpoint validator.
 
 ## 8. Persistence model
 
