@@ -222,6 +222,12 @@ final readonly class RefreshTokenRecoveryStore
 
             if ($authorization === null
                 || $authorization->revoked_at !== null
+                || ! $this->profiles->authorizes(
+                    (string) $authorization->client_id,
+                    is_string($authorization->client_profile_key) ? $authorization->client_profile_key : null,
+                    $authorization->client_profile_generation === null
+                        ? null : (int) $authorization->client_profile_generation,
+                )
                 || (string) $authorization->resource !== (string) $recovery->resource) {
                 return null;
             }
