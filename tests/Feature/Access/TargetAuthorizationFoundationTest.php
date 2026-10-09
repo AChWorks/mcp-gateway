@@ -131,6 +131,49 @@ final class TargetAuthorizationFoundationTest extends TestCase
         self::assertSame('ssh_direct', $operatorEvents['items'][0]['connector_type_snapshot']);
     }
 
+    public function test_activity_preserves_exact_oauth_client_profile_and_target_snapshot(): void
+    {
+        $owner = app(UserAccessManager::class)->create($this->attributes('owner'), []);
+        $operator = app(UserAccessManager::class)->create($this->attributes('operator'), []);
+        $target = $this->target('client-bound-target', 'wp_ai_bridge');
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
+
+        $clientId = 'https://chatgpt.com/oauth/client.json';
+        $request = app('request');
+        $request->attributes->set('oauth_client_id', $clientId);
+        $request->attributes->set('oauth_client_profile_key', 'chatgpt');
+        $request->attributes->set('oauth_user_id', $operator->getKey());
+
+        $recorder = app(ActivityRecorder::class);
+        $recorder->recordRequired((string) Str::uuid(), 'client-target-audit', 'success', $target);
+
+        $event = DB::table('activity_events')->where('operation', 'client-target-audit')->first();
+        self::assertNotNull($event);
+        self::assertSame('chatgpt', $event->client_profile_key);
+        self::assertSame(hash('sha256', $clientId), $event->client_id_hash);
+        self::assertSame($target->target_id, $event->target_id);
+        self::assertSame($target->getKey(), $event->target_record_id);
+        self::assertSame('wp_ai_bridge', $event->connector_type_snapshot);
+
+        $feed = app(ActivityFeed::class);
+        foreach ([$owner, $operator] as $viewer) {
+            $items = $feed->page($viewer, 1, 25, $target->target_id, 'client-target-audit')['items'];
+            self::assertCount(1, $items);
+            self::assertSame('chatgpt', $items[0]['client_profile_key']);
+            self::assertSame($target->getKey(), $items[0]['target_record_id']);
+        }
+
+        // A forged or malformed label is never persisted as an authenticated profile.
+        $request->attributes->set('oauth_client_profile_key', '../injected');
+        $recorder->recordRequired((string) Str::uuid(), 'invalid-client-label', 'success', $target);
+        self::assertNull(DB::table('activity_events')
+            ->where('operation', 'invalid-client-label')->value('client_profile_key'));
+    }
+
     public function test_connector_scoped_permissions_cannot_authorize_another_connector_family(): void
     {
         $owner = app(UserAccessManager::class)->create($this->attributes('owner'), []);

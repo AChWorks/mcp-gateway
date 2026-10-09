@@ -15,7 +15,7 @@
     <form class="filter-grid" method="get" action="{{ route('admin.activity') }}">
         <div class="field">
             <label for="target_id">{{ __('Target ID') }}</label>
-            <input id="target_id" name="target_id" type="text" maxlength="128" value="{{ $filters['target_id'] ?? '' }}">
+            <input id="target_id" name="target_id" type="text" maxlength="64" value="{{ $filters['target_id'] ?? '' }}">
         </div>
         <div class="field">
             <label for="operation">{{ __('Operation') }}</label>
@@ -36,6 +36,7 @@
                 <tr>
                     <th scope="col">{{ __('Time') }}</th>
                     <th scope="col">{{ __('Target') }}</th>
+                    <th scope="col">{{ __('Client profile') }}</th>
                     <th scope="col">{{ __('Operation') }}</th>
                     <th scope="col">{{ __('Outcome') }}</th>
                     <th scope="col">{{ __('Error') }}</th>
@@ -47,6 +48,7 @@
                     <tr>
                         <td><time datetime="{{ $item['created_at'] }}">{{ $item['created_at'] }}</time></td>
                         <td><code>{{ $item['target_id'] ?? '—' }}</code></td>
+                        <td><code>{{ $item['client_profile_key'] ?? '—' }}</code></td>
                         <td>{{ $item['operation'] }}</td>
                         <td><span class="badge badge-{{ $item['outcome'] === 'success' ? 'success' : 'danger' }}">{{ $item['outcome'] }}</span></td>
                         <td><code>{{ $item['error_code'] ?? '—' }}</code></td>

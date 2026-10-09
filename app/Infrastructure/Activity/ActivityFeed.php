@@ -31,7 +31,7 @@ final readonly class ActivityFeed
         $maxRows = max(1, (int) config('activity.max_rows', 5000));
         $maxPage = intdiv($maxRows + $perPage - 1, $perPage) + 1;
         $page = max(1, min($maxPage, $page));
-        $targetId = $this->filter($targetId, 128);
+        $targetId = $this->filter($targetId, 64);
         $operation = $this->filter($operation, 128);
 
         $allowedTargets = $this->access->scopeTargets(
@@ -46,6 +46,7 @@ final readonly class ActivityFeed
                 'correlation_id',
                 'actor_type',
                 'actor_id',
+                'client_profile_key',
                 'target_id',
                 'target_record_id',
                 'connector_type_snapshot',
@@ -81,7 +82,6 @@ final readonly class ActivityFeed
         }
 
         $query
-
             ->when($operation !== null, fn ($query) => $query->where('operation', $operation))
             ->orderByDesc('created_at')
             ->orderByDesc('id');
@@ -100,6 +100,7 @@ final readonly class ActivityFeed
                 'correlation_id' => (string) $row->correlation_id,
                 'actor_type' => (string) $row->actor_type,
                 'actor_id' => $row->actor_id === null ? null : (string) $row->actor_id,
+                'client_profile_key' => $row->client_profile_key === null ? null : (string) $row->client_profile_key,
                 'target_id' => $row->target_id === null ? null : (string) $row->target_id,
                 'target_record_id' => $row->target_record_id === null ? null : (string) $row->target_record_id,
                 'connector_type_snapshot' => $row->connector_type_snapshot === null ? null : (string) $row->connector_type_snapshot,

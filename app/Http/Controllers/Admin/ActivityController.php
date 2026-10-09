@@ -21,7 +21,7 @@ final class ActivityController extends Controller
 
         $validated = $request->validate([
             'page' => ['nullable', 'integer', 'min:1'],
-            'target_id' => ['nullable', 'string', 'max:128'],
+            'target_id' => ['nullable', 'string', 'max:64'],
             'operation' => ['nullable', 'string', 'max:128'],
         ]);
 

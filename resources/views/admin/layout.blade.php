@@ -28,6 +28,9 @@
                 @can('users.manage')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.target-groups.*')]) href="{{ route('admin.target-groups.index') }}">{{ __('Target groups') }}</a>
                 @endcan
+                @can('security.manage')
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.oauth-clients.*')]) href="{{ route('admin.oauth-clients.index') }}">{{ __('AI clients') }}</a>
+                @endcan
                 @can('activity.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>
                 @endcan

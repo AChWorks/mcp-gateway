@@ -3,6 +3,7 @@
 use App\Http\Controllers\Admin\ActivityController;
 use App\Http\Controllers\Admin\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\DashboardController;
+use App\Http\Controllers\Admin\OAuthClientAuthorizationsController;
 use App\Http\Controllers\Admin\SiteCheckOperationController;
 use App\Http\Controllers\Admin\SiteConnectionController;
 use App\Http\Controllers\Admin\SiteController;
@@ -78,6 +79,11 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::get('/target-groups/{targetGroup}/users', [TargetGroupUserController::class, 'index'])->name('target-groups.users.index');
     Route::get('/target-groups/{targetGroup}/users/{user}/edit', [TargetGroupUserController::class, 'edit'])->name('target-groups.users.edit');
     Route::put('/target-groups/{targetGroup}/users/{user}', [TargetGroupUserController::class, 'update'])->name('target-groups.users.update');
+
+    Route::get('/oauth-clients', [OAuthClientAuthorizationsController::class, 'index'])
+        ->name('oauth-clients.index');
+    Route::delete('/oauth-clients/authorizations/{authorization}', [OAuthClientAuthorizationsController::class, 'revoke'])
+        ->name('oauth-clients.revoke');
 
     Route::get('/activity', ActivityController::class)->name('activity');
     Route::view('/connection', 'admin.connection')

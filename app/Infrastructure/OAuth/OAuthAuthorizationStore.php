@@ -8,13 +8,18 @@ use RuntimeException;
 
 final class OAuthAuthorizationStore
 {
+    public function __construct(private readonly ClientProfileRegistry $profiles) {}
+
     /** @param list<string> $scopes */
     public function approve(int $userId, string $clientId, string $resource, array $scopes): string
     {
+        $profile = $this->profiles->active($clientId)
+            ?? throw new RuntimeException('OAuth client profile is disabled or unregistered.');
+
         $scopes = $this->normalizeScopes($scopes);
         $resourceHash = hash('sha256', $resource);
 
-        return DB::transaction(function () use ($userId, $clientId, $resource, $resourceHash, $scopes): string {
+        return DB::transaction(function () use ($userId, $clientId, $resource, $resourceHash, $scopes, $profile): string {
             if (DB::table('users')->where('id', $userId)->lockForUpdate()->first() === null) {
                 throw new RuntimeException('OAuth operator no longer exists.');
             }
@@ -30,7 +35,10 @@ final class OAuthAuthorizationStore
             foreach ($active as $authorization) {
                 $storedScopes = $this->decodeScopes((string) $authorization->scopes);
 
-                if ((string) $authorization->resource === $resource && $storedScopes === $scopes) {
+                if ((string) $authorization->resource === $resource
+                    && (string) $authorization->client_profile_key === $profile['key']
+                    && (int) $authorization->client_profile_generation === $profile['generation']
+                    && $storedScopes === $scopes) {
                     DB::table('oauth_authorizations')->where('id', $authorization->id)->update([
                         'updated_at' => now(),
                     ]);
@@ -50,6 +58,8 @@ final class OAuthAuthorizationStore
                 'id' => $id,
                 'user_id' => $userId,
                 'client_id' => $clientId,
+                'client_profile_key' => $profile['key'],
+                'client_profile_generation' => $profile['generation'],
                 'resource' => $resource,
                 'resource_hash' => $resourceHash,
                 'scopes' => json_encode($scopes, JSON_THROW_ON_ERROR),
@@ -69,9 +79,14 @@ final class OAuthAuthorizationStore
             throw new RuntimeException('OAuth user identifier is invalid.');
         }
 
+        $profile = $this->profiles->active($clientId)
+            ?? throw new RuntimeException('OAuth client profile is disabled or unregistered.');
+
         $scopes = $this->normalizeScopes($scopes);
         $rows = DB::table('oauth_authorizations')
             ->where('client_id', $clientId)
+            ->where('client_profile_key', $profile['key'])
+            ->where('client_profile_generation', $profile['generation'])
             ->where('user_id', (int) $userIdentifier)
             ->where('resource_hash', hash('sha256', $resource))
             ->whereNull('revoked_at')
@@ -90,10 +105,16 @@ final class OAuthAuthorizationStore
 
     public function isActive(string $authorizationId): bool
     {
-        return DB::table('oauth_authorizations')
+        $row = DB::table('oauth_authorizations')
             ->where('id', $authorizationId)
             ->whereNull('revoked_at')
-            ->exists();
+            ->first(['client_id', 'client_profile_key', 'client_profile_generation']);
+
+        return $row !== null && $this->profiles->authorizes(
+            (string) $row->client_id,
+            is_string($row->client_profile_key) ? $row->client_profile_key : null,
+            $row->client_profile_generation === null ? null : (int) $row->client_profile_generation,
+        );
     }
 
     /**

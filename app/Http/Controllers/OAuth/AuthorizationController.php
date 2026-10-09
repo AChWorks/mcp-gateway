@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\OAuth;
 
+use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\Entities\UserEntity;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
@@ -21,6 +22,7 @@ final readonly class AuthorizationController
         private OAuthAuthorizationStore $authorizations,
         private OAuthHttpBridge $bridge,
         private OAuthScopePolicy $scopePolicy,
+        private ClientProfileRegistry $profiles,
     ) {}
 
     public function show(Request $request): Response
@@ -36,11 +38,16 @@ final readonly class AuthorizationController
             $authorization = $this->servers->authorizationServer()->validateAuthorizationRequest($psrRequest);
 
             $redirectUri = (string) $authorization->getRedirectUri();
+            $profile = $this->profiles->active($authorization->getClient()->getIdentifier());
+            if ($profile === null) {
+                throw OAuthServerException::invalidClient($psrRequest);
+            }
 
             return $this->browserResponse(response()->view('oauth.consent', [
                 'parameters' => $parameters,
                 'clientName' => $authorization->getClient()->getName(),
                 'clientId' => $authorization->getClient()->getIdentifier(),
+                'clientProfileKey' => $profile['key'],
                 'redirectUri' => $redirectUri,
                 'scope' => implode(' ', array_map(
                     static fn ($scope): string => $scope->getIdentifier(),
@@ -64,6 +71,12 @@ final readonly class AuthorizationController
             $this->assertAuthorizationBoundary($parameters);
             $psrRequest = $this->bridge->request($request)->withQueryParams($parameters);
             $authorization = $this->servers->authorizationServer()->validateAuthorizationRequest($psrRequest);
+            $profile = $this->profiles->active($authorization->getClient()->getIdentifier());
+            if ($profile === null) {
+                throw OAuthServerException::invalidClient($psrRequest);
+            }
+            $request->attributes->set('oauth_client_profile_key', $profile['key']);
+            $request->attributes->set('oauth_client_id', $profile['client_id']);
             $authorization->setUser(new UserEntity((string) $user->getAuthIdentifier()));
 
             $approved = hash_equals('approve', (string) $request->input('decision'));
@@ -88,6 +101,7 @@ final readonly class AuthorizationController
                     'correlation_id' => CorrelationId::current(),
                     'approved' => $approved,
                     'client_id_hash' => hash('sha256', $authorization->getClient()->getIdentifier()),
+                    'client_profile_key' => $profile['key'],
                     'scopes' => $scopes,
                     'refresh_eligible' => $approved && in_array((string) config('oauth.scope'), $scopes, true),
                 ]);

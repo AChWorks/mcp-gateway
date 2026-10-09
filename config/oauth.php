@@ -24,6 +24,16 @@ return [
         'max_response_bytes' => (int) env('OAUTH_REMOTE_MAX_RESPONSE_BYTES', 65536),
     ],
 
+    // Explicitly approved client applications; never accept arbitrary client metadata URLs.
+    'client_profiles' => [
+        'chatgpt' => [
+            'client_id' => 'https://chatgpt.com/oauth/client.json',
+            'display_name' => 'ChatGPT',
+            'strategy' => 'cimd_private_key_jwt',
+            'enabled' => true,
+        ],
+    ],
+
     'keys' => [
         'private' => $resolvePath((string) env('OAUTH_PRIVATE_KEY_PATH', 'storage/app/private/oauth/private.key')),
         'public' => $resolvePath((string) env('OAUTH_PUBLIC_KEY_PATH', 'storage/app/private/oauth/public.key')),
