@@ -65,19 +65,22 @@ class AppServiceProvider extends ServiceProvider
 
         RateLimiter::for('mcp', function (Request $request) {
             $client = $request->attributes->get('oauth_client_id');
+            $profile = $request->attributes->get('oauth_client_profile_key');
             $user = $request->attributes->get('oauth_user_id');
 
-            if (! is_string($client)
-                || $client === ''
+            if (! is_string($client) || $client === ''
+                || ! is_string($profile) || preg_match('/^[a-z][a-z0-9_-]{0,47}$/D', $profile) !== 1
                 || (! is_string($user) && ! is_int($user))
                 || (string) $user === '') {
-                return Limit::none();
+                // This middleware runs only after bearer authentication.
+                // Missing principal/profile context is a failure, not unlimited access.
+                return Limit::perMinute(1)->by('mcp:missing-auth-context:'.$request->ip());
             }
 
             return $this->mcpRateLimits(
                 (int) config('mcp.rate_limits.principal.burst_per_second', 60),
                 (int) config('mcp.rate_limits.principal.per_minute', 600),
-                'mcp:'.$client.':'.(string) $user,
+                'mcp:'.hash('sha256', $profile."\0".$client."\0".(string) $user),
                 'mcp_principal_rate_limited',
             );
         });
