@@ -25,7 +25,7 @@ final class ClientEdgeProxyRateLimitTest extends TestCase
 
         self::assertSame([], config('trustedproxy.proxies'));
 
-        $this->withServerVariables(['REMOTE_ADDR' => '10.75.20.5'])
+        $this->withServerVariables(['REMOTE_ADDR' => '10.75.20.5', 'HTTP_HOST' => 'spoofed.on-forge.com'])
             ->withHeaders([
                 'Host' => 'spoofed.on-forge.com',
                 'X-Forwarded-For' => '198.51.100.77',
@@ -46,7 +46,7 @@ final class ClientEdgeProxyRateLimitTest extends TestCase
         ]))->middleware('web');
         TrustProxies::at(['10.75.20.5']);
 
-        $this->withServerVariables(['REMOTE_ADDR' => '10.75.20.5'])
+        $this->withServerVariables(['REMOTE_ADDR' => '10.75.20.5', 'HTTP_HOST' => 'gateway.example.test'])
             ->withHeaders([
                 'Host' => 'gateway.example.test',
                 'X-Forwarded-For' => '203.0.113.42',
