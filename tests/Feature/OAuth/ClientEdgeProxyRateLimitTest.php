@@ -32,7 +32,7 @@ final class ClientEdgeProxyRateLimitTest extends TestCase
                 'Forwarded' => 'for=203.0.113.42',
                 'X-Forwarded-Host' => 'untrusted.example.test',
             ])
-            ->get('/_test/client-ip')->assertOk()
+            ->get('http://spoofed.on-forge.com/_test/client-ip')->assertOk()
             ->assertJsonPath('ip', '10.75.20.5')
             ->assertJsonPath('host', 'spoofed.on-forge.com');
     }
