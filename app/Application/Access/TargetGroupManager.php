@@ -4,8 +4,8 @@ namespace App\Application\Access;
 
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Targets\TargetGroup;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;

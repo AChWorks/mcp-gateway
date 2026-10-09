@@ -267,8 +267,7 @@ final readonly class UserAccessManager
 
         return array_values(array_map(
             static fn (GatewayPermission $permission): string => $permission->value,
-            array_filter($role->permissions(), static fn (GatewayPermission $permission): bool =>
-                (str_starts_with($permission->value, 'agent.')
+            array_filter($role->permissions(), static fn (GatewayPermission $permission): bool => (str_starts_with($permission->value, 'agent.')
                     && ! in_array($permission, $allowedByDefault, true))
                 || str_starts_with($permission->value, 'ssh.'),
             ),
