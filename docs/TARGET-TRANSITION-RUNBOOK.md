@@ -49,6 +49,16 @@ The `feat/target-foundation-107` branch was reconciled with the integrated `main
 
 Focused validation on a disposable local Unix-socket MariaDB 11.8 instance passed **15 tests / 96 assertions**, including new access/Activity, mixed-connector inventory, Admin HTTP form and Target schema tests. Focused PHP lint/PHPStan also passed. Tests were **not** a full CI or historical upgrade regression. The app still contains Site-era WordPress runtime/MCP paths and is **not merge-ready**; these cannot be assumed fixed by the domain/UI progress.
 
+## Connector registration and Target Admin checkpoint (2026-10-09)
+
+The WIP branch now contains a connector-owned WordPress registration service that validates immutable Target IDs before outbound HTTP, performs existing bounded/public HTTPS OAuth discovery, and atomically writes the shared Target plus WP-specific configuration using a connector-scoped canonical endpoint reservation. No bearer/refresh/SSH/Agent credential is created by registration. A duplicate endpoint, duplicate ID, existing reservation or missing Bridge metadata fails without a partial Target record.
+
+A new Target-native Admin inventory and details view, WordPress-only registration form and generic dashboard/navigation use Target-domain identity and ACL-filtered paging. The Admin intentionally does **not** expose nonfunctional Agent/SSH registration, WordPress connection authorization or execution controls. The Target inventory service also accepts a strict built-in connector-type filter for future bounded MCP/locator work.
+
+Validation: an isolated Unix-socket MariaDB 11.8 focused suite passed **22 tests / 163 assertions** (initial complete Target Admin and connector registration slice). Project-wide Laravel Pint passed **228 files**; targeted PHPStan for new classes/views' controllers passed. Whole-project PHPStan still reports **46 errors** from legacy Site-era runtime, a release blocker. The later connector-filter change passed its focused inventory test (2 tests / 14 assertions); no full historical acceptance or PR CI is claimed. Branch has **no PR** and must not be merged.
+
+**Next non-optional integration boundary:** replace old Site-era OAuth connection, credential/refresh/revoke, check-operation and public MCP handlers/routes. Ensure `targets-list` / `target-context` and connector-owned tool families use exact Target authorization, and complete independent destructive upgrade evidence. The pending client-profile PR #126 (#117) must be integrated only after separate HIGH_ASSURANCE approval, then reconciled without resetting this branch.
+
 ## Remaining #107 work before the candidate can be reviewed or merged
 
 The existing Site-era runtime must be changed **atomically within the integration candidate**, so that no Admin/MCP endpoint or Laravel service continues accessing dropped Site tables:
