@@ -146,7 +146,11 @@ final class UserTargetAccessController extends Controller
 
     private function role(User $user): GatewayRole
     {
-        return GatewayRole::from((string) $user->role);
+        $role = $user->getAttribute('role');
+
+        return $role instanceof GatewayRole
+            ? $role
+            : GatewayRole::from((string) $role);
     }
 
     private function nullableTrim(mixed $value): ?string
