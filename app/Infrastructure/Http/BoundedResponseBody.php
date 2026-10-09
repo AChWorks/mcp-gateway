@@ -15,6 +15,10 @@ final class BoundedResponseBody
 
     private bool $limitExceeded = false;
 
+    private ?string $limitPhase = null;
+
+    private ?int $observedBytes = null;
+
     public function __construct(private readonly int $maxBytes)
     {
         if ($this->maxBytes < 1) {
@@ -55,7 +59,7 @@ final class BoundedResponseBody
         int $uploadNow,
     ): bool {
         if ($downloadNow > $this->maxBytes) {
-            $this->limitExceeded = true;
+            $this->markLimitExceeded('wire_progress', $downloadNow);
 
             return true;
         }
@@ -66,7 +70,7 @@ final class BoundedResponseBody
     public function acceptDecodedBytes(int $bytes): bool
     {
         if ($bytes < 0 || $bytes > $this->maxBytes - $this->decodedBytes) {
-            $this->limitExceeded = true;
+            $this->markLimitExceeded('decoded_body', $this->decodedBytes + max(0, $bytes));
 
             return false;
         }
@@ -84,6 +88,23 @@ final class BoundedResponseBody
     public function decodedBytes(): int
     {
         return $this->decodedBytes;
+    }
+
+    public function limitPhase(): ?string
+    {
+        return $this->limitPhase;
+    }
+
+    public function observedBytes(): ?int
+    {
+        return $this->observedBytes;
+    }
+
+    private function markLimitExceeded(string $phase, int $observedBytes): void
+    {
+        $this->limitExceeded = true;
+        $this->limitPhase ??= $phase;
+        $this->observedBytes ??= $observedBytes;
     }
 
     public function close(): void

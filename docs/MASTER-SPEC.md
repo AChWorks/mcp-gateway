@@ -16,7 +16,7 @@ MCP Gateway is a small self-hosted **connector-neutral Target control plane with
 
 WordPress/WP AI Bridge was the first connector and proved the original operational problem: connecting ChatGPT directly to many independent backends creates one client/App connection per backend. MCP Gateway provides one stable public MCP endpoint and a bounded administration surface so Targets can be added, removed, connected, tested, authorized, and routed without creating another ChatGPT App for every Target.
 
-The accepted next foundation adds AI Server Agent as the second real connector, replaces generic Site/WordPress-shaped core concepts with Target-oriented domain/persistence/access/Admin/MCP contracts, and removes the single-ChatGPT assumption from the shared client authorization boundary. ChatGPT remains the first supported client profile. The detailed breaking design is owned by `docs/TARGET-CONNECTOR-FOUNDATION.md`, Program Issue #106, and client-edge Issue #117 until implementation is integrated.
+The accepted next foundation adds AI Server Agent as the second MCP-speaking connector and `ssh_direct` as a separate third connector, replaces generic Site/WordPress-shaped core concepts with Target-oriented domain/persistence/access/Admin/MCP contracts, and removes the single-ChatGPT assumption from the shared client authorization boundary. ChatGPT remains the first supported client profile. The detailed breaking design is owned by `docs/TARGET-CONNECTOR-FOUNDATION.md`, Program Issue #106, and client-edge Issue #117 until implementation is integrated.
 
 The project must remain simple enough to deploy on an ordinary aaPanel host or compatible shared PHP hosting while keeping clean connector boundaries so future clients, administration/automation surfaces, and backend connector types can be added without rewriting the core.
 
@@ -26,7 +26,7 @@ The Gateway is a lightweight control plane, not a permanently WordPress-specific
 
 The durable product outcome is that an operator can deploy one MCP Gateway instance, register many Targets of supported connector types, connect one or more explicitly supported MCP/AI client applications to the same stable Gateway endpoint, and safely inspect or operate an explicitly selected Target through that connector's own authorization and safety boundaries.
 
-The completed V1 proof used multiple WP AI Bridge sites through ChatGPT. The accepted next breaking foundation generalizes that proof into Target semantics, adds AI Server Agent as the second connector, and generalizes the client edge so future supported clients do not require a second Gateway authorization core. Adding/removing a Target never requires another Gateway endpoint; adding a new supported client profile likewise does not create another Target fleet.
+The completed V1 proof used multiple WP AI Bridge sites through ChatGPT. The accepted next breaking foundation generalizes that proof into Target semantics, adds AI Server Agent and Direct SSH as built-in connectors, and generalizes the client edge so future supported clients do not require a second Gateway authorization core. Adding/removing a Target never requires another Gateway endpoint; adding a new supported client profile likewise does not create another Target fleet.
 
 V1-specific WordPress success criteria remain historical product evidence below; they do not define the generic core domain for new development.
 
@@ -111,13 +111,13 @@ Complex organization hierarchies, public tenancy, billing, and enterprise identi
 
 ### 4.7 Connector-neutral control plane
 
-A registered **Target** has stable Gateway identity independent of its connector implementation. WordPress/WP AI Bridge and AI Server Agent are connector-specific implementations, not definitions of the core domain.
+A registered **Target** has stable Gateway identity independent of its connector implementation. WordPress/WP AI Bridge, AI Server Agent and Direct SSH are connector-specific implementations, not definitions of the core domain.
 
 Shared application state and rules use Target semantics. Connector-specific discovery, credentials, protocol details, health semantics, setup flows, capability vocabulary, and execution logic remain behind explicit connector boundaries. Shared rules may depend on declared connector capabilities, but must not silently assume OAuth, WordPress concepts, WP AI Bridge Abilities, Linux/server semantics, or any other connector-specific contract.
 
 Connector selection is explicit and server-authoritative. The Gateway supports built-in connector implementations through a small registry/factory; it is not a dynamic third-party code loader.
 
-The Gateway remains a control plane by default. Large backup archives, media, exports, and similar data-plane payloads should normally move directly between the Target and an appropriate storage/destination when the downstream system supports that pattern; the Gateway should retain bounded status/metadata rather than becoming an unnecessary bandwidth or storage bottleneck.
+The Gateway remains a control plane by default. Large backup archives, media, exports, and similar data-plane payloads should normally move directly between the Target and an appropriate storage/destination when the downstream system supports that pattern; the Gateway should retain bounded status/metadata rather than becoming an unnecessary bandwidth or storage bottleneck. Ordinary results stay single-call; large structured payloads, command output and file transfers follow `docs/REMOTE-IO-CONTRACT.md` without fake pagination or unbounded buffers.
 
 ### 4.8 Prefer maintained building blocks where they fit
 
@@ -205,7 +205,7 @@ The durable Gateway identity is the registered site/target plus its declared con
 
 The internal connector contract should remain small and evidence-driven. It may cover capabilities such as discovery, connection health, schema/capability inspection, execution, and disconnect/revocation where the backend supports them. Do not invent capability methods for future systems until an actual connector or consumer requires them.
 
-Do not expose arbitrary connector-supplied URLs, HTTP methods, database queries, shell commands, or filesystem paths as a generic Gateway operation.
+Do not expose arbitrary connector-supplied URLs, HTTP methods, database queries, shell commands, or filesystem paths as a **generic** Gateway operation. The expressly supported `ssh_direct` connector instead allows an authorized Gateway user to execute **any** command against their explicitly registered SSH Target as its configured OS account, including permitted `sudo`/root. This is never a request-supplied arbitrary-host shell proxy.
 
 ## 6. Authentication and authorization boundaries
 
@@ -223,7 +223,7 @@ MCP Gateway
 Explicit Target
 ```
 
-Examples include Gateway-to-WP-AI-Bridge OAuth credentials and a dedicated Gateway-to-AI-Server-Agent credential. Core Target authorization must not assume that every connector uses OAuth.
+Examples include Gateway-to-WP-AI-Bridge OAuth credentials, a dedicated Gateway-to-AI-Server-Agent credential and SSH password/private-key material. Core Target authorization must not assume every connector uses OAuth or downstream MCP.
 
 ### 6.1 Client to Gateway
 
@@ -257,6 +257,8 @@ A failed/revoked Target credential must fail closed for that Target without brea
 The Gateway may narrow authority but must never manufacture downstream authority.
 
 For WP AI Bridge, a WordPress/WP-AI-Bridge denial remains denied. For AI Server Agent, Agent-side protected-resource/root-policy/`approval_required` checks remain authoritative **where they apply**, and Gateway may only narrow further. However, `agent.root_command.run` is intentionally broad root-capable authority: Agent command-pattern approval is defense-in-depth, not a complete sandbox or exhaustive shell-effect classifier. Gateway roles/UI/docs must never imply that “no approval required” makes an arbitrary root command harmless. Future connectors follow the same rule: preserve downstream authority without overstating downstream heuristics as complete containment.
+
+For Direct SSH, full remote OS account privileges are intentional; Gateway command filtering or an `Allow sudo` switch must **not** pretend to restrict an arbitrary shell. Gateway still enforces exact user/client/Target/tool permission, encrypted credential custody, verified SSH host identity and bounded egress/resources. Enabling `ssh.command.run` allows file changes through shell commands even when Gateway SFTP tools are disabled. See `docs/DIRECT-SSH-CONNECTOR.md`.
 
 The current Agent file tools are also privileged host operations: `read_file` is broad root-readable file access and `write_file` is broad root-file mutation/root-capable authority. Gateway must present `agent.file.read` as high-sensitivity privileged read and require `agent.root_command.run` in addition to `agent.file.write` for file-write routing so a file permission cannot become an alternate path around root denial.
 
@@ -309,6 +311,7 @@ V1 needs only the data required for:
 - lightweight administrative role/permission assignments when multi-user administration is enabled;
 - registered Targets, connector identity, and only common metadata genuinely shared across supported implementations; connector-specific durable configuration belongs to connector-owned persistence; for AI Server Agent this includes server inventory context such as hostname and normalized primary IPv4/IPv6 when known rather than adding server-only columns to the shared Target record;
 - server inventory IP metadata is not outbound routing authority: an Agent-reported/operator-supplied host/interface IP may be private/NAT-local and can be stored as connector context while the actual configured MCP endpoint remains independently subject to the outbound SSRF/TLS policy;
+- Direct SSH has a required IP-inclusive visible identifier: normalized configured IPv4/IPv6 or last policy-approved, pinned-host-key-verified effective peer IP (with unknown/stale status), port, username, display name and stable `target_id` on authorized Admin/Target pickers/connection flows and MCP `targets-list`/`target-context`. Store SSH endpoint/IP metadata only under its connector, support bounded local authorization-filtered IP/hostname lookup, and never accept arbitrary caller IP in place of `target_id` for an SSH command or SFTP operation;
 - encrypted Target-bound connector credentials and only the lifecycle metadata needed by their supported connector contract;
 - purpose-aware credential identity so a connector can safely own more than one credential purpose without another shared-schema redesign;
 - connector-specific temporary authorization/discovery/refresh state in connector-owned persistence rather than universal OAuth columns on the shared Target row;
@@ -391,7 +394,7 @@ V1 deliberately does not provide:
 - React/Vue/SPA administration UI;
 - arbitrary HTTP proxying;
 - raw SQL or database consoles;
-- generic Gateway-owned shell/SSH command execution outside an explicitly supported connector's bounded downstream capability contract;
+- generic Gateway-owned shell/SSH command execution **outside** an explicitly supported Target-scoped connector such as `ssh_direct`;
 - generic Gateway-owned server filesystem access outside an explicitly supported connector's bounded downstream capability contract;
 - credential extraction from WordPress;
 - bypasses around WP AI Bridge or WordPress capabilities;
@@ -409,7 +412,7 @@ Beyond that current baseline, the architecture must permit:
 
 - additional reviewed MCP/AI client profiles beyond ChatGPT and non-MCP administration/API/automation consumers that reuse the same application authorization and Target rules without changing the Target/connector domain;
 - richer Target grouping/tags or organization aids beyond the current flat Group model when a real workflow needs them;
-- additional backend connector types beyond WP AI Bridge and AI Server Agent, such as other MCP servers or deliberately supported APIs/services;
+- additional backend connector types beyond WP AI Bridge, AI Server Agent and Direct SSH, such as other MCP servers or deliberately supported APIs/services;
 - connector capability discovery without forcing every connector into WordPress/WP AI Bridge semantics;
 - richer stored health/usage reporting while preserving the no-fleet-wide-render-fan-out rule;
 - additional explicit bulk-operation/job workflows when publishing, editing, backup, maintenance, or similar multi-Target work justifies asynchronous execution;
@@ -448,6 +451,8 @@ Use these sources for different kinds of truth:
 - `docs/MASTER-SPEC.md` — project purpose, durable requirements, constraints, non-goals, and V1 completion criteria.
 - `docs/ARCHITECTURE.md` — current integrated technical architecture and component boundaries derived from this specification.
 - `docs/TARGET-CONNECTOR-FOUNDATION.md` — accepted breaking Target/connector target-state design for Program Issue #106 until that design is integrated and folded into the current architecture.
+- `docs/REMOTE-IO-CONTRACT.md` — accepted bounded result and large-file design (not current runtime proof).
+- `docs/DIRECT-SSH-CONNECTOR.md` — accepted SSH/SFTP connector design (not current runtime proof).
 - `README.md` — user-facing project overview, prerequisites, installation, usage, and release-level information; it is not an authoritative project-state, architecture, or recovery source.
 - GitHub Issues — active work, dependencies, acceptance criteria, risk, and current task state.
 - Pull requests/commits — implementation identity and review history.
