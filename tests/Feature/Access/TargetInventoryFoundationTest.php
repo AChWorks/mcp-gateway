@@ -44,7 +44,7 @@ final class TargetInventoryFoundationTest extends TestCase
         self::assertTrue($first['has_more']);
         self::assertSame('target-0001', $first['items'][0]->target_id);
         self::assertSame('target-0050', $first['items'][49]->target_id);
-        self::assertSame('ssh_direct', $first['items'][2]->connector_type);
+        self::assertSame('ssh_direct', $first['items'][1]->connector_type);
 
         $cursor = null;
         $result = [];
