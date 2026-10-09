@@ -254,6 +254,41 @@ final class ClientProfileIsolationTest extends TestCase
             ->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
     }
 
+    public function test_preflight_fails_for_identity_mutation_or_unrevoked_profile_removal(): void
+    {
+        $registry = app(ClientProfileRegistry::class);
+        $registry->assertReady();
+        self::assertSame(0, Artisan::call('gateway:oauth-client-profile', ['operation' => 'check']));
+
+        $configured = config('oauth.client_profiles');
+        config()->set('oauth.client_profiles', [
+            'chatgpt' => $configured['chatgpt'],
+        ]);
+        try {
+            $registry->assertReady();
+            self::fail('Active registered profile was silently removed from configuration.');
+        } catch (RuntimeException $expected) {
+            self::assertStringContainsString('Revoke', $expected->getMessage());
+        }
+
+        config()->set('oauth.client_profiles', $configured);
+        config()->set('oauth.client_profiles.fixture.client_id', 'https://other.example.test/oauth/client.json');
+        try {
+            $registry->assertReady();
+            self::fail('Existing profile key was rebound to a new protocol client.');
+        } catch (RuntimeException $expected) {
+            self::assertStringContainsString('identity', $expected->getMessage());
+        }
+
+        config()->set('oauth.client_profiles', $configured);
+        $registry->disable('fixture');
+        config()->set('oauth.client_profiles', [
+            'chatgpt' => $configured['chatgpt'],
+        ]);
+        $registry->assertReady();
+        self::assertSame(0, Artisan::call('gateway:oauth-client-profile', ['operation' => 'check']));
+    }
+
     public function test_unknown_duplicate_and_unsafe_remote_profile_origins_fail_closed(): void
     {
         self::assertNull(app(ClientProfileRegistry::class)->active('https://unknown.example.test/oauth/client.json'));
