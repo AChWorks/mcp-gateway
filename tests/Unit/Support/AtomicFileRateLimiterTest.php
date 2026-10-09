@@ -3,6 +3,7 @@
 namespace Tests\Unit\Support;
 
 use App\Support\AtomicFileRateLimiter;
+use Illuminate\Cache\RateLimiter;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
@@ -68,7 +69,7 @@ final class AtomicFileRateLimiterTest extends TestCase
 
     public function test_non_file_cache_driver_keeps_native_rate_limiter_behavior(): void
     {
-        self::assertInstanceOf(AtomicFileRateLimiter::class, app(\Illuminate\Cache\RateLimiter::class));
+        self::assertInstanceOf(AtomicFileRateLimiter::class, app(RateLimiter::class));
 
         $limiter = new AtomicFileRateLimiter(Cache::store('array'));
         $key = 'test:native:'.Str::random(16);
