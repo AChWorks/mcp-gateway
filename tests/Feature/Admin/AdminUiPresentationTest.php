@@ -14,10 +14,12 @@ final class AdminUiPresentationTest extends TestCase
 
     public function test_admin_stylesheet_is_versioned_from_release_identity(): void
     {
+        $releaseVersion = trim((string) file_get_contents(base_path('VERSION')));
+
         $this->actingAs($this->owner())
             ->get('/admin/users/create')
             ->assertOk()
-            ->assertSee('css/admin.css?v=1.2.1', false);
+            ->assertSee('css/admin.css?v='.$releaseVersion, false);
     }
 
     public function test_permission_controls_explain_title_scope_and_effective_behavior(): void
