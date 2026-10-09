@@ -70,6 +70,12 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('mcp', function (Request $request) {
+            // OPTIONS preflight is protected by mcp-edge, but has no authenticated
+            // principal/profile. It must not consume the principal's rate bucket.
+            if ($request->isMethod('OPTIONS')) {
+                return Limit::none();
+            }
+
             $client = $request->attributes->get('oauth_client_id');
             $profile = $request->attributes->get('oauth_client_profile_key');
             $user = $request->attributes->get('oauth_user_id');
