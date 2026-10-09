@@ -307,6 +307,7 @@ final class ClientProfileIsolationTest extends TestCase
         return $response->json();
     }
 
+    /** @return \Illuminate\Testing\TestResponse<\Illuminate\Http\Response> */
     private function refresh(string $token, string $clientId, string $key, string $kid): \Illuminate\Testing\TestResponse
     {
         return $this->post('/oauth/token', [
