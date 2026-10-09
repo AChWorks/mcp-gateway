@@ -1,22 +1,24 @@
-# MCP Gateway v1.2.1
+# MCP Gateway v1.3.0
 
-This is a backward-compatible feature release built on the v1.1.10 browser-update baseline. v1.2.0 was used only as a pre-release validation candidate and was not published as a stable release.
+This backward-compatible update provides an earlier, **testable WordPress + ChatGPT release** without waiting for the unfinished Site-to-Target redesign or Direct SSH implementation. It builds on the existing supported Site-based WordPress connector and the integrated client-neutral OAuth edge.
 
-## Highlights
+## What changed since v1.2.1
 
-- MariaDB 10.11 is now the primary database target while MySQL compatibility remains supported.
-- Multi-administrator access control adds owner/admin/operator/viewer roles with site-scoped authorization.
-- Site Groups add reusable group-scoped access and site membership management.
-- Site Health stores bounded connection evidence and exposes explicit single-site diagnostics.
-- Selected-site bulk health checks add bounded multi-target operations with durable per-target status and partial-failure handling.
-- Fleet inventory and Activity hot paths are better bounded for larger site counts.
-- OAuth refresh/recovery diagnostics and continuity behavior are more robust while remaining secret-safe.
-- Repository and WP AI Bridge namespace references are normalized under AChWorks.
-- The Admin UI now uses a shared visual foundation for selects, checkboxes, filters, tables, access controls, responsive states, and dark mode.
-- Permission controls now show human-readable titles, Gateway-wide vs site-scoped level, and concise behavioral help derived from the authoritative permission model.
+- Support administrator-approved OAuth client profiles, with separate client authorization, token identity, refresh/revocation generation and consent identity. The existing ChatGPT OAuth client remains supported.
+- Harden request limits and actionable failures for bounded WordPress MCP read-only results, including oversized downstream responses.
+- Retain the working Site-based WordPress registration/authorization, Site Groups, per-user permissions, and MCP tools: `sites-list`, `site-context`, `site-abilities-read`, `site-ability-execute`.
+- Retain browser-updater support and existing administrator credentials. This release **does not** expose incomplete `targets-*`, SSH, or AI Server Agent runtime tools.
 
-## Upgrade compatibility
+## Browser upgrade and fresh connection test
 
-The official browser updater remains the supported path for deployment-ZIP installations. Release validation covers both the historical v1.1.2 baseline and the current v1.1.10 production baseline before publication.
+Upgrade a supported MCP Gateway deployment (including v1.2.1) using the published **mcp-gateway-update-v1.3.0.zip** from the GitHub Release. Place/extract it in the existing application root, open `https://YOUR-GATEWAY/update/`, sign in as the existing administrator, review the preflight, and perform the browser update. Use the package verification hash and a restorable backup when updating a real installation.
 
-A pre-release v1.2.0 candidate may also be upgraded normally to v1.2.1 because the final candidate advances the installed version instead of relying on a same-version replacement.
+**The updater does not automatically erase existing accounts, WordPress Site registration, or ChatGPT OAuth grants.** This release deliberately avoids a destructive schema reset. If you want to start with clean connections, disconnect/revoke the old WordPress connection in Gateway Admin and reconnect/authorize the WordPress Site. Then revoke or remove the earlier Gateway authorization/connector from the ChatGPT side and connect it again, completing fresh OAuth consent. Re-register the WordPress Site only if needed, using Gateway Admin's existing Site management controls.
+
+Gateway-facing ChatGPT authorization and downstream WordPress authorization are **two separate connection steps**. Verify both: authorize/connect WP AI Bridge to the Gateway, then authorize ChatGPT to access the Gateway, list the permitted Sites and execute a small permitted WordPress Ability. Finally test disconnect/revocation and access denial. Keep WordPress/Gateway credentials and signing keys private.
+
+## Compatibility and scope
+
+- No Site-to-Target migration or loss of existing Site records in this release. Operator accounts, existing encryption/signing keys, existing database and Gateway configuration are retained by the normal updater.
+- A later major release can introduce the new Target foundation and require intentionally fresh connections. The unfinished Target/SSH/Agent branch is **not** part of v1.3.0.
+- Production interoperability with a particular WordPress installation or a new ChatGPT connector session is verified **after** the operator installs and reauthorizes; passing CI alone is not that proof.
