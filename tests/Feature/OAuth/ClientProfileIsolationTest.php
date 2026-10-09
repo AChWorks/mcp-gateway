@@ -168,6 +168,36 @@ final class ClientProfileIsolationTest extends TestCase
 
         self::assertSame(2, (int) \DB::table('oauth_client_profiles')->where('profile_key', 'fixture')->value('generation'));
         self::assertSame(1, (int) \DB::table('oauth_authorizations')->where('client_id', self::FIXTURE)->value('client_profile_generation'));
+
+        app(ClientProfileRegistry::class)->enable('fixture');
+        self::assertSame(2, app(ClientProfileRegistry::class)->active(self::FIXTURE)['generation']);
+        $this->withToken($tokens['access_token'])
+            ->postJson('/mcp', ['jsonrpc' => '2.0', 'method' => 'tools/list', 'id' => 4])
+            ->assertUnauthorized();
+        $this->refresh($tokens['refresh_token'], self::FIXTURE, $this->fixturePrivateKey, 'fixture-key')
+            ->assertStatus(400)->assertJsonPath('error', 'invalid_grant');
+
+        $newCode = $this->authorize($user, self::FIXTURE, self::FIXTURE_REDIRECT);
+        $newTokens = $this->exchange($newCode, self::FIXTURE, self::FIXTURE_REDIRECT, $this->fixturePrivateKey, 'fixture-key');
+        self::assertNotSame($tokens['access_token'], $newTokens['access_token']);
+        self::assertSame(2, (int) \DB::table('oauth_authorizations')
+            ->where('client_id', self::FIXTURE)->whereNull('revoked_at')->value('client_profile_generation'));
+    }
+
+    public function test_cli_requires_explicit_confirmation_before_revocation(): void
+    {
+        self::assertSame(1, Artisan::call('gateway:oauth-client-profile', [
+            'operation' => 'disable', 'key' => 'fixture',
+        ]));
+        self::assertNotNull(app(ClientProfileRegistry::class)->active(self::FIXTURE));
+        self::assertSame(0, Artisan::call('gateway:oauth-client-profile', [
+            'operation' => 'disable', 'key' => 'fixture', '--confirm' => true,
+        ]));
+        self::assertNull(app(ClientProfileRegistry::class)->active(self::FIXTURE));
+        self::assertSame(0, Artisan::call('gateway:oauth-client-profile', [
+            'operation' => 'enable', 'key' => 'fixture', '--confirm' => true,
+        ]));
+        self::assertSame(2, app(ClientProfileRegistry::class)->active(self::FIXTURE)['generation']);
     }
 
     public function test_unknown_duplicate_and_unsafe_remote_profile_origins_fail_closed(): void
