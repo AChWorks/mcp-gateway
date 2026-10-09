@@ -200,6 +200,58 @@ final class ClientProfileIsolationTest extends TestCase
         self::assertSame(2, app(ClientProfileRegistry::class)->active(self::FIXTURE)['generation']);
     }
 
+    public function test_owner_can_inspect_and_revoke_only_selected_client_authorization(): void
+    {
+        $operator = $this->operator();
+        $fixtureTokens = $this->exchange(
+            $this->authorize($operator, self::FIXTURE, self::FIXTURE_REDIRECT),
+            self::FIXTURE, self::FIXTURE_REDIRECT, $this->fixturePrivateKey, 'fixture-key',
+        );
+        $chatTokens = $this->exchange(
+            $this->authorize($operator, self::CHATGPT, 'https://chatgpt.com/connector_platform_oauth_redirect'),
+            self::CHATGPT, 'https://chatgpt.com/connector_platform_oauth_redirect', $this->chatPrivateKey, 'chat-key',
+        );
+
+        $owner = User::query()->create([
+            'name' => 'Gateway Owner',
+            'email' => 'owner@example.test',
+            'password' => \Illuminate\Support\Facades\Hash::make('OwnerSecure!234'),
+            'role' => GatewayRole::Owner->value,
+            'site_scope_mode' => SiteScopeMode::All->value,
+            'access_enabled' => true,
+        ]);
+
+        $this->actingAs($operator)->get('/admin/oauth-clients')->assertForbidden();
+        $this->actingAs($owner)->get('/admin/oauth-clients')
+            ->assertOk()->assertSee('Approved AI client applications')
+            ->assertSee('fixture')->assertSee('chatgpt');
+
+        $grant = \DB::table('oauth_authorizations')->where('client_id', self::FIXTURE)->first();
+        self::assertNotNull($grant);
+
+        $this->actingAs($owner)->delete('/admin/oauth-clients/authorizations/'.$grant->id, [
+            'current_password' => 'wrong',
+        ])->assertSessionHasErrors('current_password');
+        self::assertNull(\DB::table('oauth_authorizations')->where('id', $grant->id)->value('revoked_at'));
+
+        $this->actingAs($owner)->delete('/admin/oauth-clients/authorizations/'.$grant->id, [
+            'current_password' => 'OwnerSecure!234',
+        ])->assertRedirect('/admin/oauth-clients');
+
+        self::assertNotNull(\DB::table('oauth_authorizations')->where('id', $grant->id)->value('revoked_at'));
+        self::assertNull(\DB::table('oauth_authorizations')->where('client_id', self::CHATGPT)->value('revoked_at'));
+        self::assertSame('fixture', \DB::table('activity_events')
+            ->where('operation', 'oauth-client-authorization-revoked')->value('client_profile_key'));
+
+        $this->withToken($fixtureTokens['access_token'])
+            ->postJson('/mcp', ['jsonrpc' => '2.0', 'method' => 'tools/list', 'id' => 5])
+            ->assertUnauthorized();
+
+        // The other client's authorization, refresh and access tokens remain valid.
+        $this->refresh($chatTokens['refresh_token'], self::CHATGPT, $this->chatPrivateKey, 'chat-key')
+            ->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+    }
+
     public function test_unknown_duplicate_and_unsafe_remote_profile_origins_fail_closed(): void
     {
         self::assertNull(app(ClientProfileRegistry::class)->active('https://unknown.example.test/oauth/client.json'));
