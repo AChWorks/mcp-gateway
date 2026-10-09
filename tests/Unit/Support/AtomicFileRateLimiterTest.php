@@ -4,6 +4,7 @@ namespace Tests\Unit\Support;
 
 use App\Support\AtomicFileRateLimiter;
 use Illuminate\Cache\RateLimiter;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
@@ -61,6 +62,42 @@ final class AtomicFileRateLimiterTest extends TestCase
                 pcntl_waitpid($pid, $status);
             }
 
+            config()->set('cache.stores.file', $previousFile);
+            Cache::purge('file');
+            File::deleteDirectory($directory);
+        }
+    }
+
+    public function test_file_lock_timeout_denies_hit_without_unprotected_fallback(): void
+    {
+        $directory = sys_get_temp_dir().'/oauth-file-rate-lock-timeout-'.Str::random(16);
+        File::ensureDirectoryExists($directory);
+        $previousFile = config('cache.stores.file');
+
+        try {
+            config()->set('cache.stores.file.path', $directory);
+            config()->set('cache.stores.file.lock_path', $directory);
+            Cache::purge('file');
+
+            $store = Cache::store('file');
+            $limiter = new AtomicFileRateLimiter($store);
+            $key = 'uncontended-safe-identity';
+            $heldLock = $store->getStore()->lock('gateway:rate-increment:'.hash('sha256', $key), 10);
+            self::assertTrue($heldLock->get());
+
+            try {
+                try {
+                    $limiter->hit($key, 60);
+                    self::fail('Counter update bypassed an unavailable file lock.');
+                } catch (LockTimeoutException) {
+                    self::assertSame(0, $limiter->attempts($key));
+                }
+            } finally {
+                $heldLock->release();
+            }
+
+            self::assertSame(1, $limiter->hit($key, 60));
+        } finally {
             config()->set('cache.stores.file', $previousFile);
             Cache::purge('file');
             File::deleteDirectory($directory);

@@ -2,9 +2,11 @@
 
 namespace App\Infrastructure\OAuth;
 
+use Firebase\JWT\JWK;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 final class ClientProfileRegistry
 {
@@ -55,6 +57,11 @@ final class ClientProfileRegistry
                         throw new RuntimeException('Pinned OAuth client redirect URI is unsafe.');
                     }
                 }
+                if (! array_is_list($jwks['keys']) || count($jwks['keys']) > 16) {
+                    throw new RuntimeException('Pinned OAuth client JWKS must contain at most 16 ordered keys.');
+                }
+
+                $keyIds = [];
                 foreach ($jwks['keys'] as $keyEntry) {
                     if (! is_array($keyEntry) || ($keyEntry['kty'] ?? null) !== 'RSA'
                         || ($keyEntry['alg'] ?? null) !== 'RS256'
@@ -63,6 +70,45 @@ final class ClientProfileRegistry
                         || strlen($keyEntry['kid']) > 256
                         || ($keyEntry['use'] ?? 'sig') !== 'sig') {
                         throw new RuntimeException('Pinned OAuth client signing key is unsupported.');
+                    }
+
+                    if (array_intersect(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth'], array_keys($keyEntry)) !== []) {
+                        throw new RuntimeException('Pinned OAuth client JWKS must contain public key material only.');
+                    }
+
+                    if (! $this->validRsaPublicComponents($keyEntry)) {
+                        throw new RuntimeException('Pinned OAuth client RSA signing key components are invalid.');
+                    }
+
+                    if (isset($keyIds[$keyEntry['kid']])) {
+                        throw new RuntimeException('Pinned OAuth client signing key IDs must be unique.');
+                    }
+                    $keyIds[$keyEntry['kid']] = true;
+                }
+
+                // Use the runtime JWT verifier's JWK parser during startup health.
+                // Header-only validation is insufficient: RSA n/e may be absent
+                // or unparseable, leaving an enabled profile unable to authenticate.
+                try {
+                    $keys = JWK::parseKeySet($jwks);
+                } catch (Throwable $exception) {
+                    throw new RuntimeException('Pinned OAuth client signing key is not a usable RSA/RS256 public key.', previous: $exception);
+                }
+
+                if (count($keys) !== count($keyIds)) {
+                    throw new RuntimeException('Pinned OAuth client JWKS contains an ambiguous or unsupported key.');
+                }
+
+                foreach ($keys as $parsedKey) {
+                    $material = $parsedKey->getKeyMaterial();
+                    $details = $material instanceof \OpenSSLAsymmetricKey
+                        ? openssl_pkey_get_details($material)
+                        : false;
+                    if ($parsedKey->getAlgorithm() !== 'RS256'
+                        || ! is_array($details)
+                        || ($details['type'] ?? null) !== OPENSSL_KEYTYPE_RSA
+                        || ($details['bits'] ?? 0) < 2048) {
+                        throw new RuntimeException('Pinned OAuth client signing key must be a valid RSA/RS256 public key of at least 2048 bits.');
                     }
                 }
             } elseif ($key !== 'chatgpt' || $clientId !== (string) config('oauth.client.id')) {
@@ -264,6 +310,37 @@ final class ClientProfileRegistry
                 'updated_at' => now(),
             ]);
         });
+    }
+
+    /** @param array<string, mixed> $key */
+    private function validRsaPublicComponents(array $key): bool
+    {
+        $modulus = $this->decodeCanonicalRsaComponent($key['n'] ?? null, 4096);
+        $exponent = $this->decodeCanonicalRsaComponent($key['e'] ?? null, 16);
+
+        return $modulus !== null && strlen($modulus) >= 256
+            && ord($modulus[0]) !== 0
+            && (ord($modulus[strlen($modulus) - 1]) & 1) === 1
+            && $exponent !== null && strlen($exponent) <= 8
+            && ord($exponent[0]) !== 0
+            && (ord($exponent[strlen($exponent) - 1]) & 1) === 1
+            && (strlen($exponent) > 1 || ord($exponent[0]) >= 3);
+    }
+
+    private function decodeCanonicalRsaComponent(mixed $encoded, int $maxLength): ?string
+    {
+        if (! is_string($encoded) || $encoded === '' || strlen($encoded) > $maxLength
+            || preg_match('/^[A-Za-z0-9_-]+$/D', $encoded) !== 1) {
+            return null;
+        }
+
+        $decoded = base64_decode(strtr($encoded, '-_', '+/'), true);
+        if ($decoded === false || $decoded === ''
+            || rtrim(strtr(base64_encode($decoded), '+/', '-_'), '=') !== $encoded) {
+            return null;
+        }
+
+        return $decoded;
     }
 
     private function safeClientId(string $url): bool

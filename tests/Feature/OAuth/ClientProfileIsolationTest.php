@@ -289,6 +289,48 @@ final class ClientProfileIsolationTest extends TestCase
         self::assertSame(0, Artisan::call('gateway:oauth-client-profile', ['operation' => 'check']));
     }
 
+    public function test_pinned_profile_rejects_unusable_rsa_keys_and_duplicate_kids_before_authentication(): void
+    {
+        $registry = app(ClientProfileRegistry::class);
+        $original = config('oauth.client_profiles');
+        $valid = $original['fixture']['jwks']['keys'][0];
+
+        $missingModulus = $valid;
+        unset($missingModulus['n']);
+        $missingExponent = $valid;
+        unset($missingExponent['e']);
+        $badExponent = [...$valid, 'e' => 'invalid***'];
+
+        foreach ([
+            'missing modulus' => [$missingModulus],
+            'missing exponent' => [$missingExponent],
+            'invalid exponent' => [$badExponent],
+            'unsafe exponent' => [[...$valid, 'e' => JWT::urlsafeB64Encode(chr(1))]],
+            'invalid modulus' => [[...$valid, 'n' => '%%%']],
+            'private component' => [[...$valid, 'd' => 'not-public']],
+            'duplicate kid' => [$valid, $valid],
+        ] as $case => $keys) {
+            config()->set('oauth.client_profiles.fixture.jwks.keys', $keys);
+
+            try {
+                $registry->configured();
+                self::fail('Unusable pinned keys were accepted during configuration: '.$case);
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('Pinned OAuth client', $exception->getMessage(), $case);
+            }
+
+            try {
+                $registry->assertReady();
+                self::fail('Unusable pinned keys passed readiness: '.$case);
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('Pinned OAuth client', $exception->getMessage(), $case);
+            }
+        }
+
+        config()->set('oauth.client_profiles', $original);
+        $registry->assertReady();
+    }
+
     public function test_unknown_duplicate_and_unsafe_remote_profile_origins_fail_closed(): void
     {
         self::assertNull(app(ClientProfileRegistry::class)->active('https://unknown.example.test/oauth/client.json'));
