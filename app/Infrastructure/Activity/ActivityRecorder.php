@@ -86,6 +86,8 @@ final class ActivityRecorder
         ?string $errorCode,
     ): void {
         [$actorType, $actorId, $clientHash] = $this->actor();
+        $request = app()->bound('request') ? app('request') : null;
+        $profileKey = $request?->attributes->get('oauth_client_profile_key');
 
         DB::table('activity_events')->insert([
             'id' => (string) Str::ulid(),
@@ -93,6 +95,9 @@ final class ActivityRecorder
             'actor_type' => $actorType,
             'actor_id' => $actorId,
             'client_id_hash' => $clientHash,
+            'client_profile_key' => $clientHash !== null && is_string($profileKey)
+                && preg_match('/^[a-z][a-z0-9_-]{0,47}$/D', $profileKey) === 1
+                ? $profileKey : null,
             'site_id' => $siteId,
             'operation' => $operation,
             'outcome' => $outcome,
