@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\OAuthClientAuthorizationsController;
 use App\Http\Controllers\Admin\SiteCheckOperationController;
 use App\Http\Controllers\Admin\SiteConnectionController;
 use App\Http\Controllers\Admin\SiteController;
+use App\Http\Controllers\Admin\TargetConnectionController;
 use App\Http\Controllers\Admin\TargetController;
 use App\Http\Controllers\Admin\TargetGroupController;
 use App\Http\Controllers\Admin\TargetGroupTargetController;
@@ -30,6 +31,10 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::get('/targets/create', [TargetController::class, 'create'])->name('targets.create');
     Route::post('/targets', [TargetController::class, 'store'])->name('targets.store');
     Route::get('/targets/{target:target_id}', [TargetController::class, 'show'])->name('targets.show');
+    Route::post('/targets/{target:target_id}/connect', [TargetConnectionController::class, 'connect'])->name('targets.connect');
+    Route::post('/targets/{target:target_id}/reconnect', [TargetConnectionController::class, 'reconnect'])->name('targets.reconnect');
+    Route::post('/targets/{target:target_id}/disconnect', [TargetConnectionController::class, 'disconnect'])->name('targets.disconnect');
+    Route::post('/targets/{target:target_id}/test', [TargetConnectionController::class, 'test'])->name('targets.test');
 
     Route::get('/sites', [SiteController::class, 'index'])->name('sites.index');
     Route::get('/sites/create', [SiteController::class, 'create'])->name('sites.create');

@@ -64,6 +64,13 @@
         <div class="alert alert-error" role="alert">{{ $errors->first('site') }}</div>
     @endif
 
+    @if (session('target_connection_failed'))
+        <div class="alert alert-error" role="alert">{{ __('WordPress Target authorization did not complete. Open your Target and try again.') }}</div>
+    @endif
+    @if ($errors->has('target'))
+        <div class="alert alert-error" role="alert">{{ $errors->first('target') }}</div>
+    @endif
+
     @yield('content')
 </main>
 </body>

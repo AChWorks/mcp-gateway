@@ -8,12 +8,14 @@ use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
@@ -110,6 +112,12 @@ final class TargetController extends Controller
         return view('admin.targets.show', [
             'target' => $target,
             'wpConfig' => $config,
+            'hasCredential' => $target->connector_type === 'wp_ai_bridge' && TargetCredential::query()
+                ->where('target_record_id', $target->getKey())
+                ->where('connector_type', 'wp_ai_bridge')
+                ->where('purpose', 'wordpress_oauth')->exists(),
+            'revocationPending' => $target->connector_type === 'wp_ai_bridge' && DB::table('wp_ai_bridge_revocation_intents')
+                ->where('target_record_id', $target->getKey())->exists(),
         ]);
     }
 

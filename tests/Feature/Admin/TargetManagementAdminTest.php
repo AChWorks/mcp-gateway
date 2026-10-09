@@ -63,7 +63,7 @@ final class TargetManagementAdminTest extends TestCase
         $this->get('/admin/targets/wp-blog')->assertOk()
             ->assertSee('WordPress blog')
             ->assertSee('https://wordpress.example.test')
-            ->assertSee('Connection authorization is not yet configured');
+            ->assertSee('Authorize this Target to connect WordPress securely');
     }
 
     public function test_selected_scope_operator_cannot_discover_other_target_or_enroll_new_connector(): void
