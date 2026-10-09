@@ -5,6 +5,7 @@ namespace App\Infrastructure\OAuth;
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use Firebase\JWT\JWT;
 use Illuminate\Support\Facades\DB;
+use League\OAuth2\Server\Entities\ClientEntityInterface;
 use League\OAuth2\Server\Entities\ScopeEntityInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use RuntimeException;
@@ -26,7 +27,7 @@ final readonly class RefreshTokenRecoveryStore
         // ChatGPT has an accepted bounded recovery contract. Other profiles
         // receive normal rotating refresh tokens without inheriting this policy.
         $validated = $request->getAttribute('gateway.oauth.validated_client');
-        $profile = $validated instanceof \League\OAuth2\Server\Entities\ClientEntityInterface
+        $profile = $validated instanceof ClientEntityInterface
             ? $this->profiles->active($validated->getIdentifier())
             : null;
         if ($profile === null) {

@@ -3,7 +3,6 @@
 namespace App\Infrastructure\OAuth\League\Repositories;
 
 use App\Infrastructure\OAuth\ClientProfileRegistry;
-
 use App\Infrastructure\OAuth\League\Entities\AuthCodeEntity;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use Illuminate\Database\QueryException;

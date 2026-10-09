@@ -3,7 +3,6 @@
 namespace App\Infrastructure\OAuth\League\Repositories;
 
 use App\Infrastructure\OAuth\ClientProfileRegistry;
-
 use App\Infrastructure\OAuth\League\Entities\RefreshTokenEntity;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
