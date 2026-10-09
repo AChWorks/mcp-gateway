@@ -91,10 +91,22 @@ final class ClientProfileIsolationTest extends TestCase
         self::assertSame('fixture', \DB::table('oauth_authorizations')->where('client_id', self::FIXTURE)->value('client_profile_key'));
         self::assertSame('chatgpt', \DB::table('oauth_authorizations')->where('client_id', self::CHATGPT)->value('client_profile_key'));
 
-        $this->withToken($fixtureTokens['access_token'])
-            ->postJson('/mcp', ['jsonrpc' => '2.0', 'method' => 'ping', 'id' => 1])->assertOk();
-        $this->withToken($chatTokens['access_token'])
-            ->postJson('/mcp', ['jsonrpc' => '2.0', 'method' => 'ping', 'id' => 2])->assertOk();
+        $mcp = ['jsonrpc' => '2.0', 'method' => 'tools/list', 'id' => 1, 'params' => [
+            '_meta' => [
+                'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                'io.modelcontextprotocol/clientInfo' => ['name' => 'profile-fixture-test', 'version' => '1.0'],
+            ],
+        ]];
+        $headers = [
+            'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/list',
+        ];
+        $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
+        $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
 
         // A refresh issued to one client cannot be used by a different authenticated client.
         $this->refresh($fixtureTokens['refresh_token'], self::CHATGPT, $this->chatPrivateKey, 'chat-key')
@@ -113,7 +125,7 @@ final class ClientProfileIsolationTest extends TestCase
             'grant_type' => 'authorization_code',
             'client_id' => self::CHATGPT,
             'code' => $fixtureCode,
-            'redirect_uri' => self::FIXTURE_REDIRECT,
+            'redirect_uri' => 'https://chatgpt.com/connector_platform_oauth_redirect',
             'code_verifier' => str_repeat('v', 64),
             'resource' => config('oauth.resource'),
             'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
