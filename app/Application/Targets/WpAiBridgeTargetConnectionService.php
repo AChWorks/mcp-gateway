@@ -234,6 +234,8 @@ final readonly class WpAiBridgeTargetConnectionService
                 'resource_url' => $claim['context']['resource_url'],
                 'binding_hash' => hash('sha256', (string) $locked->getKey()."\0".$locked->target_id."\0".$claim['context']['client_id']."\0".$claim['context']['resource_url']),
                 'access_expires_at' => $token['expires_at'],
+                'refresh_expires_at' => $token['refresh_expires_at'],
+                'refresh_due_at' => $token['refresh_due_at'],
             ]);
 
             DB::table('wp_ai_bridge_oauth_flows')->where('id', $pending->id)->delete();
@@ -254,11 +256,11 @@ final readonly class WpAiBridgeTargetConnectionService
      *
      * @return array{resource_url:string,access_token:string}
      */
-    public function routingContext(Target $target): array
+    public function routingContext(Target $target, bool $renewIfDue = false): array
     {
         $recordId = (string) $target->getKey();
         /** @var array<string,mixed> $plan */
-        $plan = $this->withLockedTarget($recordId, function (Target $locked): array {
+        $plan = $this->withLockedTarget($recordId, function (Target $locked) use ($renewIfDue): array {
             if ($this->hasRevocationIntent($locked)) {
                 throw new WpAiBridgeTargetConnectionException('revocation_pending', 'Credential revocation is incomplete.');
             }
@@ -291,9 +293,19 @@ final readonly class WpAiBridgeTargetConnectionService
             if ($intent === null && $locked->getAttribute('connection_state') !== TargetConnectionState::Connected) {
                 throw new WpAiBridgeTargetConnectionException('reconnect_required', 'The WordPress Target requires reconnection.');
             }
-            if ($intent === null && $secret['access_expires_at'] !== null
-                && $secret['access_expires_at']->getTimestamp() > time() + 30) {
+            $accessStillValid = $secret['access_expires_at'] !== null
+                && $secret['access_expires_at']->getTimestamp() > time() + 30;
+            $dueAt = $metadata->refresh_due_at === null ? null : strtotime((string) $metadata->refresh_due_at);
+            if ($intent === null && $accessStillValid
+                && (! $renewIfDue || ($dueAt !== null && $dueAt > time()))) {
                 return ['ready' => true, 'resource_url' => $secret['resource_url'], 'access_token' => $secret['access_token']];
+            }
+
+            if ($intent === null && $metadata->refresh_expires_at !== null
+                && strtotime((string) $metadata->refresh_expires_at) <= time()) {
+                $this->setFailure($locked, 'refresh_expired', TargetConnectionState::Error);
+
+                return ['expired' => true];
             }
 
             if ($intent === null) {
@@ -344,7 +356,11 @@ final readonly class WpAiBridgeTargetConnectionService
             ];
         });
 
-        if ($plan['ready'] === true) {
+        if (($plan['expired'] ?? false) === true) {
+            throw new WpAiBridgeTargetConnectionException('refresh_expired',
+                'WordPress offline authorization has expired and requires fresh consent.');
+        }
+        if (($plan['ready'] ?? false) === true) {
             return ['resource_url' => $plan['resource_url'], 'access_token' => $plan['access_token']];
         }
 
@@ -457,6 +473,8 @@ final readonly class WpAiBridgeTargetConnectionService
             ])->save();
             DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credential->getKey())->update([
                 'access_expires_at' => $token['expires_at'],
+                'refresh_expires_at' => $token['refresh_expires_at'],
+                'refresh_due_at' => $token['refresh_due_at'],
                 'generation' => $plan['generation'] + 1,
             ]);
             DB::table('wp_ai_bridge_refresh_intents')->where('id', $intent->id)->delete();
@@ -752,7 +770,7 @@ final readonly class WpAiBridgeTargetConnectionService
     }
 
     /** @param array<string,mixed> $document
-     * @return array{access_token:string,refresh_token:string,expires_at:DateTimeImmutable,scopes:list<string>}
+     * @return array{access_token:string,refresh_token:string,expires_at:DateTimeImmutable,refresh_expires_at:?DateTimeImmutable,refresh_due_at:DateTimeImmutable,scopes:list<string>}
      */
     private function parseToken(array $document): array
     {
@@ -761,6 +779,11 @@ final readonly class WpAiBridgeTargetConnectionService
         $tokenType = $document['token_type'] ?? null;
         $expiresIn = $document['expires_in'] ?? null;
         $scope = $document['scope'] ?? null;
+        $refreshTtl = $document['refresh_token_expires_in'] ?? null;
+        if ($refreshTtl !== null && (! is_int($refreshTtl) || $refreshTtl < 1 || $refreshTtl > 315360000)) {
+            throw new WpAiBridgeTargetConnectionException('invalid_token_response',
+                'WordPress returned an invalid refresh-token lifetime.');
+        }
 
         if (! is_string($accessToken) || $accessToken === '' || strlen($accessToken) > 8192
             || ! is_string($refreshToken) || $refreshToken === '' || strlen($refreshToken) > 8192
@@ -776,10 +799,16 @@ final readonly class WpAiBridgeTargetConnectionService
             throw new WpAiBridgeTargetConnectionException('invalid_token_response', 'WordPress OAuth did not grant the required scopes.');
         }
 
+        $issuedAt = time();
+        $halfAccessTtl = max(1, intdiv((int) $expiresIn, 2));
+        $halfRefreshTtl = $refreshTtl === null ? $halfAccessTtl : max(1, intdiv($refreshTtl, 2));
+
         return [
             'access_token' => $accessToken,
             'refresh_token' => $refreshToken,
-            'expires_at' => new DateTimeImmutable('@'.(time() + (int) $expiresIn)),
+            'expires_at' => new DateTimeImmutable('@'.($issuedAt + (int) $expiresIn)),
+            'refresh_expires_at' => $refreshTtl === null ? null : new DateTimeImmutable('@'.($issuedAt + $refreshTtl)),
+            'refresh_due_at' => new DateTimeImmutable('@'.($issuedAt + min($halfAccessTtl, $halfRefreshTtl))),
             'scopes' => $scopes,
         ];
     }

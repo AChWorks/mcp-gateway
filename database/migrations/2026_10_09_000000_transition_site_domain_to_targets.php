@@ -192,6 +192,8 @@ return new class extends Migration
             $table->string('resource_url', 1024);
             $table->char('binding_hash', 64);
             $table->timestamp('access_expires_at')->nullable();
+            $table->timestamp('refresh_expires_at')->nullable();
+            $table->timestamp('refresh_due_at')->nullable()->index('wp_credential_refresh_due_idx');
             $table->unsignedBigInteger('generation')->default(1);
             $table->index(['client_id', 'binding_hash'], 'wp_credential_client_binding_idx');
         });

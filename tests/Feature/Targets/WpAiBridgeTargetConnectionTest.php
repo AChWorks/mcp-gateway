@@ -480,6 +480,75 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(1, DB::table('target_credentials')->count());
     }
 
+    public function test_due_idle_maintenance_rotates_only_selected_wordpress_target_before_expiry(): void
+    {
+        $alpha = $this->target('alpha');
+        $beta = $this->target('beta');
+        $this->pair($alpha);
+        $this->pair($beta);
+        $due = DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $this->credential($alpha)->getKey())->first();
+        self::assertNotNull($due);
+        self::assertGreaterThan(time() + 3000, strtotime((string) $due->refresh_expires_at));
+        self::assertGreaterThan(time() + 1000, strtotime((string) $due->refresh_due_at));
+        DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $this->credential($alpha)->getKey())
+            ->update(['refresh_due_at' => now()->subMinute()]);
+
+        $baseline = DB::transactionLevel();
+        self::assertSame(0, Artisan::call('gateway:wordpress-credentials-maintain'));
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame('alpha-rotated-access',
+            app(WpAiBridgeTargetConnectionService::class)->accessToken($alpha));
+        self::assertSame('beta-access',
+            app(WpAiBridgeTargetConnectionService::class)->accessToken($beta));
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $this->credential($alpha)->getKey())->value('generation'));
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $this->credential($beta)->getKey())->value('generation'));
+        self::assertGreaterThan(time() + 1000,
+            strtotime((string) DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $this->credential($alpha)->getKey())->value('refresh_due_at')));
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        foreach ($this->outboundTransactionLevels as $level) {
+            self::assertSame($baseline, $level, 'Idle refresh performed remote I/O under a database lock.');
+        }
+    }
+
+    public function test_ambiguous_idle_maintenance_does_not_unboundedly_replay_credentials(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())
+            ->update(['refresh_due_at' => now()->subMinute()]);
+        $this->failRefresh = true;
+
+        self::assertSame(1, Artisan::call('gateway:wordpress-credentials-maintain'));
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        // Even after a remote timeout, the scheduler never tries the old
+        // rotating refresh token a second time without an explicit action.
+        DB::table('wp_ai_bridge_refresh_intents')->update(['created_at' => now()->subSeconds(20)]);
+        self::assertSame(0, Artisan::call('gateway:wordpress-credentials-maintain'));
+        self::assertSame(1, $this->refreshCalls);
+    }
+
+    public function test_expired_offline_credential_is_rejected_without_remote_refresh(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())
+            ->update([
+                'refresh_due_at' => now()->subMinutes(5),
+                'refresh_expires_at' => now()->subMinute(),
+            ]);
+
+        self::assertSame(1, Artisan::call('gateway:wordpress-credentials-maintain'));
+        self::assertSame(0, $this->refreshCalls);
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame('refresh_expired', $target->last_error_code);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+    }
+
     private function expire(Target $target): void
     {
         $vault = app(WpAiBridgeTargetVault::class);
@@ -573,6 +642,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
                 return Http::response([
                     'token_type' => 'Bearer',
                     'expires_in' => 3600,
+                    'refresh_token_expires_in' => 7200,
                     'access_token' => explode('.', $host)[0].'-rotated-access',
                     'refresh_token' => explode('.', $host)[0].'-rotated-refresh',
                     'scope' => 'mcp:use offline_access',
@@ -596,6 +666,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             return Http::response([
                 'token_type' => 'Bearer',
                 'expires_in' => 3600,
+                'refresh_token_expires_in' => 7200,
                 'access_token' => explode('.', $host)[0].'-access',
                 'refresh_token' => explode('.', $host)[0].'-refresh',
                 'scope' => 'mcp:use offline_access',
