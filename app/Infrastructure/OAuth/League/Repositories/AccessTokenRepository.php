@@ -2,6 +2,8 @@
 
 namespace App\Infrastructure\OAuth\League\Repositories;
 
+use App\Infrastructure\OAuth\ClientProfileRegistry;
+
 use App\Infrastructure\OAuth\League\Entities\AccessTokenEntity;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use Illuminate\Database\QueryException;
@@ -14,7 +16,7 @@ use League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface;
 
 final readonly class AccessTokenRepository implements AccessTokenRepositoryInterface
 {
-    public function __construct(private OAuthAuthorizationStore $authorizations) {}
+    public function __construct(private OAuthAuthorizationStore $authorizations, private ClientProfileRegistry $profiles) {}
 
     public function getNewToken(
         ClientEntityInterface $clientEntity,
@@ -92,6 +94,9 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
                 'tokens.resource',
                 'tokens.expires_at',
                 'tokens.revoked_at',
+                'authorizations.client_id as authorization_client_id',
+                'authorizations.client_profile_key',
+                'authorizations.client_profile_generation',
                 'authorizations.revoked_at as authorization_revoked_at',
                 'users.access_enabled as user_access_enabled',
             ])
@@ -101,7 +106,12 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
             || $row->revoked_at !== null
             || $row->authorization_revoked_at !== null
             || ! (bool) $row->user_access_enabled
-            || (string) $row->client_id !== (string) config('oauth.client.id')
+            || ! hash_equals((string) $row->client_id, (string) $row->authorization_client_id)
+            || ! $this->profiles->authorizes(
+                (string) $row->client_id,
+                is_string($row->client_profile_key) ? $row->client_profile_key : null,
+                $row->client_profile_generation === null ? null : (int) $row->client_profile_generation,
+            )
             || (string) $row->resource !== (string) config('oauth.resource')
             || now()->gte($row->expires_at);
     }
