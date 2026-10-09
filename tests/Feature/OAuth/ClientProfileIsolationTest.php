@@ -105,10 +105,35 @@ final class ClientProfileIsolationTest extends TestCase
             'MCP-Protocol-Version' => '2026-07-28',
             'Mcp-Method' => 'tools/list',
         ];
-        $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
+        $fixtureTools = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
             ->postJson('/mcp', $mcp)->assertOk();
-        $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+        $chatTools = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
             ->postJson('/mcp', $mcp)->assertOk();
+
+        foreach ([$fixtureTools, $chatTools] as $toolResult) {
+            self::assertSame(['targets-list', 'target-context'],
+                array_column((array) $toolResult->json('result.tools'), 'name'));
+            foreach ((array) $toolResult->json('result.tools') as $tool) {
+                self::assertTrue($tool['annotations']['readOnlyHint'] ?? false);
+                self::assertFalse($tool['annotations']['destructiveHint'] ?? true);
+                self::assertFalse($tool['annotations']['openWorldHint'] ?? true);
+            }
+        }
+        $this->withHeaders([...$headers, 'Mcp-Method' => 'tools/call', 'Mcp-Name' => 'targets-list',
+            'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
+            ->postJson('/mcp', [
+                'jsonrpc' => '2.0',
+                'method' => 'tools/call',
+                'id' => 2,
+                'params' => [
+                    'name' => 'targets-list',
+                    'arguments' => (object) [],
+                    '_meta' => $mcp['params']['_meta'],
+                ],
+            ])
+            ->assertOk()
+            ->assertJsonPath('result.structuredContent.ok', true)
+            ->assertJsonPath('result.structuredContent.targets', []);
 
         // A refresh issued to one client cannot be used by a different authenticated client.
         $this->refresh($fixtureTokens['refresh_token'], self::CHATGPT, $this->chatPrivateKey, 'chat-key')
