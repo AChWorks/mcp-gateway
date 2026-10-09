@@ -3,7 +3,6 @@
 namespace App\Infrastructure\Activity;
 
 use App\Domain\Targets\Target;
-
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -36,8 +35,8 @@ final class ActivityRecorder
                     'correlation_id' => $correlationId,
                     'operation' => $operation,
                     'target_id' => $target?->target_id,
-            'target_record_id' => $target?->getKey(),
-            'connector_type_snapshot' => $target?->connector_type,
+                    'target_record_id' => $target?->getKey(),
+                    'connector_type_snapshot' => $target?->connector_type,
                     'outcome' => $outcome,
                     'error_code' => $errorCode,
                 ]);

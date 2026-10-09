@@ -81,7 +81,7 @@ final readonly class ActivityFeed
         }
 
         $query
-           
+
             ->when($operation !== null, fn ($query) => $query->where('operation', $operation))
             ->orderByDesc('created_at')
             ->orderByDesc('id');

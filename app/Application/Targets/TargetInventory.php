@@ -1,16 +1,16 @@
 <?php
 
-namespace App\Application\Sites;
+namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Sites\Site;
-use App\Domain\Sites\SiteConnectionState;
+use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
 
-final class SiteInventory
+final class TargetInventory
 {
     public function __construct(private readonly AccessControl $access) {}
 
@@ -21,7 +21,7 @@ final class SiteInventory
     public const MCP_MAX_LIMIT = 100;
 
     /**
-     * @return array{items:list<Site>,page:int,per_page:int,has_more:bool}
+     * @return array{items:list<Target>,page:int,per_page:int,has_more:bool}
      */
     public function adminPage(
         User $user,
@@ -33,21 +33,21 @@ final class SiteInventory
         $search = $this->search($search);
         $connectionState = $this->connectionState($connectionState);
 
-        $query = $this->access->scopeSites(
-            Site::query()->select([
+        $query = $this->access->scopeTargets(
+            Target::query()->select([
                 'id',
-                'site_id',
+                'target_id',
                 'display_name',
             ]),
             $user,
-            GatewayPermission::SitesView,
+            GatewayPermission::TargetsView,
         );
 
         $this->applyFilters($query, $search, $connectionState);
 
         $rows = $query
             ->orderBy('display_name')
-            ->orderBy('site_id')
+            ->orderBy('target_id')
             ->offset(($page - 1) * self::ADMIN_PAGE_SIZE)
             ->limit(self::ADMIN_PAGE_SIZE + 1)
             ->get();
@@ -57,11 +57,10 @@ final class SiteInventory
         if ($pageRows->isEmpty()) {
             $items = [];
         } else {
-            $detailQuery = Site::query()->select([
+            $detailQuery = Target::query()->select([
                 'id',
-                'site_id',
+                'target_id',
                 'display_name',
-                'base_url',
                 'connector_type',
                 'connection_state',
                 'last_error_code',
@@ -71,15 +70,15 @@ final class SiteInventory
                 'last_failure_at',
                 'last_failure_code',
             ]);
-            $sitesById = $this->access
-                ->scopeSites($detailQuery, $user, GatewayPermission::SitesView)
+            $targetsById = $this->access
+                ->scopeTargets($detailQuery, $user, GatewayPermission::TargetsView)
                 ->whereIn('id', $pageRows->pluck('id')->all())
                 ->get()
                 ->keyBy('id');
 
             $items = $pageRows
-                ->map(static fn (Site $row): ?Site => $sitesById->get($row->id))
-                ->filter(static fn (?Site $site): bool => $site instanceof Site)
+                ->map(static fn (Target $row): ?Target => $targetsById->get($row->id))
+                ->filter(static fn (?Target $target): bool => $target instanceof Target)
                 ->values()
                 ->all();
         }
@@ -93,7 +92,7 @@ final class SiteInventory
     }
 
     /**
-     * @return array{items:list<Site>,limit:int,has_more:bool,next_cursor:?string}
+     * @return array{items:list<Target>,limit:int,has_more:bool,next_cursor:?string}
      */
     public function mcpPage(
         User $user,
@@ -113,25 +112,25 @@ final class SiteInventory
         $search = $this->search($search);
         $connectionState = $this->connectionState($connectionState);
 
-        $query = $this->access->scopeSites(
-            Site::query()->select([
-                'site_id',
+        $query = $this->access->scopeTargets(
+            Target::query()->select([
+                'target_id',
                 'display_name',
                 'connector_type',
                 'connection_state',
             ]),
             $user,
-            GatewayPermission::SitesView,
+            GatewayPermission::TargetsView,
         );
 
         $this->applyFilters($query, $search, $connectionState);
 
         if ($cursor !== null) {
-            $query->where('site_id', '>', $cursor);
+            $query->where('target_id', '>', $cursor);
         }
 
         $rows = $query
-            ->orderBy('site_id')
+            ->orderBy('target_id')
             ->limit($limit + 1)
             ->get();
         $items = $rows->take($limit)->values();
@@ -142,18 +141,18 @@ final class SiteInventory
             'items' => $items->all(),
             'limit' => $limit,
             'has_more' => $hasMore,
-            'next_cursor' => $hasMore && $last instanceof Site ? $last->site_id : null,
+            'next_cursor' => $hasMore && $last instanceof Target ? $last->target_id : null,
         ];
     }
 
-    /** @param Builder<Site> $query */
+    /** @param Builder<Target> $query */
     private function applyFilters(Builder $query, ?string $search, ?string $connectionState): void
     {
         if ($search !== null) {
             $query->where(function (Builder $query) use ($search): void {
                 $query
                     ->where('display_name', 'like', '%'.$search.'%')
-                    ->orWhere('site_id', 'like', '%'.$search.'%');
+                    ->orWhere('target_id', 'like', '%'.$search.'%');
             });
         }
 
@@ -167,7 +166,7 @@ final class SiteInventory
         $value = $this->nullableTrim($value);
 
         if ($value !== null && mb_strlen($value) > 64) {
-            throw new InvalidArgumentException('cursor exceeds the supported site ID length.');
+            throw new InvalidArgumentException('cursor exceeds the supported target ID length.');
         }
 
         return $value;
@@ -188,7 +187,7 @@ final class SiteInventory
     {
         $value = $this->nullableTrim($value);
 
-        if ($value !== null && SiteConnectionState::tryFrom($value) === null) {
+        if ($value !== null && TargetConnectionState::tryFrom($value) === null) {
             throw new InvalidArgumentException('connection_state is not supported.');
         }
 
