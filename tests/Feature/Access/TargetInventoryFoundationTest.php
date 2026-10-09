@@ -59,6 +59,7 @@ final class TargetInventoryFoundationTest extends TestCase
         self::assertCount(115, $result);
         self::assertCount(115, array_unique($result));
         self::assertSame('target-0115', end($result));
+        self::assertCount(38, app(TargetInventory::class)->mcpPage($user, connectorType: 'ssh_direct')['items']);
     }
 
     public function test_inventory_search_never_reveals_out_of_scope_targets(): void

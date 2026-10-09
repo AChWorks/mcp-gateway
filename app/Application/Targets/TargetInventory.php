@@ -28,10 +28,12 @@ final class TargetInventory
         int $page = 1,
         ?string $search = null,
         ?string $connectionState = null,
+        ?string $connectorType = null,
     ): array {
         $page = max(1, $page);
         $search = $this->search($search);
         $connectionState = $this->connectionState($connectionState);
+        $connectorType = $this->connectorType($connectorType);
 
         $query = $this->access->scopeTargets(
             Target::query()->select([
@@ -43,7 +45,7 @@ final class TargetInventory
             GatewayPermission::TargetsView,
         );
 
-        $this->applyFilters($query, $search, $connectionState);
+        $this->applyFilters($query, $search, $connectionState, $connectorType);
 
         $rows = $query
             ->orderBy('display_name')
@@ -100,6 +102,7 @@ final class TargetInventory
         int $limit = self::MCP_DEFAULT_LIMIT,
         ?string $search = null,
         ?string $connectionState = null,
+        ?string $connectorType = null,
     ): array {
         if ($limit < 1 || $limit > self::MCP_MAX_LIMIT) {
             throw new InvalidArgumentException(sprintf(
@@ -111,6 +114,7 @@ final class TargetInventory
         $cursor = $this->cursor($cursor);
         $search = $this->search($search);
         $connectionState = $this->connectionState($connectionState);
+        $connectorType = $this->connectorType($connectorType);
 
         $query = $this->access->scopeTargets(
             Target::query()->select([
@@ -123,7 +127,7 @@ final class TargetInventory
             GatewayPermission::TargetsView,
         );
 
-        $this->applyFilters($query, $search, $connectionState);
+        $this->applyFilters($query, $search, $connectionState, $connectorType);
 
         if ($cursor !== null) {
             $query->where('target_id', '>', $cursor);
@@ -146,7 +150,7 @@ final class TargetInventory
     }
 
     /** @param Builder<Target> $query */
-    private function applyFilters(Builder $query, ?string $search, ?string $connectionState): void
+    private function applyFilters(Builder $query, ?string $search, ?string $connectionState, ?string $connectorType): void
     {
         if ($search !== null) {
             $query->where(function (Builder $query) use ($search): void {
@@ -158,6 +162,9 @@ final class TargetInventory
 
         if ($connectionState !== null) {
             $query->where('connection_state', $connectionState);
+        }
+        if ($connectorType !== null) {
+            $query->where('connector_type', $connectorType);
         }
     }
 
@@ -189,6 +196,18 @@ final class TargetInventory
 
         if ($value !== null && TargetConnectionState::tryFrom($value) === null) {
             throw new InvalidArgumentException('connection_state is not supported.');
+        }
+
+        return $value;
+    }
+
+    private function connectorType(?string $value): ?string
+    {
+        $value = $this->nullableTrim($value);
+        if ($value !== null && ! in_array($value, [
+            'wp_ai_bridge', 'ai_server_agent', 'ssh_direct',
+        ], true)) {
+            throw new InvalidArgumentException('connector_type is not supported.');
         }
 
         return $value;
