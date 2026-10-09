@@ -47,7 +47,7 @@ WordPress/WP AI Bridge is the first concrete connector path, but the long-lived 
 
 The diagram above and Site-named components below describe the **currently integrated V1-era implementation**. They are not the accepted naming/storage boundary for the next connector.
 
-Program Issue #106 accepts a breaking redesign before AI Server Agent becomes the second supported connector. The target-state contract is:
+Program Issue #106 accepts a breaking redesign with AI Server Agent as the second MCP-speaking connector and `ssh_direct` as a separate third connector over SSH/SFTP. The target-state contract is:
 
 - shared domain/persistence/access/Admin/MCP vocabulary becomes `Target`, not `Site`;
 - current Target/connector connection data may be reset rather than preserved through a dual compatibility model;
@@ -57,7 +57,7 @@ Program Issue #106 accepts a breaking redesign before AI Server Agent becomes th
 - generic credential custody is purpose-aware and Target+connector bound rather than permanently one credential row per Target;
 - connector selection uses an explicit built-in registry/factory with a small static connector descriptor;
 - connector-specific operation permissions are namespaced and never forced into WP Ability semantics;
-- shared downstream MCP framing moves behind a Gateway-owned remote MCP client that supports the real modern-stateless and legacy-session connector requirements;
+- shared downstream MCP framing moves behind a Gateway-owned remote MCP client supporting modern-stateless and legacy-session needs; Direct SSH uses an independent TCP SSH/SFTP adapter;
 - generic outbound MCP/HTTP infrastructure uses connector-neutral bounds/configuration rather than `bridge.*` defaults;
 - public tool count scales with connector capability families, not Target inventory, and public tools expose correct annotations/bounded schemas without internal tracing telemetry;
 - remote connector I/O runs outside database row-lock transactions using short prepare/claim and finalize phases;
@@ -67,7 +67,7 @@ Program Issue #106 accepts a breaking redesign before AI Server Agent becomes th
 - Gateway user identity, supported client profile, exact protocol client ID and any future authenticated external AI account/workspace subject remain separate;
 - idle Targets retain near-zero dynamic runtime cost, allowing only bounded connector-required lifecycle maintenance rather than per-Target runtime infrastructure.
 
-The full accepted design and implementation constraints are in [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md).
+The full accepted design and constraints are in [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md), [`DIRECT-SSH-CONNECTOR.md`](./DIRECT-SSH-CONNECTOR.md) and [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md).
 
 Until Program #106 is integrated, references in this document to `SiteRegistry`, `SiteInventory`, `site_id`, Site Groups, Site credentials, and the V1 WordPress-only tool surface remain descriptions of current source, not requirements to preserve those generic names.
 
@@ -184,7 +184,7 @@ The application/domain layer is the long-lived control-plane boundary. MCP, the 
 
 The project still stops short of a speculative provider framework, but the current scalability evidence in Issue #53 is now a concrete trigger for the first small extraction: admin and MCP inventory consumers need one shared, bounded site-inventory/query boundary instead of independently loading or filtering the fleet. That boundary should own reusable search/filter/order/page semantics and selected projections while remaining an application query service, not a generic repository framework.
 
-Connector generalization remains evidence-driven. The second real connector is now accepted: AI Server Agent under Program #106. This satisfies the previous trigger for a broader but still small connector contract. Extract only semantics demonstrated by WP AI Bridge and AI Server Agent; do not turn the redesign into a speculative provider SDK or dynamic plugin system.
+Connector generalization remains evidence-driven. The accepted non-WordPress expansion includes AI Server Agent and Direct SSH under Program #106. This satisfies the previous trigger for a broader but still small connector contract. Extract only semantics demonstrated by WP AI Bridge and AI Server Agent; do not turn the redesign into a speculative provider SDK or dynamic plugin system.
 
 Keep these invariants:
 
@@ -398,7 +398,7 @@ Connector selection is centralized from the stored `connector_type` to a concret
 
 This is not a dynamic third-party plugin loader. Callers cannot supply class names, URLs, HTTP methods, or executable connector code. Unsupported connector types fail closed.
 
-Program #106 supplies the second real connector: AI Server Agent. The implementation may now extract the smallest common connector contracts proven by `WpAiBridge` and `AiServerAgent`, plus a shared remote MCP protocol adapter where protocol mechanics are genuinely common. Connector-specific authorization, health, capability vocabulary, mutation semantics, and safety must remain inside the connector boundary.
+Program #106 supplies two non-WordPress connector types: AI Server Agent and Direct SSH. The implementation may now extract the smallest common connector contracts proven by `WpAiBridge` and `AiServerAgent`, plus a shared remote MCP protocol adapter where protocol mechanics are genuinely common. Connector-specific authorization, health, capability vocabulary, mutation semantics, and safety must remain inside the connector boundary.
 
 See [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md) for the accepted breaking target-state design.
 
@@ -678,14 +678,14 @@ A future change must not casually violate these invariants:
 4. Gateway authorization can narrow but cannot grant downstream authority the Target principal/connector does not possess.
 5. Direct WP AI Bridge operation remains independent of Gateway availability.
 6. Direct AI Server Agent operation remains independent of Gateway availability once that connector is supported.
-7. No generic arbitrary HTTP/SQL/shell/filesystem proxy is introduced as a shortcut; privileged downstream capabilities exist only through explicit supported connector contracts.
+7. No generic arbitrary HTTP/SQL/shell/filesystem proxy is introduced as a shortcut; authorized `ssh_direct` users may run unrestricted remote OS commands including permitted sudo/root **only** on the explicitly configured Target, not arbitrary host-supplied shell proxying.
 8. Security-sensitive OAuth/token/credential behavior is standards/library-backed where applicable, secret-safe, and tested.
 9. The supported baseline remains a normal PHP + MariaDB-primary/MySQL-compatible web application with no mandatory auxiliary services until measured workload requires them.
 10. Connector-specific behavior stays behind connector boundaries; the shared Target/inventory/authorization model does not require WordPress, OAuth, or Linux/server semantics.
 11. Administrative authorization is permission/policy based; role names are replaceable bundles, not distributed business logic.
 12. Fleet discovery and administration are bounded; registered-but-idle Targets do not create mandatory remote work, persistent downstream sessions, per-Target workers, or per-Target public tools.
 13. Infrastructure scales from measured active workload rather than registered Target count.
-14. Heavy backup/media/export data stays off the Gateway data path by default when direct Target-to-storage flow is possible.
+14. Heavy backup/media/export data stays off the Gateway data path by default when direct Target-to-storage flow is possible. Bounded mediated file transfers may exist; no unbounded PHP buffering or fake resumability.
 15. Historical V1 Site naming does not create a compatibility obligation after the accepted Program #106 breaking transition.
 16. ChatGPT/OpenAI remains a supported client/integration, not the shared client-edge domain; future supported clients use explicit reviewed profiles/adapters without provider-specific authorization logic in core.
 17. Agent Server IP/hostname is bounded connector-owned inventory context only; stable Target identity and Agent `instance_id` never depend on mutable network coordinates.
