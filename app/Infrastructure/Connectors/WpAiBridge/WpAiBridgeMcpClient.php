@@ -273,8 +273,19 @@ final readonly class WpAiBridgeMcpClient
                         'parameters' => $input === [] ? (object) [] : $input,
                     ],
                 ],
-            ], $headers);
+            ], $headers, $mutationRisk
+                ? null
+                : (int) config('bridge.http.readonly_tool_max_response_bytes', 262144));
         } catch (OutboundRequestException $exception) {
+            if (! $mutationRisk && $exception->reason === 'response_too_large') {
+                throw new WpAiBridgeMcpException(
+                    'response_too_large',
+                    'The downstream read is larger than the Gateway response limit. Use a targeted/paginated read or adjust the bounded read limit.',
+                    $exception,
+                    $exception->details,
+                );
+            }
+
             $reason = $mutationRisk ? 'outcome_unknown' : $exception->reason;
             $message = $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'

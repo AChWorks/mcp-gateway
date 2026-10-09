@@ -8,6 +8,9 @@ use Illuminate\Support\Facades\Http;
 
 final class SafeHttpClient
 {
+    // Maximum decoded body accepted by a single shared-PHP request, regardless of env settings.
+    public const ABSOLUTE_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
     public function __construct(private readonly OutboundTargetPolicy $targets) {}
 
     /** @param array<string, string> $headers */
@@ -29,9 +32,9 @@ final class SafeHttpClient
      * @param  array<string, mixed>  $json
      * @param  array<string, string>  $headers
      */
-    public function postJson(string $url, array $json, array $headers = []): SafeHttpResponse
+    public function postJson(string $url, array $json, array $headers = [], ?int $responseLimitBytes = null): SafeHttpResponse
     {
-        return $this->send('POST', $url, $headers, $json, 'json');
+        return $this->send('POST', $url, $headers, $json, 'json', $responseLimitBytes);
     }
 
     /** @param array<string, string> $headers */
@@ -45,12 +48,13 @@ final class SafeHttpClient
      * @param  array<string, mixed>  $payload
      * @param  'none'|'form'|'json'  $format
      */
-    private function send(string $method, string $url, array $headers, array $payload, string $format): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null): SafeHttpResponse
     {
         $target = $this->targets->validate($url);
         $connectTimeout = max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
         $requestTimeout = max($connectTimeout, (int) config('bridge.http.request_timeout_seconds', 5));
-        $maxBytes = max(1024, (int) config('bridge.http.max_response_bytes', 65536));
+        $requestedBytes = $responseLimitBytes ?? (int) config('bridge.http.max_response_bytes', 65536);
+        $maxBytes = min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $requestedBytes));
         $responseBody = new BoundedResponseBody($maxBytes);
 
         try {
@@ -89,7 +93,7 @@ final class SafeHttpClient
                 };
             } catch (ConnectionException|RequestException $exception) {
                 if ($responseBody->limitExceeded()) {
-                    throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+                    throw $this->oversize($maxBytes, $responseBody->limitPhase() ?? 'decoded_body', $responseBody->observedBytes());
                 }
 
                 if ($exception instanceof RequestException) {
@@ -103,7 +107,7 @@ final class SafeHttpClient
             }
 
             if ($responseBody->limitExceeded()) {
-                throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+                throw $this->oversize($maxBytes, $responseBody->limitPhase() ?? 'decoded_body', $responseBody->observedBytes());
             }
 
             $status = $response->status();
@@ -114,7 +118,7 @@ final class SafeHttpClient
             $psrResponse = $response->toPsrResponse();
             $lengthHeader = $psrResponse->getHeaderLine('Content-Length');
             if ($lengthHeader !== '' && ctype_digit($lengthHeader) && (int) $lengthHeader > $maxBytes) {
-                throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+                throw $this->oversize($maxBytes, 'content_length', (int) $lengthHeader);
             }
 
             $stream = $responseBody->stream();
@@ -128,12 +132,26 @@ final class SafeHttpClient
             }
 
             if (strlen($body) > $maxBytes) {
-                throw new OutboundRequestException('response_too_large', 'Remote response exceeded the configured size limit.');
+                throw $this->oversize($maxBytes, 'collected_body', strlen($body));
             }
 
             return new SafeHttpResponse($status, $psrResponse->getHeaders(), $body);
         } finally {
             $responseBody->close();
         }
+    }
+
+    private function oversize(int $limitBytes, string $phase, ?int $observedBytes): OutboundRequestException
+    {
+        $details = ['limit_bytes' => $limitBytes, 'phase' => $phase];
+        if ($observedBytes !== null) {
+            $details['observed_bytes'] = $observedBytes;
+        }
+
+        return new OutboundRequestException(
+            'response_too_large',
+            'Remote response exceeded the configured size limit.',
+            $details,
+        );
     }
 }

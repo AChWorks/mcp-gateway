@@ -43,6 +43,8 @@ final class BoundedResponseTransportTest extends TestCase
                 self::fail('Compressed response expanded beyond the decoded-byte limit without aborting.');
             } catch (ResponseException $exception) {
                 self::assertTrue($gzipOver->limitExceeded());
+                self::assertSame('decoded_body', $gzipOver->limitPhase());
+                self::assertGreaterThan(1024, $gzipOver->observedBytes());
                 self::assertLessThanOrEqual(1024, $this->storedBytes($gzipOver));
             }
 
@@ -66,6 +68,8 @@ final class BoundedResponseTransportTest extends TestCase
             } catch (ResponseException $exception) {
                 self::assertSame('', $exception->getResponse()->getHeaderLine('Content-Length'));
                 self::assertTrue($unknownOver->limitExceeded());
+                self::assertContains($unknownOver->limitPhase(), ['decoded_body', 'wire_progress']);
+                self::assertGreaterThan(1024, $unknownOver->observedBytes());
                 self::assertLessThanOrEqual(1024, $this->storedBytes($unknownOver));
             }
         } finally {

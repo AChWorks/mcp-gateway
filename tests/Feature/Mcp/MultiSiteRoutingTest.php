@@ -460,6 +460,7 @@ final class MultiSiteRoutingTest extends TestCase
         $alpha = $this->createSite('alpha');
         $this->pair($alpha);
         config()->set('bridge.http.max_response_bytes', 1024);
+        config()->set('bridge.http.readonly_tool_max_response_bytes', 1024);
 
         $this->resetHttp();
         Http::fake(function (Request $request) {
@@ -488,6 +489,71 @@ final class MultiSiteRoutingTest extends TestCase
 
         self::assertFalse($result['ok']);
         self::assertSame('response_too_large', $result['error']['code']);
+        self::assertStringContainsString('targeted/paginated read', $result['error']['message']);
+        self::assertSame(1024, $result['error']['details']['limit_bytes']);
+        self::assertContains($result['error']['details']['phase'], ['decoded_body', 'content_length', 'wire_progress']);
+        self::assertStringNotContainsString(str_repeat('x', 1024), json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_oversized_mutating_result_is_unknown_and_not_retried(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+        config()->set('bridge.http.max_response_bytes', 1024);
+        config()->set('bridge.http.readonly_tool_max_response_bytes', 4096);
+
+        $mutationCalls = 0;
+        $this->fakeBridge(function (Request $request) use (&$mutationCalls) {
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'tools/call'
+                && ($payload['params']['arguments']['ability_name'] ?? null) === 'demo/write') {
+                $mutationCalls++;
+
+                return Http::response(str_repeat('secret-mutation-result', 128), 200);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $result = app(PendingGatewayToolHandlers::class)
+            ->siteAbilityExecute($this->principal, 'alpha', 'demo/write', ['value' => 'sensitive']);
+
+        self::assertFalse($result['ok']);
+        self::assertSame('outcome_unknown', $result['error']['code']);
+        self::assertSame(1, $mutationCalls);
+        self::assertStringNotContainsString('secret-mutation-result', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_readonly_ability_result_can_be_larger_than_metadata_budget(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+        config()->set('bridge.http.max_response_bytes', 1024);
+        config()->set('bridge.http.readonly_tool_max_response_bytes', 4096);
+
+        $this->fakeBridge(function (Request $request) {
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'tools/call'
+                && ($payload['params']['arguments']['ability_name'] ?? null) === 'demo/read') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => 2,
+                    'result' => [
+                        'isError' => false,
+                        'structuredContent' => [
+                            'success' => true,
+                            'data' => ['large_read' => str_repeat('x', 2048)],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute($this->principal, 'alpha', 'demo/read', []);
+        self::assertTrue($result['ok']);
+        self::assertSame(str_repeat('x', 2048), $result['result']['large_read']);
     }
 
     private function createSite(string $siteId): Site
