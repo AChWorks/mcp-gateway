@@ -3,24 +3,31 @@
 namespace App\Infrastructure\OAuth\League\Repositories;
 
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
+use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\Entities\ClientEntity;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
 use League\OAuth2\Server\Repositories\ClientRepositoryInterface;
 
 final readonly class ClientRepository implements ClientRepositoryInterface
 {
-    public function __construct(private ChatGptClientMetadata $metadata) {}
+    public function __construct(
+        private ChatGptClientMetadata $metadata,
+        private ClientProfileRegistry $profiles,
+    ) {}
 
     public function getClientEntity(string $clientIdentifier): ?ClientEntityInterface
     {
-        if (! hash_equals((string) config('oauth.client.id'), $clientIdentifier)) {
+        $profile = $this->profiles->active($clientIdentifier);
+        if ($profile === null) {
             return null;
         }
 
+        $isChatGpt = $profile['strategy'] === 'cimd_private_key_jwt';
+
         return new ClientEntity(
             identifier: $clientIdentifier,
-            name: $this->metadata->clientName(),
-            redirectUris: $this->metadata->redirectUris(),
+            name: $isChatGpt ? $this->metadata->clientName() : $profile['display_name'],
+            redirectUris: $isChatGpt ? $this->metadata->redirectUris() : $profile['redirect_uris'],
         );
     }
 
