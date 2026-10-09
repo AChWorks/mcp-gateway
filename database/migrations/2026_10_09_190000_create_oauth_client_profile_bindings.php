@@ -50,8 +50,17 @@ return new class extends Migration
 
     public function down(): void
     {
+        // SQLite and MariaDB both require indexes referencing a column to be
+        // removed before dropping it. The historical migration rollback tests
+        // execute down() inside a restored pre-client-profile schema.
+        Schema::table('activity_events', static function (Blueprint $table): void {
+            $table->dropIndex(['client_profile_key']);
+        });
         Schema::table('activity_events', static function (Blueprint $table): void {
             $table->dropColumn('client_profile_key');
+        });
+        Schema::table('oauth_authorizations', static function (Blueprint $table): void {
+            $table->dropIndex(['client_profile_key']);
         });
         Schema::table('oauth_authorizations', static function (Blueprint $table): void {
             $table->dropColumn(['client_profile_key', 'client_profile_generation']);
