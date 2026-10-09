@@ -3,13 +3,13 @@
 namespace App\Models;
 
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-#[Fillable(['name', 'email', 'password', 'role', 'site_scope_mode', 'access_enabled'])]
+#[Fillable(['name', 'email', 'password', 'role', 'target_scope_mode', 'access_enabled'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -18,7 +18,7 @@ class User extends Authenticatable
     /** @var array<string,mixed> */
     protected $attributes = [
         'role' => 'viewer',
-        'site_scope_mode' => 'selected',
+        'target_scope_mode' => 'selected',
         'access_enabled' => true,
     ];
 
@@ -33,7 +33,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'role' => GatewayRole::class,
-            'site_scope_mode' => SiteScopeMode::class,
+            'target_scope_mode' => TargetScopeMode::class,
             'access_enabled' => 'boolean',
         ];
     }

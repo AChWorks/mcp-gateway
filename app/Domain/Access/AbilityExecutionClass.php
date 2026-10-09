@@ -12,10 +12,10 @@ enum AbilityExecutionClass: string
     public function permission(): GatewayPermission
     {
         return match ($this) {
-            self::Readonly => GatewayPermission::AbilitiesExecuteReadonly,
-            self::Mutating => GatewayPermission::AbilitiesExecuteMutating,
-            self::Destructive => GatewayPermission::AbilitiesExecuteDestructive,
-            self::Unclassified => GatewayPermission::AbilitiesExecuteUnclassified,
+            self::Readonly => GatewayPermission::WordpressAbilitiesExecuteReadonly,
+            self::Mutating => GatewayPermission::WordpressAbilitiesExecuteMutating,
+            self::Destructive => GatewayPermission::WordpressAbilitiesExecuteDestructive,
+            self::Unclassified => GatewayPermission::WordpressAbilitiesExecuteUnclassified,
         };
     }
 

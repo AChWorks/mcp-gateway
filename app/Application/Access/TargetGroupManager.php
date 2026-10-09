@@ -4,83 +4,83 @@ namespace App\Application\Access;
 
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteGroup;
-use App\Domain\Sites\Site;
+use App\Domain\Targets\TargetGroup;
+use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
 use DomainException;
 use Illuminate\Support\Facades\DB;
 
-final readonly class SiteGroupManager
+final readonly class TargetGroupManager
 {
     public function __construct(private ActivityRecorder $activity) {}
 
     /** @param list<string> $deniedPermissions */
-    public function create(string $name, array $deniedPermissions): SiteGroup
+    public function create(string $name, array $deniedPermissions): TargetGroup
     {
-        return DB::transaction(function () use ($name, $deniedPermissions): SiteGroup {
-            $group = SiteGroup::query()->create(['name' => trim($name)]);
+        return DB::transaction(function () use ($name, $deniedPermissions): TargetGroup {
+            $group = TargetGroup::query()->create(['name' => trim($name)]);
             $this->replacePermissionDenials($group, $deniedPermissions);
-            $this->recordRequired('site-group-create:'.$group->id);
+            $this->recordRequired('target-group-create:'.$group->id);
 
             return $group->refresh();
         });
     }
 
     /** @param list<string> $deniedPermissions */
-    public function update(SiteGroup $group, string $name, array $deniedPermissions): SiteGroup
+    public function update(TargetGroup $group, string $name, array $deniedPermissions): TargetGroup
     {
         DB::transaction(function () use ($group, $name, $deniedPermissions): void {
-            $locked = SiteGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
+            $locked = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
             $locked->fill(['name' => trim($name)])->save();
             $this->replacePermissionDenials($locked, $deniedPermissions);
-            $this->recordRequired('site-group-update:'.$locked->id);
+            $this->recordRequired('target-group-update:'.$locked->id);
         });
 
         return $group->refresh();
     }
 
-    public function delete(SiteGroup $group): void
+    public function delete(TargetGroup $group): void
     {
         DB::transaction(function () use ($group): void {
-            $locked = SiteGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
+            $locked = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
             $groupId = (string) $locked->id;
             $locked->delete();
-            $this->recordRequired('site-group-delete:'.$groupId);
+            $this->recordRequired('target-group-delete:'.$groupId);
         });
     }
 
-    public function updateSiteMembership(SiteGroup $group, Site $site, bool $assigned): void
+    public function updateTargetMembership(TargetGroup $group, Target $target, bool $assigned): void
     {
-        DB::transaction(function () use ($group, $site, $assigned): void {
-            $lockedGroup = SiteGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
-            $lockedSite = Site::query()->whereKey($site->getKey())->lockForUpdate()->firstOrFail();
+        DB::transaction(function () use ($group, $target, $assigned): void {
+            $lockedGroup = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
+            $lockedTarget = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
             $identity = [
-                'site_group_id' => $lockedGroup->getKey(),
-                'site_record_id' => $lockedSite->getKey(),
+                'target_group_id' => $lockedGroup->getKey(),
+                'target_record_id' => $lockedTarget->getKey(),
             ];
 
             if ($assigned) {
-                DB::table('site_group_sites')->updateOrInsert(
+                DB::table('target_group_targets')->updateOrInsert(
                     $identity,
                     ['created_at' => now(), 'updated_at' => now()],
                 );
             } else {
-                DB::table('site_group_sites')->where($identity)->delete();
+                DB::table('target_group_targets')->where($identity)->delete();
             }
 
             $this->recordRequired(
-                'site-group-site-update:'.$lockedGroup->id,
-                $lockedSite->site_id,
+                'target-group-target-update:'.$lockedGroup->id,
+                $lockedTarget->target_id,
             );
         });
     }
 
-    public function updateUserAssignment(SiteGroup $group, User $user, bool $assigned): void
+    public function updateUserAssignment(TargetGroup $group, User $user, bool $assigned): void
     {
         DB::transaction(function () use ($group, $user, $assigned): void {
-            $lockedGroup = SiteGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
+            $lockedGroup = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
             $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
 
             if ($this->role($lockedUser) === GatewayRole::Owner) {
@@ -88,28 +88,28 @@ final readonly class SiteGroupManager
             }
 
             $identity = [
-                'site_group_id' => $lockedGroup->getKey(),
+                'target_group_id' => $lockedGroup->getKey(),
                 'user_id' => $lockedUser->getKey(),
             ];
 
             if ($assigned) {
-                DB::table('site_group_users')->updateOrInsert(
+                DB::table('target_group_users')->updateOrInsert(
                     $identity,
                     ['created_at' => now(), 'updated_at' => now()],
                 );
             } else {
-                DB::table('site_group_users')->where($identity)->delete();
+                DB::table('target_group_users')->where($identity)->delete();
             }
 
-            $this->recordRequired('site-group-user-update:'.$lockedGroup->id.':'.$lockedUser->id);
+            $this->recordRequired('target-group-user-update:'.$lockedGroup->id.':'.$lockedUser->id);
         });
     }
 
     /** @return list<string> */
-    public function permissionDenials(SiteGroup $group): array
+    public function permissionDenials(TargetGroup $group): array
     {
-        return DB::table('site_group_permission_denials')
-            ->where('site_group_id', $group->getKey())
+        return DB::table('target_group_permission_denials')
+            ->where('target_group_id', $group->getKey())
             ->orderBy('permission')
             ->pluck('permission')
             ->map(static fn (mixed $permission): string => (string) $permission)
@@ -117,29 +117,29 @@ final readonly class SiteGroupManager
     }
 
     /** @return list<GatewayPermission> */
-    public function sitePermissions(): array
+    public function targetPermissions(): array
     {
-        return GatewayPermission::siteScoped();
+        return GatewayPermission::targetScoped();
     }
 
     /**
-     * @param  list<Site>  $sites
+     * @param  list<Target>  $targets
      * @return array<string,bool>
      */
-    public function siteMembershipSummaries(SiteGroup $group, array $sites): array
+    public function targetMembershipSummaries(TargetGroup $group, array $targets): array
     {
         $ids = array_map(
-            static fn (Site $site): string => (string) $site->getKey(),
-            $sites,
+            static fn (Target $target): string => (string) $target->getKey(),
+            $targets,
         );
         if ($ids === []) {
             return [];
         }
 
-        $assigned = DB::table('site_group_sites')
-            ->where('site_group_id', $group->getKey())
-            ->whereIn('site_record_id', $ids)
-            ->pluck('site_record_id')
+        $assigned = DB::table('target_group_targets')
+            ->where('target_group_id', $group->getKey())
+            ->whereIn('target_record_id', $ids)
+            ->pluck('target_record_id')
             ->mapWithKeys(static fn (mixed $id): array => [(string) $id => true]);
 
         $result = [];
@@ -154,7 +154,7 @@ final readonly class SiteGroupManager
      * @param  list<User>  $users
      * @return array<int,bool>
      */
-    public function userAssignmentSummaries(SiteGroup $group, array $users): array
+    public function userAssignmentSummaries(TargetGroup $group, array $users): array
     {
         $ids = array_map(
             static fn (User $user): int => (int) $user->getKey(),
@@ -164,8 +164,8 @@ final readonly class SiteGroupManager
             return [];
         }
 
-        $assigned = DB::table('site_group_users')
-            ->where('site_group_id', $group->getKey())
+        $assigned = DB::table('target_group_users')
+            ->where('target_group_id', $group->getKey())
             ->whereIn('user_id', $ids)
             ->pluck('user_id')
             ->mapWithKeys(static fn (mixed $id): array => [(int) $id => true]);
@@ -178,30 +178,30 @@ final readonly class SiteGroupManager
         return $result;
     }
 
-    public function siteIsAssigned(SiteGroup $group, Site $site): bool
+    public function targetIsAssigned(TargetGroup $group, Target $target): bool
     {
-        return DB::table('site_group_sites')
-            ->where('site_group_id', $group->getKey())
-            ->where('site_record_id', $site->getKey())
+        return DB::table('target_group_targets')
+            ->where('target_group_id', $group->getKey())
+            ->where('target_record_id', $target->getKey())
             ->exists();
     }
 
-    public function userIsAssigned(SiteGroup $group, User $user): bool
+    public function userIsAssigned(TargetGroup $group, User $user): bool
     {
-        return DB::table('site_group_users')
-            ->where('site_group_id', $group->getKey())
+        return DB::table('target_group_users')
+            ->where('target_group_id', $group->getKey())
             ->where('user_id', $user->getKey())
             ->exists();
     }
 
     /** @param list<string> $values */
-    private function replacePermissionDenials(SiteGroup $group, array $values): void
+    private function replacePermissionDenials(TargetGroup $group, array $values): void
     {
-        DB::table('site_group_permission_denials')
-            ->where('site_group_id', $group->getKey())
+        DB::table('target_group_permission_denials')
+            ->where('target_group_id', $group->getKey())
             ->delete();
 
-        $supported = GatewayPermission::siteScoped();
+        $supported = GatewayPermission::targetScoped();
         $permissions = [];
         foreach (array_unique($values) as $value) {
             $permission = GatewayPermission::tryFrom($value);
@@ -214,9 +214,9 @@ final readonly class SiteGroupManager
             return;
         }
 
-        DB::table('site_group_permission_denials')->insert(array_map(
+        DB::table('target_group_permission_denials')->insert(array_map(
             static fn (GatewayPermission $permission): array => [
-                'site_group_id' => $group->getKey(),
+                'target_group_id' => $group->getKey(),
                 'permission' => $permission->value,
                 'created_at' => now(),
                 'updated_at' => now(),
@@ -234,13 +234,13 @@ final readonly class SiteGroupManager
             : GatewayRole::from((string) $role);
     }
 
-    private function recordRequired(string $operation, ?string $siteId = null): void
+    private function recordRequired(string $operation, ?string $targetId = null): void
     {
         $this->activity->recordRequired(
             CorrelationId::current(),
             $operation,
             'success',
-            $siteId,
+            $targetId,
         );
     }
 }
