@@ -2,6 +2,8 @@
 
 namespace App\Infrastructure\Activity;
 
+use App\Domain\Targets\Target;
+
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -13,19 +15,19 @@ final class ActivityRecorder
         string $correlationId,
         string $operation,
         string $outcome,
-        ?string $siteId = null,
+        ?Target $target = null,
         ?string $errorCode = null,
     ): void {
-        [$correlationId, $operation, $outcome, $siteId, $errorCode] = $this->normalized(
+        [$correlationId, $operation, $outcome, $target, $errorCode] = $this->normalized(
             $correlationId,
             $operation,
             $outcome,
-            $siteId,
+            $target,
             $errorCode,
         );
 
         try {
-            $this->persist($correlationId, $operation, $outcome, $siteId, $errorCode);
+            $this->persist($correlationId, $operation, $outcome, $target, $errorCode);
         } catch (Throwable) {
             // Activity persistence must never change the authoritative outcome of a
             // routed operation, especially after a remote mutation may have executed.
@@ -33,7 +35,9 @@ final class ActivityRecorder
                 Log::warning('Gateway activity persistence failed.', [
                     'correlation_id' => $correlationId,
                     'operation' => $operation,
-                    'site_id' => $siteId,
+                    'target_id' => $target?->target_id,
+            'target_record_id' => $target?->getKey(),
+            'connector_type_snapshot' => $target?->connector_type,
                     'outcome' => $outcome,
                     'error_code' => $errorCode,
                 ]);
@@ -47,33 +51,33 @@ final class ActivityRecorder
         string $correlationId,
         string $operation,
         string $outcome,
-        ?string $siteId = null,
+        ?Target $target = null,
         ?string $errorCode = null,
     ): void {
         $this->persist(...$this->normalized(
             $correlationId,
             $operation,
             $outcome,
-            $siteId,
+            $target,
             $errorCode,
         ));
     }
 
     /**
-     * @return array{string,string,string,?string,?string}
+     * @return array{string,string,string,?Target,?string}
      */
     private function normalized(
         string $correlationId,
         string $operation,
         string $outcome,
-        ?string $siteId,
+        ?Target $target,
         ?string $errorCode,
     ): array {
         return [
             $this->correlationId($correlationId),
             $this->safeIdentifier($operation, 128) ?? 'unknown',
             $this->safeIdentifier($outcome, 32) ?? 'unknown',
-            $this->safeIdentifier($siteId, 128),
+            $target,
             $this->safeIdentifier($errorCode, 64),
         ];
     }
@@ -82,7 +86,7 @@ final class ActivityRecorder
         string $correlationId,
         string $operation,
         string $outcome,
-        ?string $siteId,
+        ?Target $target,
         ?string $errorCode,
     ): void {
         [$actorType, $actorId, $clientHash] = $this->actor();
@@ -93,7 +97,9 @@ final class ActivityRecorder
             'actor_type' => $actorType,
             'actor_id' => $actorId,
             'client_id_hash' => $clientHash,
-            'site_id' => $siteId,
+            'target_id' => $target?->target_id,
+            'target_record_id' => $target?->getKey(),
+            'connector_type_snapshot' => $target?->connector_type,
             'operation' => $operation,
             'outcome' => $outcome,
             'error_code' => $errorCode,
