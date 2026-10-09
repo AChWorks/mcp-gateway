@@ -10,7 +10,9 @@ use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\SystemDnsResolver;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Models\User;
+use App\Support\AtomicFileRateLimiter;
 use App\Support\CorrelationId;
+use Illuminate\Cache\RateLimiter as FrameworkRateLimiter;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -23,6 +25,14 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(DnsResolver::class, SystemDnsResolver::class);
+
+        // Default file-backed rate counters must not lose updates when several
+        // PHP workers hit the same edge/client bucket simultaneously.
+        $this->app->extend(FrameworkRateLimiter::class, static function (FrameworkRateLimiter $original, $app): FrameworkRateLimiter {
+            return new AtomicFileRateLimiter(
+                $app['cache']->driver($app['config']->get('cache.limiter')),
+            );
+        });
     }
 
     public function boot(): void
