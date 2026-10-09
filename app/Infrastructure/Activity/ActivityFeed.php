@@ -46,6 +46,7 @@ final readonly class ActivityFeed
                 'correlation_id',
                 'actor_type',
                 'actor_id',
+                'client_profile_key',
                 'site_id',
                 'operation',
                 'outcome',

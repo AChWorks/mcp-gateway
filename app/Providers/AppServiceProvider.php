@@ -8,8 +8,11 @@ use App\Domain\Sites\Site;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\SystemDnsResolver;
+use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Models\User;
+use App\Support\AtomicFileRateLimiter;
 use App\Support\CorrelationId;
+use Illuminate\Cache\RateLimiter as FrameworkRateLimiter;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -22,10 +25,23 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(DnsResolver::class, SystemDnsResolver::class);
+
+        // Default file-backed rate counters must not lose updates when several
+        // PHP workers hit the same edge/client bucket simultaneously.
+        $this->app->extend(FrameworkRateLimiter::class, static function (FrameworkRateLimiter $original, $app): FrameworkRateLimiter {
+            return new AtomicFileRateLimiter(
+                $app['cache']->driver($app['config']->get('cache.limiter')),
+            );
+        });
     }
 
     public function boot(): void
     {
+        // Check static OAuth identity uniqueness/origin contract at application boot
+        // without a DB or remote-network dependency. Deployment health checks the
+        // persisted immutable bindings after migrations.
+        app(ClientProfileRegistry::class)->configured();
+
         foreach (GatewayPermission::cases() as $permission) {
             Gate::define(
                 $permission->value,
@@ -64,20 +80,29 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('mcp', function (Request $request) {
+            // OPTIONS preflight is protected by mcp-edge, but has no authenticated
+            // principal/profile. It must not consume the principal's rate bucket.
+            if ($request->isMethod('OPTIONS')) {
+                return Limit::none();
+            }
+
             $client = $request->attributes->get('oauth_client_id');
+            $profile = $request->attributes->get('oauth_client_profile_key');
             $user = $request->attributes->get('oauth_user_id');
 
-            if (! is_string($client)
-                || $client === ''
+            if (! is_string($client) || $client === ''
+                || ! is_string($profile) || preg_match('/^[a-z][a-z0-9_-]{0,47}$/D', $profile) !== 1
                 || (! is_string($user) && ! is_int($user))
                 || (string) $user === '') {
-                return Limit::none();
+                // This middleware runs only after bearer authentication.
+                // Missing principal/profile context is a failure, not unlimited access.
+                return Limit::perMinute(1)->by('mcp:missing-auth-context:'.$request->ip());
             }
 
             return $this->mcpRateLimits(
                 (int) config('mcp.rate_limits.principal.burst_per_second', 60),
                 (int) config('mcp.rate_limits.principal.per_minute', 600),
-                'mcp:'.$client.':'.(string) $user,
+                'mcp:'.hash('sha256', $profile."\0".$client."\0".(string) $user),
                 'mcp_principal_rate_limited',
             );
         });

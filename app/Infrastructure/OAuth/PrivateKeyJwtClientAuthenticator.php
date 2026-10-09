@@ -14,6 +14,7 @@ final readonly class PrivateKeyJwtClientAuthenticator
 {
     public function __construct(
         private ChatGptClientMetadata $metadata,
+        private ClientProfileRegistry $profiles,
         private ClientAssertionReplayStore $replays,
     ) {}
 
@@ -26,7 +27,8 @@ final readonly class PrivateKeyJwtClientAuthenticator
             $assertionType = $this->boundedString($parameters, 'client_assertion_type', 256);
             $assertion = $this->boundedString($parameters, 'client_assertion', 16384);
 
-            if ($clientId !== (string) config('oauth.client.id')
+            $profile = $this->profiles->active($clientId);
+            if ($profile === null
                 || $assertionType !== 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
                 || $assertion === '') {
                 throw OAuthServerException::invalidClient($request);
@@ -36,7 +38,9 @@ final readonly class PrivateKeyJwtClientAuthenticator
             $keyId = $this->validateUnverifiedHeaders($unverifiedHeaders);
             [$claims, $headers] = $this->decodeWithJwks(
                 $assertion,
-                $this->metadata->jwksForKeyId($keyId),
+                $profile['strategy'] === 'cimd_private_key_jwt'
+                    ? $this->metadata->jwksForKeyId($keyId)
+                    : $profile['jwks'],
             );
             $this->validateHeaders($headers, $keyId);
             $this->validateClaims($claims, $clientId, $allowedAudiences);

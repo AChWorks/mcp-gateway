@@ -4,6 +4,7 @@ namespace App\Infrastructure\OAuth;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
 
@@ -22,15 +23,10 @@ final class ChatGptClientMetadata
         $clientId = (string) config('oauth.client.id');
         $cacheKey = 'oauth:chatgpt:metadata:'.hash('sha256', $clientId);
 
-        if ($refresh) {
-            Cache::forget($cacheKey);
-        }
-
-        /** @var array<string, mixed> $metadata */
-        $metadata = Cache::remember(
+        $metadata = $this->cached(
             $cacheKey,
-            max(60, (int) config('oauth.client.metadata_cache_seconds')),
             fn (): array => $this->validateMetadata($this->fetchJson($clientId), $clientId),
+            $refresh,
         );
 
         return $metadata;
@@ -43,18 +39,56 @@ final class ChatGptClientMetadata
         $jwksUri = (string) $metadata['jwks_uri'];
         $cacheKey = 'oauth:chatgpt:jwks:'.hash('sha256', $jwksUri);
 
-        if ($refresh) {
-            Cache::forget($cacheKey);
-        }
-
-        /** @var array<string, mixed> $jwks */
-        $jwks = Cache::remember(
+        $jwks = $this->cached(
             $cacheKey,
-            max(60, (int) config('oauth.client.metadata_cache_seconds')),
             fn (): array => $this->validateJwks($this->fetchJson($jwksUri)),
+            $refresh,
         );
 
         return $jwks;
+    }
+
+    /**
+     * Per-document single-flight: one cold request fetches metadata/JWKS while
+     * concurrent callers either observe the cached value or fail closed after
+     * a bounded wait. A failed rotation refresh never deletes known-good keys.
+     *
+     * @param  \Closure(): array<string,mixed>  $fetch
+     * @return array<string,mixed>
+     */
+    private function cached(string $cacheKey, \Closure $fetch, bool $refresh): array
+    {
+        if (! $refresh) {
+            $cached = Cache::get($cacheKey);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
+        $timeout = max(1, (int) config('oauth.client.request_timeout_seconds'));
+        $lock = Cache::lock('oauth:client:fetch-lock:'.hash('sha256', $cacheKey), $timeout + 4);
+
+        try {
+            return $lock->block($timeout + 1, static function () use ($cacheKey, $fetch, $refresh): array {
+                if (! $refresh) {
+                    $cached = Cache::get($cacheKey);
+                    if (is_array($cached)) {
+                        return $cached;
+                    }
+                }
+
+                $value = $fetch();
+                Cache::put(
+                    $cacheKey,
+                    $value,
+                    max(60, (int) config('oauth.client.metadata_cache_seconds')),
+                );
+
+                return $value;
+            });
+        } catch (LockTimeoutException) {
+            throw new RuntimeException('OAuth client metadata retrieval is busy; retry authentication later.');
+        }
     }
 
     /** @return array<string, mixed> */

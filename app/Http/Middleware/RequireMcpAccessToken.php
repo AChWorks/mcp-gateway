@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthServerManager;
 use App\Models\User;
@@ -15,6 +16,7 @@ final readonly class RequireMcpAccessToken
     public function __construct(
         private OAuthServerManager $servers,
         private OAuthHttpBridge $bridge,
+        private ClientProfileRegistry $profiles,
     ) {}
 
     public function handle(Request $request, Closure $next): Response
@@ -39,8 +41,13 @@ final readonly class RequireMcpAccessToken
         $userId = $validated->getAttribute('oauth_user_id');
         $scopes = $validated->getAttribute('oauth_scopes');
 
-        if (! is_string($clientId)
-            || ! hash_equals((string) config('oauth.client.id'), $clientId)) {
+        if (! is_string($clientId)) {
+            return $this->challenge(401, 'invalid_token');
+        }
+
+        // No profile metadata/JWKS fetch takes place on resource-token validation.
+        $profile = $this->profiles->active($clientId);
+        if ($profile === null) {
             return $this->challenge(401, 'invalid_token');
         }
 
@@ -60,6 +67,7 @@ final readonly class RequireMcpAccessToken
         }
 
         $request->attributes->set('oauth_client_id', $clientId);
+        $request->attributes->set('oauth_client_profile_key', $profile['key']);
         $request->attributes->set('oauth_user_id', (string) $user->getAuthIdentifier());
         $request->attributes->set('oauth_user', $user);
         $request->attributes->set('oauth_access_token_id', $validated->getAttribute('oauth_access_token_id'));

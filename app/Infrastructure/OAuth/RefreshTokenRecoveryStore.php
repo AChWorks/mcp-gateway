@@ -5,6 +5,7 @@ namespace App\Infrastructure\OAuth;
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use Firebase\JWT\JWT;
 use Illuminate\Support\Facades\DB;
+use League\OAuth2\Server\Entities\ClientEntityInterface;
 use League\OAuth2\Server\Entities\ScopeEntityInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use RuntimeException;
@@ -16,12 +17,26 @@ final readonly class RefreshTokenRecoveryStore
         private RefreshTokenInspector $refreshTokens,
         private OAuthEncryptionKey $keys,
         private OAuthRefreshRecoveryCipher $cipher,
+        private ClientProfileRegistry $profiles,
     ) {}
 
     public function stage(
         ServerRequestInterface $request,
         RecoverableBearerTokenResponse $response,
     ): void {
+        // ChatGPT has an accepted bounded recovery contract. Other profiles
+        // receive normal rotating refresh tokens without inheriting this policy.
+        $validated = $request->getAttribute('gateway.oauth.validated_client');
+        $profile = $validated instanceof ClientEntityInterface
+            ? $this->profiles->active($validated->getIdentifier())
+            : null;
+        if ($profile === null) {
+            throw new RuntimeException('Refresh recovery client profile is not authenticated.');
+        }
+        if ($profile['key'] !== 'chatgpt') {
+            return;
+        }
+
         $parameters = $this->parameters($request);
         $presentedToken = $this->presentedRefreshToken($parameters);
         $oldPayload = $this->refreshTokens->inspect($presentedToken);
@@ -44,7 +59,7 @@ final readonly class RefreshTokenRecoveryStore
             || $old->revoked_at === null
             || (string) $old->access_token_id !== $oldAccessTokenId
             || (string) $old->client_id !== $oldClientId
-            || (string) $old->client_id !== (string) config('oauth.client.id')
+            || (string) $old->client_id !== (string) $profile['client_id']
             || (string) $old->user_id !== $oldUserId
             || (string) $old->resource !== (string) config('oauth.resource')) {
             throw new RuntimeException('Rotated refresh token recovery binding is invalid.');
@@ -132,6 +147,10 @@ final readonly class RefreshTokenRecoveryStore
         RecoverableBearerTokenResponse $response,
         string $validatedClientId,
     ): ?RecoverableBearerTokenResponse {
+        if (($this->profiles->active($validatedClientId)['key'] ?? null) !== 'chatgpt') {
+            return null;
+        }
+
         $parameters = $this->parameters($request);
 
         try {
@@ -172,7 +191,7 @@ final readonly class RefreshTokenRecoveryStore
                 || ! $this->isFuture((string) $recovery->recovery_expires_at)
                 || ! hash_equals((string) $recovery->client_id, $validatedClientId)
                 || ! hash_equals((string) $recovery->client_id, $oldClientId)
-                || ! hash_equals((string) $recovery->client_id, (string) config('oauth.client.id'))
+                || ($this->profiles->active((string) $recovery->client_id)['key'] ?? null) !== 'chatgpt'
                 || ! hash_equals((string) $recovery->resource, (string) ($parameters['resource'] ?? ''))
                 || ! hash_equals((string) $recovery->resource, (string) config('oauth.resource'))
                 || (string) $recovery->old_refresh_token_id !== $oldRefreshTokenId
@@ -204,6 +223,12 @@ final readonly class RefreshTokenRecoveryStore
 
             if ($authorization === null
                 || $authorization->revoked_at !== null
+                || ! $this->profiles->authorizes(
+                    (string) $authorization->client_id,
+                    is_string($authorization->client_profile_key) ? $authorization->client_profile_key : null,
+                    $authorization->client_profile_generation === null
+                        ? null : (int) $authorization->client_profile_generation,
+                )
                 || (string) $authorization->resource !== (string) $recovery->resource) {
                 return null;
             }
@@ -529,6 +554,6 @@ final readonly class RefreshTokenRecoveryStore
         return is_array($refreshPayload)
             && ($refreshPayload['refresh_token_id'] ?? null) === $expectedRefreshTokenId
             && ($refreshPayload['access_token_id'] ?? null) === $expectedAccessTokenId
-            && ($refreshPayload['client_id'] ?? null) === (string) config('oauth.client.id');
+            && ($this->profiles->active((string) ($refreshPayload['client_id'] ?? ''))['key'] ?? null) === 'chatgpt';
     }
 }
