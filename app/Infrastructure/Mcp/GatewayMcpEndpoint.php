@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Mcp;
 
 use App\Application\Mcp\TargetMcpToolHandlers;
+use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Mcp\Schema\ToolAnnotations;
@@ -17,7 +18,10 @@ use Symfony\Component\HttpFoundation\Response;
 
 final readonly class GatewayMcpEndpoint
 {
-    public function __construct(private TargetMcpToolHandlers $handlers) {}
+    public function __construct(
+        private TargetMcpToolHandlers $handlers,
+        private WordpressTargetMcpToolHandlers $wordpress,
+    ) {}
 
     public function handle(Request $request): Response
     {
@@ -84,6 +88,50 @@ final readonly class GatewayMcpEndpoint
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                     ],
                     'required' => ['target_id'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (
+                    string $target_id,
+                    ?string $ability = null,
+                    int $page = 1,
+                    int $per_page = 10,
+                    ?string $namespace = null,
+                    ?string $search = null,
+                ): array => $this->wordpress->read(
+                    $this->user($request), $target_id, $ability, $page, $per_page, $namespace, $search,
+                ),
+                name: 'wordpress-abilities-read',
+                description: 'Read WordPress Ability metadata for an explicitly authorized Target.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'ability' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
+                        'page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100000, 'default' => 1],
+                        'per_page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 10],
+                        'namespace' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
+                        'search' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
+                    ],
+                    'required' => ['target_id'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (string $target_id, string $ability, array $input = []): array => $this->wordpress->execute($this->user($request), $target_id, $ability, $input),
+                name: 'wordpress-ability-execute',
+                description: 'Execute one explicitly authorized WordPress Ability with runtime safety-class enforcement.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'ability' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
+                        'input' => ['type' => 'object'],
+                    ],
+                    'required' => ['target_id', 'ability'],
                     'additionalProperties' => false,
                 ],
             )

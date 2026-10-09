@@ -249,12 +249,16 @@ final readonly class WpAiBridgeTargetConnectionService
     }
 
     /**
-     * Read a still-valid bearer token; explicit refresh orchestration remains a
-     * separate work package. Never use an expired credential or disclose it in UI.
+     * Target-bound credential snapshot or a fenced refresh, never remote I/O
+     * under the Target row lock. The remote WP issuer rotates refresh tokens.
+     *
+     * @return array{resource_url:string,access_token:string}
      */
-    public function accessToken(Target $target): string
+    public function routingContext(Target $target): array
     {
-        return $this->withLockedTarget((string) $target->getKey(), function (Target $locked): string {
+        $recordId = (string) $target->getKey();
+        /** @var array<string,mixed> $plan */
+        $plan = $this->withLockedTarget($recordId, function (Target $locked): array {
             if ($this->hasRevocationIntent($locked)) {
                 throw new WpAiBridgeTargetConnectionException('revocation_pending', 'Credential revocation is incomplete.');
             }
@@ -268,16 +272,226 @@ final readonly class WpAiBridgeTargetConnectionService
                 throw new WpAiBridgeTargetConnectionException('credential_unavailable', 'The stored credential cannot be opened safely.');
             }
 
-            $configuration = $this->configuration((string) $locked->getKey());
-            if (! hash_equals((string) $configuration->mcp_resource_url, $secret['resource_url'])) {
-                throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress credential is bound to a different remote resource.');
+            $config = $this->configuration((string) $locked->getKey());
+            if (! hash_equals((string) $config->mcp_resource_url, $secret['resource_url'])
+                || ! hash_equals($this->identity->clientId(), $secret['client_id'])) {
+                throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress credential binding has changed.');
+            }
+            $this->assertStoredSameOrigin($secret['resource_url'], (string) $config->base_url);
+            $this->assertStoredSameOrigin((string) $config->oauth_token_url, (string) $config->base_url);
+
+            $metadata = DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credential->getKey())->first();
+            if ($metadata === null) {
+                throw new WpAiBridgeTargetConnectionException('credential_unavailable', 'WordPress credential metadata is unavailable.');
+            }
+            $generation = (int) $metadata->generation;
+            $intent = DB::table('wp_ai_bridge_refresh_intents')
+                ->where('target_record_id', $locked->getKey())->first();
+
+            if ($intent === null && $locked->getAttribute('connection_state') !== TargetConnectionState::Connected) {
+                throw new WpAiBridgeTargetConnectionException('reconnect_required', 'The WordPress Target requires reconnection.');
+            }
+            if ($intent === null && $secret['access_expires_at'] !== null
+                && $secret['access_expires_at']->getTimestamp() > time() + 30) {
+                return ['ready' => true, 'resource_url' => $secret['resource_url'], 'access_token' => $secret['access_token']];
             }
 
-            if ($secret['access_expires_at'] === null || $secret['access_expires_at']->getTimestamp() <= time() + 30) {
-                throw new WpAiBridgeTargetConnectionException('refresh_required', 'Target credential refresh is not yet available.');
+            if ($intent === null) {
+                $intentId = (string) Str::ulid();
+                DB::table('wp_ai_bridge_refresh_intents')->insert([
+                    'id' => $intentId,
+                    'target_record_id' => $locked->getKey(),
+                    'credential_id' => $credential->getKey(),
+                    'generation' => $generation,
+                    'attempts' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } else {
+                if ((string) $intent->credential_id !== (string) $credential->getKey()
+                    || (int) $intent->generation !== $generation) {
+                    throw new WpAiBridgeTargetConnectionException('refresh_conflict', 'Credential changed during refresh.');
+                }
+                // Remote issuer permits one exact old-token recovery for 60s.
+                // Avoid overlapping an in-flight first request, and never
+                // replay an already recovered or too-old exchange.
+                $age = time() - (new DateTimeImmutable((string) $intent->created_at))->getTimestamp();
+                $retryDelay = max(12, (int) config('bridge.http.request_timeout_seconds', 5) + 5);
+                if ((int) $intent->attempts !== 1 || $age < $retryDelay || $age >= 45) {
+                    throw new WpAiBridgeTargetConnectionException(
+                        'refresh_pending',
+                        'The prior WordPress refresh is unresolved; do not reuse its credentials.',
+                    );
+                }
+                $intentId = (string) $intent->id;
+                DB::table('wp_ai_bridge_refresh_intents')->where('id', $intentId)->update([
+                    'attempts' => 2,
+                    'updated_at' => now(),
+                ]);
             }
 
-            return $secret['access_token'];
+            return [
+                'ready' => false,
+                'intent_id' => $intentId,
+                'credential_id' => (string) $credential->getKey(),
+                'generation' => $generation,
+                'resource_url' => $secret['resource_url'],
+                'refresh_token' => $secret['refresh_token'],
+                'client_id' => $secret['client_id'],
+                'scopes' => $secret['scopes'],
+                'token_url' => (string) $config->oauth_token_url,
+                'database_session_id' => $this->databaseSessionId(),
+            ];
+        });
+
+        if ($plan['ready'] === true) {
+            return ['resource_url' => $plan['resource_url'], 'access_token' => $plan['access_token']];
+        }
+
+        return $this->exchangeRefresh($recordId, $plan);
+    }
+
+    public function accessToken(Target $target): string
+    {
+        return $this->routingContext($target)['access_token'];
+    }
+
+    /**
+     * @param  array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int}  $plan
+     * @return array{resource_url:string,access_token:string}
+     */
+    private function exchangeRefresh(string $recordId, array $plan): array
+    {
+        try {
+            // Exact old token + client + resource is the WP Bridge's bounded
+            // single-use recovery identity after a lost rotating response.
+            $response = $this->http->postForm($plan['token_url'], [
+                'grant_type' => 'refresh_token',
+                'refresh_token' => $plan['refresh_token'],
+                'client_id' => $plan['client_id'],
+                'resource' => $plan['resource_url'],
+                'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
+                'client_assertion' => $this->identity->assertion($plan['token_url']),
+            ]);
+        } catch (OutboundRequestException $exception) {
+            $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
+            throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
+                'The WordPress refresh outcome is unknown; do not retry an uncontrolled token rotation.');
+        }
+
+        if ($response->status !== 200) {
+            // Only a transient/ambiguous response may use WP's one-shot
+            // recovery. A definitive 4xx cannot be blindly replayed.
+            $terminal = $response->status < 500
+                && ! in_array($response->status, [408, 429], true);
+            $reason = $terminal ? 'refresh_rejected' : 'refresh_ambiguous';
+            $this->recordRefreshFailure($recordId, $plan, $reason, $terminal);
+            throw new WpAiBridgeTargetConnectionException($reason,
+                'WordPress did not confirm a usable refreshed credential.');
+        }
+
+        try {
+            $token = $this->parseToken($response->json());
+            $oldScopes = $plan['scopes'];
+            $newScopes = $token['scopes'];
+            sort($oldScopes);
+            sort($newScopes);
+            if ($oldScopes !== $newScopes
+                || hash_equals($plan['refresh_token'], $token['refresh_token'])) {
+                throw new WpAiBridgeTargetConnectionException('invalid_token_response',
+                    'WordPress returned an incorrectly scoped or unrotated credential.');
+            }
+        } catch (OutboundRequestException|WpAiBridgeTargetConnectionException $exception) {
+            $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
+            throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
+                'WordPress returned an unusable response to a possibly completed token rotation.');
+        }
+
+        // A lost DB session between the remote rotation and final local write
+        // is not authority to overwrite another credential generation.
+        $this->assertDatabaseSessionId($plan['database_session_id']);
+
+        return $this->withLockedTarget($recordId, function (Target $locked) use ($plan, $token): array {
+            $intent = DB::table('wp_ai_bridge_refresh_intents')
+                ->where('target_record_id', $locked->getKey())->first();
+            $credential = $this->credential($locked);
+            $metadata = $credential instanceof TargetCredential
+                ? DB::table('wp_ai_bridge_credential_metadata')
+                    ->where('credential_id', $credential->getKey())->first()
+                : null;
+            $config = $this->configuration((string) $locked->getKey());
+
+            if ($intent === null || (string) $intent->id !== $plan['intent_id']
+                || (string) $intent->credential_id !== $plan['credential_id']
+                || (int) $intent->generation !== $plan['generation']
+                || $credential?->getKey() !== $plan['credential_id']
+                || $metadata === null || (int) $metadata->generation !== $plan['generation']
+                || $this->hasRevocationIntent($locked)
+                || ! hash_equals((string) $config->mcp_resource_url, $plan['resource_url'])
+                || ! hash_equals((string) $config->oauth_token_url, $plan['token_url'])) {
+                throw new WpAiBridgeTargetConnectionException('refresh_conflict',
+                    'WordPress Target or credential changed during refresh; reconciliation is required.');
+            }
+
+            try {
+                $secret = $this->vault->openCredential($locked, $credential);
+            } catch (RuntimeException) {
+                throw new WpAiBridgeTargetConnectionException('credential_unavailable',
+                    'WordPress credential binding was lost during refresh.');
+            }
+            if (! hash_equals($secret['refresh_token'], $plan['refresh_token'])) {
+                throw new WpAiBridgeTargetConnectionException('refresh_conflict',
+                    'WordPress credential changed during the rotating refresh.');
+            }
+
+            $credential->forceFill([
+                'encrypted_payload' => $this->vault->sealCredential(
+                    $locked,
+                    $plan['client_id'],
+                    $plan['resource_url'],
+                    $token['access_token'],
+                    $token['refresh_token'],
+                    $token['expires_at'],
+                    $token['scopes'],
+                ),
+            ])->save();
+            DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credential->getKey())->update([
+                'access_expires_at' => $token['expires_at'],
+                'generation' => $plan['generation'] + 1,
+            ]);
+            DB::table('wp_ai_bridge_refresh_intents')->where('id', $intent->id)->delete();
+            $locked->forceFill([
+                'connection_state' => TargetConnectionState::Connected,
+                'last_error_code' => null,
+                'last_success_at' => now(),
+                'last_failure_code' => null,
+            ])->save();
+
+            return ['resource_url' => $plan['resource_url'], 'access_token' => $token['access_token']];
+        });
+    }
+
+    /** @param array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int} $plan */
+    private function recordRefreshFailure(string $recordId, array $plan, string $reason, bool $terminal = false): void
+    {
+        $this->withLockedTarget($recordId, function (Target $locked) use ($plan, $reason, $terminal): void {
+            $intent = DB::table('wp_ai_bridge_refresh_intents')
+                ->where('target_record_id', $locked->getKey())->first();
+            if ($intent === null || (string) $intent->id !== $plan['intent_id']
+                || (string) $intent->credential_id !== $plan['credential_id']
+                || (int) $intent->generation !== $plan['generation']) {
+                return;
+            }
+            if ($terminal) {
+                DB::table('wp_ai_bridge_refresh_intents')->where('id', $intent->id)
+                    ->update(['attempts' => 2, 'updated_at' => now()]);
+            }
+            $locked->forceFill([
+                'connection_state' => TargetConnectionState::Error,
+                'last_error_code' => $reason,
+                'last_failure_at' => now(),
+                'last_failure_code' => $reason,
+            ])->save();
         });
     }
 
@@ -286,6 +500,13 @@ final readonly class WpAiBridgeTargetConnectionService
         $id = (string) $target->getKey();
         /** @var array{credential_id:?string,tokens:list<string>,revocation_url:?string,database_session_id:?int} $plan */
         $plan = $this->withLockedTarget($id, function (Target $locked): array {
+            if ($this->hasRefreshIntent($locked)) {
+                // A rotating successor may exist remotely even when only the
+                // old secret is retained. Revoking the old token is not proof
+                // of successor revocation.
+                throw new WpAiBridgeTargetConnectionException('refresh_pending',
+                    'Unresolved WordPress refresh must be reconciled at WordPress before disconnecting.');
+            }
             $flow = DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->first();
             if ($flow !== null && $flow->consumed_at !== null) {
                 throw new WpAiBridgeTargetConnectionException('callback_pending', 'An OAuth token exchange may still be running.');
@@ -401,7 +622,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 'last_tested_at' => now(),
                 'last_success_at' => now(),
             ];
-            if (! $this->hasRevocationIntent($locked)) {
+            if (! $this->hasRevocationIntent($locked) && ! $this->hasRefreshIntent($locked)) {
                 $fields['last_error_code'] = null;
             }
             $locked->forceFill($fields)->save();
@@ -410,12 +631,22 @@ final readonly class WpAiBridgeTargetConnectionService
 
     private function ensureReadyForConnect(Target $target): void
     {
+        if ($this->hasRefreshIntent($target)) {
+            throw new WpAiBridgeTargetConnectionException('refresh_pending',
+                'Reconcile the previous WordPress refresh before connecting.');
+        }
         if ($this->hasRevocationIntent($target)) {
             throw new WpAiBridgeTargetConnectionException('revocation_pending', 'Finish revoking the prior credential first.');
         }
         if ($this->credential($target) instanceof TargetCredential) {
             throw new WpAiBridgeTargetConnectionException('already_connected', 'Disconnect the current credential before connecting again.');
         }
+    }
+
+    private function hasRefreshIntent(Target $target): bool
+    {
+        return DB::table('wp_ai_bridge_refresh_intents')
+            ->where('target_record_id', $target->getKey())->exists();
     }
 
     private function hasRevocationIntent(Target $target): bool

@@ -28,6 +28,12 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
     private bool $failTokenExchange = false;
 
+    private bool $failRefresh = false;
+
+    private bool $rejectRefresh = false;
+
+    private int $refreshCalls = 0;
+
     private bool $attemptConcurrentDisconnect = false;
 
     private bool $sawCallbackFence = false;
@@ -335,6 +341,148 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame('alpha-access', $service->accessToken($alpha));
     }
 
+    public function test_target_refresh_rotates_expired_credentials_with_generation_fencing_and_no_network_under_lock(): void
+    {
+        $alpha = $this->target('alpha');
+        $beta = $this->target('beta');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->pair($alpha);
+        $this->pair($beta);
+        $this->expire($alpha);
+        $baseline = DB::transactionLevel();
+
+        self::assertSame('alpha-rotated-access', $service->accessToken($alpha));
+        self::assertSame('alpha-rotated-access', $service->accessToken($alpha));
+        self::assertSame('beta-access', $service->accessToken($beta));
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($alpha)->getKey())->value('generation'));
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($beta)->getKey())->value('generation'));
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame('alpha-rotated-refresh', app(WpAiBridgeTargetVault::class)
+            ->openCredential($alpha, $this->credential($alpha))['refresh_token']);
+
+        foreach ($this->outboundTransactionLevels as $level) {
+            self::assertSame($baseline, $level, 'Refresh performed remote I/O inside a database transaction.');
+        }
+    }
+
+    public function test_lost_refresh_response_fences_disconnect_and_supports_only_one_bounded_recovery(): void
+    {
+        $alpha = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->pair($alpha);
+        $this->expire($alpha);
+        $this->failRefresh = true;
+
+        try {
+            $service->accessToken($alpha);
+            self::fail('Failed first refresh was treated as success.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        self::assertSame(TargetConnectionState::Error, $alpha->refresh()->connection_state);
+
+        try {
+            $service->disconnect($alpha);
+            self::fail('Unknown rotating successor was silently disconnected.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        $service->testConnection($alpha);
+        self::assertSame('refresh_ambiguous', $alpha->refresh()->last_error_code);
+        try {
+            $service->accessToken($alpha);
+            self::fail('An in-flight refresh was replayed concurrently.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
+
+        // Simulate passage of the configured request timeout, still inside
+        // WordPress's fixed 60-second one-shot recovery envelope.
+        DB::table('wp_ai_bridge_refresh_intents')->update(['created_at' => now()->subSeconds(20)]);
+        $this->failRefresh = false;
+        self::assertSame('alpha-rotated-access', $service->accessToken($alpha));
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(TargetConnectionState::Connected, $alpha->refresh()->connection_state);
+    }
+
+    public function test_definitively_rejected_refresh_blocks_remote_replay_and_requires_reconciliation(): void
+    {
+        $alpha = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->pair($alpha);
+        $this->expire($alpha);
+        $this->rejectRefresh = true;
+
+        try {
+            $service->accessToken($alpha);
+            self::fail('Rejected refresh was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_rejected', $exception->reason);
+        }
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        DB::table('wp_ai_bridge_refresh_intents')->update(['created_at' => now()->subSeconds(20)]);
+        try {
+            $service->accessToken($alpha);
+            self::fail('Rejected refresh was automatically replayed.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(1, DB::table('target_credentials')->count());
+    }
+
+    public function test_second_unknown_rotation_never_triggers_a_third_refresh_replay(): void
+    {
+        $alpha = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->pair($alpha);
+        $this->expire($alpha);
+        $this->failRefresh = true;
+
+        for ($attempt = 1; $attempt <= 2; $attempt++) {
+            if ($attempt === 2) {
+                DB::table('wp_ai_bridge_refresh_intents')->update(['created_at' => now()->subSeconds(20)]);
+            }
+            try {
+                $service->accessToken($alpha);
+                self::fail('A failed refresh returned a valid bearer.');
+            } catch (WpAiBridgeTargetConnectionException $exception) {
+                self::assertSame('refresh_ambiguous', $exception->reason);
+            }
+        }
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+
+        $this->failRefresh = false;
+        try {
+            $service->accessToken($alpha);
+            self::fail('An unresolved second rotation was replayed a third time.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(1, DB::table('target_credentials')->count());
+    }
+
+    private function expire(Target $target): void
+    {
+        $vault = app(WpAiBridgeTargetVault::class);
+        $credential = $this->credential($target);
+        $secret = $vault->openCredential($target, $credential);
+        $credential->forceFill(['encrypted_payload' => $vault->sealCredential(
+            $target, $secret['client_id'], $secret['resource_url'],
+            $secret['access_token'], $secret['refresh_token'],
+            now()->subMinute(), $secret['scopes'],
+        )])->save();
+    }
+
     private function pair(Target $target): string
     {
         $service = app(WpAiBridgeTargetConnectionService::class);
@@ -404,6 +552,23 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             ], 200);
         }
         if ($path === '/wp-json/wp-ai-bridge/v1/oauth/token') {
+            if (($request->data()['grant_type'] ?? null) === 'refresh_token') {
+                $this->refreshCalls++;
+                if ($this->failRefresh) {
+                    return Http::response(['error' => 'temporarily_unavailable'], 503);
+                }
+                if ($this->rejectRefresh) {
+                    return Http::response(['error' => 'invalid_grant'], 400);
+                }
+
+                return Http::response([
+                    'token_type' => 'Bearer',
+                    'expires_in' => 3600,
+                    'access_token' => explode('.', $host)[0].'-rotated-access',
+                    'refresh_token' => explode('.', $host)[0].'-rotated-refresh',
+                    'scope' => 'mcp:use offline_access',
+                ], 200);
+            }
             if ($this->attemptConcurrentDisconnect) {
                 $this->attemptConcurrentDisconnect = false;
                 try {

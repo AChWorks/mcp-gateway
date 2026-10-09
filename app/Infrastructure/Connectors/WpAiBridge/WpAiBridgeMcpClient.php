@@ -5,9 +5,11 @@ namespace App\Infrastructure\Connectors\WpAiBridge;
 use App\Application\Sites\SiteConnectionException;
 use App\Application\Sites\SiteConnectionService;
 use App\Application\Sites\SiteLifecycleLock;
+use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Sites\Site;
 use App\Domain\Sites\SiteCredential;
+use App\Domain\Targets\Target;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
@@ -25,11 +27,12 @@ final readonly class WpAiBridgeMcpClient
         private SiteConnectionService $connections,
         private SiteLifecycleLock $lifecycle,
         private SafeHttpClient $http,
+        private WpAiBridgeTargetConnectionService $targetConnections,
     ) {}
 
     /** @return array<string, mixed> */
     public function readAbilities(
-        Site $site,
+        Site|Target $site,
         string $correlationId,
         ?string $ability = null,
         int $page = 1,
@@ -56,7 +59,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     public function classifyAbility(
-        Site $site,
+        Site|Target $site,
         string $ability,
         string $correlationId,
     ): AbilityExecutionClass {
@@ -69,7 +72,7 @@ final readonly class WpAiBridgeMcpClient
 
     /** @param array<string, mixed> $input */
     public function executeAbility(
-        Site $site,
+        Site|Target $site,
         string $ability,
         array $input,
         string $correlationId,
@@ -145,7 +148,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @param array<string, mixed> $input */
-    private function callAbility(Site $site, string $ability, array $input, bool $mutationRisk, string $correlationId): mixed
+    private function callAbility(Site|Target $site, string $ability, array $input, bool $mutationRisk, string $correlationId): mixed
     {
         return $this->callAbilityOnRouting(
             $this->routingContext($site),
@@ -185,8 +188,12 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @return array{resource_url:string,access_token:string} */
-    private function routingContext(Site $site): array
+    private function routingContext(Site|Target $site): array
     {
+        if ($site instanceof Target) {
+            return $this->targetConnections->routingContext($site);
+        }
+
         return $this->lifecycle->run($site, function (Site $lockedSite): array {
             if ($lockedSite->connector_type !== (string) config('bridge.connector_type', 'wp_ai_bridge')) {
                 throw new WpAiBridgeMcpException('unsupported_connector', 'The selected site does not use the WP AI Bridge connector.');

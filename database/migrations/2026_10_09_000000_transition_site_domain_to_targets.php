@@ -192,6 +192,7 @@ return new class extends Migration
             $table->string('resource_url', 1024);
             $table->char('binding_hash', 64);
             $table->timestamp('access_expires_at')->nullable();
+            $table->unsignedBigInteger('generation')->default(1);
             $table->index(['client_id', 'binding_hash'], 'wp_credential_client_binding_idx');
         });
 
@@ -207,6 +208,17 @@ return new class extends Migration
             $table->ulid('id')->primary();
             $table->foreignUlid('target_record_id')->unique()->constrained('targets')->cascadeOnDelete();
             $table->string('kind', 16)->index();
+            $table->timestamps();
+        });
+
+        // Persist the exact claim before a rotating remote refresh: a lost
+        // HTTP response must not trigger a second, untracked token exchange.
+        Schema::create('wp_ai_bridge_refresh_intents', static function (Blueprint $table): void {
+            $table->ulid('id')->primary();
+            $table->foreignUlid('target_record_id')->unique()->constrained('targets')->cascadeOnDelete();
+            $table->foreignUlid('credential_id')->constrained('target_credentials')->cascadeOnDelete();
+            $table->unsignedBigInteger('generation');
+            $table->unsignedTinyInteger('attempts')->default(1);
             $table->timestamps();
         });
 
