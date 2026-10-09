@@ -2,7 +2,7 @@
 
 Status: **IN DEVELOPMENT (#107)**. This is a proposed major-version breaking transition, **not** supported by current `main` or production builds. The new migration and Target models on `feat/target-foundation-107` are not sufficient for a working Gateway until every Site-era application/Admin/MCP route, connector flow, access rule and Activity query has been reconciled. **Do not merge/deploy this isolated implementation.**
 
-Owning contract: [Issue #107](https://github.com/AChWorks/mcp-gateway/issues/107), [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md). The planned Direct SSH extension is in [PR #124](https://github.com/AChWorks/mcp-gateway/pull/124) until integrated.
+Owning contract: [Issue #107](https://github.com/AChWorks/mcp-gateway/issues/107), [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md). The Direct SSH architecture is integrated through merged [PR #124](https://github.com/AChWorks/mcp-gateway/pull/124); Direct SSH runtime execution is not yet implemented.
 
 ## Why this must be an explicit operator-visible upgrade
 
@@ -18,11 +18,11 @@ The transition migration explicitly drops and recreates these Target-owned table
 
 `site_check_operation_targets`, `site_check_operations`, `site_group_permission_denials`, `site_group_sites`, `site_group_users`, `site_groups`, `user_site_permission_denials`, `user_site_access`, `site_oauth_flows`, `site_credentials`, `site_revocation_intents`, `site_target_reservations`, `sites`.
 
-Events in `activity_events` with a non-null legacy `site_id` are deleted to prevent them from being mistaken for a newly created Target with the same public slug. Gateway-wide Activity with null `site_id` and `activity_retention_state` remain. The new `activity_events` shape includes public Target slug plus nullable immutable internal Target ULID and connector-type snapshot, so delete/recreate cycles can be distinguished by query policy; **application-level recording/query updates remain an open #107 task**.
+Events in `activity_events` with a non-null legacy `site_id` are deleted to prevent them from being mistaken for a newly created Target with the same public slug. Gateway-wide Activity with null `site_id` and `activity_retention_state` remain. The new `activity_events` shape includes public Target slug plus nullable immutable internal Target ULID and connector-type snapshot, so delete/recreate cycles can be distinguished by query policy; **application-level Activity writer and scoped feed updates are now present and tested on the #107 WIP branch; Admin/public endpoint reconciliation and full upgrade acceptance remain open**.
 
 User `site_scope_mode` becomes `target_scope_mode`, preserving each user's current mode; the selected-scope membership set starts empty. Users, role identity, global permission-denial table, Gateway OAuth authorization/access/refresh tokens, client assertions, OAuth refresh-recovery records and persistent keys remain intact.
 
-Only known one-to-one denial strings are mapped (Gateway connection, `sites.*`/common Target rights, former `connections.*` and WP `abilities.*`). Unknown legacy permission denies and unsupported role names **abort before DDL**, requiring explicit administrator reconciliation rather than accidental widening. Migration inserts mapped denials before removing legacy aliases, and seeds new `agent.*` / `ssh.*` denials for **existing non-owner users**. Newly created non-owner accounts and first-edit denial preservation are still owned by the subsequent RBAC/UI refactor and **are not yet implemented by this migration alone**.
+Only known one-to-one denial strings are mapped (Gateway connection, `sites.*`/common Target rights, former `connections.*` and WP `abilities.*`). Unknown legacy permission denies and unsupported role names **abort before DDL**, requiring explicit administrator reconciliation rather than accidental widening. Migration inserts mapped denials before removing legacy aliases, and seeds new `agent.*` / `ssh.*` denials for **existing non-owner users**. Newly created non-owner accounts now receive conservative Agent/SSH default denials in the WIP access service, and routine profile edits preserve connector denials. Explicit Owner enablement UI remains outstanding and no production compatibility is claimed.
 
 ## Deliberate confirmation gate — only after full integration and review
 
@@ -42,6 +42,12 @@ If confirmation is missing or the old schema/denials/roles do not match the supp
 The separate unmerged branch implements the explicit schema reset, generic `Target`/credential/group domain models, and WP-specific endpoint/config storage; it does not yet wire them into the old Laravel Site-era runtime.
 
 Focused tests on an isolated SQLite database verify clean schema creation, rejection without backup acknowledgment, preservation of Gateway OAuth and users while discarding Target-owned records, strict denial translation/seeding, and Target identity immutability/connector-owned config. An **isolated unprivileged MariaDB 11.8** instance on a local-only Unix socket also passed both fresh schema creation and a seeded legacy data conversion, including the no-ack preflight, Account/OAuth/Gateway-wide Activity preservation, and Agent/SSH denial seeding. The temporary server was stopped after validation; no host-wide service or production database was touched. This is valuable early DB-specific evidence, but **does not replace primary MariaDB 10.11/MySQL compatibility checks, restoration evidence, exact historical packaged updater tests or whole-application verification** before release.
+
+## Recovered WIP checkpoint (2026-10-09)
+
+The `feat/target-foundation-107` branch was reconciled with the integrated `main` through a **non-rewriting merge**. AccessControl/UserAccessManager/TargetGroupManager, TargetInventory, ActivityRecorder/ActivityFeed, user/group admin route forms and installer/admin creation fields have been moved toward Target-domain persistence. Connector-specific permission families (`wordpress.*`, `agent.*`, `ssh.*`) now have explicit role ceilings; SSH permissions require Selected Target scope and connector-family matching is enforced before authorization. Target Activity is keyed by the immutable ULID plus a connector snapshot to prevent slug-reuse misattribution.
+
+Focused validation on a disposable local Unix-socket MariaDB 11.8 instance passed **15 tests / 96 assertions**, including new access/Activity, mixed-connector inventory, Admin HTTP form and Target schema tests. Focused PHP lint/PHPStan also passed. Tests were **not** a full CI or historical upgrade regression. The app still contains Site-era WordPress runtime/MCP paths and is **not merge-ready**; these cannot be assumed fixed by the domain/UI progress.
 
 ## Remaining #107 work before the candidate can be reviewed or merged
 
