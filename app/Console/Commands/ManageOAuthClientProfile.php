@@ -9,7 +9,7 @@ use Throwable;
 final class ManageOAuthClientProfile extends Command
 {
     protected $signature = 'gateway:oauth-client-profile
-        {operation : list, register, disable, or enable}
+        {operation : check, list, register, disable, or enable}
         {key? : Exact immutable profile key}
         {--confirm : Explicitly acknowledge profile activation or token revocation}';
 
@@ -19,6 +19,25 @@ final class ManageOAuthClientProfile extends Command
     {
         $operation = (string) $this->argument('operation');
         $key = $this->argument('key');
+
+        if ($operation === 'check') {
+            if ($key !== null) {
+                $this->error('The check operation does not accept a profile key.');
+
+                return self::FAILURE;
+            }
+
+            try {
+                $registry->assertReady();
+                $this->info('OAuth client profile registry is ready.');
+
+                return self::SUCCESS;
+            } catch (Throwable $exception) {
+                $this->error('OAuth client profile readiness failed: '.$exception->getMessage());
+
+                return self::FAILURE;
+            }
+        }
 
         if ($operation === 'list') {
             if ($key !== null) {
