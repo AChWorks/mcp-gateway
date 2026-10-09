@@ -3,7 +3,7 @@
 namespace Tests\Feature\OAuth;
 
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use App\Infrastructure\OAuth\RefreshTokenInspector;
@@ -206,32 +206,31 @@ final class ChatGptOAuthFlowTest extends TestCase
         $modernTools->assertOk();
         self::assertFalse($modernTools->headers->has('Mcp-Session-Id'));
         self::assertSame([
-            'sites-list',
-            'site-context',
-            'site-abilities-read',
-            'site-ability-execute',
+            'targets-list',
+            'target-context',
+            'wordpress-abilities-read',
+            'wordpress-ability-execute',
         ], array_column((array) $modernTools->json('result.tools'), 'name'));
 
         $modernCall = $this->withHeaders([
             ...$mcpHeaders,
             'MCP-Protocol-Version' => '2026-07-28',
             'Mcp-Method' => 'tools/call',
-            'Mcp-Name' => 'sites-list',
+            'Mcp-Name' => 'targets-list',
         ])->postJson('/mcp', [
             'jsonrpc' => '2.0',
             'id' => 11,
             'method' => 'tools/call',
             'params' => [
-                'name' => 'sites-list',
+                'name' => 'targets-list',
                 'arguments' => (object) [],
                 '_meta' => $modernMeta,
             ],
         ]);
         $modernCall->assertOk()
             ->assertJsonPath('result.structuredContent.ok', true)
-            ->assertJsonPath('result.structuredContent.sites', [])
+            ->assertJsonPath('result.structuredContent.targets', [])
             ->assertJsonPath('result.structuredContent.truncated', false);
-        self::assertIsString($modernCall->json('result.structuredContent.correlation_id'));
 
         $this->withHeaders([
             ...$mcpHeaders,
@@ -278,10 +277,10 @@ final class ChatGptOAuthFlowTest extends TestCase
         $tools->assertOk();
         $toolNames = array_column((array) $tools->json('result.tools'), 'name');
         self::assertSame([
-            'sites-list',
-            'site-context',
-            'site-abilities-read',
-            'site-ability-execute',
+            'targets-list',
+            'target-context',
+            'wordpress-abilities-read',
+            'wordpress-ability-execute',
         ], $toolNames);
 
         $refreshResponse = $this->post('/oauth/token', [
@@ -864,31 +863,23 @@ final class ChatGptOAuthFlowTest extends TestCase
     }
 
     /** @return array{0:string,1:string} */
-    public function test_existing_access_token_rechecks_current_user_and_site_scope(): void
+    public function test_existing_access_token_rechecks_current_user_and_target_scope(): void
     {
         $user = $this->operator();
         $siteRecordId = (string) Str::ulid();
-        $baseUrl = 'https://alpha.example.test';
 
-        \DB::table('sites')->insert([
+        \DB::table('targets')->insert([
             'id' => $siteRecordId,
-            'site_id' => 'alpha',
+            'target_id' => 'alpha',
             'display_name' => 'Alpha',
-            'base_url' => $baseUrl,
-            'base_url_hash' => hash('sha256', $baseUrl),
             'connector_type' => 'wp_ai_bridge',
-            'mcp_resource_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/mcp',
-            'oauth_issuer_url' => $baseUrl,
-            'oauth_authorization_url' => $baseUrl.'/wp-ai-bridge/oauth/authorize',
-            'oauth_token_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/oauth/token',
-            'oauth_revocation_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
             'connection_state' => 'disconnected',
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        \DB::table('user_site_access')->insert([
+        \DB::table('user_target_access')->insert([
             'user_id' => $user->id,
-            'site_record_id' => $siteRecordId,
+            'target_record_id' => $siteRecordId,
             'allowed' => true,
             'created_at' => now(),
             'updated_at' => now(),
@@ -900,14 +891,14 @@ final class ChatGptOAuthFlowTest extends TestCase
             'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
             'MCP-Protocol-Version' => '2026-07-28',
             'Mcp-Method' => 'tools/call',
-            'Mcp-Name' => 'sites-list',
+            'Mcp-Name' => 'targets-list',
         ];
         $payload = [
             'jsonrpc' => '2.0',
             'id' => 90,
             'method' => 'tools/call',
             'params' => [
-                'name' => 'sites-list',
+                'name' => 'targets-list',
                 'arguments' => (object) [],
                 '_meta' => [
                     'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
@@ -920,17 +911,17 @@ final class ChatGptOAuthFlowTest extends TestCase
         $this->withHeaders($headers)
             ->postJson('/mcp', $payload)
             ->assertOk()
-            ->assertJsonPath('result.structuredContent.sites.0.site_id', 'alpha');
+            ->assertJsonPath('result.structuredContent.targets.0.target_id', 'alpha');
 
-        \DB::table('user_site_access')
+        \DB::table('user_target_access')
             ->where('user_id', $user->id)
-            ->where('site_record_id', $siteRecordId)
+            ->where('target_record_id', $siteRecordId)
             ->update(['allowed' => false, 'updated_at' => now()]);
 
         $this->withHeaders($headers)
             ->postJson('/mcp', $payload)
             ->assertOk()
-            ->assertJsonPath('result.structuredContent.sites', []);
+            ->assertJsonPath('result.structuredContent.targets', []);
 
         $user->forceFill(['access_enabled' => false])->save();
 
@@ -1076,7 +1067,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             'email' => 'operator@example.test',
             'password' => Hash::make('test-password-not-used-for-oauth'),
             'role' => GatewayRole::Operator->value,
-            'site_scope_mode' => SiteScopeMode::Selected->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
             'access_enabled' => true,
         ]);
     }

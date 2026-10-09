@@ -9,7 +9,12 @@
         <h1>{{ $target->display_name }}</h1>
         <p class="muted">{{ __('Local Target identity and non-secret connector information. Credentials are never displayed.') }}</p>
     </div>
-    <a href="{{ route('admin.targets.index') }}">{{ __('Back to Targets') }}</a>
+    <div class="filter-actions">
+        @can('targets.update', $target)
+            <a class="button button-secondary" href="{{ route('admin.targets.edit', ['target' => $target->target_id]) }}">{{ __('Edit Target') }}</a>
+        @endcan
+        <a href="{{ route('admin.targets.index') }}">{{ __('Back to Targets') }}</a>
+    </div>
 </div>
 
 <section class="panel panel-wide" aria-label="{{ __('Target information') }}">
@@ -26,7 +31,7 @@
     </dl>
     @if ($target->connector_type === 'wp_ai_bridge')
         <div class="filter-actions">
-            @if (! $hasCredential && ! $revocationPending)
+            @if (! $hasCredential && ! $revocationPending && ! $refreshPending)
                 @can('targets.connect', $target)
                     <form method="post" action="{{ route('admin.targets.connect', ['target' => $target->target_id]) }}">
                         @csrf
@@ -34,7 +39,7 @@
                     </form>
                 @endcan
             @endif
-            @if ($hasCredential && ! $revocationPending)
+            @if ($hasCredential && ! $revocationPending && ! $refreshPending)
                 @can('targets.reconnect', $target)
                     @can('targets.disconnect', $target)
                         @can('targets.connect', $target)
@@ -46,7 +51,7 @@
                     @endcan
                 @endcan
             @endif
-            @if ($hasCredential || $revocationPending || $target->connection_state->value === 'pending')
+            @if (($hasCredential || $revocationPending || $target->connection_state->value === 'pending') && ! $refreshPending)
                 @can('targets.disconnect', $target)
                     <form method="post" action="{{ route('admin.targets.disconnect', ['target' => $target->target_id]) }}">
                         @csrf
@@ -61,7 +66,9 @@
                 </form>
             @endcan
         </div>
-        @if ($revocationPending)
+        @if ($refreshPending)
+            <p class="muted" role="status">{{ __('WordPress token refresh could not be confirmed. Credential use, reconnection and disconnection are blocked to prevent unsafe revocation. Have a WordPress administrator revoke the affected authorization and reconcile the connection before retrying.') }}</p>
+        @elseif ($revocationPending)
             <p class="muted">{{ __('Credential revocation is pending. Retry Disconnect when WordPress is reachable; other operations remain blocked.') }}</p>
         @elseif (! $hasCredential)
             <p class="muted">{{ __('Authorize this Target to connect WordPress securely.') }}</p>
@@ -70,4 +77,29 @@
         <p class="muted">{{ __('This connector is not yet available for enrollment.') }}</p>
     @endif
 </section>
+@can('targets.remove', $target)
+<section class="panel panel-danger" aria-labelledby="target-remove-title">
+    <h2 id="target-remove-title">{{ __('Remove Target') }}</h2>
+    @if ($canRemoveSafely)
+        <p class="muted">{{ __('Removing a Target permanently removes its scoped assignments and local connector metadata. Disconnect WordPress first. The immutable Target ID cannot be reused to inherit prior permissions.') }}</p>
+        <form method="post" action="{{ route('admin.targets.destroy', ['target' => $target->target_id]) }}" class="form-stack">
+            @csrf
+            @method('DELETE')
+            <label>
+                <input type="checkbox" name="confirm_remove" value="yes" required>
+                {{ __('I understand this permanently removes the registered Target and its assignments.') }}
+            </label>
+            <div class="filter-actions">
+                <button class="button button-danger" type="submit">{{ __('Remove Target') }}</button>
+            </div>
+        </form>
+    @else
+        <p class="muted">{{ __('Disconnect and complete or revoke any pending WordPress authorization before the Target can be removed safely.') }}</p>
+    @endif
+    @error('target')
+        <p class="form-error" role="alert">{{ $message }}</p>
+    @enderror
+</section>
+@endcan
+
 @endsection

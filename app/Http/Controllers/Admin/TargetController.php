@@ -10,9 +10,12 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Http\Controllers\Controller;
+use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Models\User;
+use App\Support\CorrelationId;
+use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,6 +23,7 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use InvalidArgumentException;
+use RuntimeException;
 
 final class TargetController extends Controller
 {
@@ -118,7 +122,78 @@ final class TargetController extends Controller
                 ->where('purpose', 'wordpress_oauth')->exists(),
             'revocationPending' => $target->connector_type === 'wp_ai_bridge' && DB::table('wp_ai_bridge_revocation_intents')
                 ->where('target_record_id', $target->getKey())->exists(),
+            'refreshPending' => $target->connector_type === 'wp_ai_bridge' && DB::table('wp_ai_bridge_refresh_intents')
+                ->where('target_record_id', $target->getKey())->exists(),
+            'canRemoveSafely' => ! TargetCredential::query()->where('target_record_id', $target->getKey())->exists()
+                && ! DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $target->getKey())->exists()
+                && ! DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $target->getKey())->exists()
+                && ! DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $target->getKey())->exists()
+                && ! in_array($target->getAttribute('connection_state'), [
+                    TargetConnectionState::Connected,
+                    TargetConnectionState::Pending,
+                    TargetConnectionState::Reassigning,
+                ], true),
         ]);
+    }
+
+    public function edit(Target $target): View
+    {
+        Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
+
+        return view('admin.targets.edit', ['target' => $target]);
+    }
+
+    public function update(Request $request, Target $target): RedirectResponse
+    {
+        Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
+        $validated = $request->validate([
+            'display_name' => ['required', 'string', 'max:160'],
+        ]);
+
+        DB::transaction(static function () use ($target, $validated): void {
+            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+            $locked->forceFill(['display_name' => (string) $validated['display_name']])->save();
+        });
+
+        return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+            ->with('status', __('Target display name updated.'));
+    }
+
+    public function destroy(Request $request, Target $target, ActivityRecorder $activity): RedirectResponse
+    {
+        Gate::authorize(GatewayPermission::TargetsRemove->value, $target);
+        $request->validate(['confirm_remove' => ['required', 'in:yes']]);
+
+        try {
+            DB::transaction(static function () use ($target, $activity): void {
+                $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+                $id = $locked->getKey();
+
+                if (TargetCredential::query()->where('target_record_id', $id)->exists()
+                    || DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $id)->exists()
+                    || DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $id)->exists()
+                    || DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $id)->exists()
+                    || in_array($locked->getAttribute('connection_state'), [
+                        TargetConnectionState::Connected,
+                        TargetConnectionState::Pending,
+                        TargetConnectionState::Reassigning,
+                    ], true)) {
+                    throw new DomainException('connection_cleanup_required');
+                }
+
+                $activity->recordRequired(CorrelationId::current(), 'target-remove', 'success', $locked);
+                if (! $locked->delete()) {
+                    throw new RuntimeException('target_delete_failed');
+                }
+            });
+        } catch (DomainException) {
+            return back()->withErrors([
+                'target' => __('Disconnect and reconcile any pending WordPress credential or authorization before removing the Target.'),
+            ]);
+        }
+
+        return redirect()->route('admin.targets.index')
+            ->with('status', __('Target removed.'));
     }
 
     private function trimmed(?string $text): ?string

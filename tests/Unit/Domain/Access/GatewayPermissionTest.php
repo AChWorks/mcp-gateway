@@ -12,27 +12,27 @@ final class GatewayPermissionTest extends TestCase
         foreach (GatewayPermission::cases() as $permission) {
             self::assertNotSame('', trim($permission->title()), $permission->value);
             self::assertNotSame('', trim($permission->description()), $permission->value);
-            self::assertContains($permission->scopeLabel(), ['Gateway-wide', 'Site-scoped']);
+            self::assertContains($permission->scopeLabel(), ['Gateway-wide', 'Target-scoped']);
         }
     }
 
-    public function test_site_remove_metadata_explains_effective_scope_instead_of_creation_ownership(): void
+    public function test_target_remove_metadata_explains_effective_scope_instead_of_creation_ownership(): void
     {
-        $permission = GatewayPermission::SitesRemove;
+        $permission = GatewayPermission::TargetsRemove;
 
-        self::assertSame('Remove sites', $permission->title());
-        self::assertSame('Site-scoped', $permission->scopeLabel());
-        self::assertTrue($permission->isSiteScoped());
-        self::assertStringContainsString('effective site scope', $permission->description());
-        self::assertStringContainsString('not limited to sites the user created', $permission->description());
+        self::assertSame('Remove Targets', $permission->title());
+        self::assertSame('Target-scoped', $permission->scopeLabel());
+        self::assertTrue($permission->isTargetScoped());
+        self::assertStringContainsString('effective Target scope', $permission->description());
+        self::assertStringContainsString('not limited to Targets the user created', $permission->description());
     }
 
-    public function test_site_create_is_gateway_wide_but_documents_selected_scope_auto_inclusion(): void
+    public function test_target_create_is_gateway_wide_but_documents_selected_scope_auto_inclusion(): void
     {
-        $permission = GatewayPermission::SitesCreate;
+        $permission = GatewayPermission::TargetsCreate;
 
         self::assertSame('Gateway-wide', $permission->scopeLabel());
-        self::assertFalse($permission->isSiteScoped());
+        self::assertFalse($permission->isTargetScoped());
         self::assertStringContainsString('automatically added', $permission->description());
     }
 }

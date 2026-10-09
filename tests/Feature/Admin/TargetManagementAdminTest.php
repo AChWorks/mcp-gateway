@@ -123,6 +123,66 @@ final class TargetManagementAdminTest extends TestCase
         self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
     }
 
+    public function test_owner_can_edit_label_without_mutating_immutable_target_identity_or_connector(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $viewer = $this->user('viewer', 'all');
+        $target = $this->target('permanent-id', 'wp_ai_bridge');
+        $recordId = (string) $target->getKey();
+
+        $this->actingAs($viewer)->get('/admin/targets/permanent-id/edit')->assertForbidden();
+        $this->put('/admin/targets/permanent-id', ['display_name' => 'Unauthorized'])->assertForbidden();
+
+        $this->actingAs($owner)->get('/admin/targets/permanent-id/edit')->assertOk()
+            ->assertSee('Only the display name can be changed')
+            ->assertSee('permanent-id');
+        $this->put('/admin/targets/permanent-id', [
+            'display_name' => 'Updated safe label',
+            'target_id' => 'hijack',
+            'connector_type' => 'ssh_direct',
+            'base_url' => 'https://attacker.example.test',
+        ])->assertRedirect('/admin/targets/permanent-id');
+
+        $target->refresh();
+        self::assertSame($recordId, (string) $target->getKey());
+        self::assertSame('permanent-id', $target->target_id);
+        self::assertSame('wp_ai_bridge', $target->connector_type);
+        self::assertSame('Updated safe label', $target->display_name);
+        $this->get('/admin/targets/permanent-id')->assertOk()
+            ->assertSee('Edit Target');
+    }
+
+    public function test_remove_requires_confirmation_and_refuses_active_or_pending_connection_state(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $viewer = $this->user('viewer', 'all');
+        $target = $this->target('to-remove', 'wp_ai_bridge');
+        DB::table('user_target_access')->insert([
+            'user_id' => $viewer->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
+
+        $this->actingAs($viewer)->delete('/admin/targets/to-remove', ['confirm_remove' => 'yes'])->assertForbidden();
+        $this->actingAs($owner)->delete('/admin/targets/to-remove')->assertSessionHasErrors('confirm_remove');
+        self::assertSame(1, Target::query()->where('target_id', 'to-remove')->count());
+
+        $target->forceFill(['connection_state' => 'connected'])->save();
+        $this->delete('/admin/targets/to-remove', ['confirm_remove' => 'yes'])->assertSessionHasErrors('target');
+        self::assertSame(1, Target::query()->where('target_id', 'to-remove')->count());
+        $target->forceFill(['connection_state' => 'disconnected'])->save();
+
+        $this->delete('/admin/targets/to-remove', ['confirm_remove' => 'yes'])
+            ->assertRedirect('/admin/targets');
+        self::assertSame(0, Target::query()->where('target_id', 'to-remove')->count());
+        self::assertSame(0, DB::table('user_target_access')
+            ->where('target_record_id', $target->getKey())->count());
+        self::assertSame(1, DB::table('activity_events')
+            ->where('target_id', 'to-remove')->where('operation', 'target-remove')->count());
+        $this->get('/admin/sites')->assertNotFound();
+        $this->get('/admin/site-checks')->assertNotFound();
+    }
+
     private function user(string $role, string $scope): User
     {
         return User::query()->create([

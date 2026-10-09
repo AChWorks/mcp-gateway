@@ -111,12 +111,14 @@ final class ClientProfileIsolationTest extends TestCase
             ->postJson('/mcp', $mcp)->assertOk();
 
         foreach ([$fixtureTools, $chatTools] as $toolResult) {
-            self::assertSame(['targets-list', 'target-context'],
+            self::assertSame(['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute'],
                 array_column((array) $toolResult->json('result.tools'), 'name'));
             foreach ((array) $toolResult->json('result.tools') as $tool) {
-                self::assertTrue($tool['annotations']['readOnlyHint'] ?? false);
-                self::assertFalse($tool['annotations']['destructiveHint'] ?? true);
-                self::assertFalse($tool['annotations']['openWorldHint'] ?? true);
+                $isExecute = $tool['name'] === 'wordpress-ability-execute';
+                $isWordPress = str_starts_with($tool['name'], 'wordpress-');
+                self::assertSame(! $isExecute, $tool['annotations']['readOnlyHint'] ?? null);
+                self::assertSame($isExecute, $tool['annotations']['destructiveHint'] ?? null);
+                self::assertSame($isWordPress, $tool['annotations']['openWorldHint'] ?? null);
             }
         }
         $this->withHeaders([...$headers, 'Mcp-Method' => 'tools/call', 'Mcp-Name' => 'targets-list',
