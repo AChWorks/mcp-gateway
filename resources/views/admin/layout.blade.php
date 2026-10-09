@@ -19,8 +19,8 @@
                 @can('dashboard.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.dashboard')]) href="{{ route('admin.dashboard') }}">{{ __('Dashboard') }}</a>
                 @endcan
-                @can('sites.view')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.sites.*')]) href="{{ route('admin.sites.index') }}">{{ __('Sites') }}</a>
+                @can('targets.view')
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.targets.*')]) href="{{ route('admin.targets.index') }}">{{ __('Targets') }}</a>
                 @endcan
                 @can('users.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.users.*')]) href="{{ route('admin.users.index') }}">{{ __('Users') }}</a>
@@ -31,7 +31,7 @@
                 @can('activity.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>
                 @endcan
-                @can('connection.view')
+                @can('gateway.connection.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.connection')]) href="{{ route('admin.connection') }}">{{ __('Connection') }}</a>
                 @endcan
             </nav>

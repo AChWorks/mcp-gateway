@@ -1,0 +1,183 @@
+<?php
+
+namespace Tests\Feature\Admin;
+
+use App\Domain\Targets\Target;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
+use App\Infrastructure\Http\DnsResolver;
+use App\Models\User;
+use GuzzleHttp\Promise\PromiseInterface;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Tests\TestCase;
+
+final class TargetManagementAdminTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host): array
+            {
+                return str_ends_with($host, '.example.test') ? ['1.1.1.1'] : [];
+            }
+        });
+
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => $this->metadata($request));
+    }
+
+    public function test_owner_can_browse_generic_targets_and_register_valid_wordpress_without_creating_credentials(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $ssh = $this->target('ssh-demo', 'ssh_direct', '<script>alert(1)</script>');
+
+        $this->actingAs($owner)->get('/admin/')->assertOk()
+            ->assertSee('Registered Targets');
+        $this->get('/admin/targets')->assertOk()
+            ->assertSee('ssh-demo')->assertDontSee('<script>alert(1)</script>', false)
+            ->assertSee('ssh_direct');
+        $this->get('/admin/targets/'.$ssh->target_id)->assertOk()
+            ->assertSee('ssh-demo');
+        $this->get('/admin/targets/create')->assertOk()
+            ->assertSee('Stable Target ID')->assertSee('wp_ai_bridge');
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'wp-blog',
+            'display_name' => 'WordPress blog',
+            'base_url' => 'https://wordpress.example.test/',
+        ])->assertRedirect('/admin/targets/wp-blog');
+
+        $wp = Target::query()->where('target_id', 'wp-blog')->firstOrFail();
+        self::assertSame('wp_ai_bridge', $wp->connector_type);
+        self::assertSame('https://wordpress.example.test', WpAiBridgeTargetConfig::query()
+            ->where('target_record_id', $wp->getKey())->value('base_url'));
+        self::assertSame(0, DB::table('target_credentials')->count());
+        $this->get('/admin/targets/wp-blog')->assertOk()
+            ->assertSee('WordPress blog')
+            ->assertSee('https://wordpress.example.test')
+            ->assertSee('Connection authorization is not yet configured');
+    }
+
+    public function test_selected_scope_operator_cannot_discover_other_target_or_enroll_new_connector(): void
+    {
+        $visible = $this->target('visible', 'wp_ai_bridge');
+        $hidden = $this->target('hidden', 'ssh_direct');
+        $operator = $this->user('operator', 'selected');
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $visible->getKey(),
+            'allowed' => true,
+        ]);
+
+        $this->actingAs($operator)->get('/admin/targets')->assertOk()
+            ->assertSee('visible')->assertDontSee('admin/targets/hidden');
+        $this->get('/admin/')->assertOk()->assertSee('Registered Targets');
+        $this->get('/admin/targets/'.$visible->target_id)->assertOk();
+        $this->get('/admin/targets/'.$hidden->target_id)->assertForbidden();
+        $this->get('/admin/targets/create')->assertForbidden();
+        $this->post('/admin/targets', [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'unexpected',
+            'display_name' => 'SSH',
+            'base_url' => 'https://wordpress.example.test',
+        ])->assertForbidden();
+
+        Http::assertNothingSent();
+        self::assertSame(2, Target::query()->count());
+    }
+
+    public function test_admin_registration_rejects_unreviewed_connector_and_non_https_or_unsafe_target(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'unauthorized',
+            'display_name' => 'Unreviewed',
+            'base_url' => 'https://wordpress.example.test',
+        ])->assertSessionHasErrors('connector_type');
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'bad-http',
+            'display_name' => 'Unreviewed',
+            'base_url' => 'http://wordpress.example.test',
+        ])->assertSessionHasErrors('base_url');
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'bad-target',
+            'display_name' => 'Private network',
+            'base_url' => 'https://127.0.0.1',
+        ])->assertSessionHasErrors('base_url');
+
+        self::assertSame(0, Target::query()->count());
+        self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
+    }
+
+    private function user(string $role, string $scope): User
+    {
+        return User::query()->create([
+            'name' => 'Test '.$role,
+            'email' => uniqid('account-', true).'@example.test',
+            'password' => 'ThisIsATestSecret!234',
+            'role' => $role,
+            'target_scope_mode' => $scope,
+            'access_enabled' => true,
+        ]);
+    }
+
+    private function target(string $id, string $connector, ?string $name = null): Target
+    {
+        return Target::query()->create([
+            'target_id' => $id,
+            'display_name' => $name ?? 'Target '.$id,
+            'connector_type' => $connector,
+        ]);
+    }
+
+    private function metadata(Request $request): PromiseInterface
+    {
+        $host = (string) parse_url($request->url(), PHP_URL_HOST);
+        $base = 'https://'.$host;
+        $path = (string) parse_url($request->url(), PHP_URL_PATH);
+
+        if ($path === '/.well-known/oauth-protected-resource') {
+            return Http::response([
+                'resource' => $base.'/wp-json/wp-ai-bridge/v1/mcp',
+                'authorization_servers' => [$base],
+                'scopes_supported' => ['mcp:use', 'offline_access'],
+                'bearer_methods_supported' => ['header'],
+            ]);
+        }
+
+        if ($path === '/.well-known/oauth-authorization-server') {
+            return Http::response([
+                'issuer' => $base,
+                'authorization_endpoint' => $base.'/wp-ai-bridge/oauth/authorize',
+                'token_endpoint' => $base.'/wp-json/wp-ai-bridge/v1/oauth/token',
+                'revocation_endpoint' => $base.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
+                'client_id_metadata_document_supported' => true,
+                'authorization_response_iss_parameter_supported' => true,
+                'token_endpoint_auth_methods_supported' => ['private_key_jwt'],
+                'token_endpoint_auth_signing_alg_values_supported' => ['RS256'],
+                'revocation_endpoint_auth_methods_supported' => ['private_key_jwt'],
+                'revocation_endpoint_auth_signing_alg_values_supported' => ['RS256'],
+                'grant_types_supported' => ['authorization_code', 'refresh_token'],
+                'response_types_supported' => ['code'],
+                'code_challenge_methods_supported' => ['S256'],
+                'scopes_supported' => ['mcp:use', 'offline_access'],
+            ]);
+        }
+
+        return Http::response([], 404);
+    }
+}

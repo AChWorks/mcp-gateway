@@ -9,15 +9,15 @@
         <h1>{{ __('Gateway dashboard') }}</h1>
         <p class="muted">{{ __('A bounded operational summary. Credentials and MCP payloads are never shown here.') }}</p>
     </div>
-    @can('sites.create')
-        <a class="button button-primary" href="{{ route('admin.sites.create') }}">{{ __('Add site') }}</a>
+    @can('targets.create')
+        <a class="button button-primary" href="{{ route('admin.targets.create') }}">{{ __('Add WordPress Target') }}</a>
     @endcan
 </div>
 
 <section class="stats-grid" aria-label="{{ __('Gateway summary') }}">
     <article class="stat-card">
-        <span class="stat-value">{{ $siteCount }}</span>
-        <span class="stat-label">{{ __('Configured sites') }}</span>
+        <span class="stat-value">{{ $targetCount }}</span>
+        <span class="stat-label">{{ __('Registered Targets') }}</span>
     </article>
     <article class="stat-card">
         <span class="stat-value">{{ $connectedCount }}</span>
@@ -28,8 +28,8 @@
         <span class="stat-label">{{ __('Lifecycle attention') }}</span>
     </article>
     <article class="stat-card">
-        <span class="stat-value">{{ $staleCount }}</span>
-        <span class="stat-label">{{ __('Stale or unknown evidence') }}</span>
+        <span class="stat-value">{{ $configuredCount }}</span>
+        <span class="stat-label">{{ __('Not connected') }}</span>
     </article>
 </section>
 
@@ -52,7 +52,7 @@
                     <thead>
                     <tr>
                         <th scope="col">{{ __('Time') }}</th>
-                        <th scope="col">{{ __('Site') }}</th>
+                        <th scope="col">{{ __('Target') }}</th>
                         <th scope="col">{{ __('Operation') }}</th>
                         <th scope="col">{{ __('Outcome') }}</th>
                     </tr>
@@ -61,7 +61,7 @@
                     @foreach ($recentActivity as $item)
                         <tr>
                             <td><time datetime="{{ $item['created_at'] }}">{{ $item['created_at'] }}</time></td>
-                            <td><code>{{ $item['site_id'] ?? __('Gateway') }}</code></td>
+                            <td><code>{{ $item['target_id'] ?? __('Gateway') }}</code></td>
                             <td>{{ $item['operation'] }}</td>
                             <td><span class="badge badge-{{ $item['outcome'] === 'success' ? 'success' : 'danger' }}">{{ $item['outcome'] }}</span></td>
                         </tr>
@@ -73,11 +73,11 @@
     </section>
     @endcan
 
-    @can('connection.view')
+    @can('gateway.connection.view')
     <aside class="panel" aria-labelledby="gateway-info-title">
         <div class="eyebrow">{{ __('Gateway') }}</div>
         <h2 id="gateway-info-title">{{ __('Connection information') }}</h2>
-        <p class="muted">{{ __('Public endpoint and non-secret setup details for the ChatGPT MCP App.') }}</p>
+        <p class="muted">{{ __('Public endpoint and non-secret setup details for supported OAuth clients.') }}</p>
         <p><a href="{{ route('admin.connection') }}">{{ __('View connection information') }}</a></p>
     </aside>
     @endcan

@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\SiteCheckOperationController;
 use App\Http\Controllers\Admin\SiteConnectionController;
 use App\Http\Controllers\Admin\SiteController;
+use App\Http\Controllers\Admin\TargetController;
 use App\Http\Controllers\Admin\TargetGroupController;
 use App\Http\Controllers\Admin\TargetGroupTargetController;
 use App\Http\Controllers\Admin\TargetGroupUserController;
@@ -23,6 +24,11 @@ Route::post('/admin/login', [AuthenticatedSessionController::class, 'store'])
 
 Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin')->name('admin.')->group(function (): void {
     Route::get('/', DashboardController::class)->name('dashboard');
+
+    Route::get('/targets', [TargetController::class, 'index'])->name('targets.index');
+    Route::get('/targets/create', [TargetController::class, 'create'])->name('targets.create');
+    Route::post('/targets', [TargetController::class, 'store'])->name('targets.store');
+    Route::get('/targets/{target:target_id}', [TargetController::class, 'show'])->name('targets.show');
 
     Route::get('/sites', [SiteController::class, 'index'])->name('sites.index');
     Route::get('/sites/create', [SiteController::class, 'create'])->name('sites.create');
