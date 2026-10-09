@@ -45,9 +45,11 @@ WordPress/WP AI Bridge is the first concrete connector path, but the long-lived 
 
 ### Accepted breaking Target/connector foundation
 
+**Active staged rollout (owner directive 2026-10-10):** this release work targets WP AI Bridge + independent `ssh_direct` on the connector-neutral Target foundation. AI Server Agent is a future approved design only; its Gateway adapter, networking/credentials, tests and release evidence are parked in #111 until explicit owner restart. Agent-specific target-state paragraphs below remain future requirements rather than implementation blockers. The current acceptance gate #112 covers WP+SSH, not Agent. No unimplemented Agent connector may be exposed as active. Refer to Program #106 for live execution order and #107 for the critical runtime/migration WIP.
+
 The diagram above and Site-named components below describe the **currently integrated V1-era implementation**. They are not the accepted naming/storage boundary for the next connector.
 
-Program Issue #106 accepts a breaking redesign with AI Server Agent as the second MCP-speaking connector and `ssh_direct` as a separate third connector over SSH/SFTP. The target-state contract is:
+Program Issue #106 accepts a breaking Target redesign now delivered in stages: current WP AI Bridge + `ssh_direct` (SSH/SFTP rather than downstream MCP), with AI Server Agent retained as a deferred future MCP-speaking connector. The long-term target-state contract is:
 
 - shared domain/persistence/access/Admin/MCP vocabulary becomes `Target`, not `Site`;
 - current Target/connector connection data may be reset rather than preserved through a dual compatibility model;
@@ -185,7 +187,7 @@ The application/domain layer is the long-lived control-plane boundary. MCP, the 
 
 The project still stops short of a speculative provider framework, but the current scalability evidence in Issue #53 is now a concrete trigger for the first small extraction: admin and MCP inventory consumers need one shared, bounded site-inventory/query boundary instead of independently loading or filtering the fleet. That boundary should own reusable search/filter/order/page semantics and selected projections while remaining an application query service, not a generic repository framework.
 
-Connector generalization remains evidence-driven. The accepted non-WordPress expansion includes AI Server Agent and Direct SSH under Program #106. This satisfies the previous trigger for a broader but still small connector contract. Extract only semantics demonstrated by WP AI Bridge, AI Server Agent and Direct SSH; common MCP framing is **only** shared by MCP-speaking connectors. Do not turn the redesign into a speculative provider SDK or dynamic plugin system.
+Connector generalization remains evidence-driven. Direct SSH provides the present non-WordPress implementation pressure under #106; AI Server Agent is a parked future consumer. Extract only shared behavior demonstrated by the currently implemented WP+SSH connectors; MCP framing must **not** be forced onto SSH. When Agent is explicitly resumed, integrate its modern/stateless MCP semantics with evidence rather than pre-building a speculative provider SDK or dynamic plugin system.
 
 Keep these invariants:
 
