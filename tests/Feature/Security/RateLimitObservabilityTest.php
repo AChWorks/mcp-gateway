@@ -79,6 +79,7 @@ final class RateLimitObservabilityTest extends TestCase
             'method' => 'tools/list',
         ]);
         $request->attributes->set('oauth_client_id', 'https://chatgpt.com/oauth/client.json');
+        $request->attributes->set('oauth_client_profile_key', 'chatgpt');
         $request->attributes->set('oauth_user_id', '42');
         $this->app->instance('request', $request);
 
