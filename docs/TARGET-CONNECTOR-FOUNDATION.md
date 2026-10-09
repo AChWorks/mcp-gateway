@@ -3,7 +3,9 @@
 Status: Accepted pre-implementation architecture contract  
 Program owner: [Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106)
 
-This document defines the breaking Target/connector foundation and client-neutral MCP edge for WP AI Bridge, AI Server Agent and the owner-accepted Direct SSH connector. Only the first two speak downstream MCP; SSH uses a separate TCP/SFTP adapter. See `DIRECT-SSH-CONNECTOR.md` and `REMOTE-IO-CONTRACT.md`. This remains a target-state design, not current runtime.
+This document retains the long-term breaking Target/connector foundation and client-neutral MCP edge for WP AI Bridge, the accepted future AI Server Agent connector and independent Direct SSH. WP and future Agent speak downstream MCP; SSH uses a separate TCP/SFTP adapter. See `DIRECT-SSH-CONNECTOR.md` and `REMOTE-IO-CONTRACT.md`. This is a target-state design, not a claim about current runtime.
+
+**Active delivery phase (owner directive 2026-10-10):** implement and test WP AI Bridge + `ssh_direct` only after Target foundation integration; #111 Agent integration/development is **PARKED** until explicitly resumed. Its detailed Agent-specific designs below are retained as future constraints, not prerequisites for #107-#110, #123, #112 or the current major release. A missing Agent adapter must fail closed, not be announced as an available built-in. Prove a small WP end-to-end Target flow in isolated fixtures as early as safely possible. Preserve client-neutral auth, Target isolation and future connector extension without adding dummy Agent code or unnecessary abstractions.
 
 It is intentionally written as a **target-state design contract**, not a claim that the current `main` implementation already matches it. Until Issue #106 and its child work are integrated, `docs/ARCHITECTURE.md` and current source remain authoritative for the running implementation.
 
@@ -184,12 +186,17 @@ Connector onboarding that accepts a secret through the Admin UI treats that fiel
 
 Supported connectors are built-in, explicitly registered implementations.
 
-Initial connector set after Issue #106:
+Active milestone's intended implemented connector set after Issue #106:
 
 ```text
 wp_ai_bridge
-ai_server_agent
 ssh_direct
+```
+
+Accepted future connector — **not implemented/advertised until explicit owner resume of #111**:
+
+```text
+ai_server_agent
 ```
 
 A small explicit registry/factory/container mapping selects a connector from the stored `connector_type`.
@@ -210,7 +217,7 @@ Shared code must not scatter `if connector_type == ...` decisions across control
 
 ### What is allowed to become common
 
-Extract only capabilities evidenced by the actual three connectors; not every connector must implement every downstream operation. Share Target identity, authorization and lifecycle mechanics where genuinely common, while keeping SSH TCP/SFTP, Agent MCP and WordPress OAuth/tool semantics connector-owned.
+Extract the common contracts from the **current implemented WP+SSH consumers**; future Agent MCP behavior is separately specified but must not drive unneeded runtime abstractions now. Share Target identity, authorization and lifecycle mechanics only where genuinely common, while keeping SSH TCP/SFTP, future Agent MCP and WordPress OAuth/tool semantics connector-owned.
 
 Likely shared application-level needs include:
 
@@ -932,8 +939,8 @@ Expected implementation dependency order:
 3. Generic Target connection/credential/health lifecycle.
 4. Client-neutral MCP authorization edge (#117; may proceed in parallel where independent, but integrates before public MCP/Agent paths consume its authenticated client-profile context).
 5. Target-neutral Admin + MCP surfaces.
-6. AI Server Agent (#111 and Agent #47) and Direct SSH (#123), independently after common foundations. #122 owns the existing oversized-response fix and cross-connector response contract.
-7. Mixed-connector + mixed-client performance/security/upgrade/release acceptance (#112), including SSH only after its candidate is implemented.
+6. Direct SSH (#123) independently after the shared WP+SSH foundation; AI Server Agent (#111 / Agent #47) remains parked until explicit owner resume. #122's existing bounded-response fix is already integrated.
+7. WP+SSH mixed-connector and mixed-client fixture performance/security/upgrade/release acceptance (#112) after the exact candidate is implemented; later Agent acceptance is a separate future gate.
 
 AI Server Agent side:
 - https://github.com/ach1992/ai-server-agent/issues/47 — Gateway integration contract;
