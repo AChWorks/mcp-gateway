@@ -131,6 +131,50 @@ final class TargetAuthorizationFoundationTest extends TestCase
         self::assertSame('ssh_direct', $operatorEvents['items'][0]['connector_type_snapshot']);
     }
 
+    public function test_connector_scoped_permissions_cannot_authorize_another_connector_family(): void
+    {
+        $owner = app(UserAccessManager::class)->create($this->attributes('owner'), []);
+        $wp = $this->target('blog-one', 'wp_ai_bridge');
+        $agent = $this->target('server-agent', 'ai_server_agent');
+        $ssh = $this->target('server-ssh', 'ssh_direct');
+        $access = app(AccessControl::class);
+
+        self::assertFalse($access->allows($owner, GatewayPermission::SshCommandRun, $wp));
+        self::assertFalse($access->allows($owner, GatewayPermission::AgentCommandRun, $ssh));
+        self::assertFalse($access->allows($owner, GatewayPermission::WordpressAbilitiesInspect, $agent));
+        self::assertTrue($access->allows($owner, GatewayPermission::SshCommandRun, $ssh));
+
+        self::assertSame(
+            ['server-ssh'],
+            $access->scopeTargets(Target::query(), $owner, GatewayPermission::SshCommandRun)
+                ->pluck('target_id')->all(),
+        );
+    }
+
+    public function test_ssh_permission_must_have_selected_scope_even_if_global_denial_is_removed(): void
+    {
+        $operator = app(UserAccessManager::class)->create($this->attributes('operator'), []);
+        $target = $this->target('ssh-lab', 'ssh_direct');
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
+
+        $access = app(AccessControl::class);
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        // Represents an explicit Owner authorization. A global role ceiling alone is insufficient.
+        DB::table('user_permission_denials')->where([
+            'user_id' => $operator->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ])->delete();
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $operator->forceFill(['target_scope_mode' => 'all'])->save();
+        self::assertFalse($access->allows($operator->fresh(), GatewayPermission::SshCommandRun, $target));
+    }
+
     /** @return array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool} */
     private function attributes(string $role): array
     {
