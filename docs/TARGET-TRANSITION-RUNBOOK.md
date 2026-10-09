@@ -41,7 +41,7 @@ If confirmation is missing or the old schema/denials/roles do not match the supp
 
 The separate unmerged branch implements the explicit schema reset, generic `Target`/credential/group domain models, and WP-specific endpoint/config storage; it does not yet wire them into the old Laravel Site-era runtime.
 
-Focused tests on an isolated SQLite database verify clean schema creation, rejection without backup acknowledgment, preservation of Gateway OAuth and users while discarding Target-owned records, strict denial translation/seeding, and Target identity immutability/connector-owned config. This **does not replace required MariaDB/MySQL upgrade tests and exact historical package/browser update tests** before release.
+Focused tests on an isolated SQLite database verify clean schema creation, rejection without backup acknowledgment, preservation of Gateway OAuth and users while discarding Target-owned records, strict denial translation/seeding, and Target identity immutability/connector-owned config. An **isolated unprivileged MariaDB 11.8** instance on a local-only Unix socket also passed both fresh schema creation and a seeded legacy data conversion, including the no-ack preflight, Account/OAuth/Gateway-wide Activity preservation, and Agent/SSH denial seeding. The temporary server was stopped after validation; no host-wide service or production database was touched. This is valuable early DB-specific evidence, but **does not replace primary MariaDB 10.11/MySQL compatibility checks, restoration evidence, exact historical packaged updater tests or whole-application verification** before release.
 
 ## Remaining #107 work before the candidate can be reviewed or merged
 
