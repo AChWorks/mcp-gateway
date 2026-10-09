@@ -26,7 +26,7 @@
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.users.*')]) href="{{ route('admin.users.index') }}">{{ __('Users') }}</a>
                 @endcan
                 @can('users.manage')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.site-groups.*')]) href="{{ route('admin.site-groups.index') }}">{{ __('Site groups') }}</a>
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.target-groups.*')]) href="{{ route('admin.target-groups.index') }}">{{ __('Target groups') }}</a>
                 @endcan
                 @can('activity.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>

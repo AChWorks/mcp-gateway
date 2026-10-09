@@ -72,7 +72,7 @@ final readonly class TargetGroupManager
 
             $this->recordRequired(
                 'target-group-target-update:'.$lockedGroup->id,
-                $lockedTarget->target_id,
+                $lockedTarget,
             );
         });
     }
@@ -234,13 +234,13 @@ final readonly class TargetGroupManager
             : GatewayRole::from((string) $role);
     }
 
-    private function recordRequired(string $operation, ?string $targetId = null): void
+    private function recordRequired(string $operation, ?Target $target = null): void
     {
         $this->activity->recordRequired(
             CorrelationId::current(),
             $operation,
             'success',
-            $targetId,
+            $target,
         );
     }
 }

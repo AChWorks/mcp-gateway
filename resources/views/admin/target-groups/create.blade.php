@@ -1,19 +1,19 @@
 @extends('admin.layout')
 
-@section('title', __('Add site group'))
+@section('title', __('Add target group'))
 
 @section('content')
 <div class="page-heading">
     <div>
         <div class="eyebrow">{{ __('Access control') }}</div>
-        <h1>{{ __('Add site group') }}</h1>
-        <p class="muted">{{ __('Create a reusable site membership layer with optional denial-only capability restrictions.') }}</p>
+        <h1>{{ __('Add target group') }}</h1>
+        <p class="muted">{{ __('Create a reusable target membership layer with optional denial-only capability restrictions.') }}</p>
     </div>
-    <a href="{{ route('admin.site-groups.index') }}">{{ __('Back to site groups') }}</a>
+    <a href="{{ route('admin.target-groups.index') }}">{{ __('Back to target groups') }}</a>
 </div>
 
 <section class="panel panel-wide">
-    <form class="form-stack" method="post" action="{{ route('admin.site-groups.store') }}">
+    <form class="form-stack" method="post" action="{{ route('admin.target-groups.store') }}">
         @csrf
 
         <div class="field">
@@ -24,9 +24,9 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Group capability restrictions') }}</legend>
-            <p class="field-help">{{ __('Checked site-scoped capabilities are denied on every site in this group for assigned users. A group can never grant authority above the user role/global ceiling.') }}</p>
+            <p class="field-help">{{ __('Checked target-scoped capabilities are denied on every target in this group for assigned users. A group can never grant authority above the user role/global ceiling.') }}</p>
             <div class="checkbox-grid">
-                @foreach ($sitePermissions as $permission)
+                @foreach ($targetPermissions as $permission)
                     @include('admin.partials.permission-option', [
                         'permission' => $permission,
                         'checked' => in_array($permission->value, old('denied_permissions', []), true),
@@ -42,7 +42,7 @@
             @error('current_password')<p class="field-error">{{ $message }}</p>@enderror
         </div>
 
-        <button class="button button-primary" type="submit">{{ __('Create site group') }}</button>
+        <button class="button button-primary" type="submit">{{ __('Create target group') }}</button>
     </form>
 </section>
 @endsection

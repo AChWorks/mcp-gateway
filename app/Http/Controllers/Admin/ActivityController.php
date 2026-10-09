@@ -21,13 +21,13 @@ final class ActivityController extends Controller
 
         $validated = $request->validate([
             'page' => ['nullable', 'integer', 'min:1'],
-            'site_id' => ['nullable', 'string', 'max:128'],
+            'target_id' => ['nullable', 'string', 'max:128'],
             'operation' => ['nullable', 'string', 'max:128'],
         ]);
 
-        $siteId = isset($validated['site_id']) ? trim((string) $validated['site_id']) : null;
+        $targetId = isset($validated['target_id']) ? trim((string) $validated['target_id']) : null;
         $operation = isset($validated['operation']) ? trim((string) $validated['operation']) : null;
-        $siteId = $siteId === '' ? null : $siteId;
+        $targetId = $targetId === '' ? null : $targetId;
         $operation = $operation === '' ? null : $operation;
 
         return view('admin.activity.index', [
@@ -35,11 +35,11 @@ final class ActivityController extends Controller
                 $user,
                 isset($validated['page']) ? (int) $validated['page'] : 1,
                 25,
-                $siteId,
+                $targetId,
                 $operation,
             ),
             'filters' => [
-                'site_id' => $siteId,
+                'target_id' => $targetId,
                 'operation' => $operation,
             ],
         ]);

@@ -51,13 +51,13 @@
                 </select>
             </div>
             <div class="field">
-                <label for="site_scope_mode">{{ __('Site scope') }}</label>
-                <select id="site_scope_mode" name="site_scope_mode" required>
-                    @foreach ($siteScopeModes as $mode)
-                        <option value="{{ $mode->value }}" @selected(old('site_scope_mode', 'selected') === $mode->value)>{{ $mode->title() }}</option>
+                <label for="target_scope_mode">{{ __('Target scope') }}</label>
+                <select id="target_scope_mode" name="target_scope_mode" required>
+                    @foreach ($targetScopeModes as $mode)
+                        <option value="{{ $mode->value }}" @selected(old('target_scope_mode', 'selected') === $mode->value)>{{ $mode->title() }}</option>
                     @endforeach
                 </select>
-                <p class="field-help">{{ __('Selected can receive sites through direct allow rules or assigned site groups. Owners are always all-sites.') }}</p>
+                <p class="field-help">{{ __('Selected can receive targets through direct allow rules or assigned target groups. Owners are always all-targets.') }}</p>
             </div>
         </div>
 
@@ -69,7 +69,7 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Global permission restrictions') }}</legend>
-            <p class="field-help">{{ __('Checked permissions are denied. The scope badge describes what the permission acts on; checking a Site-scoped permission here denies it on every site in the user\'s effective scope. Restrictions never add authority beyond the selected role.') }}</p>
+            <p class="field-help">{{ __('Checked permissions are denied. The scope badge describes what the permission acts on; checking a Target-scoped permission here denies it on every target in the user\'s effective scope. Restrictions never add authority beyond the selected role.') }}</p>
             <div class="checkbox-grid">
                 @foreach ($permissions as $permission)
                     @include('admin.partials.permission-option', [

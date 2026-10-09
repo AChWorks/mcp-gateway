@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use App\Models\User;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Validator;
@@ -57,7 +57,7 @@ final class CreateAdministrator extends Command
             'email' => $email,
             'password' => $password,
             'role' => $role->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
             'access_enabled' => true,
         ]);
 

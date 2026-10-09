@@ -6,7 +6,7 @@ use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Access\UserAccessManager;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use DomainException;
@@ -125,7 +125,7 @@ final class UserController extends Controller
             ],
             'password' => $password,
             'role' => ['required', Rule::enum(GatewayRole::class)],
-            'site_scope_mode' => ['required', Rule::enum(SiteScopeMode::class)],
+            'target_scope_mode' => ['required', Rule::enum(TargetScopeMode::class)],
             'access_enabled' => ['nullable', 'boolean'],
             'denied_permissions' => ['nullable', 'array'],
             'denied_permissions.*' => ['string', Rule::enum(GatewayPermission::class)],
@@ -149,7 +149,7 @@ final class UserController extends Controller
     {
         return [
             'roles' => GatewayRole::cases(),
-            'siteScopeModes' => SiteScopeMode::cases(),
+            'targetScopeModes' => TargetScopeMode::cases(),
             'permissions' => GatewayPermission::cases(),
         ];
     }

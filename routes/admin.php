@@ -6,11 +6,11 @@ use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\SiteCheckOperationController;
 use App\Http\Controllers\Admin\SiteConnectionController;
 use App\Http\Controllers\Admin\SiteController;
-use App\Http\Controllers\Admin\SiteGroupController;
-use App\Http\Controllers\Admin\SiteGroupSiteController;
-use App\Http\Controllers\Admin\SiteGroupUserController;
+use App\Http\Controllers\Admin\TargetGroupController;
+use App\Http\Controllers\Admin\TargetGroupTargetController;
+use App\Http\Controllers\Admin\TargetGroupUserController;
 use App\Http\Controllers\Admin\UserController;
-use App\Http\Controllers\Admin\UserSiteAccessController;
+use App\Http\Controllers\Admin\UserTargetAccessController;
 use App\Http\Middleware\EnsureLocalUserAccessEnabled;
 use Illuminate\Support\Facades\Route;
 
@@ -46,36 +46,36 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::post('/users', [UserController::class, 'store'])->name('users.store');
     Route::get('/users/{user}/edit', [UserController::class, 'edit'])->name('users.edit');
     Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
-    Route::get('/users/{user}/sites', [UserSiteAccessController::class, 'index'])->name('users.sites.index');
-    Route::get('/users/{user}/sites/{site:site_id}/edit', [UserSiteAccessController::class, 'edit'])
+    Route::get('/users/{user}/targets', [UserTargetAccessController::class, 'index'])->name('users.targets.index');
+    Route::get('/users/{user}/targets/{target:target_id}/edit', [UserTargetAccessController::class, 'edit'])
         ->withoutScopedBindings()
-        ->name('users.sites.edit');
-    Route::put('/users/{user}/sites/{site:site_id}', [UserSiteAccessController::class, 'update'])
+        ->name('users.targets.edit');
+    Route::put('/users/{user}/targets/{target:target_id}', [UserTargetAccessController::class, 'update'])
         ->withoutScopedBindings()
-        ->name('users.sites.update');
+        ->name('users.targets.update');
 
-    Route::get('/site-groups', [SiteGroupController::class, 'index'])->name('site-groups.index');
-    Route::get('/site-groups/create', [SiteGroupController::class, 'create'])->name('site-groups.create');
-    Route::post('/site-groups', [SiteGroupController::class, 'store'])->name('site-groups.store');
-    Route::get('/site-groups/{siteGroup}/edit', [SiteGroupController::class, 'edit'])->name('site-groups.edit');
-    Route::put('/site-groups/{siteGroup}', [SiteGroupController::class, 'update'])->name('site-groups.update');
-    Route::delete('/site-groups/{siteGroup}', [SiteGroupController::class, 'destroy'])->name('site-groups.destroy');
+    Route::get('/target-groups', [TargetGroupController::class, 'index'])->name('target-groups.index');
+    Route::get('/target-groups/create', [TargetGroupController::class, 'create'])->name('target-groups.create');
+    Route::post('/target-groups', [TargetGroupController::class, 'store'])->name('target-groups.store');
+    Route::get('/target-groups/{targetGroup}/edit', [TargetGroupController::class, 'edit'])->name('target-groups.edit');
+    Route::put('/target-groups/{targetGroup}', [TargetGroupController::class, 'update'])->name('target-groups.update');
+    Route::delete('/target-groups/{targetGroup}', [TargetGroupController::class, 'destroy'])->name('target-groups.destroy');
 
-    Route::get('/site-groups/{siteGroup}/sites', [SiteGroupSiteController::class, 'index'])->name('site-groups.sites.index');
-    Route::get('/site-groups/{siteGroup}/sites/{site:site_id}/edit', [SiteGroupSiteController::class, 'edit'])
+    Route::get('/target-groups/{targetGroup}/targets', [TargetGroupTargetController::class, 'index'])->name('target-groups.targets.index');
+    Route::get('/target-groups/{targetGroup}/targets/{target:target_id}/edit', [TargetGroupTargetController::class, 'edit'])
         ->withoutScopedBindings()
-        ->name('site-groups.sites.edit');
-    Route::put('/site-groups/{siteGroup}/sites/{site:site_id}', [SiteGroupSiteController::class, 'update'])
+        ->name('target-groups.targets.edit');
+    Route::put('/target-groups/{targetGroup}/targets/{target:target_id}', [TargetGroupTargetController::class, 'update'])
         ->withoutScopedBindings()
-        ->name('site-groups.sites.update');
+        ->name('target-groups.targets.update');
 
-    Route::get('/site-groups/{siteGroup}/users', [SiteGroupUserController::class, 'index'])->name('site-groups.users.index');
-    Route::get('/site-groups/{siteGroup}/users/{user}/edit', [SiteGroupUserController::class, 'edit'])->name('site-groups.users.edit');
-    Route::put('/site-groups/{siteGroup}/users/{user}', [SiteGroupUserController::class, 'update'])->name('site-groups.users.update');
+    Route::get('/target-groups/{targetGroup}/users', [TargetGroupUserController::class, 'index'])->name('target-groups.users.index');
+    Route::get('/target-groups/{targetGroup}/users/{user}/edit', [TargetGroupUserController::class, 'edit'])->name('target-groups.users.edit');
+    Route::put('/target-groups/{targetGroup}/users/{user}', [TargetGroupUserController::class, 'update'])->name('target-groups.users.update');
 
     Route::get('/activity', ActivityController::class)->name('activity');
     Route::view('/connection', 'admin.connection')
-        ->middleware('can:connection.view')
+        ->middleware('can:gateway.connection.view')
         ->name('connection');
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 });

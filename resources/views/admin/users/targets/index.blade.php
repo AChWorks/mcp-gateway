@@ -1,26 +1,26 @@
 @extends('admin.layout')
 
-@section('title', __('Site access'))
+@section('title', __('Target access'))
 
 @section('content')
 <div class="page-heading">
     <div>
-        <div class="eyebrow">{{ __('User site access') }}</div>
+        <div class="eyebrow">{{ __('User target access') }}</div>
         <h1>{{ $managedUser->name }}</h1>
-        <p class="muted">{{ __('Browse the fleet in bounded pages and configure only the site that needs an exception.') }}</p>
+        <p class="muted">{{ __('Browse the fleet in bounded pages and configure only the target that needs an exception.') }}</p>
     </div>
     <a href="{{ route('admin.users.edit', ['user' => $managedUser->id]) }}">{{ __('Back to user') }}</a>
 </div>
 
 @if ($isOwner)
-    <div class="alert alert-success" role="status">{{ __('This user is an owner. Owners always have unrestricted all-site access and do not accept site overrides.') }}</div>
+    <div class="alert alert-success" role="status">{{ __('This user is an owner. Owners always have unrestricted all-target access and do not accept target overrides.') }}</div>
 @endif
 
 <section class="panel panel-wide">
-    <form class="filter-grid" method="get" action="{{ route('admin.users.sites.index', ['user' => $managedUser->id]) }}">
+    <form class="filter-grid" method="get" action="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">
         <div class="field">
             <label for="search">{{ __('Search') }}</label>
-            <input id="search" name="search" type="search" maxlength="160" value="{{ $filters['search'] ?? '' }}" placeholder="{{ __('Name or site ID') }}">
+            <input id="search" name="search" type="search" maxlength="160" value="{{ $filters['search'] ?? '' }}" placeholder="{{ __('Name or target ID') }}">
         </div>
         <div class="field">
             <label for="connection_state">{{ __('Connection state') }}</label>
@@ -33,36 +33,36 @@
         </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Filter') }}</button>
-            <a class="button button-secondary" href="{{ route('admin.users.sites.index', ['user' => $managedUser->id]) }}">{{ __('Clear') }}</a>
+            <a class="button button-secondary" href="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">{{ __('Clear') }}</a>
         </div>
     </form>
 
-    @if ($sites === [])
-        <p class="empty-state">{{ __('No sites match these filters.') }}</p>
+    @if ($targets === [])
+        <p class="empty-state">{{ __('No targets match these filters.') }}</p>
     @else
         <div class="table-wrap">
             <table>
                 <thead>
                 <tr>
-                    <th scope="col">{{ __('Site') }}</th>
+                    <th scope="col">{{ __('Target') }}</th>
                     <th scope="col">{{ __('Explicit scope rule') }}</th>
                     <th scope="col">{{ __('Capability denials') }}</th>
                     <th scope="col"><span class="sr-only">{{ __('Actions') }}</span></th>
                 </tr>
                 </thead>
                 <tbody>
-                @foreach ($sites as $site)
-                    @php($rule = $siteRules[(string) $site->getKey()])
+                @foreach ($targets as $target)
+                    @php($rule = $targetRules[(string) $target->getKey()])
                     <tr>
                         <td>
-                            <strong>{{ $site->display_name }}</strong><br>
-                            <code class="small-code">{{ $site->site_id }}</code>
+                            <strong>{{ $target->display_name }}</strong><br>
+                            <code class="small-code">{{ $target->target_id }}</code>
                         </td>
                         <td><span class="badge badge-{{ $rule['access_rule'] === 'allow' ? 'success' : ($rule['access_rule'] === 'deny' ? 'danger' : 'neutral') }}">{{ \Illuminate\Support\Str::headline($rule['access_rule']) }}</span></td>
                         <td>{{ $rule['denied_count'] }}</td>
                         <td class="table-action">
                             @unless ($isOwner)
-                                <a href="{{ route('admin.users.sites.edit', ['user' => $managedUser->id, 'site' => $site->site_id]) }}">{{ __('Edit rule') }}</a>
+                                <a href="{{ route('admin.users.targets.edit', ['user' => $managedUser->id, 'target' => $target->target_id]) }}">{{ __('Edit rule') }}</a>
                             @endunless
                         </td>
                     </tr>
@@ -73,7 +73,7 @@
     @endif
 
     @if ($pagination['previous_url'] !== null || $pagination['next_url'] !== null)
-        <nav class="pagination" aria-label="{{ __('Site pages') }}">
+        <nav class="pagination" aria-label="{{ __('Target pages') }}">
             @if ($pagination['previous_url'] !== null)
                 <a class="button button-secondary" rel="prev" href="{{ $pagination['previous_url'] }}">{{ __('Previous') }}</a>
             @else

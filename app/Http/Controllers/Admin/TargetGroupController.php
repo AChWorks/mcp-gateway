@@ -3,9 +3,9 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
-use App\Application\Access\SiteGroupManager;
+use App\Application\Access\TargetGroupManager;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\SiteGroup;
+use App\Domain\Targets\TargetGroup;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -13,33 +13,33 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
-final class SiteGroupController extends Controller
+final class TargetGroupController extends Controller
 {
     public function index(): View
     {
         Gate::authorize(GatewayPermission::UsersManage->value);
 
-        return view('admin.site-groups.index', [
-            'groups' => SiteGroup::query()
-                ->withCount(['sites', 'users'])
+        return view('admin.target-groups.index', [
+            'groups' => TargetGroup::query()
+                ->withCount(['targets', 'users'])
                 ->orderBy('name')
                 ->simplePaginate(50),
         ]);
     }
 
-    public function create(SiteGroupManager $groups): View
+    public function create(TargetGroupManager $groups): View
     {
         Gate::authorize(GatewayPermission::UsersManage->value);
 
-        return view('admin.site-groups.create', [
-            'sitePermissions' => $groups->sitePermissions(),
+        return view('admin.target-groups.create', [
+            'targetPermissions' => $groups->targetPermissions(),
         ]);
     }
 
     public function store(
         Request $request,
         AdministratorPasswordConfirmation $confirmation,
-        SiteGroupManager $groups,
+        TargetGroupManager $groups,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::UsersManage->value);
         $confirmation->confirm($request);
@@ -51,73 +51,73 @@ final class SiteGroupController extends Controller
         );
 
         return redirect()
-            ->route('admin.site-groups.edit', ['siteGroup' => $group->id])
-            ->with('status', __('Site group created.'));
+            ->route('admin.target-groups.edit', ['targetGroup' => $group->id])
+            ->with('status', __('Target group created.'));
     }
 
-    public function edit(SiteGroup $siteGroup, SiteGroupManager $groups): View
+    public function edit(TargetGroup $targetGroup, TargetGroupManager $groups): View
     {
         Gate::authorize(GatewayPermission::UsersManage->value);
 
-        return view('admin.site-groups.edit', [
-            'siteGroup' => $siteGroup,
-            'sitePermissions' => $groups->sitePermissions(),
-            'deniedPermissions' => $groups->permissionDenials($siteGroup),
+        return view('admin.target-groups.edit', [
+            'targetGroup' => $targetGroup,
+            'targetPermissions' => $groups->targetPermissions(),
+            'deniedPermissions' => $groups->permissionDenials($targetGroup),
         ]);
     }
 
     public function update(
         Request $request,
-        SiteGroup $siteGroup,
+        TargetGroup $targetGroup,
         AdministratorPasswordConfirmation $confirmation,
-        SiteGroupManager $groups,
+        TargetGroupManager $groups,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::UsersManage->value);
         $confirmation->confirm($request);
-        $validated = $this->validated($request, $siteGroup);
+        $validated = $this->validated($request, $targetGroup);
 
         $groups->update(
-            $siteGroup,
+            $targetGroup,
             (string) $validated['name'],
             $this->deniedPermissions($validated),
         );
 
         return redirect()
-            ->route('admin.site-groups.edit', ['siteGroup' => $siteGroup->id])
-            ->with('status', __('Site group updated.'));
+            ->route('admin.target-groups.edit', ['targetGroup' => $targetGroup->id])
+            ->with('status', __('Target group updated.'));
     }
 
     public function destroy(
         Request $request,
-        SiteGroup $siteGroup,
+        TargetGroup $targetGroup,
         AdministratorPasswordConfirmation $confirmation,
-        SiteGroupManager $groups,
+        TargetGroupManager $groups,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::UsersManage->value);
         $confirmation->confirm($request);
-        $groups->delete($siteGroup);
+        $groups->delete($targetGroup);
 
         return redirect()
-            ->route('admin.site-groups.index')
-            ->with('status', __('Site group deleted. Direct user/site rules were preserved.'));
+            ->route('admin.target-groups.index')
+            ->with('status', __('Target group deleted. Direct user/target rules were preserved.'));
     }
 
     /** @return array<string,mixed> */
-    private function validated(Request $request, ?SiteGroup $siteGroup = null): array
+    private function validated(Request $request, ?TargetGroup $targetGroup = null): array
     {
         return $request->validate([
             'name' => [
                 'required',
                 'string',
                 'max:160',
-                Rule::unique('site_groups', 'name')->ignore($siteGroup?->getKey()),
+                Rule::unique('target_groups', 'name')->ignore($targetGroup?->getKey()),
             ],
             'denied_permissions' => ['nullable', 'array'],
             'denied_permissions.*' => [
                 'string',
                 Rule::in(array_map(
                     static fn (GatewayPermission $permission): string => $permission->value,
-                    GatewayPermission::siteScoped(),
+                    GatewayPermission::targetScoped(),
                 )),
             ],
         ]);

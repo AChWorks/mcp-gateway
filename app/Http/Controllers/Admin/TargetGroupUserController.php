@@ -3,10 +3,10 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
-use App\Application\Access\SiteGroupManager;
+use App\Application\Access\TargetGroupManager;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteGroup;
+use App\Domain\Targets\TargetGroup;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use DomainException;
@@ -16,12 +16,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 
-final class SiteGroupUserController extends Controller
+final class TargetGroupUserController extends Controller
 {
     public function index(
         Request $request,
-        SiteGroup $siteGroup,
-        SiteGroupManager $groups,
+        TargetGroup $targetGroup,
+        TargetGroupManager $groups,
     ): View {
         Gate::authorize(GatewayPermission::UsersManage->value);
         $validated = $request->validate([
@@ -42,46 +42,46 @@ final class SiteGroupUserController extends Controller
             ->simplePaginate(50)
             ->withQueryString();
 
-        return view('admin.site-groups.users.index', [
-            'siteGroup' => $siteGroup,
+        return view('admin.target-groups.users.index', [
+            'targetGroup' => $targetGroup,
             'users' => $users,
-            'assignments' => $groups->userAssignmentSummaries($siteGroup, $users->items()),
+            'assignments' => $groups->userAssignmentSummaries($targetGroup, $users->items()),
             'search' => $search,
         ]);
     }
 
     public function edit(
-        SiteGroup $siteGroup,
+        TargetGroup $targetGroup,
         User $user,
-        SiteGroupManager $groups,
+        TargetGroupManager $groups,
     ): View {
         Gate::authorize(GatewayPermission::UsersManage->value);
 
-        return view('admin.site-groups.users.edit', [
-            'siteGroup' => $siteGroup,
+        return view('admin.target-groups.users.edit', [
+            'targetGroup' => $targetGroup,
             'managedUser' => $user,
-            'assigned' => $groups->userIsAssigned($siteGroup, $user),
+            'assigned' => $groups->userIsAssigned($targetGroup, $user),
             'isOwner' => $this->role($user) === GatewayRole::Owner,
         ]);
     }
 
     public function update(
         Request $request,
-        SiteGroup $siteGroup,
+        TargetGroup $targetGroup,
         User $user,
         AdministratorPasswordConfirmation $confirmation,
-        SiteGroupManager $groups,
+        TargetGroupManager $groups,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::UsersManage->value);
         $confirmation->confirm($request);
         $request->validate(['assigned' => ['nullable', 'boolean']]);
 
         try {
-            $groups->updateUserAssignment($siteGroup, $user, $request->boolean('assigned'));
+            $groups->updateUserAssignment($targetGroup, $user, $request->boolean('assigned'));
         } catch (DomainException $exception) {
             if ($exception->getMessage() === 'owner_unrestricted') {
                 return back()->withErrors([
-                    'assigned' => __('Owners remain unrestricted and cannot be assigned to narrowing site groups.'),
+                    'assigned' => __('Owners remain unrestricted and cannot be assigned to narrowing target groups.'),
                 ]);
             }
 
@@ -89,11 +89,11 @@ final class SiteGroupUserController extends Controller
         }
 
         return redirect()
-            ->route('admin.site-groups.users.edit', [
-                'siteGroup' => $siteGroup->id,
+            ->route('admin.target-groups.users.edit', [
+                'targetGroup' => $targetGroup->id,
                 'user' => $user->id,
             ])
-            ->with('status', __('Site group user assignment updated.'));
+            ->with('status', __('Target group user assignment updated.'));
     }
 
     private function role(User $user): GatewayRole

@@ -3,7 +3,7 @@
 namespace App\Support;
 
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use App\Models\User;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Application;
@@ -202,7 +202,7 @@ final class SimpleWebInstaller
                     'email' => strtolower(trim((string) $input['admin_email'])),
                     'password' => (string) $input['admin_password'],
                     'role' => GatewayRole::Owner->value,
-                    'site_scope_mode' => SiteScopeMode::All->value,
+                    'target_scope_mode' => TargetScopeMode::All->value,
                     'access_enabled' => true,
                 ]);
 

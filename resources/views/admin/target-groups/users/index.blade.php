@@ -1,26 +1,26 @@
 @extends('admin.layout')
 
-@section('title', __('Site group users'))
+@section('title', __('Target group users'))
 
 @section('content')
 <div class="page-heading">
     <div>
-        <div class="eyebrow">{{ __('Site group users') }}</div>
-        <h1>{{ $siteGroup->name }}</h1>
+        <div class="eyebrow">{{ __('Target group users') }}</div>
+        <h1>{{ $targetGroup->name }}</h1>
         <p class="muted">{{ __('User assignments are paginated and never change the role/global permission ceiling.') }}</p>
     </div>
-    <a href="{{ route('admin.site-groups.edit', ['siteGroup' => $siteGroup->id]) }}">{{ __('Back to group') }}</a>
+    <a href="{{ route('admin.target-groups.edit', ['targetGroup' => $targetGroup->id]) }}">{{ __('Back to group') }}</a>
 </div>
 
 <section class="panel panel-wide">
-    <form class="filter-grid" method="get" action="{{ route('admin.site-groups.users.index', ['siteGroup' => $siteGroup->id]) }}">
+    <form class="filter-grid" method="get" action="{{ route('admin.target-groups.users.index', ['targetGroup' => $targetGroup->id]) }}">
         <div class="field">
             <label for="search">{{ __('Search') }}</label>
             <input id="search" name="search" type="search" maxlength="160" value="{{ $search ?? '' }}" placeholder="{{ __('Name or email') }}">
         </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Filter') }}</button>
-            <a class="button button-secondary" href="{{ route('admin.site-groups.users.index', ['siteGroup' => $siteGroup->id]) }}">{{ __('Clear') }}</a>
+            <a class="button button-secondary" href="{{ route('admin.target-groups.users.index', ['targetGroup' => $targetGroup->id]) }}">{{ __('Clear') }}</a>
         </div>
     </form>
 
@@ -42,7 +42,7 @@
                                 <span class="badge badge-{{ $assignments[(int) $user->id] ? 'success' : 'neutral' }}">{{ $assignments[(int) $user->id] ? __('Assigned') : __('Not assigned') }}</span>
                             @endif
                         </td>
-                        <td class="table-action"><a href="{{ route('admin.site-groups.users.edit', ['siteGroup' => $siteGroup->id, 'user' => $user->id]) }}">{{ __('Edit assignment') }}</a></td>
+                        <td class="table-action"><a href="{{ route('admin.target-groups.users.edit', ['targetGroup' => $targetGroup->id, 'user' => $user->id]) }}">{{ __('Edit assignment') }}</a></td>
                     </tr>
                 @endforeach
                 </tbody>

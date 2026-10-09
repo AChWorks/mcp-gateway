@@ -4,7 +4,7 @@ namespace App\Providers;
 
 use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Sites\Site;
+use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\SystemDnsResolver;
@@ -29,8 +29,8 @@ class AppServiceProvider extends ServiceProvider
         foreach (GatewayPermission::cases() as $permission) {
             Gate::define(
                 $permission->value,
-                static fn (User $user, ?Site $site = null): bool => app(AccessControl::class)
-                    ->allows($user, $permission, $site),
+                static fn (User $user, ?Target $target = null): bool => app(AccessControl::class)
+                    ->allows($user, $permission, $target),
             );
         }
 
