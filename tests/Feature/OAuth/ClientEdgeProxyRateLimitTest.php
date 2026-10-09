@@ -54,7 +54,7 @@ final class ClientEdgeProxyRateLimitTest extends TestCase
                 'X-Forwarded-Host' => 'spoofed.invalid',
                 'Forwarded' => 'for=198.51.100.10',
             ])
-            ->get('/_test/client-ip')->assertOk()
+            ->get('http://gateway.example.test/_test/client-ip')->assertOk()
             ->assertJsonPath('ip', '203.0.113.42')
             ->assertJsonPath('secure', true)
             ->assertJsonPath('host', 'gateway.example.test');
