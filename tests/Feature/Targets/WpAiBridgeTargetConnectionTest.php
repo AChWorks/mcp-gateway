@@ -46,8 +46,8 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         parent::setUp();
         config()->set('bridge.client.id', 'https://gateway.example.test/oauth/client.json');
         config()->set('bridge.client.name', 'Gateway Test');
-        // Historical published redirect URL remains accepted by the new Target handler.
-        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/sites/callback');
+        // Breaking Target release advertises an exact new connector redirect.
+        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/targets/callback');
         config()->set('bridge.client.jwks_uri', 'https://gateway.example.test/oauth/jwks.json');
         Artisan::call('gateway:bridge-client-keygen', ['--force' => true]);
 
@@ -61,6 +61,15 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
         Http::preventStrayRequests();
         Http::fake(fn (Request $request) => $this->bridgeResponse($request));
+    }
+
+    public function test_old_site_callback_is_not_advertised_or_routable_in_breaking_target_release(): void
+    {
+        $this->get('/oauth/sites/callback')->assertNotFound();
+        self::assertSame(
+            'https://gateway.example.test/oauth/targets/callback',
+            (string) config('bridge.client.redirect_uri'),
+        );
     }
 
     public function test_two_targets_have_isolated_encrypted_oauth_and_exact_issuer_bound_replay_safe_callback(): void
@@ -208,7 +217,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
         self::assertArrayHasKey('state', $args);
 
-        $this->get('/oauth/sites/callback?'.http_build_query([
+        $this->get('/oauth/targets/callback?'.http_build_query([
             'state' => $args['state'],
             'code' => 'alpha-code',
             'iss' => 'https://alpha.example.test',

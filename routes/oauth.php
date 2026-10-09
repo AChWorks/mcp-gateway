@@ -11,10 +11,10 @@ Route::get('/oauth/client.json', GatewayBridgeClientMetadataController::class)
     ->name('bridge.client.metadata');
 Route::get('/oauth/jwks.json', GatewayBridgeClientJwksController::class)
     ->name('bridge.client.jwks');
-// Retain the configured public redirect URI while replacing the Site-era handler.
-Route::get('/oauth/sites/callback', TargetOAuthCallbackController::class)
+// The breaking Target migration requires fresh WordPress OAuth authorization.
+Route::get('/oauth/targets/callback', TargetOAuthCallbackController::class)
     ->middleware('throttle:oauth-browser')
-    ->name('bridge.site.callback');
+    ->name('bridge.target.callback');
 
 Route::get('/oauth/authorize', [AuthorizationController::class, 'show'])
     ->middleware([EnsureLocalUserAccessEnabled::class, 'throttle:oauth-browser']);

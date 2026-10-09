@@ -16,7 +16,7 @@ final class GatewayBridgeClientIdentityTest extends TestCase
 
         config()->set('bridge.client.id', 'https://gateway.example.test/oauth/client.json');
         config()->set('bridge.client.name', 'MCP Gateway Test');
-        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/sites/callback');
+        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/targets/callback');
         config()->set('bridge.client.jwks_uri', 'https://gateway.example.test/oauth/jwks.json');
         Artisan::call('gateway:bridge-client-keygen', ['--force' => true]);
     }
@@ -28,7 +28,7 @@ final class GatewayBridgeClientIdentityTest extends TestCase
             ->assertJson([
                 'client_id' => 'https://gateway.example.test/oauth/client.json',
                 'client_name' => 'MCP Gateway Test',
-                'redirect_uris' => ['https://gateway.example.test/oauth/sites/callback'],
+                'redirect_uris' => ['https://gateway.example.test/oauth/targets/callback'],
                 'grant_types' => ['authorization_code', 'refresh_token'],
                 'response_types' => ['code'],
                 'token_endpoint_auth_method' => 'private_key_jwt',

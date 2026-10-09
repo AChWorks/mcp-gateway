@@ -14,6 +14,10 @@ Owning contract: [Issue #107](https://github.com/AChWorks/mcp-gateway/issues/107
 
 **Next engineering slice:** wire bounded WP Ability read/execute to exact Target scope and credential, implement crash/concurrency-safe refresh, finish remaining legacy conversions, then run focused tests followed by stable-candidate broad CI, MariaDB historical update+restore rehearsal, high-assurance review, owner-authorized release, and owner-performed WordPress/ChatGPT reconnection.
 
+## Breaking WordPress OAuth callback naming (2026-10-10)
+
+The next breaking Target release advertises /oauth/targets/callback in Gateway client metadata and registers it as the active WordPress OAuth callback. The former /oauth/sites/callback route is deliberately not maintained. Because WordPress and ChatGPT owners must reauthorize after the controlled legacy reset, do **not** create a Site callback compatibility alias. Refresh WordPress approved Gateway OAuth client metadata/JWKS cache against the installed major release before pairing; the new redirect must exactly match the metadata document. This path change is not applicable to an unshipped Site-only release.
+
 ## Target-scoped WordPress MCP and rotating refresh checkpoint (2026-10-10)
 
 **WIP implementation, not a release acceptance.** The current Target branch now exposes the bounded public WordPress Ability read/execute tools alongside Target list/context. WordPress Ability metadata, runtime safety-class authorization, exact Target selection and bearer acquisition route through Target credentials; the public tool names and security annotations remain stable per the Target foundation contract. Old Site Admin URLs were removed from candidate routing; the Target Admin now supports permission-checked display-name editing (immutable identity/endpoint) and confirmed Target removal only when credential, OAuth flow and revocation/refresh intent checks are clean. Remaining Site-era services, views and tests still require reconciliation.

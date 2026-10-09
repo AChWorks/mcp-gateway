@@ -32,7 +32,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         parent::setUp();
         config()->set('bridge.client.id', 'https://gateway.example.test/oauth/client.json');
         config()->set('bridge.client.name', 'Gateway Test');
-        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/sites/callback');
+        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/targets/callback');
         config()->set('bridge.client.jwks_uri', 'https://gateway.example.test/oauth/jwks.json');
         Artisan::call('gateway:bridge-client-keygen', ['--force' => true]);
 
