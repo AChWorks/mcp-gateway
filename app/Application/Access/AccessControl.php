@@ -21,6 +21,10 @@ final readonly class AccessControl
             return false;
         }
 
+        if ($target instanceof Target && ! $this->permissionMatchesTarget($permission, $target)) {
+            return false;
+        }
+
         if (! $target instanceof Target || $role === GatewayRole::Owner) {
             return true;
         }
@@ -122,6 +126,11 @@ final readonly class AccessControl
             return $query->whereRaw('1 = 0');
         }
 
+        $connector = $this->connectorForPermission($permission);
+        if ($connector !== null) {
+            $query->where('connector_type', $connector);
+        }
+
         $query = $this->scopePrincipalTargets($query, $user);
 
         if ($role === GatewayRole::Owner) {
@@ -220,6 +229,12 @@ final readonly class AccessControl
             return true;
         }
 
+        // Remote shell/file capability must never escape explicitly selected Targets.
+        if (str_starts_with($permission->value, 'ssh.')
+            && $this->scopeMode($user) !== TargetScopeMode::Selected) {
+            return false;
+        }
+
         return ! DB::table('user_permission_denials')
             ->where('user_id', $user->getKey())
             ->where('permission', $permission->value)
@@ -277,6 +292,23 @@ final readonly class AccessControl
             ->where('target_group_targets.target_record_id', $target->getKey())
             ->where('target_group_permission_denials.permission', $permission->value)
             ->exists();
+    }
+
+    private function permissionMatchesTarget(GatewayPermission $permission, Target $target): bool
+    {
+        $connector = $this->connectorForPermission($permission);
+
+        return $connector === null || $target->connector_type === $connector;
+    }
+
+    private function connectorForPermission(GatewayPermission $permission): ?string
+    {
+        return match (true) {
+            str_starts_with($permission->value, 'wordpress.') => 'wp_ai_bridge',
+            str_starts_with($permission->value, 'agent.') => 'ai_server_agent',
+            str_starts_with($permission->value, 'ssh.') => 'ssh_direct',
+            default => null,
+        };
     }
 
     private function role(User $user): ?GatewayRole
