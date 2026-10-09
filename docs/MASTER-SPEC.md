@@ -4,6 +4,12 @@ Status: Canonical project specification
 
 Repository: `AChWorks/mcp-gateway`
 
+## Active staged delivery (owner directive 2026-10-10)
+
+The **current next major-version milestone** is a working connector-neutral Target Gateway for **WP AI Bridge and independent `ssh_direct`**, using the already integrated client-neutral OAuth foundation. **AI Server Agent is an accepted future connector whose Gateway integration/development is PAUSED until explicit owner resumption** (Issue #111). It is **not** required for the current milestone or its final WP+SSH acceptance (Issue #112), and must not be advertised as implemented. Retain only the small Target/credential/authorization extension boundaries justified by current WP+SSH use; no speculative Agent adapter, Agent-specific compatibility CI, background worker or cross-repository implementation.
+
+Prioritize #107 runtime and migration reconciliation, an **early isolated WP end-to-end proof** once the coherent Target path is available, then #108-#110 shared WP+SSH runtime, #123 Direct SSH, and final exact-candidate #112 acceptance. Preserve high-assurance OAuth/SSH/migration boundaries, target identity, limited I/O, explicit owner gates and the historically accepted Agent target-state design for a later separately authorized integration. The previously planned simultaneous three-connector release wording elsewhere describes long-term architecture, **not active release obligations**; current task/dependency state belongs in [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106).
+
 ### AChWorks ecosystem relationship
 
 **Koinon** (`AChWorks/koinon`) owns ecosystem-level governance, discovery, and generic cross-project contracts. This repository remains authoritative for MCP Gateway product intent, architecture, implementation, Issues/PRs/CI, releases, and deployment behavior.
@@ -16,7 +22,7 @@ MCP Gateway is a small self-hosted **connector-neutral Target control plane with
 
 WordPress/WP AI Bridge was the first connector and proved the original operational problem: connecting ChatGPT directly to many independent backends creates one client/App connection per backend. MCP Gateway provides one stable public MCP endpoint and a bounded administration surface so Targets can be added, removed, connected, tested, authorized, and routed without creating another ChatGPT App for every Target.
 
-The accepted next foundation adds AI Server Agent as the second MCP-speaking connector and `ssh_direct` as a separate third connector, replaces generic Site/WordPress-shaped core concepts with Target-oriented domain/persistence/access/Admin/MCP contracts, and removes the single-ChatGPT assumption from the shared client authorization boundary. ChatGPT remains the first supported client profile. The detailed breaking design is owned by `docs/TARGET-CONNECTOR-FOUNDATION.md`, Program Issue #106, and client-edge Issue #117 until implementation is integrated.
+The active breaking foundation replaces shared Site/WordPress-shaped core concepts with Target-oriented domain/persistence/access/Admin/MCP contracts and adds independent `ssh_direct` alongside WP AI Bridge, with the already integrated client-neutral OAuth edge. ChatGPT remains the first supported client profile. The accepted future AI Server Agent design is retained but its connector work is paused, not a condition of this major milestone. Detailed contracts are owned by `docs/TARGET-CONNECTOR-FOUNDATION.md`, Program Issue #106 and client-edge Issue #117.
 
 The project must remain simple enough to deploy on an ordinary aaPanel host or compatible shared PHP hosting while keeping clean connector boundaries so future clients, administration/automation surfaces, and backend connector types can be added without rewriting the core.
 
@@ -26,7 +32,7 @@ The Gateway is a lightweight control plane, not a permanently WordPress-specific
 
 The durable product outcome is that an operator can deploy one MCP Gateway instance, register many Targets of supported connector types, connect one or more explicitly supported MCP/AI client applications to the same stable Gateway endpoint, and safely inspect or operate an explicitly selected Target through that connector's own authorization and safety boundaries.
 
-The completed V1 proof used multiple WP AI Bridge sites through ChatGPT. The accepted next breaking foundation generalizes that proof into Target semantics, adds AI Server Agent and Direct SSH as built-in connectors, and generalizes the client edge so future supported clients do not require a second Gateway authorization core. Adding/removing a Target never requires another Gateway endpoint; adding a new supported client profile likewise does not create another Target fleet.
+The completed V1 proof used multiple WP AI Bridge sites through ChatGPT. The next breaking milestone generalizes that proof into Target semantics with WP AI Bridge and Direct SSH, while preserving the client-neutral edge and future ability to add AI Server Agent when explicitly resumed. Adding/removing a Target never requires another Gateway endpoint; adding a new supported client profile likewise does not create another Target fleet.
 
 V1-specific WordPress success criteria remain historical product evidence below; they do not define the generic core domain for new development.
 
@@ -85,7 +91,7 @@ Future connectors must state explicitly whether a direct mode exists; the core m
 
 The application must avoid hard-coding the shared control plane to ChatGPT, WordPress, WP AI Bridge, or any one backend family.
 
-WP AI Bridge is the first connector. AI Server Agent is the accepted second connector and is the concrete trigger for the Target/connector foundation described in `docs/TARGET-CONNECTOR-FOUNDATION.md`. Common connector contracts must be extracted from these real implementations rather than hypothetical providers.
+WP AI Bridge is the original connector. Direct SSH provides the current independent non-WordPress proof for the Target/connector foundation described in `docs/TARGET-CONNECTOR-FOUNDATION.md`. AI Server Agent remains a future accepted integration, paused until explicitly resumed. Extract common contracts only from implemented, tested consumers rather than from hypothetical provider behaviors.
 
 Future MCP clients and non-MCP administration/automation surfaces may reuse the same Target identity, authorization, inventory, lifecycle, activity, and routing rules without bypassing connector authorization.
 
