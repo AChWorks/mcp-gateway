@@ -19,6 +19,19 @@ enum GatewayPermission: string
     case WordpressAbilitiesExecuteMutating = 'wordpress.abilities.execute.mutating';
     case WordpressAbilitiesExecuteDestructive = 'wordpress.abilities.execute.destructive';
     case WordpressAbilitiesExecuteUnclassified = 'wordpress.abilities.execute.unclassified';
+    case AgentEnvironmentRead = 'agent.environment.read';
+    case AgentCommandRun = 'agent.command.run';
+    case AgentRootCommandRun = 'agent.root_command.run';
+    case AgentJobStart = 'agent.job.start';
+    case AgentJobRead = 'agent.job.read';
+    case AgentJobStop = 'agent.job.stop';
+    case AgentFileRead = 'agent.file.read';
+    case AgentFileWrite = 'agent.file.write';
+    case AgentBrowserSetup = 'agent.browser.setup';
+    case AgentBrowserRun = 'agent.browser.run';
+    case SshCommandRun = 'ssh.command.run';
+    case SshFileRead = 'ssh.file.read';
+    case SshFileWrite = 'ssh.file.write';
     case ActivityView = 'activity.view';
     case UsersView = 'users.view';
     case UsersManage = 'users.manage';
@@ -42,6 +55,19 @@ enum GatewayPermission: string
             self::WordpressAbilitiesExecuteMutating => 'Run mutating abilities',
             self::WordpressAbilitiesExecuteDestructive => 'Run destructive abilities',
             self::WordpressAbilitiesExecuteUnclassified => 'Run unclassified abilities',
+            self::AgentEnvironmentRead => 'Read Agent environment',
+            self::AgentCommandRun => 'Run Agent worker commands',
+            self::AgentRootCommandRun => 'Run Agent root commands',
+            self::AgentJobStart => 'Start Agent jobs',
+            self::AgentJobRead => 'Read Agent job status and output',
+            self::AgentJobStop => 'Stop Agent jobs',
+            self::AgentFileRead => 'Read Agent files',
+            self::AgentFileWrite => 'Write Agent files',
+            self::AgentBrowserSetup => 'Set up Agent browser',
+            self::AgentBrowserRun => 'Run Agent browser',
+            self::SshCommandRun => 'Run SSH remote commands',
+            self::SshFileRead => 'Read SSH remote files',
+            self::SshFileWrite => 'Write SSH remote files',
             self::ActivityView => 'View activity',
             self::UsersView => 'View users',
             self::UsersManage => 'Manage users and Target groups',
@@ -67,6 +93,19 @@ enum GatewayPermission: string
             self::WordpressAbilitiesExecuteMutating => 'Execute downstream abilities classified as mutating but not destructive on Targets inside the user\'s effective Target scope.',
             self::WordpressAbilitiesExecuteDestructive => 'Execute downstream abilities classified as destructive on Targets inside the user\'s effective Target scope. This permission should remain unavailable unless destructive operations are intended.',
             self::WordpressAbilitiesExecuteUnclassified => 'Execute downstream abilities whose safety class cannot be determined. This is a separate high-trust fallback and is not implied by read-only or mutating execution.',
+            self::AgentEnvironmentRead => 'Target-scoped read agent environment; requires explicit Gateway, Target and connector permissions.',
+            self::AgentCommandRun => 'Target-scoped run agent worker commands; requires explicit Gateway, Target and connector permissions.',
+            self::AgentRootCommandRun => 'Target-scoped run agent root commands; requires explicit Gateway, Target and connector permissions.',
+            self::AgentJobStart => 'Target-scoped start agent jobs; requires explicit Gateway, Target and connector permissions.',
+            self::AgentJobRead => 'Target-scoped read agent job status and output; requires explicit Gateway, Target and connector permissions.',
+            self::AgentJobStop => 'Target-scoped stop agent jobs; requires explicit Gateway, Target and connector permissions.',
+            self::AgentFileRead => 'Target-scoped read agent files; requires explicit Gateway, Target and connector permissions.',
+            self::AgentFileWrite => 'Target-scoped write agent files; requires explicit Gateway, Target and connector permissions.',
+            self::AgentBrowserSetup => 'Target-scoped set up agent browser; requires explicit Gateway, Target and connector permissions.',
+            self::AgentBrowserRun => 'Target-scoped run agent browser; requires explicit Gateway, Target and connector permissions.',
+            self::SshCommandRun => 'Target-scoped run ssh remote commands; requires explicit Gateway, Target and connector permissions.',
+            self::SshFileRead => 'Target-scoped read ssh remote files; requires explicit Gateway, Target and connector permissions.',
+            self::SshFileWrite => 'Target-scoped write ssh remote files; requires explicit Gateway, Target and connector permissions.',
             self::ActivityView => 'Open the activity feed. Non-owner results are constrained to Targets visible through targets.view and the effective Target scope; owners retain unrestricted recovery visibility.',
             self::UsersView => 'View local Gateway user accounts. This is Gateway-wide and does not itself allow changing access.',
             self::UsersManage => 'Create and edit Gateway users, per-Target access rules, Target groups, and group membership. This is Gateway-wide access administration.',
@@ -100,6 +139,19 @@ enum GatewayPermission: string
             self::WordpressAbilitiesExecuteMutating,
             self::WordpressAbilitiesExecuteDestructive,
             self::WordpressAbilitiesExecuteUnclassified,
+            self::AgentEnvironmentRead,
+            self::AgentCommandRun,
+            self::AgentRootCommandRun,
+            self::AgentJobStart,
+            self::AgentJobRead,
+            self::AgentJobStop,
+            self::AgentFileRead,
+            self::AgentFileWrite,
+            self::AgentBrowserSetup,
+            self::AgentBrowserRun,
+            self::SshCommandRun,
+            self::SshFileRead,
+            self::SshFileWrite,
         ];
     }
 }
