@@ -37,7 +37,10 @@ final readonly class UserAccessManager
                 'access_enabled' => (bool) $attributes['access_enabled'],
             ]);
 
-            $this->replaceGlobalDenials($user, $role, $deniedPermissions);
+            $this->replaceGlobalDenials($user, $role, [
+                ...$deniedPermissions,
+                ...$this->defaultConnectorDenials($role),
+            ]);
             $this->normalizeOwnerState($user, $role);
             $this->recordRequired('user-access-create:'.$user->id);
 
@@ -90,7 +93,13 @@ final readonly class UserAccessManager
             }
 
             $lockedUser->fill($values)->save();
-            $this->replaceGlobalDenials($lockedUser, $role, $deniedPermissions);
+            // Editing ordinary user fields must not erase migration-seeded connector
+            // denials merely because the form omitted newly introduced permissions.
+            $this->replaceGlobalDenials($lockedUser, $role, [
+                ...$deniedPermissions,
+                ...$this->existingConnectorDenials($lockedUser),
+                ...($currentRole !== $role ? $this->defaultConnectorDenials($role) : []),
+            ]);
             $this->normalizeOwnerState($lockedUser, $role);
             $this->recordRequired('user-access-update:'.$lockedUser->id);
         });
@@ -242,6 +251,42 @@ final readonly class UserAccessManager
     public function targetPermissions(): array
     {
         return GatewayPermission::targetScoped();
+    }
+
+    /** @return list<string> */
+    private function defaultConnectorDenials(GatewayRole $role): array
+    {
+        if ($role === GatewayRole::Owner) {
+            return [];
+        }
+
+        $allowedByDefault = [
+            GatewayPermission::AgentEnvironmentRead,
+            GatewayPermission::AgentCommandRun,
+        ];
+
+        return array_values(array_map(
+            static fn (GatewayPermission $permission): string => $permission->value,
+            array_filter($role->permissions(), static fn (GatewayPermission $permission): bool =>
+                (str_starts_with($permission->value, 'agent.')
+                    && ! in_array($permission, $allowedByDefault, true))
+                || str_starts_with($permission->value, 'ssh.'),
+            ),
+        ));
+    }
+
+    /** @return list<string> */
+    private function existingConnectorDenials(User $user): array
+    {
+        return DB::table('user_permission_denials')
+            ->where('user_id', $user->getKey())
+            ->where(function ($query): void {
+                $query->where('permission', 'like', 'agent.%')
+                    ->orWhere('permission', 'like', 'ssh.%');
+            })
+            ->pluck('permission')
+            ->map(static fn (mixed $value): string => (string) $value)
+            ->all();
     }
 
     /** @param  list<string>  $deniedPermissions */
