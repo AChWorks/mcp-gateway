@@ -94,6 +94,47 @@ final class SafeHttpClientTest extends TestCase
             self::fail('Oversize response was accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('response_too_large', $exception->reason);
+            self::assertSame(1024, $exception->details['limit_bytes']);
+            self::assertContains($exception->details['phase'], ['decoded_body', 'content_length', 'collected_body', 'wire_progress']);
+            self::assertArrayNotHasKey('body', $exception->details);
+        }
+    }
+
+    public function test_readonly_tool_budget_is_distinct_from_the_base_metadata_budget(): void
+    {
+        config()->set('bridge.http.max_response_bytes', 1024);
+        $body = str_repeat('a', 2048);
+        Http::fake(fn (Request $request) => Http::response($body, 200));
+
+        /** @var SafeHttpClient $client */
+        $client = app(SafeHttpClient::class);
+        $response = $client->postJson('https://wp.example.test/wp-json/wp-ai-bridge/v1/mcp', [], [], 4096);
+
+        self::assertSame($body, $response->body);
+
+        try {
+            $client->get('https://wp.example.test/.well-known/oauth-protected-resource');
+            self::fail('Base metadata budget was unexpectedly raised by the tool override.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('response_too_large', $exception->reason);
+            self::assertSame(1024, $exception->details['limit_bytes']);
+        }
+    }
+
+    public function test_operator_config_cannot_disable_the_absolute_response_size_ceiling(): void
+    {
+        config()->set('bridge.http.max_response_bytes', PHP_INT_MAX);
+        Http::fake(fn (Request $request) => Http::response(str_repeat('z', SafeHttpClient::ABSOLUTE_MAX_RESPONSE_BYTES + 1), 200));
+
+        /** @var SafeHttpClient $client */
+        $client = app(SafeHttpClient::class);
+
+        try {
+            $client->get('https://wp.example.test/.well-known/oauth-protected-resource');
+            self::fail('Absolute response safety ceiling was bypassed.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('response_too_large', $exception->reason);
+            self::assertSame(SafeHttpClient::ABSOLUTE_MAX_RESPONSE_BYTES, $exception->details['limit_bytes']);
         }
     }
 
@@ -112,6 +153,9 @@ final class SafeHttpClientTest extends TestCase
                 self::fail(sprintf('Oversize HTTP %d response was accepted.', $status));
             } catch (OutboundRequestException $exception) {
                 self::assertSame('response_too_large', $exception->reason, 'Unexpected size-limit normalization for HTTP '.$status);
+                self::assertSame(1024, $exception->details['limit_bytes']);
+                self::assertSame('decoded_body', $exception->details['phase']);
+                self::assertSame(1025, $exception->details['observed_bytes']);
             }
         }
     }

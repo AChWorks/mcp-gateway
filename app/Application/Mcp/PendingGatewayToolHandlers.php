@@ -144,7 +144,7 @@ final class PendingGatewayToolHandlers
             $this->health->recordOperationFailure($site, $exception->reason);
             $this->recordFailure($correlationId, 'site-abilities-read', $site->site_id, $exception->reason);
 
-            return $this->error($correlationId, $exception->reason, $exception->getMessage());
+            return $this->error($correlationId, $exception->reason, $exception->getMessage(), $exception->details);
         }
 
         $this->health->recordOperationSuccess($site);
@@ -203,7 +203,7 @@ final class PendingGatewayToolHandlers
             $this->health->recordOperationFailure($site, $exception->reason);
             $this->recordFailure($correlationId, 'site-ability-execute', $site->site_id, $exception->reason);
 
-            return $this->error($correlationId, $exception->reason, $exception->getMessage());
+            return $this->error($correlationId, $exception->reason, $exception->getMessage(), $exception->details);
         }
 
         $this->health->recordOperationSuccess($site);
@@ -357,13 +357,20 @@ final class PendingGatewayToolHandlers
         $this->activity->record($correlationId, $operation, $outcome, $siteId, $code);
     }
 
-    /** @return array<string, mixed> */
-    private function error(string $correlationId, string $code, string $message): array
+    /**
+     * @param  array{limit_bytes?:int,observed_bytes?:int,phase?:string}  $details
+     * @return array<string, mixed>
+     */
+    private function error(string $correlationId, string $code, string $message, array $details = []): array
     {
         return [
             'ok' => false,
             'correlation_id' => $correlationId,
-            'error' => ['code' => $code, 'message' => $message],
+            'error' => [
+                'code' => $code,
+                'message' => $message,
+                ...($details === [] ? [] : ['details' => $details]),
+            ],
         ];
     }
 }
