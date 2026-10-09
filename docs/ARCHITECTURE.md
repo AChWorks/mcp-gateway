@@ -184,7 +184,7 @@ The application/domain layer is the long-lived control-plane boundary. MCP, the 
 
 The project still stops short of a speculative provider framework, but the current scalability evidence in Issue #53 is now a concrete trigger for the first small extraction: admin and MCP inventory consumers need one shared, bounded site-inventory/query boundary instead of independently loading or filtering the fleet. That boundary should own reusable search/filter/order/page semantics and selected projections while remaining an application query service, not a generic repository framework.
 
-Connector generalization remains evidence-driven. The accepted non-WordPress expansion includes AI Server Agent and Direct SSH under Program #106. This satisfies the previous trigger for a broader but still small connector contract. Extract only semantics demonstrated by WP AI Bridge and AI Server Agent; do not turn the redesign into a speculative provider SDK or dynamic plugin system.
+Connector generalization remains evidence-driven. The accepted non-WordPress expansion includes AI Server Agent and Direct SSH under Program #106. This satisfies the previous trigger for a broader but still small connector contract. Extract only semantics demonstrated by WP AI Bridge, AI Server Agent and Direct SSH; common MCP framing is **only** shared by MCP-speaking connectors. Do not turn the redesign into a speculative provider SDK or dynamic plugin system.
 
 Keep these invariants:
 
@@ -398,7 +398,7 @@ Connector selection is centralized from the stored `connector_type` to a concret
 
 This is not a dynamic third-party plugin loader. Callers cannot supply class names, URLs, HTTP methods, or executable connector code. Unsupported connector types fail closed.
 
-Program #106 supplies two non-WordPress connector types: AI Server Agent and Direct SSH. The implementation may now extract the smallest common connector contracts proven by `WpAiBridge` and `AiServerAgent`, plus a shared remote MCP protocol adapter where protocol mechanics are genuinely common. Connector-specific authorization, health, capability vocabulary, mutation semantics, and safety must remain inside the connector boundary.
+Program #106 supplies two non-WordPress connector types: AI Server Agent and Direct SSH. The implementation may now extract the smallest Target/authorization/lifecycle contracts demonstrated across `WpAiBridge`, `AiServerAgent` and `ssh_direct`. Only the first two share remote MCP protocol mechanics; SSH remains a separate TCP/SFTP adapter. Connector-specific authorization, health, capability vocabulary, mutation semantics, and safety must remain inside the connector boundary.
 
 See [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md) for the accepted breaking target-state design.
 

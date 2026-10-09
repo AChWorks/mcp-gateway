@@ -210,7 +210,7 @@ Shared code must not scatter `if connector_type == ...` decisions across control
 
 ### What is allowed to become common
 
-Extract only capabilities that both real connectors demonstrate are common.
+Extract only capabilities evidenced by the actual three connectors; not every connector must implement every downstream operation. Share Target identity, authorization and lifecycle mechanics where genuinely common, while keeping SSH TCP/SFTP, Agent MCP and WordPress OAuth/tool semantics connector-owned.
 
 Likely shared application-level needs include:
 
@@ -579,6 +579,8 @@ The accepted initial role ceiling for Agent capabilities is intentionally conser
 - Operator's role ceiling adds only `agent.environment.read` and `agent.command.run`;
 - Viewer adds only `agent.environment.read`.
 
+Direct SSH follows the same explicit permission framework without command-string restrictions: Owner has all SSH permissions; Administrator and Operator role ceilings may include `ssh.command.run`, `ssh.file.read` and `ssh.file.write`, but **all SSH permissions default denied for every new non-owner** until deliberately enabled by the Owner and narrowed to assigned Targets. Viewer has no SSH permissions. These toggles control **Gateway tool exposure**, not OS/sudo or filesystem access for a user already granted arbitrary shell commands.
+
 Existing non-owner accounts are migrated with explicit global denials for every newly introduced `agent.*` and `ssh.*` permission that would otherwise enter their role ceiling, so an upgrade never implicitly grants Linux command or file access. The access UI then lets an authorized Owner deliberately remove the relevant denials within the role ceiling. This uses the existing denial model instead of inventing a second grant engine.
 
 Input-sensitive authorization must close privilege-composition gaps. In particular, `agent-start-job` with `root=true` requires both `agent.job.start` and `agent.root_command.run`; possession of the job-start permission must never become an alternate path to root. The same rule applies to any future tool whose arguments materially elevate the operation above its base permission.
@@ -587,7 +589,7 @@ During the breaking Site -> Target migration, existing users/roles must not beco
 
 The known one-to-one permission renames are explicit: `connection.view -> gateway.connection.view`, `sites.* -> targets.*`, Site-scoped `connections.connect/reconnect/disconnect/test -> targets.connect/reconnect/disconnect/test`, and `abilities.* -> wordpress.abilities.*`. This translation preserves existing WordPress authority while keeping new Agent permissions separate.
 
-New connector permissions are especially sensitive: an existing non-owner account that previously administered WordPress must not silently gain Linux command/root/file/browser authority merely because AI Server Agent was added. The migration/default-role plan must preserve equal-or-narrower effective authority for existing non-owner accounts until those new connector capabilities are explicitly enabled through the supported access-management model.
+New connector permissions are especially sensitive: an existing non-owner account that previously administered WordPress must not silently gain Linux command/root/file/browser authority merely because AI Server Agent **or Direct SSH** was added. The migration/default-role plan must preserve equal-or-narrower effective authority for existing non-owner accounts until those new connector capabilities are explicitly enabled through the supported access-management model.
 
 Connector-specific downstream authorization remains independent:
 
