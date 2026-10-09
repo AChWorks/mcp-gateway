@@ -204,10 +204,9 @@ final class ClientProfileRegistry
             && is_string($parts['host'] ?? null)
             && preg_match('/^[a-z0-9][a-z0-9.-]+$/D', (string) $parts['host']) === 1
             && ! filter_var($parts['host'], FILTER_VALIDATE_IP)
-            && ! isset($parts['user'], $parts['pass'])
             && ! isset($parts['user']) && ! isset($parts['pass'])
             && ! isset($parts['fragment']) && ! isset($parts['query']) && ! isset($parts['port'])
-            && is_string($parts['path'] ?? null) && ($parts['path'] ?? '') !== '/';
+            && $parts['path'] !== '/' && $parts['path'] !== '';
     }
 
     private function safeRedirectUri(string $url): bool
