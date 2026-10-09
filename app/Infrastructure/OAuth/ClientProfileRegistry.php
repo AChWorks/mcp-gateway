@@ -195,6 +195,35 @@ final class ClientProfileRegistry
         });
     }
 
+    /**
+     * Explicit re-enablement retains the generation bumped at disable, so every
+     * previously issued code/refresh/access token remains invalid permanently.
+     */
+    public function enable(string $key): void
+    {
+        $configured = $this->configured()[$key] ?? null;
+        if ($configured === null || ! $configured['enabled']) {
+            throw new InvalidArgumentException('OAuth client profile is not enabled in reviewed configuration.');
+        }
+
+        DB::transaction(static function () use ($key, $configured): void {
+            $profile = DB::table('oauth_client_profiles')->where('profile_key', $key)
+                ->lockForUpdate()->first();
+            if ($profile === null || $profile->disabled_at === null) {
+                throw new RuntimeException('OAuth client profile is not in the disabled state.');
+            }
+            if (! hash_equals((string) $profile->client_id, $configured['client_id'])
+                || ! hash_equals((string) $profile->auth_strategy, $configured['strategy'])) {
+                throw new RuntimeException('OAuth client profile identity is immutable.');
+            }
+
+            DB::table('oauth_client_profiles')->where('profile_key', $key)->update([
+                'disabled_at' => null,
+                'updated_at' => now(),
+            ]);
+        });
+    }
+
     private function safeClientId(string $url): bool
     {
         $parts = parse_url($url);
