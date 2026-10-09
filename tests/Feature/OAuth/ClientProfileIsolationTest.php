@@ -14,7 +14,9 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -215,7 +217,7 @@ final class ClientProfileIsolationTest extends TestCase
         $owner = User::query()->create([
             'name' => 'Gateway Owner',
             'email' => 'owner@example.test',
-            'password' => \Illuminate\Support\Facades\Hash::make('OwnerSecure!234'),
+            'password' => Hash::make('OwnerSecure!234'),
             'role' => GatewayRole::Owner->value,
             'site_scope_mode' => SiteScopeMode::All->value,
             'access_enabled' => true,
@@ -307,8 +309,8 @@ final class ClientProfileIsolationTest extends TestCase
         return $response->json();
     }
 
-    /** @return \Illuminate\Testing\TestResponse<\Illuminate\Http\Response> */
-    private function refresh(string $token, string $clientId, string $key, string $kid): \Illuminate\Testing\TestResponse
+    /** @return TestResponse<\Illuminate\Http\Response> */
+    private function refresh(string $token, string $clientId, string $key, string $kid): TestResponse
     {
         return $this->post('/oauth/token', [
             'grant_type' => 'refresh_token',
