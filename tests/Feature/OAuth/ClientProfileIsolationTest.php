@@ -130,7 +130,7 @@ final class ClientProfileIsolationTest extends TestCase
             'resource' => config('oauth.resource'),
             'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
             'client_assertion' => $this->assertion(self::CHATGPT, $this->chatPrivateKey, 'chat-key'),
-        ])->assertStatus(400)->assertJsonPath('error', 'invalid_grant');
+        ])->assertStatus(400)->assertJsonPath('error', 'invalid_request');
 
         $this->post('/oauth/token', [
             'grant_type' => 'authorization_code',
