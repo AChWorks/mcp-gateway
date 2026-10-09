@@ -109,10 +109,14 @@ final class TargetTransitionMigrationTest extends TestCase
         self::assertNull(DB::table('activity_events')->first()->target_id);
         self::assertSame(1, DB::table('activity_retention_state')->count());
 
-        self::assertSame(1, DB::table('oauth_authorizations')->where('id', $authorization)->count());
-        self::assertSame(1, DB::table('oauth_refresh_recoveries')->count());
-        self::assertSame(1, DB::table('oauth_access_tokens')->count());
-        self::assertSame(1, DB::table('oauth_refresh_tokens')->count());
+        // Reauthorization from ChatGPT must be a fresh grant: no old
+        // Gateway-issued access/refresh token may survive the major upgrade.
+        self::assertSame(0, DB::table('oauth_authorizations')->where('id', $authorization)->count());
+        self::assertSame(0, DB::table('oauth_auth_codes')->count());
+        self::assertSame(1, DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')->count());
+        self::assertSame(0, DB::table('oauth_refresh_recoveries')->count());
+        self::assertSame(0, DB::table('oauth_access_tokens')->count());
+        self::assertSame(0, DB::table('oauth_refresh_tokens')->count());
 
         $denied = static fn (int $id): array => DB::table('user_permission_denials')
             ->where('user_id', $id)->pluck('permission')->all();
@@ -128,6 +132,30 @@ final class TargetTransitionMigrationTest extends TestCase
         self::assertContains('ssh.file.write', $denied($operator));
         self::assertNotContains('ssh.command.run', $denied($viewer));
         self::assertSame([], $denied($owner));
+    }
+
+    public function test_gateway_oauth_grants_alone_require_explicit_reconnection_ack_before_any_ddl(): void
+    {
+        $this->migrateLegacy();
+        $owner = $this->createUser('owner', 'all');
+        $authorization = (string) Str::ulid();
+        $this->seedGatewayOAuth($authorization, $owner);
+
+        try {
+            $this->transition()->up();
+            self::fail('Active Gateway OAuth grants were erased without a restorable backup and operator acknowledgment.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('restorable database backup', $exception->getMessage());
+        }
+
+        self::assertTrue(Schema::hasTable('sites'));
+        self::assertFalse(Schema::hasTable('targets'));
+        self::assertSame(1, DB::table('oauth_authorizations')->where('id', $authorization)->count());
+        self::assertSame(1, DB::table('oauth_auth_codes')->count());
+        self::assertSame(1, DB::table('oauth_access_tokens')->count());
+        self::assertSame(1, DB::table('oauth_refresh_tokens')->count());
+        self::assertSame(1, DB::table('oauth_refresh_recoveries')->count());
+        self::assertSame(1, DB::table('users')->where('id', $owner)->count());
     }
 
     public function test_unknown_permission_denial_is_rejected_before_any_mutation(): void
@@ -268,6 +296,12 @@ final class TargetTransitionMigrationTest extends TestCase
             'resource' => $data['resource'],
             'resource_hash' => hash('sha256', $data['resource']),
             'scopes' => '["mcp:use"]',
+        ]);
+        DB::table('oauth_auth_codes')->insert([
+            ...$data,
+            'id' => 'gateway-auth-code',
+            'scopes' => '["mcp:use"]',
+            'expires_at' => now()->addMinutes(5),
         ]);
         DB::table('oauth_access_tokens')->insert([
             ...$data,

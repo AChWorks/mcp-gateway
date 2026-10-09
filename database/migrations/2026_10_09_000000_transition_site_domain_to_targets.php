@@ -82,15 +82,20 @@ return new class extends Migration
         if (! Schema::hasColumn('users', 'site_scope_mode') || ! Schema::hasColumn('activity_events', 'site_id')) {
             throw new RuntimeException('Historical Target schema does not match the supported upgrade baseline.');
         }
-        $hadTargetState = $hadTargetState || DB::table('activity_events')->whereNotNull('site_id')->exists();
+        $hadTargetState = $hadTargetState
+            || DB::table('activity_events')->whereNotNull('site_id')->exists()
+            // Reconnection is intentional: prior ChatGPT/Gateway OAuth grants and
+            // tokens are never carried into the breaking Target-domain release.
+            || DB::table('oauth_authorizations')->exists();
 
         if ($hadTargetState && (
             (string) config('target_transition.reset_acknowledged') !== 'RESET_TARGET_STATE'
             || (string) config('target_transition.database_backup_verified') !== 'RESTORABLE_DATABASE_BACKUP_VERIFIED'
         )) {
             throw new RuntimeException(
-                'This major upgrade deletes registered Targets, downstream credentials, Target access/groups and Target activity. '
-                .'A consistent, restorable database backup and the explicit Target reset confirmations are required before migration.',
+                'This major upgrade resets old WordPress Targets, connector credentials, Target access/groups/activity '
+                .'and existing Gateway OAuth authorizations/tokens (including ChatGPT). '
+                .'A consistent, restorable database backup and explicit connection reset confirmations are required before migration.',
             );
         }
 
@@ -119,6 +124,13 @@ return new class extends Migration
         if (Schema::hasTable('targets') || Schema::hasTable('target_credentials')) {
             throw new RuntimeException('A partial Target migration is present; do not attempt destructive automatic recovery.');
         }
+
+        // All existing OAuth client authorizations, access/refresh tokens,
+        // pending codes and refresh recoveries belong to the retired connection
+        // generation. FK cascades delete their dependent token/refresh rows.
+        // Preserve administrator accounts, signing/encryption keys, non-Target
+        // activity and the client-profile configuration for a fresh reconnect.
+        DB::table('oauth_authorizations')->delete();
 
         // Explicitly delete legacy Target-scoped activity. Gateway-wide activity is preserved.
         DB::table('activity_events')->whereNotNull('site_id')->delete();
