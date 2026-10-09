@@ -25,6 +25,19 @@ The Gateway remains a routing/control plane. No generic application-wide arbitra
 - Operator UI can show remote login privilege as informational (regular/sudo/root) and a warning, but an `Allow sudo` toggle would be unenforceable with unrestricted commands. Do not implement a misleading security switch.
 - A new connector permission must default to denied for existing **non-owner** users, with explicit Owner-enabled role-ceiling/global-denial and Target-scope assignment as already used in #107/#110. No WordPress role inherits shell privileges on migration.
 
+## IP-inclusive SSH Target identification
+
+**A Direct SSH Target must be distinguishable by its IP address when selected or used, not only by display name or `target_id`.** The Gateway-local `target_id` remains the immutable routing and authorization selector, internal Target record ID remains distinct, and the SSH server host key is the separate cryptographic identity. An IP or hostname alone is not a durable identity or a security boundary.
+
+- **Connector-owned configuration:** save the registered host as a canonical IPv4/IPv6 literal or explicitly registered DNS hostname, TCP port, OS username, auth method and pinned server host key. Store bounded effective connection IP, observation time and verification/freshness state as SSH-specific metadata; none are generic `targets` columns. A literal IP is immediately known at registration but must not be labeled host-key verified before trusted verification.
+- **DNS-based hosts:** distinguish the registered hostname, provisional DNS results and the **actual policy-approved TCP peer IP selected for the SSH connection**. Only report it as verified after the pinned SSH host key is validated, before credentials are sent. Display `IP not yet verified` when unavailable, and clearly mark a previously observed IP as stale when appropriate. No guessed, arbitrary or cached DNS candidate may masquerade as a live authenticated peer.
+- **Human identifier:** render `display name — deploy@203.0.113.10:22 — prod-ssh` for IPv4 and `display name — deploy@[2001:db8::10]:22 — prod-ssh` for IPv6; also show hostname when configured. For an as-yet-unverified hostname, show `username@hostname:port — target_id (IP not yet verified)`. Targets with the same IP but different OS username, port or Target ID must remain visibly separate.
+- **Operator flows:** the IP-inclusive identifier belongs on authorized SSH add/confirmation, inventory, Target picker, detail, test, connect/reconnect and command/file destination confirmation surfaces, not only diagnostics.
+- **Authorized MCP identity:** `targets-list` and `target-context` return bounded SSH-specific, non-secret context: stable `target_id`, display name, normalized IP (configured literal or last verified actual connection IP where known), port, username, optional hostname and IP verification/freshness status. Do not reveal private addresses to unauthorized users or clients. Ordinary list/context/search perform no network probing or DNS lookup.
+- **Search and command boundary:** support bounded local, authorization-filtered inventory lookup by normalized IPv4/IPv6, optional IP:port and registered hostname. Return all matching authorized Targets on ambiguous/shared IPs. Commands and SFTP operations still require an **exact authorized `target_id`**; arbitrary caller-supplied IP/hostname never becomes SSH routing authority.
+
+Changed IP, DNS answers, TCP destination or host key must be rechecked under registered endpoint/network egress and pinned host-key policy with explicit verified rebinding where appropriate. For an executed action, displayed effective connection IP must describe the policy-approved, verified connected peer, not a pre-connect DNS candidate. This is required initial SSH acceptance under #123 revision 2 and its dependent #108/#109/#110/#112 contracts.
+
 ## Transport and trust
 
 - Use a narrowly scoped SSH adapter (evaluate maintained phpseclib compatible with pinned PHP/Composer) and SFTP adapter; **SSH is not an MCP server**, so the common MCP-over-HTTP adapter used for WP AI Bridge and Agent is not applicable to SSH wire framing.
@@ -58,6 +71,7 @@ Do not add a required daemon/queue/SSH binary/PHP SSH extension to the ordinary 
 6. Output flood, timeout, disconnect, cancellation and repeated-call behavior preserve caps and `outcome_unknown` (no blind retry).
 7. SFTP stat/list/ranged read/small write and bounded basic transfer succeed where supported; malformed path, permission denial, changing source, partial upload and binary data are handled without leakage/corruption.
 8. Both existing WordPress and Agent connector behavior, shared-host release packaging and client auth/target routing remain intact.
+9. Normalized IPv4/IPv6 (including bracket formatting), verified effective DNS-connected IP versus unknown/stale IP states, and `name + username@IP:port + target_id` appear in authorized Admin/picker/MCP selection and connection context. Local IP search handles shared-IP/multi-account ambiguity, unauthorized access returns no endpoint metadata, and command/SFTP cannot route by arbitrary IP.
 
 ## Not in first delivery
 

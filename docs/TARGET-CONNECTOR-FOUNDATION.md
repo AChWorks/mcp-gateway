@@ -319,11 +319,15 @@ Use stable output schemas for structured Gateway-owned responses where practical
 
 For Agent Targets, public `targets-list`/`target-context` may expose the bounded server identity summary (for example hostname and Server IP) when the caller has the required Target and Agent-environment permission. The raw configured endpoint remains Admin/routing state unless a concrete client use case separately justifies exposing it.
 
+**Direct SSH has such a concrete use case: preventing wrong-host selection before shell/file operations.** Authorized `targets-list`/`target-context` must expose a bounded, non-secret SSH identity projection with `target_id`, display name, normalized configured/verified IP, TCP port, SSH username, optional hostname and IP verification/freshness status. An IP literal can be displayed before connection but is not host-key-verified; hostname records show only the actual policy-approved, host-key-verified TCP peer IP as verified evidence (or an honest unknown/stale label). SSH-specific endpoint identity belongs in connector-owned persistence, not in the common `targets` schema, and must not be visible to unauthorized principals/clients.
+
 ### Core tools
 
 `targets-list` is bounded, authorization-filtered, deterministically pageable/searchable and may filter by connector type/connection state without contacting Targets.
 
 For Agent Targets, the bounded local inventory index/query may also match normalized Server IP and hostname/FQDN where known so a human or AI client can resolve “the server at X” without a remote probe. IP/hostname matches are not unique identities; return all authorized matches and keep `target_id` as the explicit routing selector.
+
+For Direct SSH Targets, bounded local authorization-filtered search also matches normalized IPv4/IPv6, optional IP:port and configured hostname. Multiple authorized Targets sharing one IP but differing in username/port remain separate selectable choices. No list/search remote probe or implicit selection; command/SFTP calls require exact `target_id` rather than a caller-provided IP.
 
 `target-context` returns bounded common Target state plus only explicitly safe connector-specific context. It must not expose credentials, authorization endpoints, raw internal transport details, or arbitrary downstream metadata merely because those values are stored.
 
@@ -466,6 +470,7 @@ A Target detail page should separate:
 
 - WordPress/WP AI Bridge connection details; or
 - AI Server Agent endpoint (Admin/routing context), stable instance ID, hostname, Server IP when known, bounded observed-address evidence and capability details; or
+- Direct SSH registered host, normalized configured IPv4/IPv6 or policy-approved host-key-verified effective connection IP (with freshness/unknown status), SSH username, TCP port and pinned host-key verification state. Show `display name — username@IP:port — target_id` (IPv6 in brackets) also on inventory, Target pickers, test and connect/reconnect/operation destination confirmation; or
 - another future connector's own information.
 
 Keep Laravel/Blade/server-rendered administration. Progressive JS is acceptable where it improves a bounded interaction. Do not introduce an SPA solely because connector count increases.
@@ -843,6 +848,12 @@ The implementation program must prove at least:
 - `approval_required` round-trip works;
 - direct Agent use remains valid;
 - no Gateway route bypasses applicable Agent policy/approval checks, and Gateway never overstates those checks as complete containment of arbitrary root shell.
+
+### Direct SSH
+
+- SSH Target inventory/pickers/MCP context show bounded IPv4/IPv6 + port + username + display name + stable `target_id` and actual validated TCP peer IP verification/freshness; handle unresolved DNS, shared-IP ambiguity and unauthorized IP disclosure safely, without permitting IP-as-Target command routing;
+- shell/SFTP operations require the explicit authorized Target and the pinned host key; network policy/IP drift never silently chooses a different endpoint;
+- SSH password/key, unrestricted authorized OS-account command execution, bounded SFTP, file streaming and failure/`outcome_unknown` handling meet `DIRECT-SSH-CONNECTOR.md` and `REMOTE-IO-CONTRACT.md` acceptance.
 
 ### Client edge
 
