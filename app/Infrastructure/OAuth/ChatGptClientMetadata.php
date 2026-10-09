@@ -4,6 +4,7 @@ namespace App\Infrastructure\OAuth;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
 
@@ -52,7 +53,7 @@ final class ChatGptClientMetadata
      * concurrent callers either observe the cached value or fail closed after
      * a bounded wait. A failed rotation refresh never deletes known-good keys.
      *
-     * @param \Closure(): array<string,mixed> $fetch
+     * @param  \Closure(): array<string,mixed>  $fetch
      * @return array<string,mixed>
      */
     private function cached(string $cacheKey, \Closure $fetch, bool $refresh): array
@@ -85,7 +86,7 @@ final class ChatGptClientMetadata
 
                 return $value;
             });
-        } catch (\Illuminate\Contracts\Cache\LockTimeoutException) {
+        } catch (LockTimeoutException) {
             throw new RuntimeException('OAuth client metadata retrieval is busy; retry authentication later.');
         }
     }
