@@ -85,6 +85,48 @@ final class ClientProfileRegistry
         return $profiles;
     }
 
+    /**
+     * Deployment/health preflight. Unexpected live registry rows are never
+     * silently reassigned or revived by a changed configuration file.
+     */
+    public function assertReady(): void
+    {
+        $configured = $this->configured();
+        $registered = DB::table('oauth_client_profiles')->get()->keyBy('profile_key');
+        $activeCount = 0;
+
+        foreach ($configured as $profile) {
+            $stored = $registered->get($profile['key']);
+            if ($stored === null) {
+                if ($profile['enabled']) {
+                    throw new RuntimeException('Configured OAuth client profile requires explicit registration.');
+                }
+
+                continue;
+            }
+            if (! hash_equals((string) $stored->client_id, $profile['client_id'])
+                || ! hash_equals((string) $stored->auth_strategy, $profile['strategy'])) {
+                throw new RuntimeException('OAuth client profile identity differs from durable registration.');
+            }
+            if (! $profile['enabled'] && $stored->disabled_at === null) {
+                throw new RuntimeException('Disable the OAuth client profile durably before changing its configuration.');
+            }
+            if ($profile['enabled'] && $stored->disabled_at === null) {
+                $activeCount++;
+            }
+        }
+
+        foreach ($registered as $key => $stored) {
+            if (! isset($configured[$key]) && $stored->disabled_at === null) {
+                throw new RuntimeException('Revoke the registered OAuth client profile before removing it from configuration.');
+            }
+        }
+
+        if ($activeCount === 0) {
+            throw new RuntimeException('There is no active, explicitly supported OAuth client profile.');
+        }
+    }
+
     /** @return array<string, mixed>|null */
     public function active(string $clientId): ?array
     {
