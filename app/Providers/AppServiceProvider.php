@@ -6,6 +6,7 @@ use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Sites\Site;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\SystemDnsResolver;
 use App\Models\User;
@@ -26,6 +27,11 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Check static OAuth identity uniqueness/origin contract at application boot
+        // without a DB or remote-network dependency. Deployment health checks the
+        // persisted immutable bindings after migrations.
+        app(ClientProfileRegistry::class)->configured();
+
         foreach (GatewayPermission::cases() as $permission) {
             Gate::define(
                 $permission->value,
