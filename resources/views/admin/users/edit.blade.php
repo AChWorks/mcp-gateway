@@ -53,7 +53,7 @@
                         <option value="{{ $mode->value }}" @selected(old('target_scope_mode', $managedUser->target_scope_mode->value) === $mode->value)>{{ $mode->title() }}</option>
                     @endforeach
                 </select>
-                <p class="field-help">{{ __('All targets reaches the full fleet unless a direct target deny excludes a target. Selected targets reaches only direct allows and assigned groups; direct denies still win. Owners are always all-targets.') }}</p>
+                <p class="field-help">{{ __('Target scope controls which Targets this user may reach, not the connector type or granted capabilities. All targets includes the fleet except direct denies; Selected uses direct allows and assigned groups. Owners always reach all Targets.') }}</p>
             </div>
         </div>
 
