@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Http\Request;
+use McpGatewayUpdate\UpdateBusyException;
 use McpGatewayUpdate\WebUpdater;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 
@@ -228,7 +229,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
             'MCP Gateway Updated',
             updaterSteps('complete').'<div class="success" role="status"><strong>Update complete.</strong><p>MCP Gateway '.updaterEscape($result['from']).' → '.updaterEscape($result['to']).' is installed and the application is live.</p></div>'.$warning.'<p><a href="/admin">Open administrator panel</a></p>',
         );
-    } catch (\McpGatewayUpdate\UpdateBusyException) {
+    } catch (UpdateBusyException) {
         updaterRender('MCP Gateway Update In Progress',
             updaterSteps('postflight')
             .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Another authorized update step is already running. No second operation was started.</p></div>'
@@ -379,7 +380,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
             .'<p class="muted">Without JavaScript, select Continue update once to perform the final step.</p>'
             .'<p id="recovery-link" class="notice" hidden>Completion cannot be confirmed. <a href="/update/">Check this update in the same browser</a> or <a href="/admin">verify the administrator panel</a>. Do not retry an uncertain migration.</p>',
             200, updaterAutoFinishScript());
-    } catch (\McpGatewayUpdate\UpdateBusyException) {
+    } catch (UpdateBusyException) {
         updaterRender('Another Update Step Is Running',
             updaterSteps('files').'<div class="notice" role="status">This request did not start a second update. Return to the original browser tab; do not submit again.</div>',
             409);

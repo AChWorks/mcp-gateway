@@ -49,7 +49,6 @@ try {
         check(str_contains($exception->getMessage(), 'expired'), 'expired token rejected before mutation');
     }
 
-
     $write('files-replaced', time() + 1800);
     $lock = fopen($lockPath, 'c');
     check($lock !== false && flock($lock, LOCK_EX | LOCK_NB), 'exclusive operation lock');

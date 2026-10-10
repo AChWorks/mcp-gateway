@@ -167,7 +167,7 @@ final class WebUpdater
     private function stageLocked(string $browserToken, array $attestations): array
     {
         if (is_file($this->statePath())) {
-            throw new RuntimeException("An update is already staged. Resume or recover it; do not start another update.");
+            throw new RuntimeException('An update is already staged. Resume or recover it; do not start another update.');
         }
         $this->assertBrowserToken($browserToken);
         $info = $this->inspect();
@@ -412,6 +412,7 @@ final class WebUpdater
 
     /**
      * Private state for the matching browser only. No backup paths are exposed.
+     *
      * @return array{phase:string,running:bool,expired:bool,continuation:?string}|null
      */
     public function browserUpdateStatus(string $browserToken): ?array
