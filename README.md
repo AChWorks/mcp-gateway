@@ -248,6 +248,8 @@ The released public tool catalog contains **exactly four** tools:
 | `wordpress-abilities-read` | Inspect WordPress Ability metadata on one authorized WordPress Target. |
 | `wordpress-ability-execute` | Execute a schema-valid Ability for an explicit authorized WordPress Target, subject to effect-class and downstream permissions. |
 
+**New WordPress plugin Abilities are not individually registered in Gateway.** When WP AI Bridge exposes a new Ability in the authorized Target's catalog, discover its live name/schema and call the existing `wordpress-ability-execute` tool; no Gateway release or extra public tool is required. The Gateway enforces the existing user/client/Target execution permission (including an explicitly grantable `unclassified` class when classification metadata is absent) and WordPress/Bridge enforces its own permissions. An unavailable *new MCP protocol feature* is a separate negotiated SDK/client capability, not a WordPress Ability rejected merely for being new.
+
 Typical flow: call `targets-list`, select an exact `target_id`, read `target-context` and the selected Ability's schema, then execute only the required authorized operation. Never infer an implicit Target from conversation history. Read-only metadata does not authorize writes, and a client-profile display label never grants Target access.
 
 SSH/Agent tool names and runtimes are **not available** in the current release.
