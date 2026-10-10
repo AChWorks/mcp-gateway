@@ -186,11 +186,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fqx "# MCP Gateway v$VERSION" RELEASE_NOTES.md || {
-            echo "RELEASE_NOTES.md must identify the exact VERSION ($VERSION)." >&2
-            exit 1
-          }
-          cp RELEASE_NOTES.md dist/release-notes.md
+          bash bin/render-github-release-notes.sh "$VERSION" RELEASE_NOTES.md dist/release-notes.md
           cat >> dist/release-notes.md <<EOF_NOTES
 
           MCP Gateway v$VERSION ships two verified operator artifacts built from the same production runtime tree.
