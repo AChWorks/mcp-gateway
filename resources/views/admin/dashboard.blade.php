@@ -10,7 +10,7 @@
         <p class="muted">{{ __('A bounded operational summary. Credentials and MCP payloads are never shown here.') }}</p>
     </div>
     @can('targets.create')
-        <a class="button button-primary" href="{{ route('admin.targets.create') }}">{{ __('Add WordPress Target') }}</a>
+        <a class="button button-primary" href="{{ route('admin.targets.create') }}">{{ __('Add Target') }}</a>
     @endcan
 </div>
 

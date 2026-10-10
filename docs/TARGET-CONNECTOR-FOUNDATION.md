@@ -450,7 +450,15 @@ Add Target
 
 The common shell owns Target identity and generic lifecycle presentation.
 
+**Release truth:** the diagram above describes the *long-term conceptual choices*, not choices to enable before implementation. The Add Target UI offers **only** built-in connectors with a working, reviewed registration/credential flow in the installed release. In v2.0.0 this means **WordPress / WP AI Bridge only**; SSH is planned separately (#123), while Agent is owner-paused (#111). The generic fleet action is **Add Target**; the selected connector's endpoint, OAuth, trust and recovery labels remain specific. The server must still reject fabricated `connector_type` inputs and cannot infer enrollment from a display-only choice.
+
 Connector-specific steps own their own fields, authorization/setup flow, diagnostics and help text.
+
+### Permission-screen presentation
+
+User restrictions, Target Group restrictions and per-Target overrides must distinguish **role ceiling**, **Target reachability** and **denial-only capability restrictions**. Render permission keys from the same `GatewayPermission` definitions used by the server, grouped by Gateway administration, shared Target lifecycle, and connector-specific WordPress/SSH/Agent families. Include the true `Gateway-wide` versus `Target-scoped` action badge; this is orthogonal to connector type.
+
+Only actually executable connector capabilities are interactive. Unshipped connector families may be described in a collapsed read-only advanced section, with explicit `not available`/`paused` status, but must never appear as working permissions or imply the connector is enrollable. Preserve previously stored deny-only values (including for now-unavailable connector families) across unrelated edits, so a UI refactor cannot silently broaden effective authority. On an exact Target editor, show shared capabilities and only that Target connector's controls; retain any historical unrelated denial keys without presenting them as actions on that Target. When a future connector ships, update its real registration route, server guard/authorization contract, and permission-screen availability together rather than displaying a premature placeholder.
 
 ### Target detail
 

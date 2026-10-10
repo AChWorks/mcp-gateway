@@ -53,7 +53,7 @@
                         <option value="{{ $mode->value }}" @selected(old('target_scope_mode', $managedUser->target_scope_mode->value) === $mode->value)>{{ $mode->title() }}</option>
                     @endforeach
                 </select>
-                <p class="field-help">{{ __('All targets reaches the full fleet unless a direct target deny excludes a target. Selected targets reaches only direct allows and assigned groups; direct denies still win. Owners are always all-targets.') }}</p>
+                <p class="field-help">{{ __('Target scope controls which Targets this user may reach, not the connector type or granted capabilities. All targets includes the fleet except direct denies; Selected uses direct allows and assigned groups. Owners always reach all Targets.') }}</p>
             </div>
         </div>
 
@@ -65,17 +65,13 @@
         @error('access_enabled')<p class="field-error">{{ $message }}</p>@enderror
 
         <fieldset class="permission-fieldset">
-            <legend>{{ __('Global permission restrictions') }}</legend>
+            <legend>{{ __('Permission restrictions (deny only)') }}</legend>
             <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. The scope badge describes what the permission acts on; a Target-scoped denial here applies across every target in the user\'s effective scope. Owner restrictions are intentionally ignored and cleared.') }}</p>
             @php($selectedDenials = old('denied_permissions', $deniedPermissions))
-            <div class="checkbox-grid">
-                @foreach ($permissions as $permission)
-                    @include('admin.partials.permission-option', [
-                        'permission' => $permission,
-                        'checked' => in_array($permission->value, $selectedDenials, true),
-                    ])
-                @endforeach
-            </div>
+            @include('admin.partials.permission-groups', [
+                'permissions' => $permissions,
+                'selectedDenials' => $selectedDenials,
+            ])
         </fieldset>
 
         <div class="form-grid">

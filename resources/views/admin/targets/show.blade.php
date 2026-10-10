@@ -20,7 +20,7 @@
 <section class="panel panel-wide" aria-label="{{ __('Target information') }}">
     <dl class="detail-list">
         <dt>{{ __('Target ID') }}</dt><dd><code>{{ $target->target_id }}</code></dd>
-        <dt>{{ __('Connector') }}</dt><dd><code>{{ $target->connector_type }}</code></dd>
+        <dt>{{ __('Connector') }}</dt><dd>{{ $target->connector_type === 'wp_ai_bridge' ? __('WordPress (WP AI Bridge)') : $target->connector_type }} <code class="small-code">{{ $target->connector_type }}</code></dd>
         <dt>{{ __('Connection state') }}</dt><dd>{{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}</dd>
         <dt>{{ __('Last tested') }}</dt><dd>{{ $target->last_tested_at?->toIso8601String() ?? __('Not yet tested') }}</dd>
         <dt>{{ __('Last error') }}</dt><dd>{{ $target->last_error_code ?? __('No recorded error') }}</dd>
@@ -108,7 +108,7 @@
 <section class="panel panel-danger" aria-labelledby="target-remove-title">
     <h2 id="target-remove-title">{{ __('Remove Target') }}</h2>
     @if ($canRemoveSafely)
-        <p class="muted">{{ __('Removing a Target permanently removes its scoped assignments and local connector metadata. Disconnect WordPress first. The immutable Target ID cannot be reused to inherit prior permissions.') }}</p>
+        <p class="muted">{{ __('Removing a Target permanently removes its scoped assignments and local connector metadata. Disconnect its connector first. A later Target with the same ID cannot inherit prior permissions.') }}</p>
         <form method="post" action="{{ route('admin.targets.destroy', ['target' => $target->target_id]) }}" class="form-stack">
             @csrf
             @method('DELETE')
@@ -121,7 +121,7 @@
             </div>
         </form>
     @else
-        <p class="muted">{{ __('Disconnect and complete or revoke any pending WordPress authorization before the Target can be removed safely.') }}</p>
+        <p class="muted">{{ __('Disconnect the connector and resolve any pending credential or authorization before removing this Target.') }}</p>
     @endif
     @error('target')
         <p class="form-error" role="alert">{{ $message }}</p>

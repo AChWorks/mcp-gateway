@@ -57,7 +57,7 @@
                         <option value="{{ $mode->value }}" @selected(old('target_scope_mode', 'selected') === $mode->value)>{{ $mode->title() }}</option>
                     @endforeach
                 </select>
-                <p class="field-help">{{ __('Selected can receive targets through direct allow rules or assigned target groups. Owners are always all-targets.') }}</p>
+                <p class="field-help">{{ __('Target scope controls which Targets this user may reach, not the connector type or granted capabilities. Selected uses direct allow rules and Target groups; Owners always reach all Targets.') }}</p>
             </div>
         </div>
 
@@ -68,16 +68,12 @@
         </label>
 
         <fieldset class="permission-fieldset">
-            <legend>{{ __('Global permission restrictions') }}</legend>
+            <legend>{{ __('Permission restrictions (deny only)') }}</legend>
             <p class="field-help">{{ __('Checked permissions are denied. The scope badge describes what the permission acts on; checking a Target-scoped permission here denies it on every target in the user\'s effective scope. Restrictions never add authority beyond the selected role.') }}</p>
-            <div class="checkbox-grid">
-                @foreach ($permissions as $permission)
-                    @include('admin.partials.permission-option', [
-                        'permission' => $permission,
-                        'checked' => in_array($permission->value, old('denied_permissions', []), true),
-                    ])
-                @endforeach
-            </div>
+            @include('admin.partials.permission-groups', [
+                'permissions' => $permissions,
+                'selectedDenials' => old('denied_permissions', []),
+            ])
         </fieldset>
 
         <div class="field">

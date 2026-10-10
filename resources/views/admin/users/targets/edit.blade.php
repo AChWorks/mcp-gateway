@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Target-specific restriction') }}</div>
         <h1>{{ $target->display_name }}</h1>
-        <p class="muted">{{ $managedUser->name }} · <code>{{ $target->target_id }}</code></p>
+        <p class="muted">{{ $managedUser->name }} · <code>{{ $target->target_id }}</code> · {{ __('Connector') }}: {{ $target->connector_type === 'wp_ai_bridge' ? __('WordPress') : $target->connector_type }}</p>
     </div>
     <a href="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">{{ __('Back to target access') }}</a>
 </div>
@@ -33,16 +33,13 @@
 
             <fieldset class="permission-fieldset">
                 <legend>{{ __('Capability restrictions on this target') }}</legend>
-                <p class="field-help">{{ __('Checked capabilities are denied only on this target. They can never grant authority missing from the user role.') }}</p>
+                <p class="field-help">{{ __('Only this Target’s connector capabilities are shown. Checked permissions deny operations on this Target; role ceilings and global/group restrictions still apply.') }}</p>
                 @php($selectedDenials = old('denied_permissions', $targetRule['denied_permissions']))
-                <div class="checkbox-grid">
-                    @foreach ($targetPermissions as $permission)
-                        @include('admin.partials.permission-option', [
-                            'permission' => $permission,
-                            'checked' => in_array($permission->value, $selectedDenials, true),
-                        ])
-                    @endforeach
-                </div>
+                @include('admin.partials.permission-groups', [
+                    'permissions' => $targetPermissions,
+                    'selectedDenials' => $selectedDenials,
+                    'connectorType' => $target->connector_type,
+                ])
             </fieldset>
 
             <div class="field">

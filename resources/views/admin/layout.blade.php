@@ -52,14 +52,6 @@
         <div class="alert alert-success" role="status">{{ session('status') }}</div>
     @endif
 
-    @if (session('site_connection_status'))
-        @if (str_starts_with((string) session('site_connection_status'), 'connected:'))
-            <div class="alert alert-success" role="status">{{ __('WordPress authorization completed successfully.') }}</div>
-        @else
-            <div class="alert alert-error" role="alert">{{ __('WordPress authorization did not complete. Open the site details and retry when ready.') }}</div>
-        @endif
-    @endif
-
     @if ($errors->has('site'))
         <div class="alert alert-error" role="alert">{{ $errors->first('site') }}</div>
     @endif
