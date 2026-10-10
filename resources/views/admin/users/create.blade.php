@@ -57,7 +57,7 @@
                         <option value="{{ $mode->value }}" @selected(old('target_scope_mode', 'selected') === $mode->value)>{{ $mode->title() }}</option>
                     @endforeach
                 </select>
-                <p class="field-help">{{ __('Selected can receive targets through direct allow rules or assigned target groups. Owners are always all-targets.') }}</p>
+                <p class="field-help">{{ __('Target scope controls which Targets this user may reach, not the connector type or granted capabilities. Selected uses direct allow rules and Target groups; Owners always reach all Targets.') }}</p>
             </div>
         </div>
 
