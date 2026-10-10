@@ -4,6 +4,9 @@
 
 ## Trust and identity contract
 
+Client identity and OAuth approval are **not capability whitelists**. A new WordPress plugin Ability or a compatible, already-implemented MCP protocol extension must not require creating a new OAuth client profile or reauthorizing the same application. Client profiles identify the real authenticated application; source operations and negotiated protocol capabilities are distinct and remain subject to the existing Gateway user/Target and downstream permissions. A truly new client identity/authentication strategy still follows the reviewed profile onboarding below.
+
+
 - `client_profile_key` is a local stable security identifier. An exact HTTPS protocol `client_id` belongs to one immutable profile/authentication strategy, never to multiple profiles. Display names can change; provider labels are not policy inputs.
 - `config/oauth.php` is the reviewed, explicit allowlist. Production supports the existing ChatGPT CIMD/RS256 `private_key_jwt` path. A reviewed future client may have **pinned**, static redirect URIs and RS256 JWKS; it is not created by arbitrary Dynamic Client Registration. Do not expose client onboarding to request-supplied metadata/JWKS URLs.
 - Pinned RSA/RS256 profiles must provide at most 16 public signing JWKs with unique `kid` values, canonical base64url RSA modulus/exponent (`n`/`e`), and at least 2048-bit RSA public keys; private RSA key components are forbidden. Configuration/bootstrap and `gateway:oauth-client-profile check` use the runtime verifier's JWK parser and reject unusable, ambiguous or weak keys before authentication traffic. Do not bypass a failing readiness check by registering an invalid profile.
