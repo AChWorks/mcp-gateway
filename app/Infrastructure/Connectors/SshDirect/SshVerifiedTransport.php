@@ -6,6 +6,7 @@ use App\Application\Targets\SshTargetConnectionException;
 use Closure;
 use phpseclib4\Crypt\PublicKeyLoader;
 use phpseclib4\Crypt\RSA;
+use phpseclib4\Net\SFTP;
 use phpseclib4\Net\SSH2;
 use Throwable;
 
@@ -42,6 +43,36 @@ final readonly class SshVerifiedTransport
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
         Closure $operation,
+    ): mixed {
+        return $this->withAuthenticatedOperation(
+            $endpoint, $pin, $authMethod, $secret, $passphrase, $operation, false,
+        );
+    }
+
+    /** @param Closure(SFTP,string):mixed $operation */
+    public function withAuthenticatedSftpSession(
+        SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
+        string $authMethod, string $secret, ?string $passphrase,
+        Closure $operation,
+    ): mixed {
+        return $this->withAuthenticatedOperation(
+            $endpoint, $pin, $authMethod, $secret, $passphrase,
+            static function (SSH2 $ssh, string $peerIp) use ($operation): mixed {
+                if (! $ssh instanceof SFTP) {
+                    throw new SshTargetConnectionException('sftp_unavailable');
+                }
+
+                return $operation($ssh, $peerIp);
+            },
+            true,
+        );
+    }
+
+    /** @param Closure(SSH2,string):mixed $operation */
+    private function withAuthenticatedOperation(
+        SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
+        string $authMethod, string $secret, ?string $passphrase,
+        Closure $operation, bool $requireSftp,
     ): mixed {
         $privateKey = null;
         $rsaClientAuthentication = false;
@@ -92,7 +123,9 @@ final readonly class SshVerifiedTransport
             }
 
             try {
-                $ssh = new SSH2($socket, $endpoint->port, 8);
+                $ssh = $requireSftp
+                    ? new SshSubsystemOnlySftp($socket, $endpoint->port, 8)
+                    : new SSH2($socket, $endpoint->port, 8);
                 $ssh->setTimeout(8);
                 $ssh->setPreferredAlgorithms(
                     $this->algorithms->preferredAlgorithms($pin, $rsaClientAuthentication),

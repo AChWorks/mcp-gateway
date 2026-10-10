@@ -1,6 +1,6 @@
 # Remote Results and File Transfer Contract
 
-Status: Accepted target-state design. Bounded WP transport is integrated, and SSH command results are a proposed PR slice. SFTP/streaming and durable continuation remain unimplemented.
+Status: Accepted target-state design; bounded WP and SSH command previews are integrated in main source, not newly released. Four small, bounded SFTP MCP operations are a new candidate; larger authenticated binary HTTP streaming and durable continuation are pending.
 Owners: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [bounded-response work #122](https://github.com/AChWorks/mcp-gateway/issues/122).
 Related: [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [Direct SSH connector](./DIRECT-SSH-CONNECTOR.md).
 
@@ -62,7 +62,7 @@ Do not conflate **transport response-size bounds** with **application pagination
 
 **Foundation (#108 / #109 / #110):** factor shared downstream MCP bounds and error propagation where truly common; keep connector-owned payload/transport and stable Target/user authorization. Do not introduce a generic large-object framework before the third real connector demonstrates a need.
 
-**Direct SSH (#123):** ship ordinary command output plus bounded SFTP stat/list/read/write and, when supported by the runtime without unbounded PHP buffering, basic streamed file transfer; explicitly signal unavailable continuation for truncated commands. No always-on PTY/job/transfer service required.
+**Direct SSH (#123):** bounded command previews are merged in #145. The new SFTP candidate handles small inline stat/list, up-to-16-KiB binary-safe base64 ranges and create-only/conditional replace. This is NOT streamed binary HTTP transfer. Large authenticated upload/download, strong source-version guarantees and partial-transfer recovery remain pending. No always-on PTY/job/transfer service required.
 
 **Final acceptance (#112):** validate small-path latency, oversize/encoded/unknown-length handling, no cross-Target/credential leaks, interrupted-write unknown outcomes, representative large file and mixed-connector limits, and supported shared-PHP packaging. Add only tests for capabilities actually shipped.
 

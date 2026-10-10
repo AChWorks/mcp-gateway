@@ -1,6 +1,6 @@
 # Direct SSH Target Connector
 
-Status: **Owner-accepted target-state design**; SSH registration, trusted-host-key pinning and credential login are integrated by PR #144 but not released. Command execution is a separately reviewed PR candidate, while SFTP and final integrated acceptance remain pending in [Issue #123](https://github.com/AChWorks/mcp-gateway/issues/123).
+Status: Owner-accepted target design; verified SSH login (#144) and bounded command execution (#145) are merged on main but not yet released. A four-operation SFTP stat/list/range-read/small-write candidate is under active review. Larger streaming, key rotation, private/VPN egress and final #112 acceptance remain pending.
 Parent: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106).
 See also [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [remote I/O contract](./REMOTE-IO-CONTRACT.md).
 
@@ -14,13 +14,23 @@ A successful login test authenticates and disconnects without running a command.
 
 Security tests cover out-of-band host-key pin parsing, encrypted bound credentials, IP-inclusive authorization-filtered inventory, default SSH capability denials, public-only policy, per-Target connection admission/rate control and WordPress regressions. CI also provisions disposable loopback-only OpenSSH fixtures behind an explicitly fixture-only dial-policy implementation; that does **not** relax production `SshTcpAddressPolicy`, which rejects loopback. The fixture covers positive password authentication, encrypted RSA private-key/passphrase authentication with an Ed25519 host pin, RSA-SHA2 host-pin interoperability, wrong-password failure, wrong-host-key rejection before authentication, actual numeric peer verification, and fail-closed legacy-only RSA/SHA-1, weak-KEX, weak-cipher and weak-MAC negotiation. Host-key/credential rotation, SSH command/SFTP behavior, interruption/uncertain command outcomes and mixed WP+SSH release validation remain later acceptance work.
 
-## Next operational slice: bounded SSH command exec (PR candidate)
+## Integrated command slice: bounded SSH exec (PR #145)
 
-The proposed `ssh-command-run` tool authorizes exactly one stored `target_id` through `ssh.command.run`, and reuses the existing verified numeric peer, pinned server host key and encrypted Target-bound credential before a one-off, non-interactive exec. It does not authorize an arbitrary destination, install a daemon, or change WordPress operations. Remote shell text is not allowlisted. The selected remote OS account alone determines permitted commands, including `sudo`, root and access to remote files.
+The integrated `ssh-command-run` tool authorizes exactly one stored `target_id` through `ssh.command.run`, and reuses the existing verified numeric peer, pinned server host key and encrypted Target-bound credential before a one-off, non-interactive exec. It does not authorize an arbitrary destination, install a daemon, or change WordPress operations. Remote shell text is not allowlisted. The selected remote OS account alone determines permitted commands, including `sudo`, root and access to remote files.
 
 Per-command timeout is 1–15 seconds; command input is at most 8192 bytes. Captured stdout is limited to 16384 bytes, stderr to 8192 bytes, with independent UTF-8 or base64 representations, nullable exit status, completeness/truncation markers and the verified connection IP. A timeout, channel failure, or exceeded preview budget after possible dispatch is `outcome_unknown`; the command is never retried automatically, and no continuation/resume is invented. The remote process may continue after disconnect, so a caller must not repeat a mutating command without independent verification. Activity records do not include raw command strings or output.
 
-SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. SFTP and deliberate host-key/credential rotation remain separate development slices. The feature is **not integrated or released** until review and merge gates pass.
+SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. SFTP and deliberate host-key/credential rotation remain separate development slices. Command exec is merged as #145 after independent review; it remains unreleased.
+
+## SFTP file I/O candidate (not yet integrated or released)
+
+The candidate adds stat, bounded list, binary-safe ranged read and bounded small write MCP tools. Each requires exact Target ID, verified numeric SSH peer, pinned server host key before credential login and fresh post-login Target/permission checks. The file tools have independent read or write Gateway permissions, default denied for nonowners until a password-confirmed explicit Owner grant in Selected scope. The remote SFTP subsystem and Unix account determine path/symlink/chroot behavior. SSH shell command authority remains independent and can still read or modify remote files.
+
+Directory lists cap at 100 entries and 16 KiB of names; overflow errors instead of inventing a cursor. Range reads cap at 16 KiB, encode opaque bytes in base64, expose EOF/size/mtime, and optionally compare size+mtime before and after a range. Size+mtime is only a best-effort change detector, NOT a strong unchanged-source proof. Create-only writes cap at 16 KiB and use a random same-directory temporary name; intentional replacement requires explicit overwrite plus a size+mtime precondition and server POSIX-rename support. Post-dispatch uncertainty is never treated as rollback and is not automatically retried.
+
+The locked phpseclib 4.0.2 SFTP client has a shell exec fallback when the SFTP subsystem is refused; the candidate explicitly rejects this fallback. Unsupported SFTP must never become implicit shell execution. No generic terminal, arbitrary URL/host routing, public filesystem endpoint or mandatory background daemon is introduced.
+
+Large authenticated binary-stream HTTP upload/download, strict immutable-source identity, interrupted large-transfer recovery, key rotation/re-enrollment and private/VPN destination approval are OUTSTANDING #123/#112 work. Do not call bounded base64 MCP payloads streamed transfer or claim this candidate is installed.
 
 ## Product boundary
 

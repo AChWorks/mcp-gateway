@@ -208,7 +208,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $body = (string) ob_get_clean();
         $document = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
         $names = array_column($document['result']['tools'], 'name');
-        foreach (['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute', 'ssh-command-run'] as $name) {
+        foreach (['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute', 'ssh-command-run', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'] as $name) {
             self::assertContains($name, $names);
         }
         foreach (['site-ability-execute', 'agent-run-command'] as $name) {
