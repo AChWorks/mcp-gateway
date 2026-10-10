@@ -32,13 +32,38 @@ final class SshTcpAddressPolicyTest extends TestCase
     public function test_hostname_resolves_to_bounded_public_numeric_candidates_only(): void
     {
         $policy = $this->policy([
-            'prod.example.test' => ['1.1.1.1', '8.8.8.8', '1.1.1.1'],
+            'prod.example.test.' => ['1.1.1.1', '8.8.8.8', '1.1.1.1'],
         ]);
         $endpoint = SshRegisteredEndpoint::fromInput('PROD.example.test', 2202, 'deploy');
 
         self::assertSame(['1.1.1.1', '8.8.8.8'], $policy->approvedDialAddresses($endpoint));
         self::assertNull($endpoint->configuredIp());
         self::assertSame('deploy@prod.example.test:2202', $endpoint->destinationLabel());
+    }
+
+    public function test_registered_dns_hostname_is_queried_as_absolute_fqdn_never_search_relative(): void
+    {
+        $resolver = new class implements DnsResolver
+        {
+            /** @var list<string> */
+            public array $queries = [];
+
+            public function resolve(string $host): array
+            {
+                $this->queries[] = $host;
+
+                // A search-suffixed name could have another PUBLIC IP, so
+                // testing only public/private resolution is not sufficient.
+                return $host === 'prod.example.test.' ? ['1.1.1.1'] : ['8.8.8.8'];
+            }
+        };
+
+        $endpoint = SshRegisteredEndpoint::fromInput('PROD.EXAMPLE.TEST.', 2202, 'deploy');
+        self::assertSame('prod.example.test', $endpoint->host);
+
+        $policy = new SshTcpAddressPolicy($resolver, new PublicIpAddressPolicy);
+        self::assertSame(['1.1.1.1'], $policy->approvedDialAddresses($endpoint));
+        self::assertSame(['prod.example.test.'], $resolver->queries);
     }
 
     public function test_mixed_public_and_private_dns_is_rejected_instead_of_partially_trusted(): void
@@ -50,15 +75,22 @@ final class SshTcpAddressPolicyTest extends TestCase
             ['1.1.1.1', 'fe80::1'],
             ['8.8.8.8', 'not-a-numeric-address'],
             ['1.1.1.1', '203.0.113.10'],
+            ['1.1.1.1', '64:ff9b:1::1'],
+            ['8.8.8.8', '100:0:0:1::1'],
+            ['1.1.1.1', '3fff::1'],
+            ['8.8.8.8', '5f00::1'],
         ] as $answers) {
-            $this->expectUnsafe($this->policy(['prod.example.test' => $answers]),
+            $this->expectUnsafe($this->policy(['prod.example.test.' => $answers]),
                 SshRegisteredEndpoint::fromInput('prod.example.test', 22, 'deploy'));
         }
     }
 
     public function test_non_public_registered_literals_cannot_bypass_the_default_tcp_policy(): void
     {
-        foreach (['127.0.0.1', '10.0.0.1', '192.168.1.9', '::1', 'fd00::1', '203.0.113.10'] as $address) {
+        foreach ([
+            '127.0.0.1', '10.0.0.1', '192.168.1.9', '::1', 'fd00::1', '203.0.113.10',
+            '64:ff9b:1::1', '100:0:0:1::1', '3fff::1', '5f00::1',
+        ] as $address) {
             $this->expectUnsafe($this->policy([]),
                 SshRegisteredEndpoint::fromInput($address, 22, 'root'));
         }
@@ -68,9 +100,9 @@ final class SshTcpAddressPolicyTest extends TestCase
     {
         $endpoint = SshRegisteredEndpoint::fromInput('prod.example.test', 22, 'deploy');
 
-        $this->expectUnsafe($this->policy(['prod.example.test' => []]), $endpoint);
+        $this->expectUnsafe($this->policy(['prod.example.test.' => []]), $endpoint);
         $this->expectUnsafe($this->policy([
-            'prod.example.test' => array_fill(0, 17, '8.8.8.8'),
+            'prod.example.test.' => array_fill(0, 17, '8.8.8.8'),
         ]), $endpoint);
     }
 
