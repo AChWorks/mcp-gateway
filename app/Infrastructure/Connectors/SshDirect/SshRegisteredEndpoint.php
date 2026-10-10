@@ -57,7 +57,10 @@ final readonly class SshRegisteredEndpoint
             throw new InvalidArgumentException('SSH host is not a canonical IP address.');
         }
 
-        $host = rtrim($host, '.');
+        // One DNS root dot is canonicalizable; repeated trailing dots are not.
+        if (str_ends_with($host, '.')) {
+            $host = substr($host, 0, -1);
+        }
         $labels = explode('.', $host);
         if (count($labels) < 2 || strlen($host) > 253) {
             throw new InvalidArgumentException('SSH hostname must be a valid fully qualified name.');
