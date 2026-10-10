@@ -34,6 +34,7 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::post('/targets/{target:target_id}/connect', [TargetConnectionController::class, 'connect'])->name('targets.connect');
     Route::post('/targets/{target:target_id}/reconnect', [TargetConnectionController::class, 'reconnect'])->name('targets.reconnect');
     Route::post('/targets/{target:target_id}/disconnect', [TargetConnectionController::class, 'disconnect'])->name('targets.disconnect');
+    Route::post('/targets/{target:target_id}/reconcile-refresh', [TargetConnectionController::class, 'reconcileRefresh'])->name('targets.reconcile-refresh');
     Route::post('/targets/{target:target_id}/test', [TargetConnectionController::class, 'test'])->name('targets.test');
 
     Route::get('/users', [UserController::class, 'index'])->name('users.index');

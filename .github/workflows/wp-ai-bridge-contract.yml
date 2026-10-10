@@ -7,6 +7,7 @@ on:
     paths:
       - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
+      - 'app/Application/Targets/**'
       - 'app/Http/Controllers/OAuth/GatewayBridgeClientJwksController.php'
       - 'app/Http/Controllers/OAuth/GatewayBridgeClientMetadataController.php'
       - 'app/Http/Controllers/OAuth/SiteOAuthCallbackController.php'
@@ -28,6 +29,7 @@ on:
     paths:
       - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
+      - 'app/Application/Targets/**'
       - 'app/Http/Controllers/OAuth/GatewayBridgeClientJwksController.php'
       - 'app/Http/Controllers/OAuth/GatewayBridgeClientMetadataController.php'
       - 'app/Http/Controllers/OAuth/SiteOAuthCallbackController.php'

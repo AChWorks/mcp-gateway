@@ -513,6 +513,59 @@ final readonly class WpAiBridgeTargetConnectionService
         });
     }
 
+    /**
+     * Local recovery is permitted only after an Owner independently confirms
+     * that WordPress revoked the full Gateway client authorization (including
+     * any unknown rotated successor). This action itself never revokes tokens
+     * remotely and must never be presented as remote revocation evidence.
+     *
+     * The intent ID fences a stale Admin tab or a completed concurrent refresh.
+     * All local changes and the required audit record share one Target lock.
+     */
+    public function reconcileRevokedRefresh(Target $target, string $intentId, callable $recordAudit): void
+    {
+        $this->withLockedTarget((string) $target->getKey(), function (Target $locked) use ($intentId, $recordAudit): void {
+            $intent = DB::table('wp_ai_bridge_refresh_intents')
+                ->where('target_record_id', $locked->getKey())->first();
+            $credential = $this->credential($locked);
+            $metadata = $credential instanceof TargetCredential
+                ? DB::table('wp_ai_bridge_credential_metadata')
+                    ->where('credential_id', $credential->getKey())->first()
+                : null;
+
+            if ($intent === null || ! hash_equals((string) $intent->id, $intentId)
+                || $credential === null || $metadata === null
+                || (string) $intent->credential_id !== (string) $credential->getKey()
+                || (int) $intent->generation !== (int) $metadata->generation
+                || $this->hasRevocationIntent($locked)
+                || DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
+                throw new WpAiBridgeTargetConnectionException('refresh_conflict',
+                    'The unresolved WordPress refresh changed. Review current state before reconciling.');
+            }
+
+            // Wait beyond the WordPress single-use recovery window and the
+            // configured network timeout before accepting the *external*
+            // revocation attestation. Still require WordPress-side evidence.
+            $settleSeconds = max(75, 60 + (int) config('bridge.http.request_timeout_seconds', 5) + 15);
+            if (time() - (new DateTimeImmutable((string) $intent->created_at))->getTimestamp() < $settleSeconds) {
+                throw new WpAiBridgeTargetConnectionException('refresh_settling',
+                    'An OAuth refresh might still be in flight. Wait before WordPress-side reconciliation.');
+            }
+
+            $credential->delete(); // Cascades to metadata and this exact refresh intent.
+            $locked->forceFill([
+                'connection_state' => TargetConnectionState::Disconnected,
+                'last_error_code' => 'manual_revocation_attested',
+                'connected_at' => null,
+                'last_failure_at' => now(),
+                'last_failure_code' => 'manual_revocation_attested',
+            ])->save();
+
+            // A failed audit write must roll back the entire local recovery.
+            $recordAudit($locked);
+        });
+    }
+
     public function disconnect(Target $target): void
     {
         $id = (string) $target->getKey();

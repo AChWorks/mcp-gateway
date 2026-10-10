@@ -605,6 +605,155 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         }
     }
 
+    public function test_manual_ambiguous_refresh_reconciliation_is_owner_only_and_requires_remote_attestation(): void
+    {
+        $alpha = $this->target('alpha');
+        $beta = $this->target('beta');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->pair($alpha);
+        $this->pair($beta);
+        $this->expire($alpha);
+        $this->failRefresh = true;
+
+        try {
+            $service->accessToken($alpha);
+            self::fail('Ambiguous rotating refresh was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        $intent = DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $alpha->getKey())->first();
+        self::assertNotNull($intent);
+        $payload = [
+            'intent_id' => $intent->id,
+            'confirm_target_id' => 'alpha',
+            'wordpress_client_revoked' => 'yes',
+            'other_clients_affected' => 'yes',
+            'current_password' => 'CorrectHorse!234',
+        ];
+
+        $this->actingAs($this->user('operator', 'all'))
+            ->post('/admin/targets/alpha/reconcile-refresh', $payload)->assertForbidden();
+        $this->actingAs($this->user('owner', 'all'))
+            ->post('/admin/targets/alpha/reconcile-refresh', [
+                ...$payload, 'current_password' => 'wrong',
+            ])->assertSessionHasErrors('current_password');
+        $this->post('/admin/targets/alpha/reconcile-refresh', [
+            ...$payload, 'wordpress_client_revoked' => '',
+        ])->assertSessionHasErrors('wordpress_client_revoked');
+        $this->get('/admin/targets/alpha')->assertOk()
+            ->assertSee('Manual WordPress refresh recovery')
+            ->assertSee('other non-ChatGPT OAuth clients');
+
+        self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(2, DB::table('target_credentials')->count());
+
+        // The remote one-shot recovery window must expire first.
+        $this->post('/admin/targets/alpha/reconcile-refresh', $payload)
+            ->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHasErrors('target');
+        self::assertSame(2, DB::table('target_credentials')->count());
+
+        // Purely test a simulated human-confirmed WordPress-side client
+        // approval-revision change; this cannot prove a real remote revocation.
+        DB::table('wp_ai_bridge_refresh_intents')->where('id', $intent->id)
+            ->update(['created_at' => now()->subMinutes(3)]);
+        $refreshCallsBefore = $this->refreshCalls;
+        $this->post('/admin/targets/alpha/reconcile-refresh', $payload)
+            ->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHasNoErrors();
+
+        self::assertSame($refreshCallsBefore, $this->refreshCalls);
+        self::assertSame(TargetConnectionState::Disconnected, $alpha->refresh()->connection_state);
+        self::assertSame('manual_revocation_attested', $alpha->last_error_code);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(0, DB::table('target_credentials')->where('target_record_id', $alpha->getKey())->count());
+        self::assertSame(1, DB::table('target_credentials')->where('target_record_id', $beta->getKey())->count());
+        self::assertSame('beta-access', $service->accessToken($beta));
+
+        self::assertSame(1, DB::table('activity_events')
+            ->where('target_record_id', $alpha->getKey())
+            ->where('operation', 'wordpress-refresh-remote-revocation-attested')
+            ->where('outcome', 'operator-attested')->count());
+        $this->post('/admin/targets/alpha/reconcile-refresh', $payload)
+            ->assertSessionHasErrors('target');
+        // Fresh pairing is possible only after the operator restores
+        // Gateway client approval and initiates a new WordPress OAuth flow.
+        self::assertStringContainsString('state=', $service->begin($alpha));
+    }
+
+    public function test_refresh_manual_reconciliation_rejects_stale_intent_and_wrong_target(): void
+    {
+        $alpha = $this->target('alpha');
+        $this->pair($alpha);
+        $this->expire($alpha);
+        $this->failRefresh = true;
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->accessToken($alpha);
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        $intent = DB::table('wp_ai_bridge_refresh_intents')->first();
+        self::assertNotNull($intent);
+        DB::table('wp_ai_bridge_refresh_intents')->where('id', $intent->id)
+            ->update(['created_at' => now()->subMinutes(3)]);
+
+        $this->actingAs($this->user('owner', 'all'));
+        $payload = [
+            'intent_id' => $intent->id,
+            'confirm_target_id' => 'other-target',
+            'wordpress_client_revoked' => 'yes',
+            'other_clients_affected' => 'yes',
+            'current_password' => 'CorrectHorse!234',
+        ];
+        $this->post('/admin/targets/alpha/reconcile-refresh', $payload)
+            ->assertSessionHasErrors('confirm_target_id');
+        $this->post('/admin/targets/alpha/reconcile-refresh', [
+            ...$payload, 'confirm_target_id' => 'alpha', 'intent_id' => (string) Str::ulid(),
+        ])->assertSessionHasErrors('target');
+
+        self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(1, DB::table('target_credentials')->count());
+        self::assertSame(0, DB::table('activity_events')
+            ->where('operation', 'wordpress-refresh-remote-revocation-attested')->count());
+    }
+
+    public function test_manual_revocation_reconciliation_rolls_back_if_required_audit_fails(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $this->failRefresh = true;
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        try {
+            $service->accessToken($target);
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        $intent = DB::table('wp_ai_bridge_refresh_intents')->first();
+        self::assertNotNull($intent);
+        DB::table('wp_ai_bridge_refresh_intents')->where('id', $intent->id)
+            ->update(['created_at' => now()->subMinutes(3)]);
+        $credentialId = (string) $this->credential($target)->getKey();
+
+        try {
+            $service->reconcileRevokedRefresh($target, $intent->id, static function (): void {
+                throw new \RuntimeException('Synthetic mandatory audit database failure.');
+            });
+            self::fail('An absent mandatory audit was treated as completed reconciliation.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('Synthetic mandatory audit database failure.', $exception->getMessage());
+        }
+
+        self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->where('id', $intent->id)->count());
+        self::assertSame(1, DB::table('target_credentials')->where('id', $credentialId)->count());
+        self::assertSame(1, DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credentialId)->count());
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame('refresh_ambiguous', $target->last_error_code);
+    }
+
     private function expire(Target $target): void
     {
         $vault = app(WpAiBridgeTargetVault::class);

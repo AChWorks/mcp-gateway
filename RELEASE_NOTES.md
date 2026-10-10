@@ -6,8 +6,13 @@
 
 - Generic immutable Target domain, ACL/Target Groups and scoped Activity, with real Target Admin inventory, registration, detail, display-name editing, checked metadata diagnostics and guarded removal.
 - WordPress Target OAuth with target-bound encrypted PKCE credentials, signed client identity, confirmed remote revocation, bounded rotating refresh-token recovery and scheduled idle renewal.
+- Owner-only, password-confirmed and audited **manual local recovery** from an unresolved WordPress rotating-refresh outcome after explicit WordPress-side client revocation attestation; no silent credential erasure or claim of automatically verified remote revocation.
 - Authorized exact-Target MCP inventory/context plus WordPress Ability catalog and safety-class-gated execute; existing client-neutral ChatGPT OAuth remains supported.
 - Intentional retirement of old Site-only routes and bulk-check pages; Agent and Direct SSH runtime remain **unimplemented** and are not advertised.
+
+## Manual WordPress refresh recovery warning
+
+If a rotating WordPress refresh becomes ambiguous, normal Target disconnect/reconnect is intentionally blocked. A WordPress administrator must first **remove and save** this Gateway's exact client metadata URL from WP AI Bridge's **Approved OAuth Clients**; this invalidates **all** non-ChatGPT additional OAuth clients on that WordPress site, not just the selected Gateway Target. Only after explicit approval and verification of this collateral effect may a Gateway Owner acknowledge that external revocation, confirm the exact Target ID and password, and clear the single local Target credential. Audit describes an **operator attestation**, never independent proof of remote revocation. See the runbook; the Gateway never automatically makes this remote approval-list change.
 
 ## Mandatory operator warning
 
@@ -15,7 +20,7 @@ The upgrade from published v1.2.1 replaces the legacy Site schema, invalidates i
 
 ## Release gates (not yet satisfied)
 
-Current isolated SQLite/MariaDB test results are not release authorization. Complete real browser-ZIP upgrade and recovery checks from the **published v1.2.1 deployment**, real non-production WordPress Target E2E and ChatGPT reconnection, exact-candidate CI and independent HIGH_ASSURANCE review. Require owner approval before merge, publication and production upgrade. See docs/TARGET-TRANSITION-RUNBOOK.md and Issue #107.
+Isolated local SQLite/MariaDB, published v1.2.1 browser-ZIP upgrade and independent seeded database backup/restore rehearsal are useful evidence but **not** release authorization. Still require exact-candidate MariaDB 10.11/CI (including released v1.2.1 update regression), real authorized non-production WordPress Target E2E and ChatGPT reconnection, and independent HIGH_ASSURANCE review. Require owner approval before merge, publication and production upgrade. See docs/TARGET-TRANSITION-RUNBOOK.md and Issue #107.
 
 ---
 

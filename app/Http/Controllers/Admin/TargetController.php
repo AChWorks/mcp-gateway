@@ -122,6 +122,9 @@ final class TargetController extends Controller
                 ->where('purpose', 'wordpress_oauth')->exists(),
             'revocationPending' => $target->connector_type === 'wp_ai_bridge' && DB::table('wp_ai_bridge_revocation_intents')
                 ->where('target_record_id', $target->getKey())->exists(),
+            'refreshIntent' => $target->connector_type === 'wp_ai_bridge'
+                ? DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $target->getKey())->first(['id', 'created_at'])
+                : null,
             'refreshPending' => $target->connector_type === 'wp_ai_bridge' && DB::table('wp_ai_bridge_refresh_intents')
                 ->where('target_record_id', $target->getKey())->exists(),
             'canRemoveSafely' => ! TargetCredential::query()->where('target_record_id', $target->getKey())->exists()
