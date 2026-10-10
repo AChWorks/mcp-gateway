@@ -11,8 +11,10 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
+#[Group('database-concurrency')]
 final class SshVerificationStateTest extends TestCase
 {
     use RefreshDatabase;
