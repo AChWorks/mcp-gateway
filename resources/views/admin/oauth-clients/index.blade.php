@@ -48,7 +48,7 @@
     <p class="muted">{{ __('Register, disable and re-enable only via the reviewed administrator CLI. Disabling invalidates all previously issued grants.') }}</p>
 </section>
 
-<section class="panel panel-wide">
+<section class="panel panel-wide ai-client-authorizations">
     <h2>{{ __('Client authorizations') }}</h2>
     <form class="filter-grid" method="get" action="{{ route('admin.oauth-clients.index') }}">
         <div class="field">
@@ -90,7 +90,7 @@
                         <td><time datetime="{{ $grant->created_at }}">{{ $grant->created_at }}</time></td>
                         <td>
                             @if ($grant->revoked_at === null)
-                                <form method="post" action="{{ route('admin.oauth-clients.revoke', ['authorization' => $grant->id]) }}">
+                                <form class="client-grant-revoke-form" method="post" action="{{ route('admin.oauth-clients.revoke', ['authorization' => $grant->id]) }}">
                                     @csrf
                                     @method('DELETE')
                                     <label for="password-{{ $grant->id }}">{{ __('Current Owner password') }}</label>

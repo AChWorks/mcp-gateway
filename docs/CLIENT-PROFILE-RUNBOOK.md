@@ -1,6 +1,6 @@
 # Gateway OAuth client-profile recovery, security and rollout
 
-**Status:** implementation candidate on `feat/client-profile-edge-117` for Issue #117, **not released**. This is not a declaration that `main` serves multiple OAuth clients. Final release acceptance remains Issue #112. The authority for Target access remains the Gateway user and Target ACL; an approved AI client application is not an authenticated AI account/workspace and conveys **no** Target, Agent or SSH permission.
+**Status:** the client-profile implementation from [PR #126](https://github.com/AChWorks/mcp-gateway/pull/126) is integrated and shipped with the [v2.0.0 Target release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.0.0). The only reviewed preconfigured AI client application is ChatGPT; this does **not** claim support for additional external AI providers. Issue #112 remains open for the wider future WP + Direct SSH acceptance, not as a prerequisite to this already-shipped ChatGPT profile. The authority for Target access remains the Gateway user and Target ACL; an approved AI client application is not an authenticated AI account/workspace and conveys **no** Target, Agent or SSH permission.
 
 ## Trust and identity contract
 
@@ -56,4 +56,4 @@ In Admin, an Owner with `security.manage` may inspect `/admin/oauth-clients` and
 
 ## Evidence and test ownership
 
-The branch's feature tests use generated ephemeral RS256 keys and an entirely controlled pinned second-client fixture; they do not enroll a real Gemini/Claude provider or infer a remote user's account. They cover code/refresh/bearer binding, Client A/B revocation isolation, generation non-resurrection, Owner authorization UI, bad metadata/duplicate IDs, direct/trusted-proxy spoof controls, and existing ChatGPT flow. The CI and independent HIGH_ASSURANCE review evidence must be attached to the eventual PR; do not treat a WIP branch as shipped.
+The merged #117 feature tests use generated ephemeral RS256 keys and an entirely controlled pinned second-client fixture; they do not enroll a real Gemini/Claude provider or infer a remote user's account. They cover code/refresh/bearer binding, Client A/B revocation isolation, generation non-resurrection, Owner authorization UI, bad metadata/duplicate IDs, direct/trusted-proxy spoof controls, and existing ChatGPT flow. The implementation was merged in [PR #126](https://github.com/AChWorks/mcp-gateway/pull/126) and included in the published Target release; retain exact PR/CI/review evidence for later security changes. A controlled second-client fixture is not permission or proof to enroll a real external provider.

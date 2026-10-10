@@ -253,7 +253,9 @@ final class ClientProfileIsolationTest extends TestCase
         $this->actingAs($operator)->get('/admin/oauth-clients')->assertForbidden();
         $this->actingAs($owner)->get('/admin/oauth-clients')
             ->assertOk()->assertSee('Approved AI client applications')
-            ->assertSee('fixture')->assertSee('chatgpt');
+            ->assertSee('fixture')->assertSee('chatgpt')
+            ->assertSee('class="client-grant-revoke-form"', false)
+            ->assertSee('autocomplete="current-password"', false);
 
         $grant = \DB::table('oauth_authorizations')->where('client_id', self::FIXTURE)->first();
         self::assertNotNull($grant);
