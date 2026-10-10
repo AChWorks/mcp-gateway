@@ -4,11 +4,11 @@ namespace Tests\Feature\Admin;
 
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Targets\Target;
-use Illuminate\Support\Facades\DB;
 use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 final class AdminUiPresentationTest extends TestCase
