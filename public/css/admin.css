@@ -408,6 +408,10 @@ input[type="radio"]:checked::before {
     margin: 0.4rem 0 0.85rem;
 }
 
+.permission-category .checkbox-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+}
+
 .permission-category-collapsible {
     padding: 0.7rem 0.85rem;
     border: 1px solid var(--ui-border);
@@ -441,7 +445,7 @@ input[type="radio"]:checked::before {
 
 .checkbox-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
     gap: 0.65rem;
 }
 
