@@ -287,6 +287,36 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame('version-B', base64_decode($read['result']['data'], true));
     }
 
+    public function test_streamed_internal_adapter_rejects_network_socket_sources_and_sinks(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        self::assertIsArray($pair);
+        try {
+            try {
+                app(SshFileRuntime::class)->downloadToStream(
+                    $owner, $target, $this->home().'/file', $pair[0], 4096, 10,
+                );
+                self::fail('A network sink is not a bounded local staged output file.');
+            } catch (SshTargetConnectionException $e) {
+                self::assertSame('invalid_input', $e->reason);
+            }
+            try {
+                app(SshFileRuntime::class)->uploadFromStream(
+                    $owner, $target, $this->home().'/file', $pair[0], 1,
+                    hash('sha256', 'x'), 4096, 10, $this->env('SSH_FIXTURE_PRIVATE_STAGING'),
+                );
+                self::fail('A network source must not be read in the SFTP admission lease.');
+            } catch (SshTargetConnectionException $e) {
+                self::assertSame('invalid_input', $e->reason);
+            }
+        } finally {
+            fclose($pair[0]);
+            fclose($pair[1]);
+        }
+    }
+
     public function test_streamed_download_limits_and_hash_mismatch_are_not_silent_success(): void
     {
         $owner = $this->owner();

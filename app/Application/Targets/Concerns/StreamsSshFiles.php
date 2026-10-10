@@ -320,6 +320,24 @@ trait StreamsSshFiles
         if (! is_resource($stream) || get_resource_type($stream) !== 'stream') {
             throw new SshTargetConnectionException('invalid_input');
         }
+
+        // Internal byte streams must be already staged regular local files
+        // (including PHP's memory/temp wrappers). A socket, FIFO, HTTP body
+        // or arbitrary stream wrapper may block indefinitely on fread/fwrite
+        // and silently outlive the Target admission lease. The future public
+        // data plane owns authenticated ingress, bounded staging and expiry.
+        $info = stream_get_meta_data($stream);
+        $stat = @fstat($stream);
+        $localFile = ($info['wrapper_type'] ?? null) === 'plainfile'
+            && ($info['stream_type'] ?? null) === 'STDIO';
+        $phpTemp = ($info['wrapper_type'] ?? null) === 'PHP'
+            && in_array($info['stream_type'] ?? null, ['TEMP', 'MEMORY'], true);
+        if (! is_array($stat) || ! isset($stat['mode'])
+            || ($stat['mode'] & 0170000) !== 0100000
+            || ($info['seekable'] ?? false) !== true
+            || (! $localFile && ! $phpTemp)) {
+            throw new SshTargetConnectionException('invalid_input');
+        }
     }
 
     private function validateSha256(?string $sha256): void
