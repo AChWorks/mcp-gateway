@@ -184,7 +184,7 @@ Connector onboarding that accepts a secret through the Admin UI treats that fiel
 
 Supported connectors are built-in, explicitly registered implementations.
 
-Initial connector set after Issue #106:
+Accepted built-in connector vocabulary (not a claim of simultaneous runtime availability; Agent #111 is owner-paused, SSH file work remains gated):
 
 ```text
 wp_ai_bridge
@@ -204,7 +204,7 @@ This is **not**:
 
 Unsupported connector types fail closed.
 
-Each registered connector should expose only the smallest static descriptor needed by shared code, such as stable connector type, operator-facing label, supported lifecycle capabilities, and connector-owned permission/tool families. This descriptor is metadata for built-in code; it is not an executable plugin manifest.
+Each registered connector should expose the smallest **static implementation descriptor** the shared lifecycle and Admin actually need: stable connector type, label, supported lifecycle capabilities, and reviewed capability/permission families. This is not a per-downstream-tool manifest or executable plugin loader. The **runtime Target-owned operation/schema catalog** is separate and may evolve safely without expanding the static registry.
 
 Shared code must not scatter `if connector_type == ...` decisions across controllers, authorization, Admin views and MCP handlers. Selection happens at the connector boundary, while business rules that truly span connectors stay in the application layer.
 
@@ -341,11 +341,17 @@ Do not force other connectors into WP Ability vocabulary.
 
 The Gateway surfaces the supported Agent capability set through the `agent-*` names above without registering copies for every Agent Target.
 
-The connector preserves downstream Agent semantics rather than reimplementing host execution. Extra tools that appear on a newer Agent are **not** automatically proxied; support is added deliberately through the Gateway connector contract.
+The future Agent connector preserves downstream semantics rather than reimplementing host execution. **Compatible new Agent operations within an already reviewed, permission-mapped capability family** should be discoverable/usable through that family's stable Gateway contract without a Gateway handler or public tool-registration edit per downstream version. **Unknown effect classes, new privileges, incompatible schemas or unreviewed capability families are not blindly proxied** and require explicit contract/security review. Agent #111 remains paused; this is a future acceptance direction, not a claim of shipped behavior.
 
 ### Direct SSH family
 
 `ssh-command-run` deliberately supports unrestricted remote OS account commands (including OS-permitted `sudo`/root); it is mutation-capable and cannot be constrained by shell-string allowlists. `ssh.file.read`/`ssh.file.write` apply to SFTP tool exposure, **not** a sandbox around users with `ssh.command.run`. Common Target authorization, exact host identity, outbound TCP policy and result bounds still apply. See `DIRECT-SSH-CONNECTOR.md` and `REMOTE-IO-CONTRACT.md`.
+
+### Target catalog evolution and minimal-upgrade rule
+
+The Gateway has a **stable public tool-family schema** and a **separate selected-Target capability/schema catalog**. A known connector may publish new compatible operations without requiring Gateway source/installation upgrades, as already illustrated by the WordPress Ability catalog. Connector registration remains explicit; no dynamic PHP class loading or arbitrary call-any-tool bypass. The reviewed Gateway family owns effect/permission mapping and safe argument validation; downstream metadata and MCP annotations inform compatibility, **not authorization**. Missing/ambiguous/privileged-new semantics fail closed. See [MASTER-SPEC.md](./MASTER-SPEC.md) §4.9 and [ARCHITECTURE.md](./ARCHITECTURE.md) §4 for the canonical policy and ownership.
+
+Negotiation, compatible cached catalog snapshots, version/scope-aware invalidation and optional MCP notifications are transport-adapter behavior. The runtime must not network-fan-out on public `tools/list` or inventory, and must not depend on a host automatically refreshing tools. A new supported client authentication profile still requires reviewed identity/configuration; a new ordinary downstream Ability within an existing family does not. Future connector admission should prefer extending the Target-side adapter/declared family to duplicating core auth, routing, transfer or tool plumbing.
 
 ## 9. AI Server Agent safety boundary
 
