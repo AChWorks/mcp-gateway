@@ -411,6 +411,30 @@ fi
 grep -F "target version must be newer" "$tmp/downgrade.out" >/dev/null || { cat "$tmp/downgrade.out" >&2; echo "Downgrade rejection was not actionable." >&2; exit 1; }
 printf '%s\n' "$old_version" > "$target/VERSION"
 
+# A directory with no owner-write permission must block browser staging
+# before code mutation and explain the PHP-worker ownership fix. Running this
+# as root cannot simulate the actual non-root PHP worker permissions.
+if [[ "$(id -u)" -ne 0 ]]; then
+  public_staging_mode="$(stat -c '%a' "$target/public/update")"
+  chmod 0555 "$target/public/update"
+  if inspect_package "$target" "$target/update" >"$tmp/public-staging-permission.out" 2>&1; then
+    echo "A non-writable temporary public update directory unexpectedly passed preflight." >&2
+    exit 1
+  fi
+  grep -F 'Temporary public/update/ is not writable by the PHP worker' "$tmp/public-staging-permission.out" >/dev/null || {
+    cat "$tmp/public-staging-permission.out" >&2
+    echo "Temporary public update permission error was not explained." >&2
+    exit 1
+  }
+  grep -F 'Do not use 0777 or change public/.user.ini' "$tmp/public-staging-permission.out" >/dev/null || {
+    cat "$tmp/public-staging-permission.out" >&2
+    echo "Temporary staging permission error lacked scoped safety guidance." >&2
+    exit 1
+  }
+  chmod "$public_staging_mode" "$target/public/update"
+  inspect_package "$target" "$target/update"
+fi
+
 # Tampering and symlinked package content must fail before target mutation.
 cp -a "$target/update" "$tmp/tampered-update"
 printf 'tampered\n' >> "$tmp/tampered-update/payload/VERSION"

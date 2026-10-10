@@ -86,6 +86,12 @@ final class WebUpdater
         ];
 
         $failedChecks = array_keys(array_filter($checks, static fn (bool $passed): bool => ! $passed));
+        $failedChecks = array_map(
+            static fn (string $check): string => $check === 'Temporary public update staging is writable'
+                ? 'Temporary public/update/ is not writable by the PHP worker. Check only this temporary directory: its owner must match the PHP worker (often www on aaPanel), with owner-write permission such as 0755. Do not use 0777 or change public/.user.ini or unrelated public/ files'
+                : $check,
+            $failedChecks,
+        );
         if ($failedChecks !== []) {
             throw new RuntimeException('Update preflight failed: '.implode('; ', $failedChecks).'.');
         }
