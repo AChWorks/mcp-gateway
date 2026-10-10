@@ -1,12 +1,12 @@
 # Target Foundation Transition — implementation and recovery runbook
 
-Status: **IN DEVELOPMENT (#107), version 2.0.0 candidate, NOT PUBLISHED**. This breaking Target transition is not on main or any production build. Target-native application/Admin/MCP code, the historical data migration and local browser ZIP update have been exercised in isolated tests; independent WordPress E2E, exact-candidate CI and HIGH_ASSURANCE review remain release gates. **Do not merge/deploy this isolated implementation.**
+Status: **v2.0.0 Target transition and recovery runbook**. This breaking release replaces Site with Target. Exact-candidate CI and an independent HIGH_ASSURANCE code review passed before release authorization. **Real external WordPress ↔ Gateway ↔ ChatGPT E2E has not yet been established** and remains a separate operator acceptance step. Publishing a GitHub Release never updates a server or approves a destructive database migration. Before any upgrade, read the reset/data-retention warnings and verify a consistent, independently restorable database backup. Dated sections below describe historical pre-release test checkpoints; historical "candidate", "unmerged" or old CI statements do not supersede current GitHub PR/Release evidence.
 
 Owning contract: [Issue #107](https://github.com/AChWorks/mcp-gateway/issues/107), [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [Target Admin/MCP #110](https://github.com/AChWorks/mcp-gateway/issues/110), [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md). The Direct SSH architecture is integrated through merged [PR #124](https://github.com/AChWorks/mcp-gateway/pull/124); Direct SSH runtime execution is not yet implemented.
 
-## Verified Target runtime and actual historical MariaDB rehearsal (2026-10-10; unmerged)
+## Verified Target runtime and historical MariaDB rehearsal (2026-10-10)
 
-**Candidate only. No merge, Release, install, production migration or endpoint exposure.**
+**Historical isolated-test evidence only.** These rehearsals did not install, migrate or expose any operator/production endpoint.
 
 ### Site-era retirement and replacement coverage
 
