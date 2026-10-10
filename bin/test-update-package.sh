@@ -142,7 +142,7 @@ if [[ "$old_version" == "1.2.1" ]]; then
       $owner = App\Models\User::query()->where("email", "admin@example.test")->firstOrFail();
       // The baseline creates its first account *after* migrate:fresh.
       // V1 defaults new accounts to Viewer; explicitly seed the owner role
-      // rather than incorrectly attributing the fixture's role to migration.
+      // rather than incorrectly attributing the seed role to migration.
       $owner->forceFill(["role" => "owner", "site_scope_mode" => "all", "access_enabled" => true])->save();
       $operator = App\Models\User::query()->create([
         "name" => "Legacy operator", "email" => "operator@example.test",

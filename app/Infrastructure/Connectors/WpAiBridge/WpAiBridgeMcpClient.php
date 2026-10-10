@@ -109,7 +109,10 @@ final readonly class WpAiBridgeMcpClient
         });
     }
 
-    /** @param array{resource_url:string,access_token:string} $routing */
+    /**
+     * @param  array{resource_url:string,access_token:string}  $routing
+     * @param  array<string,string>|null  $sessionHeaders
+     */
     private function abilityExecutionClass(
         array $routing,
         string $ability,
