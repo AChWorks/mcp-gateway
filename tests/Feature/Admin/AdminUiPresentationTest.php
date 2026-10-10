@@ -6,6 +6,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetGroup;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -129,6 +130,41 @@ final class AdminUiPresentationTest extends TestCase
             ->assertDontSee('AI Server Agent')
             ->assertSee('name="denied_permissions[]" value="ssh.command.run"', false)
             ->assertSee('Existing restrictions for other connector types are preserved');
+    }
+
+    public function test_group_and_user_edit_preserve_stored_future_denials_as_hidden_values(): void
+    {
+        $owner = $this->owner();
+        $group = TargetGroup::query()->create(['name' => 'Mixed connector group']);
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $operator = User::query()->create([
+            'name' => 'Operator',
+            'email' => 'operator-'.uniqid().'@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+            'access_enabled' => true,
+        ]);
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $operator->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->actingAs($owner)->get('/admin/target-groups/'.$group->getKey().'/edit')
+            ->assertOk()
+            ->assertSee('name="denied_permissions[]" value="ssh.command.run"', false)
+            ->assertSee('Existing denial retained');
+        $this->actingAs($owner)->get('/admin/users/'.$operator->getKey().'/edit')
+            ->assertOk()
+            ->assertSee('name="denied_permissions[]" value="ssh.command.run"', false)
+            ->assertSee('Existing denial retained');
     }
 
     private function owner(): User
