@@ -282,6 +282,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             'target-context',
             'wordpress-abilities-read',
             'wordpress-ability-execute',
+            'ssh-command-run',
         ], $toolNames);
 
         $refreshResponse = $this->post('/oauth/token', [
