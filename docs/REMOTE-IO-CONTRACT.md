@@ -1,7 +1,7 @@
 # Remote Results and File Transfer Contract
 
-Status: Accepted target-state design. Bounded WP transport is integrated, and SSH command results are a proposed PR slice. SFTP/streaming and durable continuation remain unimplemented.
-Owners: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [bounded-response work #122](https://github.com/AChWorks/mcp-gateway/issues/122).
+Status: Durable data/result contract, not a live implementation log. WordPress bounded responses and SSH command-source are implemented; the availability of SFTP inline/streaming, client file ingress/egress, resumability and delivery must be checked against current PRs, Issues and Releases before they are claimed.
+Owners: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [bounded-response #122](https://github.com/AChWorks/mcp-gateway/issues/122) (integrated), [SSH file backend #123](https://github.com/AChWorks/mcp-gateway/issues/123) and [shared client↔Target exchange #147](https://github.com/AChWorks/mcp-gateway/issues/147).
 Related: [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [Direct SSH connector](./DIRECT-SSH-CONNECTOR.md).
 
 ## Purpose and scope
@@ -56,14 +56,22 @@ Do not conflate **transport response-size bounds** with **application pagination
 - File transport is connector-dependent: initial `ssh_direct` can use SFTP; AI Server Agent retains its own ranged file and job contracts; WP AI Bridge uses application-level bounded APIs. **Do not force SSH into MCP-over-HTTP transport.**
 - On normal request/response paths, avoid synchronous multi-gigabyte transit through PHP shared hosting. A future larger transfer may require chunked authenticated HTTP, external storage/direct transfer, or an explicit durable transfer session, evaluated against hosting limits.
 
+## Proportional work and independent ceilings
+
+A **maximum permitted size does not imply a preallocated buffer**. For a request of 10 KiB under a validated 256 KiB maximum, process only the actual 10 KiB plus necessary framing, encoding, authentication and transport overhead. Avoid unnecessary staging, copying or SSH reconnects for small data. Stream unknown-length content with bounded reusable buffers and enforce an independently bounded total size as bytes arrive. A hard payload quota is a safety guard, **not** the mechanism by which the product becomes performant.
+
+Keep **per-inline-call**, **per-stream buffer/window**, **whole-transfer bytes**, **deadline/worker occupancy**, **concurrency** and **temporary disk** distinct. An inline SFTP 16 KiB guard is not an end-user file-transfer ceiling. Use actual client/Target capabilities and measured round trips, connection count, p50/p95 latency, peak memory/CPU, temp disk and error behavior to select appropriate inline ceilings, chunk/window sizes and streaming versus private authenticated handoff. Comparison workloads should cover small files under a much higher permitted maximum and representative medium/larger binary content. Do not demand a new queue/object store/daemon to solve a small-file efficiency problem.
+
+The *same* Gateway transfer authorization/integrity/quotas/outcome policy must serve verified clients and supported WP/SSH Target adapters without one data-transfer engine per extension, tool or application. Public file-return links and opaque references do not prove the model can consume file bytes; verify client ingress and actual model-readable versus user-downloadable egress independently. For security/execution gates and acceptance use #147 and #112.
+
 ## Delivery sequence and ownership
 
-**Now (#122):** reproduce existing WP oversize case, preserve finite decoded-byte limit, add typed safe failure + effective-limit diagnostics/configuration and tests; document connector/tool limit choice and interface with WP #100. Establish the semantics in this document without pretending all future mechanisms ship now.
+**Completed bounded-response foundation (#122):** keep the integrated decoded-byte limit, typed safe oversize diagnostics and compatibility tests. Further changes must be tied to real measurements and must not silently expand unrelated JSON limits.
 
 **Foundation (#108 / #109 / #110):** factor shared downstream MCP bounds and error propagation where truly common; keep connector-owned payload/transport and stable Target/user authorization. Do not introduce a generic large-object framework before the third real connector demonstrates a need.
 
-**Direct SSH (#123):** ship ordinary command output plus bounded SFTP stat/list/read/write and, when supported by the runtime without unbounded PHP buffering, basic streamed file transfer; explicitly signal unavailable continuation for truncated commands. No always-on PTY/job/transfer service required.
+**Direct SSH (#123):** SSH bounded command output is source-integrated. Merge/accept the separately gated small SFTP candidate and internal streaming backend only after their exact security/integration gates; neither is proof of a public end-to-end file handoff. Do not infer retrievable continuation from a truncated one-off command or require an always-on PTY/job service.
 
-**Final acceptance (#112):** validate small-path latency, oversize/encoded/unknown-length handling, no cross-Target/credential leaks, interrupted-write unknown outcomes, representative large file and mixed-connector limits, and supported shared-PHP packaging. Add only tests for capabilities actually shipped.
+**Client handoff (#147) and final mixed Target acceptance (#112):** prove real client attachment ingress, real model-readable versus user-downloadable output where supported, shared WP/SSH adapters, integrity and proportional work. Then validate small-path latency, oversize/encoded/unknown-length handling, cross-Target isolation, interrupted-write outcomes, larger files, concurrency and supported shared-PHP packaging. Do not test speculative features as if already shipped.
 
 **Future, demand-driven:** resumable transfer with durable ID/offset/checksum, spooled command output, durable SSH jobs, PTY/interactive stdin, richer MCP Tasks integration, object-storage offload. They are architectural extension points, **not release blockers** and must not be advertised until implemented and tested.
