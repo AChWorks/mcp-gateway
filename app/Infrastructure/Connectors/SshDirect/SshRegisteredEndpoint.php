@@ -33,8 +33,18 @@ final readonly class SshRegisteredEndpoint
         }
 
         $host = strtolower(trim($host, ' '));
-        if (str_starts_with($host, '[') && str_ends_with($host, ']')) {
-            $host = substr($host, 1, -1);
+        if (str_starts_with($host, '[') || str_ends_with($host, ']')) {
+            // Brackets disambiguate IPv6 literals only, never IPv4 or DNS.
+            if (! str_starts_with($host, '[') || ! str_ends_with($host, ']')) {
+                throw new InvalidArgumentException('Bracketed SSH host must be a valid IPv6 literal.');
+            }
+
+            $inside = substr($host, 1, -1);
+            if (filter_var($inside, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false) {
+                throw new InvalidArgumentException('Bracketed SSH host must be a valid IPv6 literal.');
+            }
+
+            $host = $inside;
         }
 
         if ($host === '' || strlen($host) > 253) {
