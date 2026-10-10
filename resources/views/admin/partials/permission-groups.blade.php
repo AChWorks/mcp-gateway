@@ -9,7 +9,7 @@
         ],
         'targets' => [
             'title' => __('Shared Target management'),
-            'help' => __('These capabilities apply across connector types, subject to each user’s Target scope and the connector’s supported lifecycle.'),
+            'help' => __('Shared registration and lifecycle controls. The badge distinguishes Gateway-wide actions (such as adding a Target) from Target-scoped actions (such as connecting one).'),
             'status' => null,
             'future' => false,
         ],
