@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
+use App\Application\Targets\Concerns\StreamsSshFiles;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
@@ -24,6 +25,8 @@ use Throwable;
  */
 final readonly class SshFileRuntime
 {
+    use StreamsSshFiles;
+
     private const MAX_PATH_BYTES = 1024;
 
     private const MAX_RANGE_BYTES = 16384;
