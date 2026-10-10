@@ -129,7 +129,16 @@ final readonly class GatewayMcpEndpoint
                     'properties' => [
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                         'ability' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
-                        'input' => ['type' => 'object'],
+                        // MCP SDK normalizes an empty JSON object to an
+                        // empty PHP array during schema validation. Admit only
+                        // that zero-item array representation, not arbitrary
+                        // JSON arrays, and keep the downstream object shape.
+                        'input' => [
+                            'anyOf' => [
+                                ['type' => 'object'],
+                                ['type' => 'array', 'maxItems' => 0],
+                            ],
+                        ],
                     ],
                     'required' => ['target_id', 'ability'],
                     'additionalProperties' => false,

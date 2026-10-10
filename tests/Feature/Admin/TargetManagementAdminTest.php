@@ -8,9 +8,11 @@ use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 
 final class TargetManagementAdminTest extends TestCase
@@ -181,6 +183,64 @@ final class TargetManagementAdminTest extends TestCase
             ->where('target_id', 'to-remove')->where('operation', 'target-remove')->count());
         $this->get('/admin/sites')->assertNotFound();
         $this->get('/admin/site-checks')->assertNotFound();
+    }
+
+    public function test_target_admin_lifecycle_routes_remain_authenticated_and_web_csrf_guarded(): void
+    {
+        foreach (['/admin/targets', '/admin/targets/create', '/admin/activity'] as $path) {
+            $this->get($path)->assertRedirect('/admin/login');
+        }
+
+        foreach ([
+            'admin.targets.store',
+            'admin.targets.update',
+            'admin.targets.destroy',
+            'admin.targets.connect',
+            'admin.targets.reconnect',
+            'admin.targets.disconnect',
+            'admin.targets.test',
+        ] as $name) {
+            $route = Route::getRoutes()->getByName($name);
+            self::assertNotNull($route, $name);
+            self::assertContains('web', $route->middleware(), $name);
+            self::assertContains('auth', $route->middleware(), $name);
+        }
+
+        foreach (['admin.sites.store', 'admin.site-checks.store', 'bridge.site.callback'] as $old) {
+            self::assertNull(Route::getRoutes()->getByName($old), $old);
+        }
+    }
+
+    public function test_target_explicit_metadata_check_stores_bounded_failure_without_network_on_read(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $this->actingAs($owner);
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'metadata-fail',
+            'display_name' => 'Metadata check',
+            'base_url' => 'https://wordpress.example.test/',
+        ])->assertRedirect('/admin/targets/metadata-fail');
+
+        $target = Target::query()->where('target_id', 'metadata-fail')->sole();
+        Http::assertSentCount(2);
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(static fn (Request $request) => Http::response(['error' => 'not_found'], 404));
+
+        $this->get('/admin/targets/'.$target->target_id)->assertOk();
+        Http::assertNothingSent();
+
+        $this->post(route('admin.targets.test', ['target' => $target->target_id], false))
+            ->assertRedirect('/admin/targets/'.$target->target_id)
+            ->assertSessionHasErrors('target');
+        $target->refresh();
+        self::assertNotNull($target->last_tested_at);
+        self::assertSame('missing_bridge', $target->last_error_code);
+        self::assertSame('missing_bridge', $target->last_failure_code);
+        self::assertNotNull($target->last_failure_at);
+        $this->get('/admin/targets/'.$target->target_id)
+            ->assertOk()->assertSee('missing_bridge');
     }
 
     private function user(string $role, string $scope): User

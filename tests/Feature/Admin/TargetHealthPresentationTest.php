@@ -3,16 +3,16 @@
 namespace Tests\Feature\Admin;
 
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
-use App\Domain\Sites\Site;
-use App\Domain\Sites\SiteConnectionState;
+use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
-final class SiteHealthPresentationTest extends TestCase
+final class TargetHealthPresentationTest extends TestCase
 {
     use RefreshDatabase;
 
@@ -21,16 +21,16 @@ final class SiteHealthPresentationTest extends TestCase
         Http::preventStrayRequests();
         config()->set('bridge.health.stale_after_hours', 24);
 
-        $owner = $this->user(GatewayRole::Owner, SiteScopeMode::All);
-        $healthy = $this->site('healthy', SiteConnectionState::Connected, [
+        $owner = $this->user(GatewayRole::Owner, TargetScopeMode::All);
+        $healthy = $this->site('healthy', TargetConnectionState::Connected, [
             'connected_at' => now(),
             'last_success_at' => now(),
         ]);
-        $this->site('stale', SiteConnectionState::Connected, [
+        $this->site('stale', TargetConnectionState::Connected, [
             'connected_at' => now()->subDays(3),
             'last_success_at' => now()->subDays(3),
         ]);
-        $this->site('unreachable', SiteConnectionState::Error, [
+        $this->site('unreachable', TargetConnectionState::Error, [
             'last_error_code' => 'network_failure',
             'last_failure_at' => now(),
             'last_failure_code' => 'network_failure',
@@ -40,22 +40,21 @@ final class SiteHealthPresentationTest extends TestCase
 
         $this->get('/admin')
             ->assertOk()
-            ->assertSee('Stale or unknown evidence');
+            ->assertSee('Registered Targets');
 
-        $this->get('/admin/sites')
+        $this->get('/admin/targets')
             ->assertOk()
-            ->assertSee('Healthy')
+            ->assertSee('Connected')
             ->assertSee('Stale')
             ->assertSee('Unreachable')
-            ->assertSee('Latest evidence');
+            ->assertSee('Connection state');
 
         $this->get('/admin/activity')->assertOk();
 
-        $this->get(route('admin.sites.show', ['site' => $healthy->site_id], false))
+        $this->get(route('admin.targets.show', ['target' => $healthy->target_id], false))
             ->assertOk()
-            ->assertSee('Last successful operation')
-            ->assertSee('Last explicit check')
-            ->assertSee('Latest failure');
+            ->assertSee('Connection state')
+            ->assertSee('Last tested');
 
         Http::assertNothingSent();
     }
@@ -64,30 +63,30 @@ final class SiteHealthPresentationTest extends TestCase
     {
         Http::preventStrayRequests();
 
-        $operator = $this->user(GatewayRole::Operator, SiteScopeMode::Selected);
-        $visible = $this->site('visible', SiteConnectionState::Connected, [
+        $operator = $this->user(GatewayRole::Operator, TargetScopeMode::Selected);
+        $visible = $this->site('visible', TargetConnectionState::Connected, [
             'connected_at' => now(),
             'last_success_at' => now(),
         ]);
-        $this->site('hidden', SiteConnectionState::Error, [
+        $this->site('hidden', TargetConnectionState::Error, [
             'last_error_code' => 'network_failure',
             'last_failure_at' => now(),
             'last_failure_code' => 'network_failure',
         ]);
 
-        DB::table('user_site_access')->insert([
+        DB::table('user_target_access')->insert([
             'user_id' => $operator->id,
-            'site_record_id' => $visible->id,
+            'target_record_id' => $visible->id,
             'allowed' => true,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
 
         $this->actingAs($operator)
-            ->get('/admin/sites')
+            ->get('/admin/targets')
             ->assertOk()
             ->assertSee('Visible')
-            ->assertSee('Healthy')
+            ->assertSee('Connected')
             ->assertDontSee('Hidden')
             ->assertDontSee('network_failure');
 
@@ -95,34 +94,25 @@ final class SiteHealthPresentationTest extends TestCase
     }
 
     /** @param array<string,mixed> $evidence */
-    private function site(string $siteId, SiteConnectionState $state, array $evidence): Site
+    private function site(string $siteId, TargetConnectionState $state, array $evidence): Target
     {
-        $base = 'https://'.$siteId.'.example.test';
-
-        return Site::query()->create([
-            'site_id' => $siteId,
+        return Target::query()->create([
+            'target_id' => $siteId,
             'display_name' => ucfirst($siteId),
-            'base_url' => $base,
-            'base_url_hash' => hash('sha256', $base),
             'connector_type' => 'wp_ai_bridge',
-            'mcp_resource_url' => $base.'/wp-json/wp-ai-bridge/v1/mcp',
-            'oauth_issuer_url' => $base,
-            'oauth_authorization_url' => $base.'/wp-ai-bridge/oauth/authorize',
-            'oauth_token_url' => $base.'/wp-json/wp-ai-bridge/v1/oauth/token',
-            'oauth_revocation_url' => $base.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
             'connection_state' => $state,
             ...$evidence,
         ]);
     }
 
-    private function user(GatewayRole $role, SiteScopeMode $scope): User
+    private function user(GatewayRole $role, TargetScopeMode $scope): User
     {
         return User::query()->create([
             'name' => ucfirst($role->value),
             'email' => $role->value.'-health-'.uniqid().'@example.test',
             'password' => 'CorrectHorse!234',
             'role' => $role->value,
-            'site_scope_mode' => $scope->value,
+            'target_scope_mode' => $scope->value,
             'access_enabled' => true,
         ]);
     }

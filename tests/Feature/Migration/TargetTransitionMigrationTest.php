@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Migration;
 
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -11,6 +12,45 @@ use Tests\TestCase;
 final class TargetTransitionMigrationTest extends TestCase
 {
     private const MIGRATION = '2026_10_09_000000_transition_site_domain_to_targets.php';
+
+    private bool $rebuildMariaDbTestSchema = false;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        if (! in_array(DB::getDriverName(), ['mariadb', 'mysql'], true)) {
+            return;
+        }
+
+        // These tests intentionally build a historical schema by hand instead
+        // of consuming current migrations. Only a dedicated, disposable
+        // PHPUnit database may be cleared; never a live Gateway database.
+        $name = (string) DB::connection()->getDatabaseName();
+        if (! app()->environment('testing')
+            || preg_match('/(?:^|[_-])(?:test|testing|ci)(?:[_-]|$)/i', $name) !== 1) {
+            throw new RuntimeException('Historical migration fixture refuses a non-test MariaDB database.');
+        }
+
+        $this->rebuildMariaDbTestSchema = true;
+        DB::connection()->getSchemaBuilder()->dropAllTables();
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            if ($this->rebuildMariaDbTestSchema) {
+                // Reconstruct the normal Target schema for the following
+                // feature suites: DDL is not transactionally rolled back.
+                // Hand-built legacy schemas have no migrations repository;
+                // Laravel migrate:fresh skips its wipe in that case.
+                DB::connection()->getSchemaBuilder()->dropAllTables();
+                Artisan::call('migrate:fresh', ['--force' => true]);
+            }
+        } finally {
+            parent::tearDown();
+        }
+    }
 
     public function test_clean_install_migrates_to_generic_target_and_connector_owned_storage(): void
     {

@@ -748,6 +748,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 return;
             }
             $this->setFailure($locked, $reason, TargetConnectionState::Error);
+            $locked->forceFill(['last_tested_at' => now()])->save();
         });
     }
 

@@ -1,11 +1,11 @@
 <?php
 
-namespace Tests\Feature\Sites;
+namespace Tests\Feature\Targets;
 
-use App\Application\Mcp\PendingGatewayToolHandlers;
-use App\Application\Sites\SiteInventory;
+use App\Application\Mcp\TargetMcpToolHandlers;
+use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -13,17 +13,17 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Tests\TestCase;
 
-final class SiteInventoryTest extends TestCase
+final class TargetInventoryTest extends TestCase
 {
     use RefreshDatabase;
 
     public function test_admin_inventory_uses_two_bounded_queries_at_representative_fleet_sizes(): void
     {
-        $inventory = app(SiteInventory::class);
+        $inventory = app(TargetInventory::class);
         $user = $this->owner();
 
         foreach ([[1, 100], [101, 200], [201, 500]] as [$from, $to]) {
-            $this->seedSites($from, $to);
+            $this->seedTargets($from, $to);
 
             DB::flushQueryLog();
             DB::enableQueryLog();
@@ -31,55 +31,55 @@ final class SiteInventoryTest extends TestCase
             $queries = DB::getQueryLog();
             DB::disableQueryLog();
 
-            self::assertCount(SiteInventory::ADMIN_PAGE_SIZE, $page['items']);
-            self::assertSame(SiteInventory::ADMIN_PAGE_SIZE, $page['per_page']);
+            self::assertCount(TargetInventory::ADMIN_PAGE_SIZE, $page['items']);
+            self::assertSame(TargetInventory::ADMIN_PAGE_SIZE, $page['per_page']);
             self::assertTrue($page['has_more']);
             self::assertCount(2, $queries);
-            self::assertSame('site-00001', $page['items'][0]->site_id);
-            self::assertSame('site-00050', $page['items'][49]->site_id);
+            self::assertSame('target-00001', $page['items'][0]->target_id);
+            self::assertSame('target-00050', $page['items'][49]->target_id);
         }
     }
 
     public function test_admin_inventory_page_search_and_state_filter_are_deterministic(): void
     {
-        $this->seedSites(1, 120);
-        $inventory = app(SiteInventory::class);
+        $this->seedTargets(1, 120);
+        $inventory = app(TargetInventory::class);
         $user = $this->owner();
 
         $secondPage = $inventory->adminPage($user, 2);
-        self::assertSame('site-00051', $secondPage['items'][0]->site_id);
-        self::assertSame('site-00100', $secondPage['items'][49]->site_id);
+        self::assertSame('target-00051', $secondPage['items'][0]->target_id);
+        self::assertSame('target-00100', $secondPage['items'][49]->target_id);
         self::assertTrue($secondPage['has_more']);
 
         $filtered = $inventory->adminPage($user, 1, 'Site 001', 'connected');
         self::assertNotSame([], $filtered['items']);
         self::assertFalse($filtered['has_more']);
 
-        foreach ($filtered['items'] as $site) {
-            self::assertStringContainsString('Site 001', $site->display_name);
-            self::assertSame('connected', $site->getRawOriginal('connection_state'));
+        foreach ($filtered['items'] as $target) {
+            self::assertStringContainsString('Site 001', $target->display_name);
+            self::assertSame('connected', $target->getRawOriginal('connection_state'));
         }
     }
 
-    public function test_admin_sites_http_page_is_bounded_and_keeps_filters_across_pagination(): void
+    public function test_admin_targets_http_page_is_bounded_and_keeps_filters_across_pagination(): void
     {
-        $this->seedSites(1, 120);
+        $this->seedTargets(1, 120);
         $this->actingAs(User::query()->create([
             'name' => 'Gateway Admin',
             'email' => 'inventory-admin@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
         ]));
 
-        $first = $this->get('/admin/sites');
+        $first = $this->get('/admin/targets');
         $first->assertOk()
             ->assertSee('Site 00001')
             ->assertSee('Site 00050')
             ->assertDontSee('Site 00051')
             ->assertSee('Next');
 
-        $second = $this->get('/admin/sites?page=2');
+        $second = $this->get('/admin/targets?page=2');
         $second->assertOk()
             ->assertSee('Site 00051')
             ->assertSee('Site 00100')
@@ -87,7 +87,7 @@ final class SiteInventoryTest extends TestCase
             ->assertSee('Previous')
             ->assertSee('Next');
 
-        $filtered = $this->get('/admin/sites?search=Site%20001&connection_state=connected');
+        $filtered = $this->get('/admin/targets?search=Site%20001&connection_state=connected');
         $filtered->assertOk()
             ->assertSee('Site 00102')
             ->assertDontSee('Site 00101')
@@ -96,8 +96,8 @@ final class SiteInventoryTest extends TestCase
 
     public function test_mcp_cursor_discovers_the_entire_representative_fleet_without_unbounded_pages(): void
     {
-        $this->seedSites(1, 500);
-        $inventory = app(SiteInventory::class);
+        $this->seedTargets(1, 500);
+        $inventory = app(TargetInventory::class);
         $user = $this->owner();
         $cursor = null;
         $discovered = [];
@@ -114,8 +114,8 @@ final class SiteInventoryTest extends TestCase
             self::assertLessThanOrEqual(73, count($page['items']));
             $queries += count($queryLog);
 
-            foreach ($page['items'] as $site) {
-                $discovered[] = $site->site_id;
+            foreach ($page['items'] as $target) {
+                $discovered[] = $target->target_id;
             }
 
             $cursor = $page['next_cursor'];
@@ -123,45 +123,45 @@ final class SiteInventoryTest extends TestCase
 
         self::assertCount(500, $discovered);
         self::assertCount(500, array_unique($discovered));
-        self::assertSame('site-00001', $discovered[0]);
-        self::assertSame('site-00500', $discovered[499]);
+        self::assertSame('target-00001', $discovered[0]);
+        self::assertSame('target-00500', $discovered[499]);
         self::assertSame(7, $queries);
     }
 
-    public function test_sites_list_preserves_no_argument_first_page_and_adds_deterministic_continuation(): void
+    public function test_targets_list_preserves_no_argument_first_page_and_adds_deterministic_continuation(): void
     {
-        $this->seedSites(1, 150);
-        $handlers = app(PendingGatewayToolHandlers::class);
+        $this->seedTargets(1, 150);
+        $handlers = app(TargetMcpToolHandlers::class);
         $user = $this->owner();
 
-        $first = $handlers->sitesList($user);
+        $first = $handlers->targetsList($user);
         self::assertTrue($first['ok']);
-        self::assertCount(100, $first['sites']);
+        self::assertCount(100, $first['targets']);
         self::assertTrue($first['truncated']);
-        self::assertSame('site-00100', $first['next_cursor']);
+        self::assertSame('target-00100', $first['next_cursor']);
 
-        $second = $handlers->sitesList($user, cursor: $first['next_cursor']);
+        $second = $handlers->targetsList($user, cursor: $first['next_cursor']);
         self::assertTrue($second['ok']);
-        self::assertCount(50, $second['sites']);
+        self::assertCount(50, $second['targets']);
         self::assertFalse($second['truncated']);
         self::assertNull($second['next_cursor']);
-        self::assertSame('site-00101', $second['sites'][0]['site_id']);
-        self::assertSame('site-00150', $second['sites'][49]['site_id']);
+        self::assertSame('target-00101', $second['targets'][0]['target_id']);
+        self::assertSame('target-00150', $second['targets'][49]['target_id']);
     }
 
     public function test_inventory_rejects_unbounded_or_unknown_machine_filters(): void
     {
-        $inventory = app(SiteInventory::class);
+        $inventory = app(TargetInventory::class);
         $user = $this->owner();
 
         try {
-            $inventory->mcpPage($user, limit: SiteInventory::MCP_MAX_LIMIT + 1);
+            $inventory->mcpPage($user, limit: TargetInventory::MCP_MAX_LIMIT + 1);
             self::fail('An oversized MCP inventory limit must be rejected.');
         } catch (InvalidArgumentException $exception) {
             self::assertSame('limit must be between 1 and 100.', $exception->getMessage());
         }
 
-        $result = app(PendingGatewayToolHandlers::class)->sitesList($user, connection_state: 'unknown');
+        $result = app(TargetMcpToolHandlers::class)->targetsList($user, connection_state: 'unknown');
         self::assertFalse($result['ok']);
         self::assertSame('invalid_input', $result['error']['code']);
     }
@@ -173,18 +173,17 @@ final class SiteInventoryTest extends TestCase
             'email' => 'inventory-owner-'.uniqid().'@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
         ]);
     }
 
-    private function seedSites(int $from, int $to): void
+    private function seedTargets(int $from, int $to): void
     {
         $rows = [];
         $now = now();
 
         for ($index = $from; $index <= $to; $index++) {
-            $siteId = sprintf('site-%05d', $index);
-            $baseUrl = sprintf('https://site-%05d.example.test', $index);
+            $targetId = sprintf('target-%05d', $index);
             $state = match ($index % 3) {
                 0 => 'connected',
                 1 => 'disconnected',
@@ -193,16 +192,9 @@ final class SiteInventoryTest extends TestCase
 
             $rows[] = [
                 'id' => (string) Str::ulid(),
-                'site_id' => $siteId,
+                'target_id' => $targetId,
                 'display_name' => sprintf('Site %05d', $index),
-                'base_url' => $baseUrl,
-                'base_url_hash' => hash('sha256', $baseUrl),
                 'connector_type' => 'wp_ai_bridge',
-                'mcp_resource_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/mcp',
-                'oauth_issuer_url' => $baseUrl,
-                'oauth_authorization_url' => $baseUrl.'/wp-ai-bridge/oauth/authorize',
-                'oauth_token_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/oauth/token',
-                'oauth_revocation_url' => $baseUrl.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
                 'connection_state' => $state,
                 'last_error_code' => $state === 'error' ? 'network_failure' : null,
                 'last_tested_at' => null,
@@ -212,13 +204,13 @@ final class SiteInventoryTest extends TestCase
             ];
 
             if (count($rows) === 200) {
-                DB::table('sites')->insert($rows);
+                DB::table('targets')->insert($rows);
                 $rows = [];
             }
         }
 
         if ($rows !== []) {
-            DB::table('sites')->insert($rows);
+            DB::table('targets')->insert($rows);
         }
     }
 }

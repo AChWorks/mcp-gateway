@@ -23,6 +23,8 @@
         <dt>{{ __('Connector') }}</dt><dd><code>{{ $target->connector_type }}</code></dd>
         <dt>{{ __('Connection state') }}</dt><dd>{{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}</dd>
         <dt>{{ __('Last tested') }}</dt><dd>{{ $target->last_tested_at?->toIso8601String() ?? __('Not yet tested') }}</dd>
+        <dt>{{ __('Last error') }}</dt><dd>{{ $target->last_error_code ?? __('No recorded error') }}</dd>
+        <dt>{{ __('Last failure') }}</dt><dd>{{ $target->last_failure_at?->toIso8601String() ?? __('No recorded failure') }}</dd>
         @if ($wpConfig !== null)
             <dt>{{ __('WordPress origin') }}</dt><dd><code class="small-code">{{ $wpConfig->base_url }}</code></dd>
             <dt>{{ __('MCP resource') }}</dt><dd><code class="small-code">{{ $wpConfig->mcp_resource_url }}</code></dd>

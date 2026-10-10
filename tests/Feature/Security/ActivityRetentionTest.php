@@ -30,7 +30,7 @@ final class ActivityRetentionTest extends TestCase
         self::assertSame(3, DB::table('activity_events')->count());
         self::assertSame(
             ['recent-3', 'recent-4', 'recent-5'],
-            DB::table('activity_events')->orderBy('created_at')->pluck('site_id')->all(),
+            DB::table('activity_events')->orderBy('created_at')->pluck('target_id')->all(),
         );
     }
 
@@ -45,7 +45,7 @@ final class ActivityRetentionTest extends TestCase
             ->expectsOutput('Activity retention pruned: expired=0 overflow=0 remaining=1')
             ->assertSuccessful();
 
-        self::assertDatabaseHas('activity_events', ['site_id' => 'recent']);
+        self::assertDatabaseHas('activity_events', ['target_id' => 'recent']);
     }
 
     private function insertActivity(string $siteId, mixed $createdAt): void
@@ -56,7 +56,7 @@ final class ActivityRetentionTest extends TestCase
             'actor_type' => 'system',
             'actor_id' => null,
             'client_id_hash' => null,
-            'site_id' => $siteId,
+            'target_id' => $siteId,
             'operation' => 'retention-test',
             'outcome' => 'success',
             'error_code' => null,

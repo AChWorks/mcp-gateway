@@ -4,8 +4,8 @@ namespace Tests\Feature\Admin;
 
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
-use App\Domain\Sites\Site;
+use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -18,28 +18,28 @@ final class AdminAuthorizationTest extends TestCase
 
     public function test_selected_operator_sees_only_authorized_sites_and_direct_url_cannot_bypass_scope(): void
     {
-        $operator = $this->user(GatewayRole::Operator, SiteScopeMode::Selected);
+        $operator = $this->user(GatewayRole::Operator, TargetScopeMode::Selected);
         $alpha = $this->site('alpha');
         $beta = $this->site('beta');
 
         $this->allowSite($operator, $alpha);
 
         $this->actingAs($operator)
-            ->get('/admin/sites')
+            ->get('/admin/targets')
             ->assertOk()
             ->assertSee('Alpha')
             ->assertDontSee('Beta');
 
         $this->actingAs($operator)
-            ->get(route('admin.sites.show', ['site' => $alpha->site_id], false))
+            ->get(route('admin.targets.show', ['target' => $alpha->target_id], false))
             ->assertOk();
 
         $this->actingAs($operator)
-            ->get(route('admin.sites.show', ['site' => $beta->site_id], false))
+            ->get(route('admin.targets.show', ['target' => $beta->target_id], false))
             ->assertForbidden();
 
         $this->actingAs($operator)
-            ->put(route('admin.sites.update', ['site' => $alpha->site_id], false), [
+            ->put(route('admin.targets.update', ['target' => $alpha->target_id], false), [
                 'display_name' => 'Changed',
                 'base_url' => $alpha->base_url,
             ])
@@ -48,27 +48,27 @@ final class AdminAuthorizationTest extends TestCase
 
     public function test_per_site_denial_blocks_one_site_without_blocking_other_site_route_authorization(): void
     {
-        $administrator = $this->user(GatewayRole::Administrator, SiteScopeMode::All);
+        $administrator = $this->user(GatewayRole::Administrator, TargetScopeMode::All);
         $alpha = $this->site('alpha');
         $beta = $this->site('beta');
 
-        DB::table('user_site_permission_denials')->insert([
+        DB::table('user_target_permission_denials')->insert([
             'user_id' => $administrator->id,
-            'site_record_id' => $alpha->id,
-            'permission' => GatewayPermission::SitesUpdate->value,
+            'target_record_id' => $alpha->id,
+            'permission' => GatewayPermission::TargetsUpdate->value,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
 
         $this->actingAs($administrator)
-            ->put(route('admin.sites.update', ['site' => $alpha->site_id], false), [
+            ->put(route('admin.targets.update', ['target' => $alpha->target_id], false), [
                 'display_name' => 'Alpha changed',
                 'base_url' => $alpha->base_url,
             ])
             ->assertForbidden();
 
         $this->actingAs($administrator)
-            ->put(route('admin.sites.update', ['site' => $beta->site_id], false), [
+            ->put(route('admin.targets.update', ['target' => $beta->target_id], false), [
                 'display_name' => 'Beta changed',
                 'base_url' => $beta->base_url,
             ])
@@ -79,7 +79,7 @@ final class AdminAuthorizationTest extends TestCase
 
     public function test_disabled_user_cannot_start_a_new_admin_session(): void
     {
-        $user = $this->user(GatewayRole::Administrator, SiteScopeMode::All, false);
+        $user = $this->user(GatewayRole::Administrator, TargetScopeMode::All, false);
 
         $this->post('/admin/login', [
             'email' => $user->email,
@@ -94,7 +94,7 @@ final class AdminAuthorizationTest extends TestCase
 
     public function test_disabled_user_existing_browser_session_is_terminated_for_admin_and_oauth(): void
     {
-        $user = $this->user(GatewayRole::Administrator, SiteScopeMode::All);
+        $user = $this->user(GatewayRole::Administrator, TargetScopeMode::All);
 
         $this->actingAs($user)
             ->get('/admin')
@@ -116,7 +116,7 @@ final class AdminAuthorizationTest extends TestCase
 
     public function test_selected_scope_activity_excludes_other_sites_and_gateway_global_events(): void
     {
-        $operator = $this->user(GatewayRole::Operator, SiteScopeMode::Selected);
+        $operator = $this->user(GatewayRole::Operator, TargetScopeMode::Selected);
         $alpha = $this->site('alpha');
         $this->site('beta');
         $this->allowSite($operator, $alpha);
@@ -135,7 +135,7 @@ final class AdminAuthorizationTest extends TestCase
 
     private function user(
         GatewayRole $role,
-        SiteScopeMode $scope,
+        TargetScopeMode $scope,
         bool $enabled = true,
     ): User {
         return User::query()->create([
@@ -143,35 +143,26 @@ final class AdminAuthorizationTest extends TestCase
             'email' => $role->value.'-'.uniqid().'@example.test',
             'password' => 'CorrectHorse!234',
             'role' => $role->value,
-            'site_scope_mode' => $scope->value,
+            'target_scope_mode' => $scope->value,
             'access_enabled' => $enabled,
         ]);
     }
 
-    private function site(string $siteId): Site
+    private function site(string $siteId): Target
     {
-        $base = 'https://'.$siteId.'.example.test';
-
-        return Site::query()->create([
-            'site_id' => $siteId,
+        return Target::query()->create([
+            'target_id' => $siteId,
             'display_name' => ucfirst($siteId),
-            'base_url' => $base,
-            'base_url_hash' => hash('sha256', $base),
             'connector_type' => 'wp_ai_bridge',
-            'mcp_resource_url' => $base.'/wp-json/wp-ai-bridge/v1/mcp',
-            'oauth_issuer_url' => $base,
-            'oauth_authorization_url' => $base.'/wp-ai-bridge/oauth/authorize',
-            'oauth_token_url' => $base.'/wp-json/wp-ai-bridge/v1/oauth/token',
-            'oauth_revocation_url' => $base.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
             'connection_state' => 'disconnected',
         ]);
     }
 
-    private function allowSite(User $user, Site $site): void
+    private function allowSite(User $user, Target $site): void
     {
-        DB::table('user_site_access')->insert([
+        DB::table('user_target_access')->insert([
             'user_id' => $user->id,
-            'site_record_id' => $site->id,
+            'target_record_id' => $site->id,
             'allowed' => true,
             'created_at' => now(),
             'updated_at' => now(),
@@ -186,7 +177,9 @@ final class AdminAuthorizationTest extends TestCase
             'actor_type' => 'system',
             'actor_id' => null,
             'client_id_hash' => null,
-            'site_id' => $siteId,
+            'target_id' => $siteId,
+            'target_record_id' => $siteId === null ? null : Target::query()->where('target_id', $siteId)->value('id'),
+            'connector_type_snapshot' => $siteId === null ? null : 'wp_ai_bridge',
             'operation' => $operation,
             'outcome' => 'success',
             'error_code' => null,

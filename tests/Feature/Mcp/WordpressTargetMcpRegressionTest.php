@@ -2,13 +2,14 @@
 
 namespace Tests\Feature\Mcp;
 
-use App\Application\Mcp\PendingGatewayToolHandlers;
-use App\Application\Sites\SiteConnectionService;
-use App\Application\Sites\SiteRegistry;
+use App\Application\Mcp\TargetMcpToolHandlers;
+use App\Application\Mcp\WordpressTargetMcpToolHandlers;
+use App\Application\Targets\WpAiBridgeTargetConnectionService;
+use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
-use App\Domain\Sites\Site;
+use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
 use App\Models\User;
@@ -20,7 +21,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
-final class MultiSiteRoutingTest extends TestCase
+final class WordpressTargetMcpRegressionTest extends TestCase
 {
     use RefreshDatabase;
 
@@ -38,12 +39,12 @@ final class MultiSiteRoutingTest extends TestCase
             'email' => 'mcp-owner@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
         ]);
 
         config()->set('bridge.client.id', 'https://gateway.example.test/oauth/client.json');
         config()->set('bridge.client.name', 'MCP Gateway Test');
-        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/sites/callback');
+        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/targets/callback');
         config()->set('bridge.client.jwks_uri', 'https://gateway.example.test/oauth/jwks.json');
         Artisan::call('gateway:bridge-client-keygen', ['--force' => true]);
 
@@ -64,20 +65,21 @@ final class MultiSiteRoutingTest extends TestCase
         $this->pair($alpha);
         $this->createSite('beta');
 
-        $handlers = app(PendingGatewayToolHandlers::class);
-        $list = $handlers->sitesList($this->principal);
-        $context = $handlers->siteContext($this->principal, 'alpha');
+        $handlers = app(WordpressTargetMcpToolHandlers::class);
+        $list = app(TargetMcpToolHandlers::class)->targetsList($this->principal);
+        $context = app(TargetMcpToolHandlers::class)->targetContext($this->principal, 'alpha');
 
         self::assertTrue($list['ok']);
-        self::assertSame(['alpha', 'beta'], array_column($list['sites'], 'site_id'));
+        self::assertSame(['alpha', 'beta'], array_column($list['targets'], 'target_id'));
         self::assertFalse($list['truncated']);
-        self::assertSame('connected', $list['sites'][0]['connection_state']);
-        self::assertSame('disconnected', $list['sites'][1]['connection_state']);
+        self::assertSame('connected', $list['targets'][0]['connection_state']);
+        self::assertSame('disconnected', $list['targets'][1]['connection_state']);
 
         self::assertTrue($context['ok']);
-        self::assertSame('alpha', $context['site']['site_id']);
-        self::assertSame('https://alpha.example.test', $context['site']['base_url']);
-        self::assertSame('https://alpha.example.test/wp-json/wp-ai-bridge/v1/mcp', $context['site']['mcp_resource_url']);
+        self::assertSame('alpha', $context['target']['target_id']);
+        self::assertSame('wp_ai_bridge', $context['target']['connector_type']);
+        self::assertArrayNotHasKey('base_url', $context['target']);
+        self::assertArrayNotHasKey('mcp_resource_url', $context['target']);
 
         $encoded = json_encode([$list, $context], JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString('alpha-access', $encoded);
@@ -93,12 +95,10 @@ final class MultiSiteRoutingTest extends TestCase
         $beta = $this->createSite('beta');
         $this->pair($alpha);
         $this->pair($beta);
-        $alpha->forceFill(['last_success_at' => null])->save();
-        $beta->forceFill(['last_success_at' => null])->save();
 
-        $handlers = app(PendingGatewayToolHandlers::class);
-        $alphaList = $handlers->siteAbilitiesRead($this->principal, 'alpha', null, 2, 1, 'alpha-space', 'needle');
-        $betaExact = $handlers->siteAbilitiesRead($this->principal, 'beta', 'beta/demo');
+        $handlers = app(WordpressTargetMcpToolHandlers::class);
+        $alphaList = $handlers->read($this->principal, 'alpha', null, 2, 1, 'alpha-space', 'needle');
+        $betaExact = $handlers->read($this->principal, 'beta', 'beta/demo');
 
         self::assertTrue($alphaList['ok']);
         self::assertSame('alpha/demo', $alphaList['catalog']['items'][0]['name']);
@@ -109,8 +109,8 @@ final class MultiSiteRoutingTest extends TestCase
         self::assertTrue($betaExact['ok']);
         self::assertSame('beta/demo', $betaExact['catalog']['items'][0]['name']);
         self::assertSame('object', $betaExact['catalog']['items'][0]['input_schema']['type']);
-        self::assertNotNull($alpha->refresh()->last_success_at);
-        self::assertNotNull($beta->refresh()->last_success_at);
+        self::assertSame(2, DB::table('activity_events')
+            ->where('operation', 'wordpress-abilities-read')->where('outcome', 'success')->count());
 
         self::assertSame(['alpha.example.test', 'beta.example.test'], array_column($this->toolCalls, 'host'));
         self::assertSame(['wp-ai-bridge/abilities-read', 'wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'));
@@ -124,22 +124,25 @@ final class MultiSiteRoutingTest extends TestCase
         $this->pair($alpha);
         $this->pair($beta);
 
-        $handlers = app(PendingGatewayToolHandlers::class);
-        $read = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/read', ['id' => 7]);
-        $write = $handlers->siteAbilityExecute($this->principal, 'beta', 'demo/write', ['value' => 'changed']);
-        $denied = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/denied', []);
+        $handlers = app(WordpressTargetMcpToolHandlers::class);
+        $read = $handlers->execute($this->principal, 'alpha', 'demo/read', ['id' => 7]);
+        $write = $handlers->execute($this->principal, 'beta', 'demo/write', ['value' => 'changed']);
+        $denied = $handlers->execute($this->principal, 'alpha', 'demo/denied', []);
 
         self::assertTrue($read['ok']);
-        self::assertSame(['site' => 'alpha', 'kind' => 'read'], $read['result']);
+        self::assertSame(['target' => 'alpha', 'kind' => 'read'], $read['result']);
 
         self::assertTrue($write['ok']);
-        self::assertSame(['site' => 'beta', 'kind' => 'write', 'updated' => true], $write['result']);
+        self::assertSame(['target' => 'beta', 'kind' => 'write', 'updated' => true], $write['result']);
 
         self::assertFalse($denied['ok']);
         self::assertSame('downstream_rejected', $denied['error']['code']);
-        self::assertStringContainsString('Permission denied', $denied['error']['message']);
-        self::assertNotNull($alpha->refresh()->last_failure_at);
-        self::assertSame('downstream_rejected', $alpha->last_failure_code);
+        self::assertStringNotContainsString('alpha-access', $denied['error']['message']);
+        $this->assertDatabaseHas('activity_events', [
+            'operation' => 'wordpress-ability-execute',
+            'target_id' => 'alpha',
+            'error_code' => 'downstream_rejected',
+        ]);
 
         self::assertSame(
             [
@@ -174,63 +177,63 @@ final class MultiSiteRoutingTest extends TestCase
             'email' => 'write-only@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Operator->value,
-            'site_scope_mode' => SiteScopeMode::Selected->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
         ]);
 
-        DB::table('user_site_access')->insert([
+        DB::table('user_target_access')->insert([
             'user_id' => $operator->id,
-            'site_record_id' => $site->id,
+            'target_record_id' => $site->id,
             'allowed' => true,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        DB::table('user_site_permission_denials')->insert([
+        DB::table('user_target_permission_denials')->insert([
             [
                 'user_id' => $operator->id,
-                'site_record_id' => $site->id,
-                'permission' => GatewayPermission::SitesView->value,
+                'target_record_id' => $site->id,
+                'permission' => GatewayPermission::TargetsView->value,
                 'created_at' => now(),
                 'updated_at' => now(),
             ],
             [
                 'user_id' => $operator->id,
-                'site_record_id' => $site->id,
-                'permission' => GatewayPermission::AbilitiesInspect->value,
+                'target_record_id' => $site->id,
+                'permission' => GatewayPermission::WordpressAbilitiesInspect->value,
                 'created_at' => now(),
                 'updated_at' => now(),
             ],
             [
                 'user_id' => $operator->id,
-                'site_record_id' => $site->id,
-                'permission' => GatewayPermission::AbilitiesExecuteReadonly->value,
+                'target_record_id' => $site->id,
+                'permission' => GatewayPermission::WordpressAbilitiesExecuteReadonly->value,
                 'created_at' => now(),
                 'updated_at' => now(),
             ],
         ]);
 
-        $handlers = app(PendingGatewayToolHandlers::class);
+        $handlers = app(WordpressTargetMcpToolHandlers::class);
 
-        $context = $handlers->siteContext($operator, 'alpha');
+        $context = app(TargetMcpToolHandlers::class)->targetContext($operator, 'alpha');
         self::assertFalse($context['ok']);
-        self::assertSame('site_not_found', $context['error']['code']);
+        self::assertSame('target_not_found', $context['error']['code']);
 
-        $catalog = $handlers->siteAbilitiesRead($operator, 'alpha');
+        $catalog = $handlers->read($operator, 'alpha');
         self::assertFalse($catalog['ok']);
-        self::assertSame('site_not_found', $catalog['error']['code']);
+        self::assertSame('target_not_found', $catalog['error']['code']);
 
-        $read = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/read', []);
+        $read = $handlers->execute($operator, 'alpha', 'demo/read', []);
         self::assertFalse($read['ok']);
         self::assertSame('forbidden', $read['error']['code']);
 
-        $write = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/write', ['value' => 'changed']);
+        $write = $handlers->execute($operator, 'alpha', 'demo/write', ['value' => 'changed']);
         self::assertTrue($write['ok']);
         self::assertSame('write', $write['result']['kind']);
 
-        $destructive = $handlers->siteAbilityExecute($operator, 'alpha', 'demo/delete', []);
+        $destructive = $handlers->execute($operator, 'alpha', 'demo/delete', []);
         self::assertFalse($destructive['ok']);
         self::assertSame('forbidden', $destructive['error']['code']);
 
-        $unclassified = $handlers->siteAbilityExecute($operator, 'alpha', 'provider/write', []);
+        $unclassified = $handlers->execute($operator, 'alpha', 'provider/write', []);
         self::assertFalse($unclassified['ok']);
         self::assertSame('forbidden', $unclassified['error']['code']);
     }
@@ -240,7 +243,7 @@ final class MultiSiteRoutingTest extends TestCase
         $alpha = $this->createSite('alpha');
         $this->pair($alpha);
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead($this->principal, 'alpha');
+        $result = app(WordpressTargetMcpToolHandlers::class)->read($this->principal, 'alpha');
 
         self::assertTrue($result['ok']);
         self::assertSame(10, $result['catalog']['per_page']);
@@ -290,15 +293,18 @@ final class MultiSiteRoutingTest extends TestCase
             return $this->bridgeResponse($request);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute($this->principal, 'alpha', 'demo/read', []);
+        $result = app(WordpressTargetMcpToolHandlers::class)->execute($this->principal, 'alpha', 'demo/read', []);
 
         self::assertFalse($result['ok']);
         self::assertSame('network_failure', $result['error']['code']);
-        self::assertStringContainsString('downstream read', $result['error']['message']);
+        self::assertStringNotContainsString('alpha-access', $result['error']['message']);
         self::assertSame(1, $catalogCalls);
         self::assertSame(1, $targetCalls);
-        self::assertNotNull($alpha->refresh()->last_failure_at);
-        self::assertSame('network_failure', $alpha->last_failure_code);
+        $this->assertDatabaseHas('activity_events', [
+            'operation' => 'wordpress-ability-execute',
+            'target_id' => 'alpha',
+            'error_code' => 'network_failure',
+        ]);
     }
 
     public function test_real_mcp_transport_accepts_nested_empty_object_and_preserves_object_identity_downstream(): void
@@ -324,40 +330,72 @@ final class MultiSiteRoutingTest extends TestCase
         $host = parse_url((string) config('oauth.resource'), PHP_URL_HOST);
         self::assertIsString($host);
 
-        $meta = [
-            'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
-            'io.modelcontextprotocol/clientCapabilities' => (object) [],
-            'io.modelcontextprotocol/clientInfo' => ['name' => 'issue-50-test', 'version' => '1.0.0'],
+        $headers = [
+            'HTTP_HOST' => $host,
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+            'HTTP_MCP_PROTOCOL_VERSION' => '2025-11-25',
         ];
-        $body = json_encode([
+        $endpoint = app(GatewayMcpEndpoint::class);
+
+        $initialize = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], $headers, json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 1,
+            'method' => 'initialize',
+            'params' => [
+                'protocolVersion' => '2025-11-25',
+                'capabilities' => (object) [],
+                'clientInfo' => ['name' => 'target-regression', 'version' => '1.0.0'],
+            ],
+        ], JSON_THROW_ON_ERROR));
+        $initialize->attributes->set('oauth_user', $this->principal);
+        $initialized = $endpoint->handle($initialize);
+        self::assertSame(200, $initialized->getStatusCode());
+        $session = $initialized->headers->get('Mcp-Session-Id');
+        self::assertNotEmpty($session);
+        $headers['HTTP_MCP_SESSION_ID'] = $session;
+
+        $request = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], $headers, json_encode([
             'jsonrpc' => '2.0',
             'id' => 50,
             'method' => 'tools/call',
             'params' => [
-                'name' => 'site-ability-execute',
+                'name' => 'wordpress-ability-execute',
                 'arguments' => [
-                    'site_id' => 'alpha',
+                    'target_id' => 'alpha',
                     'ability' => 'demo/read',
                     'input' => (object) [],
                 ],
-                '_meta' => $meta,
             ],
-        ], JSON_THROW_ON_ERROR);
-
-        $request = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], [
-            'HTTP_HOST' => $host,
-            'CONTENT_TYPE' => 'application/json',
-            'HTTP_ACCEPT' => 'application/json',
-            'HTTP_MCP_PROTOCOL_VERSION' => '2026-07-28',
-            'HTTP_MCP_METHOD' => 'tools/call',
-            'HTTP_MCP_NAME' => 'site-ability-execute',
-        ], $body);
-
+        ], JSON_THROW_ON_ERROR));
         $request->attributes->set('oauth_user', $this->principal);
-        $response = app(GatewayMcpEndpoint::class)->handle($request);
-
+        $response = $endpoint->handle($request);
         self::assertSame(200, $response->getStatusCode());
+        ob_start();
+        $response->sendContent();
+        $body = (string) ob_get_clean();
+        self::assertStringContainsString('"isError":false', $body);
         self::assertInstanceOf(\stdClass::class, $downstreamParameters);
+
+        // The SDK's empty-object coercion must not turn into permission for
+        // nonempty JSON arrays masquerading as WordPress Ability objects.
+        $previousCalls = count($this->toolCalls);
+        $invalid = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], $headers, json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 51,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'wordpress-ability-execute',
+                'arguments' => ['target_id' => 'alpha', 'ability' => 'demo/read', 'input' => [1, 2]],
+            ],
+        ], JSON_THROW_ON_ERROR));
+        $invalid->attributes->set('oauth_user', $this->principal);
+        $rejected = $endpoint->handle($invalid);
+        ob_start();
+        $rejected->sendContent();
+        $invalidBody = (string) ob_get_clean();
+        self::assertStringContainsString('Invalid parameters', $invalidBody);
+        self::assertSame($previousCalls, count($this->toolCalls));
     }
 
     public function test_unknown_or_disconnected_site_fails_before_downstream_mcp_execution(): void
@@ -372,16 +410,16 @@ final class MultiSiteRoutingTest extends TestCase
             return $this->bridgeResponse($request);
         });
 
-        $handlers = app(PendingGatewayToolHandlers::class);
-        $unknown = $handlers->siteAbilitiesRead($this->principal, 'missing');
-        $disconnected = $handlers->siteAbilityExecute($this->principal, 'alpha', 'demo/write', []);
+        $handlers = app(WordpressTargetMcpToolHandlers::class);
+        $unknown = $handlers->read($this->principal, 'missing');
+        $disconnected = $handlers->execute($this->principal, 'alpha', 'demo/write', []);
 
         self::assertFalse($unknown['ok']);
-        self::assertSame('site_not_found', $unknown['error']['code']);
+        self::assertSame('target_not_found', $unknown['error']['code']);
         self::assertFalse($disconnected['ok']);
         self::assertSame('missing_credential', $disconnected['error']['code']);
         self::assertSame(0, $mcpRequests);
-        self::assertNull(Site::query()->where('site_id', 'alpha')->sole()->last_failure_at);
+        self::assertNull(Target::query()->where('target_id', 'alpha')->sole()->last_failure_at);
     }
 
     public function test_ambiguous_mutation_transport_failure_is_not_retried(): void
@@ -428,15 +466,19 @@ final class MultiSiteRoutingTest extends TestCase
             return $this->bridgeResponse($request);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)
-            ->siteAbilityExecute($this->principal, 'alpha', 'demo/write', ['value' => 'ambiguous']);
+        $result = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/write', ['value' => 'ambiguous']);
 
         self::assertFalse($result['ok']);
         self::assertSame('outcome_unknown', $result['error']['code']);
         self::assertSame(1, $catalogCalls);
         self::assertSame(1, $targetCalls);
-        self::assertNotNull($alpha->refresh()->last_failure_at);
-        self::assertSame('outcome_unknown', $alpha->last_failure_code);
+        $this->assertDatabaseHas('activity_events', [
+            'operation' => 'wordpress-ability-execute',
+            'target_id' => 'alpha',
+            'outcome' => 'unknown',
+            'error_code' => 'outcome_unknown',
+        ]);
     }
 
     public function test_disconnect_of_one_site_does_not_break_other_site_routing(): void
@@ -446,12 +488,12 @@ final class MultiSiteRoutingTest extends TestCase
         $this->pair($alpha);
         $this->pair($beta);
 
-        app(SiteConnectionService::class)->disconnect($alpha);
-        $result = app(PendingGatewayToolHandlers::class)
-            ->siteAbilityExecute($this->principal, 'beta', 'demo/read', []);
+        app(WpAiBridgeTargetConnectionService::class)->disconnect($alpha);
+        $result = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'beta', 'demo/read', []);
 
         self::assertTrue($result['ok']);
-        self::assertSame('beta', $result['result']['site']);
+        self::assertSame('beta', $result['result']['target']);
         self::assertSame('Bearer beta-access', $this->toolCalls[array_key_last($this->toolCalls)]['authorization']);
     }
 
@@ -485,13 +527,12 @@ final class MultiSiteRoutingTest extends TestCase
             return Http::response(str_repeat('x', 2048), 200, ['Content-Type' => 'application/json']);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilitiesRead($this->principal, 'alpha', null, 1, 25);
+        $result = app(WordpressTargetMcpToolHandlers::class)->read($this->principal, 'alpha', null, 1, 25);
 
         self::assertFalse($result['ok']);
         self::assertSame('response_too_large', $result['error']['code']);
-        self::assertStringContainsString('targeted/paginated read', $result['error']['message']);
-        self::assertSame(1024, $result['error']['details']['limit_bytes']);
-        self::assertContains($result['error']['details']['phase'], ['decoded_body', 'content_length', 'wire_progress']);
+        self::assertStringNotContainsString(str_repeat('x', 1024), $result['error']['message']);
+        self::assertArrayNotHasKey('details', $result['error']);
         self::assertStringNotContainsString(str_repeat('x', 1024), json_encode($result, JSON_THROW_ON_ERROR));
     }
 
@@ -515,8 +556,8 @@ final class MultiSiteRoutingTest extends TestCase
             return $this->bridgeResponse($request);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)
-            ->siteAbilityExecute($this->principal, 'alpha', 'demo/write', ['value' => 'sensitive']);
+        $result = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/write', ['value' => 'sensitive']);
 
         self::assertFalse($result['ok']);
         self::assertSame('outcome_unknown', $result['error']['code']);
@@ -551,27 +592,26 @@ final class MultiSiteRoutingTest extends TestCase
             return $this->bridgeResponse($request);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute($this->principal, 'alpha', 'demo/read', []);
+        $result = app(WordpressTargetMcpToolHandlers::class)->execute($this->principal, 'alpha', 'demo/read', []);
         self::assertTrue($result['ok']);
         self::assertSame(str_repeat('x', 2048), $result['result']['large_read']);
     }
 
-    private function createSite(string $siteId): Site
+    private function createSite(string $siteId): Target
     {
-        return app(SiteRegistry::class)->create(
-            $siteId,
-            ucfirst($siteId),
-            'https://'.$siteId.'.example.test',
+        return app(WpAiBridgeTargetRegistration::class)->register(
+            $siteId, ucfirst($siteId), 'https://'.$siteId.'.example.test',
         );
     }
 
-    private function pair(Site $site): void
+    private function pair(Target $site): void
     {
-        $connections = app(SiteConnectionService::class);
+        $connections = app(WpAiBridgeTargetConnectionService::class);
         $authorizeUrl = $connections->begin($site);
         parse_str((string) parse_url($authorizeUrl, PHP_URL_QUERY), $query);
         self::assertIsString($query['state'] ?? null);
-        $connections->completeCallback((string) $query['state'], $site->site_id.'-code', $site->base_url, null);
+        $connections->completeCallback((string) $query['state'], $site->target_id.'-code',
+            'https://'.$site->target_id.'.example.test', null);
     }
 
     private function fakeBridge(?callable $override = null): void
@@ -733,10 +773,10 @@ final class MultiSiteRoutingTest extends TestCase
         }
 
         if ($ability === 'demo/write') {
-            return $this->toolSuccess(['site' => $siteId, 'kind' => 'write', 'updated' => true]);
+            return $this->toolSuccess(['target' => $siteId, 'kind' => 'write', 'updated' => true]);
         }
 
-        return $this->toolSuccess(['site' => $siteId, 'kind' => 'read']);
+        return $this->toolSuccess(['target' => $siteId, 'kind' => 'read']);
     }
 
     private function requestHeader(Request $request, string $name): string

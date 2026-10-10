@@ -32,6 +32,8 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
     private bool $rejectRefresh = false;
 
+    private bool $malformedRefresh = false;
+
     private int $refreshCalls = 0;
 
     private bool $attemptConcurrentDisconnect = false;
@@ -549,6 +551,60 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
     }
 
+    public function test_encrypted_oauth_flow_expiry_cannot_be_extended_by_editing_database_timestamp(): void
+    {
+        $target = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $url = $service->begin($target);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $params);
+        self::assertIsString($params['state']);
+
+        // The encrypted state binds its original expiration. Changing only
+        // the database row must not extend the authorization window.
+        DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $target->getKey())
+            ->update(['expires_at' => now()->addDays(2)]);
+        try {
+            $service->completeCallback($params['state'], 'alpha-code', 'https://alpha.example.test', null);
+            self::fail('Database timestamp manipulation extended the protected OAuth flow.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('invalid_state', $exception->reason);
+        }
+
+        self::assertSame(0, DB::table('target_credentials')->count());
+        self::assertSame(TargetConnectionState::Pending, $target->refresh()->connection_state);
+    }
+
+    public function test_unrotated_refresh_success_is_ambiguous_and_never_replaces_known_ciphertext(): void
+    {
+        $target = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->pair($target);
+        $original = $this->credential($target);
+        $originalCiphertext = $original->encrypted_payload;
+        $this->expire($target);
+        $ciphertextBeforeRefresh = $this->credential($target)->encrypted_payload;
+        $this->malformedRefresh = true;
+
+        try {
+            $service->accessToken($target);
+            self::fail('Unrotated OAuth refresh token was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame($ciphertextBeforeRefresh, $this->credential($target)->encrypted_payload);
+        self::assertNotSame($originalCiphertext, $ciphertextBeforeRefresh);
+        self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        try {
+            $service->disconnect($target);
+            self::fail('Unknown downstream token state was disconnected without reconciliation.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+    }
+
     private function expire(Target $target): void
     {
         $vault = app(WpAiBridgeTargetVault::class);
@@ -637,6 +693,15 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
                 }
                 if ($this->rejectRefresh) {
                     return Http::response(['error' => 'invalid_grant'], 400);
+                }
+                if ($this->malformedRefresh) {
+                    return Http::response([
+                        'token_type' => 'Bearer',
+                        'expires_in' => 3600,
+                        'access_token' => explode('.', $host)[0].'-unexpected-access',
+                        'refresh_token' => explode('.', $host)[0].'-refresh',
+                        'scope' => 'mcp:use offline_access',
+                    ], 200);
                 }
 
                 return Http::response([

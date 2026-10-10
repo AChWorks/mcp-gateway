@@ -3,7 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -40,7 +40,7 @@ final class CreateAdministratorCommandTest extends TestCase
         $this->assertNotSame($password, $user->getRawOriginal('password'));
         $this->assertTrue(Hash::check($password, (string) $user->getRawOriginal('password')));
         $this->assertSame(GatewayRole::Owner, $user->role);
-        $this->assertSame(SiteScopeMode::All, $user->site_scope_mode);
+        $this->assertSame(TargetScopeMode::All, $user->target_scope_mode);
         $this->assertTrue($user->access_enabled);
     }
 
@@ -51,7 +51,7 @@ final class CreateAdministratorCommandTest extends TestCase
             'email' => 'owner@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
         ]);
 
         $password = 'DifferentHorse!234';
@@ -68,7 +68,7 @@ final class CreateAdministratorCommandTest extends TestCase
         $user = User::query()->where('email', 'second@example.test')->firstOrFail();
 
         $this->assertSame(GatewayRole::Administrator, $user->role);
-        $this->assertSame(SiteScopeMode::All, $user->site_scope_mode);
+        $this->assertSame(TargetScopeMode::All, $user->target_scope_mode);
         $this->assertTrue($user->access_enabled);
     }
 

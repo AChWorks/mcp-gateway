@@ -1,3 +1,24 @@
+# MCP Gateway v2.0.0 — Breaking Target candidate (NOT PUBLISHED)
+
+**Development-only release candidate on the Target foundation branch.** No GitHub Release, production deployment, upgrade or database reset has been authorized. This major version replaces the Site model and is not backward-compatible with existing Site-era API paths or saved connections.
+
+## Intended first major package
+
+- Generic immutable Target domain, ACL/Target Groups and scoped Activity, with real Target Admin inventory, registration, detail, display-name editing, checked metadata diagnostics and guarded removal.
+- WordPress Target OAuth with target-bound encrypted PKCE credentials, signed client identity, confirmed remote revocation, bounded rotating refresh-token recovery and scheduled idle renewal.
+- Authorized exact-Target MCP inventory/context plus WordPress Ability catalog and safety-class-gated execute; existing client-neutral ChatGPT OAuth remains supported.
+- Intentional retirement of old Site-only routes and bulk-check pages; Agent and Direct SSH runtime remain **unimplemented** and are not advertised.
+
+## Mandatory operator warning
+
+The upgrade from published v1.2.1 replaces the legacy Site schema, invalidates incompatible Gateway OAuth grants and token generations, and requires fresh WordPress and ChatGPT authorization. It **preserves local administrators/users/roles, security keys, global authorization denials and unrelated Gateway data**, not the old connector registrations or Site groups. A consistent **independently restorable database backup** and explicit operator reset+backup acknowledgment are required *before destructive DDL*. The browser updater's code backup **is not** a database backup. A partial MariaDB DDL failure requires restoring the independent database backup; never assume rollback or automatically retry.
+
+## Release gates (not yet satisfied)
+
+Current isolated SQLite/MariaDB test results are not release authorization. Complete real browser-ZIP upgrade and recovery checks from the **published v1.2.1 deployment**, real non-production WordPress Target E2E and ChatGPT reconnection, exact-candidate CI and independent HIGH_ASSURANCE review. Require owner approval before merge, publication and production upgrade. See docs/TARGET-TRANSITION-RUNBOOK.md and Issue #107.
+
+---
+
 # MCP Gateway v1.2.1
 
 This is a backward-compatible feature release built on the v1.1.10 browser-update baseline. v1.2.0 was used only as a pre-release validation candidate and was not published as a stable release.

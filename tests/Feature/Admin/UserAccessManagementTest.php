@@ -5,8 +5,8 @@ namespace Tests\Feature\Admin;
 use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
-use App\Domain\Sites\Site;
+use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -28,10 +28,10 @@ final class UserAccessManagementTest extends TestCase
             'password' => 'DifferentHorse!234',
             'password_confirmation' => 'DifferentHorse!234',
             'role' => GatewayRole::Operator->value,
-            'site_scope_mode' => SiteScopeMode::Selected->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
             'access_enabled' => '1',
             'denied_permissions' => [
-                GatewayPermission::ConnectionsTest->value,
+                GatewayPermission::TargetsTest->value,
             ],
             'current_password' => 'CorrectHorse!234',
         ]);
@@ -40,11 +40,11 @@ final class UserAccessManagementTest extends TestCase
 
         $response->assertRedirect(route('admin.users.edit', ['user' => $user->id], false));
         self::assertSame(GatewayRole::Operator, $user->role);
-        self::assertSame(SiteScopeMode::Selected, $user->site_scope_mode);
+        self::assertSame(TargetScopeMode::Selected, $user->target_scope_mode);
         self::assertTrue($user->access_enabled);
         $this->assertDatabaseHas('user_permission_denials', [
             'user_id' => $user->id,
-            'permission' => GatewayPermission::ConnectionsTest->value,
+            'permission' => GatewayPermission::TargetsTest->value,
         ]);
         $this->assertDatabaseHas('activity_events', [
             'actor_type' => 'administrator',
@@ -61,7 +61,7 @@ final class UserAccessManagementTest extends TestCase
             'email' => 'administrator@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Administrator->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
         ]);
 
         $this->actingAs($administrator)
@@ -78,7 +78,7 @@ final class UserAccessManagementTest extends TestCase
                 'name' => $owner->name,
                 'email' => $owner->email,
                 'role' => GatewayRole::Administrator->value,
-                'site_scope_mode' => SiteScopeMode::All->value,
+                'target_scope_mode' => TargetScopeMode::All->value,
                 'access_enabled' => '0',
                 'current_password' => 'CorrectHorse!234',
             ])
@@ -99,7 +99,7 @@ final class UserAccessManagementTest extends TestCase
                 'name' => $operator->name,
                 'email' => $operator->email,
                 'role' => GatewayRole::Viewer->value,
-                'site_scope_mode' => SiteScopeMode::Selected->value,
+                'target_scope_mode' => TargetScopeMode::Selected->value,
                 'access_enabled' => '1',
                 'current_password' => 'WrongHorse!234',
             ])
@@ -115,15 +115,15 @@ final class UserAccessManagementTest extends TestCase
         $site = $this->site('alpha');
 
         $this->actingAs($owner)
-            ->put(route('admin.users.sites.update', [
+            ->put(route('admin.users.targets.update', [
                 'user' => $operator->id,
-                'site' => $site->site_id,
+                'target' => $site->target_id,
             ], false), [
                 'access_rule' => 'allow',
                 'denied_permissions' => [
-                    GatewayPermission::SitesView->value,
-                    GatewayPermission::AbilitiesInspect->value,
-                    GatewayPermission::AbilitiesExecuteReadonly->value,
+                    GatewayPermission::TargetsView->value,
+                    GatewayPermission::WordpressAbilitiesInspect->value,
+                    GatewayPermission::WordpressAbilitiesExecuteReadonly->value,
                 ],
                 'current_password' => 'CorrectHorse!234',
             ])
@@ -131,21 +131,21 @@ final class UserAccessManagementTest extends TestCase
 
         $access = app(AccessControl::class);
 
-        self::assertFalse($access->allows($operator, GatewayPermission::SitesView, $site));
-        self::assertFalse($access->allows($operator, GatewayPermission::AbilitiesInspect, $site));
-        self::assertFalse($access->allows($operator, GatewayPermission::AbilitiesExecuteReadonly, $site));
-        self::assertTrue($access->allows($operator, GatewayPermission::AbilitiesExecuteMutating, $site));
-        self::assertFalse($access->allows($operator, GatewayPermission::AbilitiesExecuteDestructive, $site));
+        self::assertFalse($access->allows($operator, GatewayPermission::TargetsView, $site));
+        self::assertFalse($access->allows($operator, GatewayPermission::WordpressAbilitiesInspect, $site));
+        self::assertFalse($access->allows($operator, GatewayPermission::WordpressAbilitiesExecuteReadonly, $site));
+        self::assertTrue($access->allows($operator, GatewayPermission::WordpressAbilitiesExecuteMutating, $site));
+        self::assertFalse($access->allows($operator, GatewayPermission::WordpressAbilitiesExecuteDestructive, $site));
 
-        $this->assertDatabaseHas('user_site_access', [
+        $this->assertDatabaseHas('user_target_access', [
             'user_id' => $operator->id,
-            'site_record_id' => $site->id,
+            'target_record_id' => $site->id,
             'allowed' => true,
         ]);
         $this->assertDatabaseHas('activity_events', [
             'actor_type' => 'administrator',
             'actor_id' => (string) $owner->id,
-            'operation' => 'user-site-access-update:'.$operator->id.':alpha',
+            'operation' => 'user-target-access-update:'.$operator->id.':alpha',
             'outcome' => 'success',
         ]);
     }
@@ -158,15 +158,15 @@ final class UserAccessManagementTest extends TestCase
             'email' => 'all-sites@example.test',
             'password' => 'DifferentHorse!234',
             'role' => GatewayRole::Administrator->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
         ]);
         $alpha = $this->site('alpha');
         $beta = $this->site('beta');
 
         $this->actingAs($owner)
-            ->put(route('admin.users.sites.update', [
+            ->put(route('admin.users.targets.update', [
                 'user' => $administrator->id,
-                'site' => $beta->site_id,
+                'target' => $beta->target_id,
             ], false), [
                 'access_rule' => 'deny',
                 'current_password' => 'CorrectHorse!234',
@@ -174,8 +174,8 @@ final class UserAccessManagementTest extends TestCase
             ->assertRedirect();
 
         $access = app(AccessControl::class);
-        self::assertTrue($access->allows($administrator, GatewayPermission::SitesView, $alpha));
-        self::assertFalse($access->allows($administrator, GatewayPermission::SitesView, $beta));
+        self::assertTrue($access->allows($administrator, GatewayPermission::TargetsView, $alpha));
+        self::assertFalse($access->allows($administrator, GatewayPermission::TargetsView, $beta));
     }
 
     public function test_owner_site_overrides_are_rejected_and_owner_remains_unrestricted(): void
@@ -184,22 +184,22 @@ final class UserAccessManagementTest extends TestCase
         $site = $this->site('alpha');
 
         $this->actingAs($owner)
-            ->put(route('admin.users.sites.update', [
+            ->put(route('admin.users.targets.update', [
                 'user' => $owner->id,
-                'site' => $site->site_id,
+                'target' => $site->target_id,
             ], false), [
                 'access_rule' => 'deny',
-                'denied_permissions' => [GatewayPermission::SitesView->value],
+                'denied_permissions' => [GatewayPermission::TargetsView->value],
                 'current_password' => 'CorrectHorse!234',
             ])
             ->assertSessionHasErrors('access_rule');
 
         self::assertTrue(app(AccessControl::class)->allows(
             $owner,
-            GatewayPermission::SitesRemove,
+            GatewayPermission::TargetsRemove,
             $site,
         ));
-        self::assertSame(0, DB::table('user_site_access')->where('user_id', $owner->id)->count());
+        self::assertSame(0, DB::table('user_target_access')->where('user_id', $owner->id)->count());
     }
 
     private function owner(): User
@@ -209,7 +209,7 @@ final class UserAccessManagementTest extends TestCase
             'email' => 'owner-'.uniqid().'@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
             'access_enabled' => true,
         ]);
     }
@@ -221,26 +221,17 @@ final class UserAccessManagementTest extends TestCase
             'email' => 'operator-'.uniqid().'@example.test',
             'password' => 'DifferentHorse!234',
             'role' => GatewayRole::Operator->value,
-            'site_scope_mode' => SiteScopeMode::Selected->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
             'access_enabled' => true,
         ]);
     }
 
-    private function site(string $siteId): Site
+    private function site(string $siteId): Target
     {
-        $base = 'https://'.$siteId.'.example.test';
-
-        return Site::query()->create([
-            'site_id' => $siteId,
+        return Target::query()->create([
+            'target_id' => $siteId,
             'display_name' => ucfirst($siteId),
-            'base_url' => $base,
-            'base_url_hash' => hash('sha256', $base),
             'connector_type' => 'wp_ai_bridge',
-            'mcp_resource_url' => $base.'/wp-json/wp-ai-bridge/v1/mcp',
-            'oauth_issuer_url' => $base,
-            'oauth_authorization_url' => $base.'/wp-ai-bridge/oauth/authorize',
-            'oauth_token_url' => $base.'/wp-json/wp-ai-bridge/v1/oauth/token',
-            'oauth_revocation_url' => $base.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
             'connection_state' => 'disconnected',
         ]);
     }
