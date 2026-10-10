@@ -51,6 +51,10 @@ final readonly class SshFileRuntime
                 $sftp->disableStatCache();
                 try {
                     $attributes = $sftp->lstat($path);
+                } catch (SshTargetConnectionException $exception) {
+                    // Preserve an explicit no-SFTP-subsystem result; never
+                    // replace it with a generic file-not-found outcome.
+                    throw $exception;
                 } catch (Throwable) {
                     throw new SshTargetConnectionException('file_unavailable');
                 }

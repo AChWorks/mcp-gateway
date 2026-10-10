@@ -84,7 +84,7 @@ final class AdminUiPresentationTest extends TestCase
                 ->assertSee('Shared Target management')
                 ->assertSee('WordPress (WP AI Bridge)')
                 ->assertSee('Direct SSH')
-                ->assertSee('Command available; SFTP pending')
+                ->assertSee('Command and bounded SFTP tools')
                 ->assertSee('AI Server Agent')
                 ->assertSee('Paused')
                 ->assertSee('Review reserved permission definitions');
