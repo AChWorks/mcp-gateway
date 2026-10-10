@@ -77,6 +77,13 @@ ssh-keygen -q -t rsa -b 3072 -N '' -f "${root}/host_rsa"
 ssh-keygen -q -t ed25519 -N '' -f "${root}/wrong_ed25519"
 ssh-keygen -q -t rsa -b 3072 -N "${key_passphrase}" -f "${root}/login_rsa"
 
+# Registration intentionally accepts only the canonical two-field public-key
+# form. ssh-keygen appends a local comment by default, so strip fixture-only
+# comments rather than weakening the production parser.
+awk '{print $1" "$2}' "${root}/host_ed25519.pub" > "${root}/host_ed25519.pin"
+awk '{print $1" "$2}' "${root}/host_rsa.pub" > "${root}/host_rsa.pin"
+awk '{print $1" "$2}' "${root}/wrong_ed25519.pub" > "${root}/wrong_ed25519.pin"
+
 sudo install -d -m 700 -o "${fixture_user}" -g "${fixture_user}" "/home/${fixture_user}/.ssh"
 sudo install -m 600 -o "${fixture_user}" -g "${fixture_user}"   "${root}/login_rsa.pub" "/home/${fixture_user}/.ssh/authorized_keys"
 
@@ -149,9 +156,9 @@ SSH_FIXTURE_USER=${fixture_user}
 SSH_FIXTURE_PASSWORD=${password}
 SSH_FIXTURE_KEY_PASSPHRASE=${key_passphrase}
 SSH_FIXTURE_RSA_LOGIN_KEY=${root}/login_rsa
-SSH_FIXTURE_ED25519_HOST_PUB=${root}/host_ed25519.pub
-SSH_FIXTURE_RSA_HOST_PUB=${root}/host_rsa.pub
-SSH_FIXTURE_WRONG_ED25519_HOST_PUB=${root}/wrong_ed25519.pub
+SSH_FIXTURE_ED25519_HOST_PUB=${root}/host_ed25519.pin
+SSH_FIXTURE_RSA_HOST_PUB=${root}/host_rsa.pin
+SSH_FIXTURE_WRONG_ED25519_HOST_PUB=${root}/wrong_ed25519.pin
 SSH_FIXTURE_PORT_MODERN=${ports[0]}
 SSH_FIXTURE_PORT_LEGACY_RSA=${ports[1]}
 SSH_FIXTURE_PORT_WEAK_KEX=${ports[2]}
