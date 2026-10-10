@@ -102,7 +102,7 @@ final readonly class UserAccessManager
                 // to change any default-denied SSH permission.
                 ...array_filter($this->existingConnectorDenials($lockedUser),
                     static fn (string $permission): bool => ! $allowSshPermissionChanges
-                        || ! str_starts_with($permission, 'ssh.')),
+                        || $permission !== GatewayPermission::SshCommandRun->value),
                 ...($currentRole !== $role ? $this->defaultConnectorDenials($role) : []),
                 // Changing away from Selected always revokes dormant SSH grants;
                 // returning to Selected later requires a new explicit Owner grant.

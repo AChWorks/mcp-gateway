@@ -94,7 +94,8 @@ final class UserAccessManagementTest extends TestCase
         $this->put('/admin/users/'.$operator->id, [
             ...$payload,
             'confirm_ssh_permission_changes' => '1',
-            'denied_permissions' => [GatewayPermission::SshFileRead->value, GatewayPermission::SshFileWrite->value],
+            // Omitted SFTP switches must remain denied until those tools are implemented.
+            'denied_permissions' => [],
         ])->assertRedirect();
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
         self::assertFalse($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
