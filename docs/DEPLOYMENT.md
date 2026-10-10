@@ -391,7 +391,11 @@ For an authorized upgrade:
 5. Open `https://gateway.example.com/update/` over HTTPS.
 6. Authenticate with the existing Gateway administrator account if prompted. The temporary updater reuses the normal administrator session and CSRF boundary.
 7. Confirm the installed/target versions and all preflight checks, then choose **Update MCP Gateway**.
-8. Keep the browser request active until success is reported, then repeat the safe HTTP verification from this document.
+8. Keep the browser page open. The UI displays honest phases (not estimated percentages), starts the authorized final POST automatically with JavaScript, and offers a single manual **Continue update** fallback when JavaScript is disabled. After success, repeat the safe HTTP verification from this document.
+
+The updater records named phase durations in the PHP error log as phase and elapsed_ms, without authorization material. If an update is slow, correlate those timings with the hosting request timeouts and PHP worker logs (redacted) rather than estimating progress from browser time.
+
+If the browser connection is interrupted, open the /update/ path **in the original browser session** to inspect browser-bound recovery state. An idle files-replaced step can be continued once using its valid time-bounded token; another running step must not be submitted in parallel. If the previous step stopped in migrate (or another uncertain state), **do not click Start/Continue again, run migration rollback, delete state, or re-extract**: preserve code and database recovery evidence for manual reconciliation. A missing temporary endpoint after cleanup does not itself prove success; verify the /admin and /up endpoints and installed version. An HTTP 404 after cleanup is expected; diagnose proxy/origin slash redirects separately before changing hosting rules.
 
 Before mutation, the browser updater verifies its private manifest and temporary public-entry hash, rejects symbolic links/unsafe targets, validates semantic version direction, confirms the target is an installed deployment-ZIP layout, and runs the current Gateway environment check. It then:
 

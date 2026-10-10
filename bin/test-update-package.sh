@@ -561,6 +561,46 @@ curl -fsS -H "$https_header" -H "Cookie: $cookie_header" \
 continuation="$(grep -o 'name="continuation" value="[a-f0-9]*"' "$tmp/stage.html" | head -n 1 | sed 's/.*value="\([a-f0-9]*\)"/\1/')"
 [[ "$continuation" =~ ^[a-f0-9]{64}$ ]] || { cat "$tmp/stage.html" >&2; echo "Browser updater did not return a valid continuation token." >&2; exit 1; }
 
+# The first phase is usable with JavaScript disabled, while modern browsers
+# should initiate exactly one asynchronous finish request with visible status.
+grep -F 'id="continue-update"' "$tmp/stage.html" >/dev/null || { echo "Missing final-step form." >&2; exit 1; }
+grep -F 'fetch(form.action' "$tmp/stage.html" >/dev/null || { echo "Automatic final-step handoff is absent." >&2; exit 1; }
+grep -F 'id="manual-continue"' "$tmp/stage.html" >/dev/null || { echo "Script-disabled continuation fallback is absent." >&2; exit 1; }
+
+# Reload after stage must resume safely without asking Laravel to authenticate
+# an already maintenance-bound browser session.
+resume_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/resume.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$resume_code" == "200" ]] || { echo "Staged update cannot resume (HTTP $resume_code)." >&2; exit 1; }
+grep -F 'Resume MCP Gateway Update' "$tmp/resume.html" >/dev/null || { echo "Safe resume form missing." >&2; exit 1; }
+
+# An active finish request must not permit a second POST to enter migrations.
+lockfile="$target/storage/app/private/update-execution.lock"
+php -r '$h=fopen($argv[1],"c"); flock($h,LOCK_EX); file_put_contents($argv[2],"ready"); usleep(2500000);' "$lockfile" "$tmp/updater-locked" &
+holder_pid=$!
+for attempt in $(seq 1 30); do
+  [[ -f "$tmp/updater-locked" ]] && break
+  sleep 0.1
+done
+[[ -f "$tmp/updater-locked" ]] || { echo "Could not acquire test operation lock." >&2; exit 1; }
+busy_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/busy.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$busy_code" == "202" ]] || { echo "Concurrent update did not show safe progress (HTTP $busy_code)." >&2; exit 1; }
+duplicate_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" --data-urlencode 'action=finish' --data-urlencode "continuation=$continuation" -o "$tmp/duplicate.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$duplicate_code" == "202" ]] || { echo "Concurrent finish was not refused (HTTP $duplicate_code)." >&2; exit 1; }
+wait "$holder_pid"
+rm -f "$tmp/updater-locked"
+
+# Simulate a request killed after crossing the migration boundary: the next
+# GET must NOT emit a false 403 or permit a second migration.
+state_file="$target/storage/app/private/update-state.json"
+php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p), true, 512, JSON_THROW_ON_ERROR); $s["phase"]="migrate"; $s["migration_started"]=true; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
+stalled_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/stalled.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$stalled_code" == "503" ]] || { echo "Interrupted migration did not stop safely (HTTP $stalled_code)." >&2; exit 1; }
+grep -Fi 'database may be partially migrated' "$tmp/stalled.html" >/dev/null || { echo "Interrupted migration was not explained." >&2; exit 1; }
+if grep -F 'Administrator authentication could not be verified.' "$tmp/stalled.html" >/dev/null; then
+  echo "Maintenance reload emitted the misleading authentication failure." >&2; exit 1
+fi
+php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p), true, 512, JSON_THROW_ON_ERROR); $s["phase"]="files-replaced"; $s["migration_started"]=false; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
+
 curl -fsS -H "$https_header" -H "Cookie: $cookie_header" \
   --data-urlencode 'action=finish' \
   --data-urlencode "continuation=$continuation" \
@@ -676,6 +716,8 @@ backup_dir="$(find "$target/storage/app/private/update-backups" -mindepth 1 -max
   php artisan gateway:check --no-interaction >/dev/null
 )
 
+post_cleanup_code_without_slash="$(curl -sS -o /dev/null -w '%{http_code}' -H "$https_header" "$base_url/update")"
+[[ "$post_cleanup_code_without_slash" == "404" ]] || { echo "Temporary /update endpoint remained reachable (HTTP $post_cleanup_code_without_slash)." >&2; exit 1; }
 post_cleanup_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "$https_header" "$base_url/update/")"
 [[ "$post_cleanup_code" == "404" ]] || { echo "Temporary /update/ endpoint remained reachable after successful cleanup (HTTP $post_cleanup_code)." >&2; exit 1; }
 

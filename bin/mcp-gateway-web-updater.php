@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Throwable;
 
+final class UpdateBusyException extends RuntimeException {}
+
 final class WebUpdater
 {
     private const MANAGED_ROOT = [
@@ -159,6 +161,14 @@ final class WebUpdater
      */
     public function stage(string $browserToken, array $attestations = []): array
     {
+        return $this->withExecutionLock(fn (): array => $this->timed('stage-total', fn (): array => $this->stageLocked($browserToken, $attestations)));
+    }
+
+    private function stageLocked(string $browserToken, array $attestations): array
+    {
+        if (is_file($this->statePath())) {
+            throw new RuntimeException("An update is already staged. Resume or recover it; do not start another update.");
+        }
         $this->assertBrowserToken($browserToken);
         $info = $this->inspect();
         $from = $info['installed'];
@@ -178,10 +188,11 @@ final class WebUpdater
             throw new RuntimeException('Breaking Target reset requires both explicit browser confirmations for this exact update package and an independently restorable database backup. No files were changed.');
         }
         $continuation = bin2hex(random_bytes(32));
+        $continuationExpiresAt = time() + 1800;
 
         $this->runArtisan('gateway:check', ['--no-interaction' => true], 'Current Gateway preflight failed. No files were changed.');
 
-        $backup = $this->createBackup($from, $to);
+        $backup = $this->timed('backup', fn (): string => $this->createBackup($from, $to));
         try {
             $this->assertBackupCredible($backup, $from, $to);
         } catch (Throwable $exception) {
@@ -215,10 +226,11 @@ final class WebUpdater
                 'target_reset_package_sha256' => $plan['package_sha256'],
                 'browser_token_hash' => hash('sha256', $browserToken),
                 'continuation_token' => $continuation,
+                'continuation_expires_at' => $continuationExpiresAt,
             ]);
 
             $filesMutated = true;
-            $this->replaceManagedFiles();
+            $this->timed('replace-files', fn () => $this->replaceManagedFiles());
 
             if (! is_file($this->basePath.'/.env')) {
                 throw new RuntimeException('Persistent .env disappeared unexpectedly.');
@@ -226,7 +238,7 @@ final class WebUpdater
             if (! is_file($this->basePath.'/storage/app/private/installed')) {
                 throw new RuntimeException('Installed marker disappeared unexpectedly.');
             }
-            $this->assertInstalledRuntimeMatchesPackage($to);
+            $this->timed('verify-installed', fn () => $this->assertInstalledRuntimeMatchesPackage($to));
 
             $this->writeState([
                 'from' => $from,
@@ -238,6 +250,7 @@ final class WebUpdater
                 'target_reset_package_sha256' => $plan['package_sha256'],
                 'browser_token_hash' => hash('sha256', $browserToken),
                 'continuation_token' => $continuation,
+                'continuation_expires_at' => $continuationExpiresAt,
             ]);
 
             return ['from' => $from, 'to' => $to, 'continuation' => $continuation];
@@ -285,6 +298,11 @@ final class WebUpdater
     /** @return array{from:string,to:string,cleanup_warning:?string} */
     public function finish(string $browserToken, string $continuation): array
     {
+        return $this->withExecutionLock(fn (): array => $this->timed('finish-total', fn (): array => $this->finishLocked($browserToken, $continuation)));
+    }
+
+    private function finishLocked(string $browserToken, string $continuation): array
+    {
         $state = $this->readState();
         $this->assertContinuation($state, $browserToken, $continuation);
 
@@ -308,7 +326,7 @@ final class WebUpdater
         try {
             $this->assertBackupCredible($backup, $from, $to);
             $backupCredible = true;
-            $this->assertInstalledRuntimeMatchesPackage($to);
+            $this->timed('verify-installed', fn () => $this->assertInstalledRuntimeMatchesPackage($to));
             $plan = $this->targetResetPlan($from, $to);
             if ($plan['required']) {
                 if (($state['target_reset_attested'] ?? null) !== true
@@ -392,23 +410,45 @@ final class WebUpdater
         ];
     }
 
-    public function pendingContinuation(string $browserToken): ?string
+    /**
+     * Private state for the matching browser only. No backup paths are exposed.
+     * @return array{phase:string,running:bool,expired:bool,continuation:?string}|null
+     */
+    public function browserUpdateStatus(string $browserToken): ?array
     {
         if (! is_file($this->statePath())) {
             return null;
         }
-
         try {
             $state = $this->readState();
-            if (($state['phase'] ?? null) !== 'files-replaced' || ! $this->browserTokenMatches($state, $browserToken)) {
+            if (! $this->browserTokenMatches($state, $browserToken)) {
                 return null;
             }
-            $continuation = $state['continuation_token'] ?? null;
+            $phase = $state['phase'] ?? '';
+            if (! is_string($phase) || ! in_array($phase, [
+                'replace-files', 'files-replaced', 'migrate',
+                'failed-before-migration-backup', 'failed-before-migration-restore',
+                'failed-after-migration-start',
+            ], true)) {
+                $phase = 'unknown';
+            }
+            $running = $this->executionInProgress();
+            $expiry = $state['continuation_expires_at'] ?? null;
+            $expired = is_int($expiry) && time() > $expiry;
+            $token = $state['continuation_token'] ?? null;
+            $continuation = $phase === 'files-replaced' && ! $running && ! $expired
+                && is_string($token) && preg_match('/^[a-f0-9]{64}$/D', $token) === 1
+                ? $token : null;
 
-            return is_string($continuation) && preg_match('/^[a-f0-9]{64}$/', $continuation) ? $continuation : null;
+            return compact('phase', 'running', 'expired', 'continuation');
         } catch (Throwable) {
             return null;
         }
+    }
+
+    public function pendingContinuation(string $browserToken): ?string
+    {
+        return $this->browserUpdateStatus($browserToken)['continuation'] ?? null;
     }
 
     /** @return array<string,mixed>|null */
@@ -942,7 +982,7 @@ final class WebUpdater
     private function runArtisan(string $command, array $parameters, string $failure): void
     {
         try {
-            $exit = Artisan::call($command, $parameters);
+            $exit = $this->timed('artisan-'.$command, fn (): int => Artisan::call($command, $parameters));
         } catch (Throwable $exception) {
             throw new RuntimeException($failure, 0, $exception);
         }
@@ -958,6 +998,59 @@ final class WebUpdater
             Artisan::call('up', ['--no-interaction' => true]);
         } catch (Throwable) {
         }
+    }
+
+    /** Log only bounded phase names and duration, never state or credentials. */
+    private function timed(string $phase, callable $operation): mixed
+    {
+        $start = hrtime(true);
+        try {
+            return $operation();
+        } finally {
+            error_log(sprintf('MCP Gateway updater phase=%s elapsed_ms=%d',
+                $phase, intdiv(hrtime(true) - $start, 1000000)));
+        }
+    }
+
+    /** Serialize all stage/finish mutations, including DDL, across PHP workers. */
+    private function withExecutionLock(callable $operation): mixed
+    {
+        $path = dirname($this->statePath()).'/update-execution.lock';
+        $handle = @fopen($path, 'c');
+        if ($handle === false) {
+            throw new RuntimeException('Private updater lock is not writable.');
+        }
+        @chmod($path, 0600);
+        if (! @flock($handle, LOCK_EX | LOCK_NB)) {
+            fclose($handle);
+            throw new UpdateBusyException('Another update step is already running. Do not submit it again.');
+        }
+        try {
+            return $operation();
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+    }
+
+    /** A missing lock means idle; unreadable locks are treated as busy. */
+    private function executionInProgress(): bool
+    {
+        $path = dirname($this->statePath()).'/update-execution.lock';
+        if (! is_file($path)) {
+            return false;
+        }
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            return true;
+        }
+        $available = @flock($handle, LOCK_EX | LOCK_NB);
+        if ($available) {
+            flock($handle, LOCK_UN);
+        }
+        fclose($handle);
+
+        return ! $available;
     }
 
     /** @param array<string,mixed> $state */
@@ -982,7 +1075,19 @@ final class WebUpdater
     /** @return array<string,mixed> */
     private function readState(): array
     {
-        $raw = file_get_contents($this->statePath());
+        $handle = @fopen($this->statePath(), 'rb');
+        if ($handle === false) {
+            throw new RuntimeException('Updater state is missing or unreadable.');
+        }
+        try {
+            if (! flock($handle, LOCK_SH)) {
+                throw new RuntimeException('Updater state could not be locked for reading.');
+            }
+            $raw = stream_get_contents($handle);
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
         if (! is_string($raw)) {
             throw new RuntimeException('Updater state is missing or unreadable.');
         }
@@ -1004,6 +1109,10 @@ final class WebUpdater
     {
         if (! $this->browserTokenMatches($state, $browserToken)) {
             throw new RuntimeException('The browser update session is invalid or expired.');
+        }
+        $expiresAt = $state['continuation_expires_at'] ?? null;
+        if (is_int($expiresAt) && time() > $expiresAt) {
+            throw new RuntimeException('The continuation has expired. Preserve update state and follow recovery guidance.');
         }
         $expected = $state['continuation_token'] ?? null;
         if (! is_string($expected) || ! preg_match('/^[a-f0-9]{64}$/', $expected) || ! hash_equals($expected, $continuation)) {
