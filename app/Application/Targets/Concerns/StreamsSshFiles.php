@@ -328,14 +328,13 @@ trait StreamsSshFiles
         // data plane owns authenticated ingress, bounded staging and expiry.
         $info = stream_get_meta_data($stream);
         $stat = @fstat($stream);
-        $localFile = ($info['wrapper_type'] ?? null) === 'plainfile'
-            && ($info['stream_type'] ?? null) === 'STDIO';
-        $phpTemp = ($info['wrapper_type'] ?? null) === 'PHP'
-            && in_array($info['stream_type'] ?? null, ['TEMP', 'MEMORY'], true);
-        if (! is_array($stat) || ! isset($stat['mode'])
-            || ($stat['mode'] & 0170000) !== 0100000
-            || ($info['seekable'] ?? false) !== true
-            || (! $localFile && ! $phpTemp)) {
+        // PHPStan's stream metadata stub declares wrapper_type unconditionally,
+        // but real generic_socket resources omit it on supported PHP versions.
+        $wrapper = $info['wrapper_type'] ?? null; // @phpstan-ignore nullCoalesce.offset
+        $localFile = $wrapper === 'plainfile' && $info['stream_type'] === 'STDIO';
+        $phpTemp = $wrapper === 'PHP' && in_array($info['stream_type'], ['TEMP', 'MEMORY'], true);
+        if (! is_array($stat) || ($stat['mode'] & 0170000) !== 0100000
+            || $info['seekable'] !== true || (! $localFile && ! $phpTemp)) {
             throw new SshTargetConnectionException('invalid_input');
         }
     }
