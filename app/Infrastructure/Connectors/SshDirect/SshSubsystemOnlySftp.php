@@ -37,6 +37,14 @@ final class SshSubsystemOnlySftp extends SFTP
 
     private int $readBatchResponses = 0;
 
+    /** @var array<int,true> Issued READ response IDs in the current batch. */
+    private array $readBatchIssuedIds = [];
+
+    /** @var array<int,true> Unique, already received READ response IDs. */
+    private array $readBatchRepliedIds = [];
+
+    private string $incomingFramePrefix = '';
+
     /** @param Closure():mixed $action */
     public function withTransferDeadline(int $deadlineNs, Closure $action): mixed
     {
@@ -56,18 +64,41 @@ final class SshSubsystemOnlySftp extends SFTP
         int $client_channel,
         #[\SensitiveParameter] string $data,
     ): void {
-        // This is the complete SFTP request frame, assembled by the locked
-        // library's private send_sftp_packet(). READ=5 and request-id=0 marks
-        // the start of each (<=32 request) download batch. Parent's GET can
-        // process unbounded numbers of such batches without a global file cap.
+        // phpseclib's private SFTP::send_sftp_packet() passes exactly one
+        // complete framed request. Track READ=5 IDs sent by the client.
+        // Never permit responses with unknown or duplicate IDs into the
+        // private wrong-ID requestBuffer. Normal out-of-order issued replies
+        // still work, and each fresh READ id 0 creates a finite new batch.
         if ($client_channel === self::CHANNEL && strlen($data) >= 9
-            && ord($data[4]) === 5 && unpack('Nlength', substr($data, 0, 4))['length'] === strlen($data) - 4) {
-            $id = unpack('Nid', substr($data, 5, 4))['id'];
-            if ($id === 0) {
-                $this->readBatchResponseBytes = 0;
-                $this->readBatchResponses = 0;
-            } elseif ($this->readBatchResponseBytes === null) {
-                throw new SshTargetConnectionException('sftp_response_budget_exceeded');
+            && unpack('Nlength', substr($data, 0, 4))['length'] === strlen($data) - 4) {
+            $type = ord($data[4]);
+            if ($type === 5) {
+                $id = unpack('Nid', substr($data, 5, 4))['id'];
+                if ($id === 0) {
+                    if ($this->readBatchResponseBytes !== null
+                        && count($this->readBatchIssuedIds) !== count($this->readBatchRepliedIds)) {
+                        throw new SshTargetConnectionException('sftp_response_budget_exceeded');
+                    }
+                    $this->readBatchResponseBytes = 0;
+                    $this->readBatchResponses = 0;
+                    $this->readBatchIssuedIds = [];
+                    $this->readBatchRepliedIds = [];
+                }
+                if ($this->readBatchResponseBytes === null
+                    || isset($this->readBatchIssuedIds[$id])
+                    || count($this->readBatchIssuedIds) >= 32) {
+                    throw new SshTargetConnectionException('sftp_response_budget_exceeded');
+                }
+                $this->readBatchIssuedIds[$id] = true;
+            } elseif ($this->readBatchResponseBytes !== null) {
+                if (count($this->readBatchIssuedIds) !== count($this->readBatchRepliedIds)) {
+                    throw new SshTargetConnectionException('sftp_response_budget_exceeded');
+                }
+                // Only after all issued replies were received can another
+                // SFTP operation follow GET. Nothing stale may survive this.
+                $this->readBatchResponseBytes = null;
+                $this->readBatchIssuedIds = [];
+                $this->readBatchRepliedIds = [];
             }
         }
 
@@ -140,8 +171,26 @@ final class SshSubsystemOnlySftp extends SFTP
         while ($offset < $total) {
             if ($this->incomingFrameRemaining > 0) {
                 $consumed = min($this->incomingFrameRemaining, $total - $offset);
+                if ($this->readBatchResponseBytes !== null
+                    && strlen($this->incomingFramePrefix) < 5) {
+                    $take = min(5 - strlen($this->incomingFramePrefix), $consumed);
+                    $this->incomingFramePrefix .= substr($bytes, $offset, $take);
+                    if (strlen($this->incomingFramePrefix) === 5) {
+                        $replyType = ord($this->incomingFramePrefix[0]);
+                        $replyId = unpack('Nid', substr($this->incomingFramePrefix, 1, 4))['id'];
+                        if (! in_array($replyType, [101, 103], true)
+                            || ! isset($this->readBatchIssuedIds[$replyId])
+                            || isset($this->readBatchRepliedIds[$replyId])) {
+                            throw new SshTargetConnectionException('sftp_response_budget_exceeded');
+                        }
+                        $this->readBatchRepliedIds[$replyId] = true;
+                    }
+                }
                 $this->incomingFrameRemaining -= $consumed;
                 $offset += $consumed;
+                if ($this->incomingFrameRemaining === 0) {
+                    $this->incomingFramePrefix = '';
+                }
 
                 continue;
             }
@@ -169,6 +218,10 @@ final class SshSubsystemOnlySftp extends SFTP
                         throw new SshTargetConnectionException('sftp_response_budget_exceeded');
                     }
                 }
+                if ($this->readBatchResponseBytes !== null && $payloadLength < 5) {
+                    throw new SshTargetConnectionException('sftp_response_budget_exceeded');
+                }
+                $this->incomingFramePrefix = '';
                 $this->incomingFrameRemaining = $payloadLength;
             }
         }

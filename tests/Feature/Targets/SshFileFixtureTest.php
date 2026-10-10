@@ -588,6 +588,14 @@ final class SshFileFixtureTest extends TestCase
         // its real owner. The zero-byte probe must detect this mismatch.
         $owner = $this->owner();
         $target = $this->target('password', (int) $this->env('SSH_FIXTURE_PORT_ELEVATED_SFTP'));
+        // Prove the elevated SFTP subsystem is genuinely reachable and
+        // can stat the foreign-owned private directory before fault testing.
+        $available = app(SshFileMcpToolHandlers::class)->stat(
+            $owner, $target->target_id, $this->env('SSH_FIXTURE_ELEVATED_PRIVATE_STAGING'),
+        );
+        self::assertTrue($available['ok'], json_encode($available));
+        self::assertSame('directory', $available['result']['file']['type']);
+
         $source = fopen('php://temp', 'w+b');
         self::assertIsResource($source);
         $payload = random_bytes(4096);

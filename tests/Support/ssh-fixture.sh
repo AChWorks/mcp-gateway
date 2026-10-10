@@ -4,6 +4,11 @@ set -euo pipefail
 action="${1:-}"
 env_file="${2:-}"
 root="${SSH_FIXTURE_ROOT:-}"
+# If startup aborts BEFORE the final GITHUB_ENV export, the always() cleanup
+# still has a deterministic, narrowly scoped disposable runner path.
+if [[ "${action}" == "stop" && -z "${root}" && "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+  root="${RUNNER_TEMP:-/tmp}/mcp-gateway-ssh-fixture-${GITHUB_RUN_ID}"
+fi
 
 stop_fixture() {
   if [[ -z "${root}" || ! -d "${root}" ]]; then
