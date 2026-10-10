@@ -16,6 +16,13 @@
     # Keep the installer outside Laravel so it can run before .env exists.
     RewriteRule ^install/?$ install.php [L]
 
+    # The browser updater is temporary. After successful cleanup, OpenLiteSpeed
+    # can retain a directory-slash redirect for /update while the generic
+    # trailing-slash rewrite redirects /update/ back to /update. End that loop
+    # safely without changing normal staged-directory handling.
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^update/?$ - [G,L]
+
     # Redirect Trailing Slashes If Not A Folder...
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_URI} (.+)/$

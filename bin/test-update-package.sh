@@ -652,6 +652,10 @@ if [[ -n "$prune_fixture_root" ]]; then
 fi
 
 [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$new_version" ]] || { echo "Target VERSION was not updated." >&2; exit 1; }
+grep -F 'RewriteRule ^update/?$ - [G,L]' "$target/public/.htaccess" >/dev/null || {
+  echo "Installed package does not protect temporary /update URLs against OpenLiteSpeed slash redirect loops." >&2
+  exit 1
+}
 if [[ "$old_version" == "1.2.1" ]]; then
   (
     cd "$target"
