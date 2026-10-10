@@ -42,6 +42,28 @@ final class SshHostKeyPinTest extends TestCase
         }
     }
 
+    public function test_verified_rsa_sha2_negotiation_matches_same_pinned_ssh_rsa_wire_key(): void
+    {
+        $blob = pack('N', 7).'ssh-rsa'.pack('N', 1)."\x03".pack('N', 33).str_repeat("\x11", 33);
+        $key = 'ssh-rsa '.base64_encode($blob);
+        $pin = SshHostKeyPin::fromLine($key);
+
+        self::assertSame($key, $pin->canonicalLine());
+        self::assertTrue($pin->matches('rsa-sha2-256 '.base64_encode($blob)));
+        self::assertTrue($pin->matches('rsa-sha2-512 '.base64_encode($blob)));
+        self::assertTrue($pin->matches($key));
+        self::assertFalse($pin->matches('rsa-sha2-512 '.base64_encode($blob.'x')));
+        self::assertFalse($pin->matches('rsa-sha2-512 !!!'));
+
+        // A signature negotiation label is not a valid stored public key.
+        try {
+            SshHostKeyPin::fromLine('rsa-sha2-512 '.base64_encode($blob));
+            self::fail('Accepted signature negotiation as a pinned host-key type.');
+        } catch (InvalidArgumentException) {
+            self::assertTrue(true);
+        }
+    }
+
     private function ed25519(string $raw): string
     {
         return 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', strlen($raw)).$raw);

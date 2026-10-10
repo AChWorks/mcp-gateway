@@ -52,6 +52,16 @@ final readonly class SshHostKeyPin
 
     public function matches(string $serverKey): bool
     {
+        // phpseclib returns the negotiated RSA *signature algorithm*
+        // (rsa-sha2-256/512), while the OpenSSH public host-key blob still
+        // begins with "ssh-rsa". Normalize only this verified RSA alias;
+        // stored pins must remain canonical OpenSSH public-key lines.
+        if ($this->type === 'ssh-rsa'
+            && (str_starts_with($serverKey, 'rsa-sha2-256 ')
+                || str_starts_with($serverKey, 'rsa-sha2-512 '))) {
+            $serverKey = 'ssh-rsa '.substr($serverKey, strpos($serverKey, ' ') + 1);
+        }
+
         try {
             $presented = self::fromLine($serverKey);
         } catch (InvalidArgumentException) {
