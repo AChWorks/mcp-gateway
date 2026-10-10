@@ -19,14 +19,14 @@
                 @can('dashboard.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.dashboard')]) href="{{ route('admin.dashboard') }}">{{ __('Dashboard') }}</a>
                 @endcan
-                @can('sites.view')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.sites.*')]) href="{{ route('admin.sites.index') }}">{{ __('Sites') }}</a>
+                @can('targets.view')
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.targets.*')]) href="{{ route('admin.targets.index') }}">{{ __('Targets') }}</a>
                 @endcan
                 @can('users.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.users.*')]) href="{{ route('admin.users.index') }}">{{ __('Users') }}</a>
                 @endcan
                 @can('users.manage')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.site-groups.*')]) href="{{ route('admin.site-groups.index') }}">{{ __('Site groups') }}</a>
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.target-groups.*')]) href="{{ route('admin.target-groups.index') }}">{{ __('Target groups') }}</a>
                 @endcan
                 @can('security.manage')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.oauth-clients.*')]) href="{{ route('admin.oauth-clients.index') }}">{{ __('AI clients') }}</a>
@@ -34,7 +34,7 @@
                 @can('activity.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>
                 @endcan
-                @can('connection.view')
+                @can('gateway.connection.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.connection')]) href="{{ route('admin.connection') }}">{{ __('Connection') }}</a>
                 @endcan
             </nav>
@@ -62,6 +62,13 @@
 
     @if ($errors->has('site'))
         <div class="alert alert-error" role="alert">{{ $errors->first('site') }}</div>
+    @endif
+
+    @if (session('target_connection_failed'))
+        <div class="alert alert-error" role="alert">{{ __('WordPress Target authorization did not complete. Open your Target and try again.') }}</div>
+    @endif
+    @if ($errors->has('target'))
+        <div class="alert alert-error" role="alert">{{ $errors->first('target') }}</div>
     @endif
 
     @yield('content')

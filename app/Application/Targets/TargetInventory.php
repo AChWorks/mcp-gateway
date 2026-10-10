@@ -1,0 +1,226 @@
+<?php
+
+namespace App\Application\Targets;
+
+use App\Application\Access\AccessControl;
+use App\Domain\Access\GatewayPermission;
+use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
+use InvalidArgumentException;
+
+final class TargetInventory
+{
+    public function __construct(private readonly AccessControl $access) {}
+
+    public const ADMIN_PAGE_SIZE = 50;
+
+    public const MCP_DEFAULT_LIMIT = 100;
+
+    public const MCP_MAX_LIMIT = 100;
+
+    /**
+     * @return array{items:list<Target>,page:int,per_page:int,has_more:bool}
+     */
+    public function adminPage(
+        User $user,
+        int $page = 1,
+        ?string $search = null,
+        ?string $connectionState = null,
+        ?string $connectorType = null,
+    ): array {
+        $page = max(1, $page);
+        $search = $this->search($search);
+        $connectionState = $this->connectionState($connectionState);
+        $connectorType = $this->connectorType($connectorType);
+
+        $query = $this->access->scopeTargets(
+            Target::query()->select([
+                'id',
+                'target_id',
+                'display_name',
+            ]),
+            $user,
+            GatewayPermission::TargetsView,
+        );
+
+        $this->applyFilters($query, $search, $connectionState, $connectorType);
+
+        $rows = $query
+            ->orderBy('display_name')
+            ->orderBy('target_id')
+            ->offset(($page - 1) * self::ADMIN_PAGE_SIZE)
+            ->limit(self::ADMIN_PAGE_SIZE + 1)
+            ->get();
+        $hasMore = $rows->count() > self::ADMIN_PAGE_SIZE;
+        $pageRows = $rows->take(self::ADMIN_PAGE_SIZE)->values();
+
+        if ($pageRows->isEmpty()) {
+            $items = [];
+        } else {
+            $detailQuery = Target::query()->select([
+                'id',
+                'target_id',
+                'display_name',
+                'connector_type',
+                'connection_state',
+                'last_error_code',
+                'last_tested_at',
+                'connected_at',
+                'last_success_at',
+                'last_failure_at',
+                'last_failure_code',
+            ]);
+            $targetsById = $this->access
+                ->scopeTargets($detailQuery, $user, GatewayPermission::TargetsView)
+                ->whereIn('id', $pageRows->pluck('id')->all())
+                ->get()
+                ->keyBy('id');
+
+            $items = $pageRows
+                ->map(static fn (Target $row): ?Target => $targetsById->get($row->id))
+                ->filter(static fn (?Target $target): bool => $target instanceof Target)
+                ->values()
+                ->all();
+        }
+
+        return [
+            'items' => $items,
+            'page' => $page,
+            'per_page' => self::ADMIN_PAGE_SIZE,
+            'has_more' => $hasMore,
+        ];
+    }
+
+    /**
+     * @return array{items:list<Target>,limit:int,has_more:bool,next_cursor:?string}
+     */
+    public function mcpPage(
+        User $user,
+        ?string $cursor = null,
+        int $limit = self::MCP_DEFAULT_LIMIT,
+        ?string $search = null,
+        ?string $connectionState = null,
+        ?string $connectorType = null,
+    ): array {
+        if ($limit < 1 || $limit > self::MCP_MAX_LIMIT) {
+            throw new InvalidArgumentException(sprintf(
+                'limit must be between 1 and %d.',
+                self::MCP_MAX_LIMIT,
+            ));
+        }
+
+        $cursor = $this->cursor($cursor);
+        $search = $this->search($search);
+        $connectionState = $this->connectionState($connectionState);
+        $connectorType = $this->connectorType($connectorType);
+
+        $query = $this->access->scopeTargets(
+            Target::query()->select([
+                'target_id',
+                'display_name',
+                'connector_type',
+                'connection_state',
+            ]),
+            $user,
+            GatewayPermission::TargetsView,
+        );
+
+        $this->applyFilters($query, $search, $connectionState, $connectorType);
+
+        if ($cursor !== null) {
+            $query->where('target_id', '>', $cursor);
+        }
+
+        $rows = $query
+            ->orderBy('target_id')
+            ->limit($limit + 1)
+            ->get();
+        $items = $rows->take($limit)->values();
+        $hasMore = $rows->count() > $limit;
+        $last = $items->last();
+
+        return [
+            'items' => $items->all(),
+            'limit' => $limit,
+            'has_more' => $hasMore,
+            'next_cursor' => $hasMore && $last instanceof Target ? $last->target_id : null,
+        ];
+    }
+
+    /** @param Builder<Target> $query */
+    private function applyFilters(Builder $query, ?string $search, ?string $connectionState, ?string $connectorType): void
+    {
+        if ($search !== null) {
+            $query->where(function (Builder $query) use ($search): void {
+                $query
+                    ->where('display_name', 'like', '%'.$search.'%')
+                    ->orWhere('target_id', 'like', '%'.$search.'%');
+            });
+        }
+
+        if ($connectionState !== null) {
+            $query->where('connection_state', $connectionState);
+        }
+        if ($connectorType !== null) {
+            $query->where('connector_type', $connectorType);
+        }
+    }
+
+    private function cursor(?string $value): ?string
+    {
+        $value = $this->nullableTrim($value);
+
+        if ($value !== null && mb_strlen($value) > 64) {
+            throw new InvalidArgumentException('cursor exceeds the supported target ID length.');
+        }
+
+        return $value;
+    }
+
+    private function search(?string $value): ?string
+    {
+        $value = $this->nullableTrim($value);
+
+        if ($value !== null && mb_strlen($value) > 160) {
+            throw new InvalidArgumentException('search exceeds the supported length.');
+        }
+
+        return $value;
+    }
+
+    private function connectionState(?string $value): ?string
+    {
+        $value = $this->nullableTrim($value);
+
+        if ($value !== null && TargetConnectionState::tryFrom($value) === null) {
+            throw new InvalidArgumentException('connection_state is not supported.');
+        }
+
+        return $value;
+    }
+
+    private function connectorType(?string $value): ?string
+    {
+        $value = $this->nullableTrim($value);
+        if ($value !== null && ! in_array($value, [
+            'wp_ai_bridge', 'ai_server_agent', 'ssh_direct',
+        ], true)) {
+            throw new InvalidArgumentException('connector_type is not supported.');
+        }
+
+        return $value;
+    }
+
+    private function nullableTrim(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
+    }
+}

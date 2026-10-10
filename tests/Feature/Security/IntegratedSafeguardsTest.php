@@ -2,19 +2,20 @@
 
 namespace Tests\Feature\Security;
 
-use App\Application\Mcp\PendingGatewayToolHandlers;
-use App\Application\Sites\SiteConnectionService;
-use App\Application\Sites\SiteRegistry;
+use App\Application\Mcp\TargetMcpToolHandlers;
+use App\Application\Mcp\WordpressTargetMcpToolHandlers;
+use App\Application\Targets\WpAiBridgeTargetConnectionService;
+use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
-use App\Domain\Sites\Site;
-use App\Domain\Sites\SiteCredential;
+use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
 use App\Http\Middleware\EnsureCorrelationId;
 use App\Http\Middleware\ObserveOAuthTokenRequest;
 use App\Infrastructure\Activity\ActivityFeed;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\DnsResolver;
-use App\Infrastructure\OAuth\SiteCredentialVault;
 use App\Models\User;
 use App\Support\BoundedLogDefaults;
 use App\Support\CorrelationId;
@@ -51,12 +52,14 @@ final class IntegratedSafeguardsTest extends TestCase
         $response = app(EnsureCorrelationId::class)->handle(
             $request,
             function () use ($principal): Response {
-                return response()->json(app(PendingGatewayToolHandlers::class)->sitesList($principal));
+                return response()->json(app(TargetMcpToolHandlers::class)->targetsList($principal));
             },
         );
 
         $payload = json_decode((string) $response->getContent(), true, 32, JSON_THROW_ON_ERROR);
-        $correlationId = (string) $payload['correlation_id'];
+        self::assertTrue($payload['ok']);
+        self::assertArrayNotHasKey('correlation_id', $payload);
+        $correlationId = (string) $response->headers->get(CorrelationId::HEADER);
 
         self::assertTrue(Str::isUuid($correlationId));
         self::assertSame($correlationId, $response->headers->get(CorrelationId::HEADER));
@@ -67,7 +70,7 @@ final class IntegratedSafeguardsTest extends TestCase
         self::assertSame('oauth_user', $activity->actor_type);
         self::assertSame((string) $principal->id, $activity->actor_id);
         self::assertSame(hash('sha256', 'https://chatgpt.com/oauth/client.json'), $activity->client_id_hash);
-        self::assertSame('sites-list', $activity->operation);
+        self::assertSame('targets-list', $activity->operation);
         self::assertSame('success', $activity->outcome);
 
         $serialized = json_encode($activity, JSON_THROW_ON_ERROR);
@@ -82,7 +85,12 @@ final class IntegratedSafeguardsTest extends TestCase
 
         $recorder = app(ActivityRecorder::class);
         for ($index = 1; $index <= 5; $index++) {
-            $recorder->record((string) Str::uuid(), 'site-ability-execute', 'success', 'site-'.$index);
+            $target = Target::query()->create([
+                'target_id' => 'site-'.$index,
+                'display_name' => 'Target '.$index,
+                'connector_type' => 'wp_ai_bridge',
+            ]);
+            $recorder->record((string) Str::uuid(), 'wordpress-ability-execute', 'success', $target);
         }
 
         self::assertSame(5, DB::table('activity_events')->count());
@@ -94,7 +102,7 @@ final class IntegratedSafeguardsTest extends TestCase
             'email' => 'activity-owner@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
         ]);
         $page = app(ActivityFeed::class)->page($user, 1, 50);
         self::assertSame(2, $page['per_page']);
@@ -120,42 +128,42 @@ final class IntegratedSafeguardsTest extends TestCase
         self::assertSame(['single', 'single'], BoundedLogDefaults::normalize('single', 'single'));
     }
 
-    public function test_wrong_application_key_fails_closed_without_losing_encrypted_credential(): void
+    public function test_wrong_application_key_fails_closed_without_losing_encrypted_target_credential(): void
     {
-        $site = $this->rawSite('recovery');
-        $vault = app(SiteCredentialVault::class);
+        $this->prepareBridgeEnvironment();
+        $target = $this->createSite('recovery');
+        $vault = app(WpAiBridgeTargetVault::class);
         $secretAccess = 'recovery-access-secret';
         $secretRefresh = 'recovery-refresh-secret';
-        $resource = $site->mcp_resource_url;
-        $clientId = 'https://gateway.example.test/oauth/client.json';
-        $encrypted = $vault->seal(
-            $site,
-            $clientId,
-            $resource,
-            $secretAccess,
-            $secretRefresh,
-            new DateTimeImmutable('+1 hour'),
-            ['mcp:use', 'offline_access'],
+        $resource = 'https://recovery.example.test/wp-json/wp-ai-bridge/v1/mcp';
+        $clientId = (string) config('bridge.client.id');
+        $encrypted = $vault->sealCredential(
+            $target, $clientId, $resource, $secretAccess, $secretRefresh,
+            new DateTimeImmutable('+1 hour'), ['mcp:use', 'offline_access'],
         );
-
-        $credential = SiteCredential::query()->create([
-            'site_record_id' => (string) $site->getKey(),
+        $credential = TargetCredential::query()->create([
+            'target_record_id' => (string) $target->getKey(),
+            'connector_type' => 'wp_ai_bridge',
+            'purpose' => 'wordpress_oauth',
+            'encrypted_payload' => $encrypted,
+        ]);
+        DB::table('wp_ai_bridge_credential_metadata')->insert([
+            'credential_id' => $credential->getKey(),
             'client_id' => $clientId,
             'resource_url' => $resource,
-            'binding_hash' => SiteCredentialVault::bindingHash($site, $clientId, $resource),
-            'encrypted_payload' => $encrypted,
+            'binding_hash' => hash('sha256', (string) $target->getKey()."\0".$target->target_id."\0".$clientId."\0".$resource),
             'access_expires_at' => now()->addHour(),
+            'generation' => 1,
         ]);
+        $target->forceFill(['connection_state' => 'connected'])->save();
 
         $originalEncrypter = app('encrypter');
         Crypt::swap(new Encrypter(random_bytes(32), 'AES-256-CBC'));
         Http::preventStrayRequests();
 
-        $principal = $this->owner('recovery-owner@example.test');
-
         try {
-            $result = app(PendingGatewayToolHandlers::class)
-                ->siteAbilityExecute($principal, 'recovery', 'demo/read', []);
+            $result = app(WordpressTargetMcpToolHandlers::class)
+                ->execute($this->owner('recovery-owner@example.test'), 'recovery', 'demo/read', []);
         } finally {
             Crypt::swap($originalEncrypter);
         }
@@ -164,21 +172,21 @@ final class IntegratedSafeguardsTest extends TestCase
         self::assertSame('credential_unavailable', $result['error']['code']);
         self::assertStringNotContainsString($secretAccess, $result['error']['message']);
         self::assertStringNotContainsString($secretRefresh, $result['error']['message']);
-        self::assertDatabaseHas('activity_events', [
-            'site_id' => 'recovery',
-            'operation' => 'site-ability-execute',
+        $this->assertDatabaseHas('activity_events', [
+            'target_id' => 'recovery',
+            'operation' => 'wordpress-ability-execute',
             'outcome' => 'failure',
             'error_code' => 'credential_unavailable',
         ]);
-        self::assertDatabaseHas('site_credentials', [
+        $this->assertDatabaseHas('target_credentials', [
             'id' => $credential->id,
-            'site_record_id' => $site->id,
+            'target_record_id' => $target->id,
             'encrypted_payload' => $encrypted,
         ]);
-        self::assertDatabaseHas('sites', ['id' => $site->id, 'site_id' => 'recovery']);
+        $this->assertDatabaseHas('targets', ['id' => $target->id, 'target_id' => 'recovery']);
     }
 
-    public function test_downstream_echo_of_site_bearer_is_redacted_from_mcp_error_and_activity(): void
+    public function test_downstream_echo_of_target_bearer_is_not_exposed_to_mcp_or_activity(): void
     {
         $this->prepareBridgeEnvironment();
         $alpha = $this->createSite('alpha');
@@ -205,7 +213,7 @@ final class IntegratedSafeguardsTest extends TestCase
 
             return Http::response([
                 'jsonrpc' => '2.0',
-                'id' => 2,
+                'id' => $payload['id'] ?? null,
                 'result' => [
                     'isError' => true,
                     'content' => [[
@@ -216,11 +224,12 @@ final class IntegratedSafeguardsTest extends TestCase
             ], 200);
         });
 
-        $result = app(PendingGatewayToolHandlers::class)->siteAbilityExecute($this->owner('redaction-owner@example.test'), 'alpha', 'demo/denied', []);
+        $result = app(WordpressTargetMcpToolHandlers::class)->execute($this->owner('redaction-owner@example.test'), 'alpha', 'demo/denied', []);
 
         self::assertFalse($result['ok']);
         self::assertSame('downstream_rejected', $result['error']['code']);
-        self::assertStringContainsString('[redacted]', $result['error']['message']);
+        self::assertStringNotContainsString('alpha-access', $result['error']['message']);
+        self::assertStringNotContainsString('alpha-refresh', $result['error']['message']);
 
         $encoded = json_encode([
             'result' => $result,
@@ -241,7 +250,7 @@ final class IntegratedSafeguardsTest extends TestCase
         $this->resetHttp();
         $seen = [];
         $triggered = false;
-        $handlers = app(PendingGatewayToolHandlers::class);
+        $handlers = app(WordpressTargetMcpToolHandlers::class);
         $principal = $this->owner('interleaved-owner@example.test');
 
         Http::fake(function (ClientRequest $request) use (&$seen, &$triggered, $handlers, $principal) {
@@ -266,7 +275,7 @@ final class IntegratedSafeguardsTest extends TestCase
             if (($payload['method'] ?? null) === 'initialize') {
                 if ($siteId === 'alpha' && ! $triggered) {
                     $triggered = true;
-                    $beta = $handlers->siteAbilityExecute($principal, 'beta', 'demo/read', []);
+                    $beta = $handlers->execute($principal, 'beta', 'demo/read', []);
                     self::assertTrue($beta['ok']);
                     self::assertSame('beta', $beta['result']['site']);
                 }
@@ -280,7 +289,7 @@ final class IntegratedSafeguardsTest extends TestCase
 
             return Http::response([
                 'jsonrpc' => '2.0',
-                'id' => 2,
+                'id' => $payload['id'] ?? null,
                 'result' => [
                     'isError' => false,
                     'structuredContent' => ['success' => true, 'data' => ['site' => $siteId]],
@@ -288,7 +297,7 @@ final class IntegratedSafeguardsTest extends TestCase
             ], 200);
         });
 
-        $alphaResult = $handlers->siteAbilityExecute($principal, 'alpha', 'demo/read', []);
+        $alphaResult = $handlers->execute($principal, 'alpha', 'demo/read', []);
         self::assertTrue($alphaResult['ok']);
         self::assertSame('alpha', $alphaResult['result']['site']);
         self::assertTrue($triggered);
@@ -331,7 +340,7 @@ final class IntegratedSafeguardsTest extends TestCase
             'email' => $email,
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
         ]);
     }
 
@@ -339,7 +348,7 @@ final class IntegratedSafeguardsTest extends TestCase
     {
         config()->set('bridge.client.id', 'https://gateway.example.test/oauth/client.json');
         config()->set('bridge.client.name', 'MCP Gateway Test');
-        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/sites/callback');
+        config()->set('bridge.client.redirect_uri', 'https://gateway.example.test/oauth/targets/callback');
         config()->set('bridge.client.jwks_uri', 'https://gateway.example.test/oauth/jwks.json');
         Artisan::call('gateway:bridge-client-keygen', ['--force' => true]);
 
@@ -355,38 +364,19 @@ final class IntegratedSafeguardsTest extends TestCase
         Http::fake(fn (ClientRequest $request) => $this->bridgeResponse($request));
     }
 
-    private function createSite(string $siteId): Site
+    private function createSite(string $siteId): Target
     {
-        return app(SiteRegistry::class)->create($siteId, ucfirst($siteId), 'https://'.$siteId.'.example.test');
+        return app(WpAiBridgeTargetRegistration::class)->register($siteId, ucfirst($siteId), 'https://'.$siteId.'.example.test');
     }
 
-    private function pair(Site $site): void
+    private function pair(Target $site): void
     {
-        $connections = app(SiteConnectionService::class);
+        $connections = app(WpAiBridgeTargetConnectionService::class);
         $authorizeUrl = $connections->begin($site);
         parse_str((string) parse_url($authorizeUrl, PHP_URL_QUERY), $query);
         self::assertIsString($query['state'] ?? null);
-        $connections->completeCallback((string) $query['state'], $site->site_id.'-code', $site->base_url, null);
-    }
-
-    private function rawSite(string $siteId): Site
-    {
-        $base = 'https://'.$siteId.'.example.test';
-
-        return Site::query()->create([
-            'site_id' => $siteId,
-            'display_name' => ucfirst($siteId),
-            'base_url' => $base,
-            'base_url_hash' => hash('sha256', $base),
-            'connector_type' => 'wp_ai_bridge',
-            'mcp_resource_url' => $base.'/wp-json/wp-ai-bridge/v1/mcp',
-            'oauth_issuer_url' => $base,
-            'oauth_authorization_url' => $base.'/wp-ai-bridge/oauth/authorize',
-            'oauth_token_url' => $base.'/wp-json/wp-ai-bridge/v1/oauth/token',
-            'oauth_revocation_url' => $base.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
-            'connection_state' => 'connected',
-            'connected_at' => now(),
-        ]);
+        $connections->completeCallback((string) $query['state'], $site->target_id.'-code',
+            'https://'.$site->target_id.'.example.test', null);
     }
 
     private function resetHttp(): void

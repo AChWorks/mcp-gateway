@@ -8,8 +8,10 @@ on:
       - 'app/Application/Access/**'
       - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
+      - 'app/Application/Targets/**'
       - 'app/Domain/Access/**'
       - 'app/Domain/Sites/**'
+      - 'app/Domain/Targets/**'
       - 'app/Http/Controllers/Admin/**'
       - 'app/Http/Middleware/RequireMcpAccessToken.php'
       - 'app/Http/Middleware/EnsureLocalUserAccessEnabled.php'
@@ -28,9 +30,11 @@ on:
       - 'tests/Feature/Mcp/SiteGroup*'
       - 'tests/Feature/OAuth/**'
       - 'tests/Feature/Sites/**'
+      - 'tests/Feature/Targets/**'
       - 'tests/Feature/Security/Access*'
       - 'tests/Feature/Security/Activity*'
       - 'tests/Support/oauth_concurrent_token_request.php'
+      - 'tests/Support/wp_target_concurrent_action.php'
       - 'tests/Support/site_lifecycle_concurrent_action.php'
       - 'tests/Support/site_check_concurrent_action.php'
       - 'composer.json'
@@ -46,8 +50,10 @@ on:
       - 'app/Application/Access/**'
       - 'app/Application/Mcp/**'
       - 'app/Application/Sites/**'
+      - 'app/Application/Targets/**'
       - 'app/Domain/Access/**'
       - 'app/Domain/Sites/**'
+      - 'app/Domain/Targets/**'
       - 'app/Http/Controllers/Admin/**'
       - 'app/Http/Middleware/RequireMcpAccessToken.php'
       - 'app/Http/Middleware/EnsureLocalUserAccessEnabled.php'
@@ -66,9 +72,11 @@ on:
       - 'tests/Feature/Mcp/SiteGroup*'
       - 'tests/Feature/OAuth/**'
       - 'tests/Feature/Sites/**'
+      - 'tests/Feature/Targets/**'
       - 'tests/Feature/Security/Access*'
       - 'tests/Feature/Security/Activity*'
       - 'tests/Support/oauth_concurrent_token_request.php'
+      - 'tests/Support/wp_target_concurrent_action.php'
       - 'tests/Support/site_lifecycle_concurrent_action.php'
       - 'tests/Support/site_check_concurrent_action.php'
       - 'composer.json'
@@ -131,7 +139,7 @@ jobs:
           DB_PASSWORD: test-password
         run: php artisan migrate:fresh --force
 
-      - name: Run MariaDB OAuth and site-lifecycle concurrency tests
+      - name: Run MariaDB OAuth and Target concurrency tests
         env:
           APP_ENV: testing
           APP_KEY: base64:a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=

@@ -3,7 +3,7 @@
 namespace Tests\Feature\OAuth;
 
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Models\User;
@@ -105,10 +105,37 @@ final class ClientProfileIsolationTest extends TestCase
             'MCP-Protocol-Version' => '2026-07-28',
             'Mcp-Method' => 'tools/list',
         ];
-        $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
+        $fixtureTools = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
             ->postJson('/mcp', $mcp)->assertOk();
-        $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+        $chatTools = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
             ->postJson('/mcp', $mcp)->assertOk();
+
+        foreach ([$fixtureTools, $chatTools] as $toolResult) {
+            self::assertSame(['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute'],
+                array_column((array) $toolResult->json('result.tools'), 'name'));
+            foreach ((array) $toolResult->json('result.tools') as $tool) {
+                $isExecute = $tool['name'] === 'wordpress-ability-execute';
+                $isWordPress = str_starts_with($tool['name'], 'wordpress-');
+                self::assertSame(! $isExecute, $tool['annotations']['readOnlyHint'] ?? null);
+                self::assertSame($isExecute, $tool['annotations']['destructiveHint'] ?? null);
+                self::assertSame($isWordPress, $tool['annotations']['openWorldHint'] ?? null);
+            }
+        }
+        $this->withHeaders([...$headers, 'Mcp-Method' => 'tools/call', 'Mcp-Name' => 'targets-list',
+            'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
+            ->postJson('/mcp', [
+                'jsonrpc' => '2.0',
+                'method' => 'tools/call',
+                'id' => 2,
+                'params' => [
+                    'name' => 'targets-list',
+                    'arguments' => (object) [],
+                    '_meta' => $mcp['params']['_meta'],
+                ],
+            ])
+            ->assertOk()
+            ->assertJsonPath('result.structuredContent.ok', true)
+            ->assertJsonPath('result.structuredContent.targets', []);
 
         // A refresh issued to one client cannot be used by a different authenticated client.
         $this->refresh($fixtureTokens['refresh_token'], self::CHATGPT, $this->chatPrivateKey, 'chat-key')
@@ -219,7 +246,7 @@ final class ClientProfileIsolationTest extends TestCase
             'email' => 'owner@example.test',
             'password' => Hash::make('OwnerSecure!234'),
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
             'access_enabled' => true,
         ]);
 
@@ -458,7 +485,7 @@ final class ClientProfileIsolationTest extends TestCase
             'email' => 'operator@example.test',
             'password' => 'irrelevant',
             'role' => GatewayRole::Operator->value,
-            'site_scope_mode' => SiteScopeMode::Selected->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
             'access_enabled' => true,
         ]);
     }

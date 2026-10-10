@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Access control') }}</div>
         <h1>{{ __('Local users') }}</h1>
-        <p class="muted">{{ __('Roles define the permission ceiling. Global, group, and direct per-site rules can only narrow that authority.') }}</p>
+        <p class="muted">{{ __('Roles define the permission ceiling. Global, group, and direct per-target rules can only narrow that authority.') }}</p>
     </div>
     @can('users.manage')
         <a class="button button-primary" href="{{ route('admin.users.create') }}">{{ __('Add user') }}</a>
@@ -24,7 +24,7 @@
                 <tr>
                     <th scope="col">{{ __('User') }}</th>
                     <th scope="col">{{ __('Role') }}</th>
-                    <th scope="col">{{ __('Site scope') }}</th>
+                    <th scope="col">{{ __('Target scope') }}</th>
                     <th scope="col">{{ __('Status') }}</th>
                     <th scope="col"><span class="sr-only">{{ __('Actions') }}</span></th>
                 </tr>
@@ -37,7 +37,7 @@
                             <span class="muted">{{ $user->email }}</span>
                         </td>
                         <td><span class="badge badge-neutral">{{ \Illuminate\Support\Str::headline($user->role->value) }}</span></td>
-                        <td><span class="badge badge-neutral" title="{{ $user->site_scope_mode->description() }}">{{ $user->site_scope_mode->title() }}</span></td>
+                        <td><span class="badge badge-neutral" title="{{ $user->target_scope_mode->description() }}">{{ $user->target_scope_mode->title() }}</span></td>
                         <td>
                             <span class="badge badge-{{ $user->access_enabled ? 'success' : 'danger' }}">
                                 {{ $user->access_enabled ? __('Enabled') : __('Disabled') }}

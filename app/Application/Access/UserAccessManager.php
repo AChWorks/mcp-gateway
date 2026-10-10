@@ -4,8 +4,8 @@ namespace App\Application\Access;
 
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
-use App\Domain\Sites\Site;
+use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
@@ -17,15 +17,15 @@ final readonly class UserAccessManager
     public function __construct(private ActivityRecorder $activity) {}
 
     /**
-     * @param  array{name:string,email:string,password:string,role:string,site_scope_mode:string,access_enabled:bool}  $attributes
+     * @param  array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
     public function create(array $attributes, array $deniedPermissions): User
     {
         $role = GatewayRole::from((string) $attributes['role']);
         $scope = $role === GatewayRole::Owner
-            ? SiteScopeMode::All
-            : SiteScopeMode::from((string) $attributes['site_scope_mode']);
+            ? TargetScopeMode::All
+            : TargetScopeMode::from((string) $attributes['target_scope_mode']);
 
         $user = DB::transaction(function () use ($attributes, $role, $scope, $deniedPermissions): User {
             $user = User::query()->create([
@@ -33,11 +33,14 @@ final readonly class UserAccessManager
                 'email' => (string) $attributes['email'],
                 'password' => (string) $attributes['password'],
                 'role' => $role->value,
-                'site_scope_mode' => $scope->value,
+                'target_scope_mode' => $scope->value,
                 'access_enabled' => (bool) $attributes['access_enabled'],
             ]);
 
-            $this->replaceGlobalDenials($user, $role, $deniedPermissions);
+            $this->replaceGlobalDenials($user, $role, [
+                ...$deniedPermissions,
+                ...$this->defaultConnectorDenials($role),
+            ]);
             $this->normalizeOwnerState($user, $role);
             $this->recordRequired('user-access-create:'.$user->id);
 
@@ -48,7 +51,7 @@ final readonly class UserAccessManager
     }
 
     /**
-     * @param  array{name:string,email:string,password?:string|null,role:string,site_scope_mode:string,access_enabled:bool}  $attributes
+     * @param  array{name:string,email:string,password?:string|null,role:string,target_scope_mode:string,access_enabled:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
     public function update(User $user, array $attributes, array $deniedPermissions): User
@@ -56,8 +59,8 @@ final readonly class UserAccessManager
         $role = GatewayRole::from((string) $attributes['role']);
         $enabled = (bool) $attributes['access_enabled'];
         $scope = $role === GatewayRole::Owner
-            ? SiteScopeMode::All
-            : SiteScopeMode::from((string) $attributes['site_scope_mode']);
+            ? TargetScopeMode::All
+            : TargetScopeMode::from((string) $attributes['target_scope_mode']);
 
         DB::transaction(function () use ($user, $attributes, $role, $enabled, $scope, $deniedPermissions): void {
             $enabledOwners = User::query()
@@ -81,7 +84,7 @@ final readonly class UserAccessManager
                 'name' => (string) $attributes['name'],
                 'email' => (string) $attributes['email'],
                 'role' => $role->value,
-                'site_scope_mode' => $scope->value,
+                'target_scope_mode' => $scope->value,
                 'access_enabled' => $enabled,
             ];
 
@@ -90,7 +93,13 @@ final readonly class UserAccessManager
             }
 
             $lockedUser->fill($values)->save();
-            $this->replaceGlobalDenials($lockedUser, $role, $deniedPermissions);
+            // Editing ordinary user fields must not erase migration-seeded connector
+            // denials merely because the form omitted newly introduced permissions.
+            $this->replaceGlobalDenials($lockedUser, $role, [
+                ...$deniedPermissions,
+                ...$this->existingConnectorDenials($lockedUser),
+                ...($currentRole !== $role ? $this->defaultConnectorDenials($role) : []),
+            ]);
             $this->normalizeOwnerState($lockedUser, $role);
             $this->recordRequired('user-access-update:'.$lockedUser->id);
         });
@@ -99,17 +108,17 @@ final readonly class UserAccessManager
     }
 
     /** @param list<string> $deniedPermissions */
-    public function updateSiteRule(
+    public function updateTargetRule(
         User $user,
-        Site $site,
+        Target $target,
         string $accessRule,
         array $deniedPermissions,
     ): void {
         if (in_array($accessRule, ['inherit', 'allow', 'deny'], true) === false) {
-            throw new DomainException('invalid_site_rule');
+            throw new DomainException('invalid_target_rule');
         }
 
-        DB::transaction(function () use ($user, $site, $accessRule, $deniedPermissions): void {
+        DB::transaction(function () use ($user, $target, $accessRule, $deniedPermissions): void {
             $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
             if ($this->role($lockedUser) === GatewayRole::Owner) {
                 throw new DomainException('owner_unrestricted');
@@ -117,13 +126,13 @@ final readonly class UserAccessManager
 
             $identity = [
                 'user_id' => $lockedUser->getKey(),
-                'site_record_id' => $site->getKey(),
+                'target_record_id' => $target->getKey(),
             ];
 
             if ($accessRule === 'inherit') {
-                DB::table('user_site_access')->where($identity)->delete();
+                DB::table('user_target_access')->where($identity)->delete();
             } else {
-                DB::table('user_site_access')->updateOrInsert(
+                DB::table('user_target_access')->updateOrInsert(
                     $identity,
                     [
                         'allowed' => $accessRule === 'allow',
@@ -133,7 +142,7 @@ final readonly class UserAccessManager
                 );
             }
 
-            DB::table('user_site_permission_denials')->where($identity)->delete();
+            DB::table('user_target_permission_denials')->where($identity)->delete();
 
             $permissions = $this->normalizedDenials(
                 $this->role($lockedUser),
@@ -151,13 +160,13 @@ final readonly class UserAccessManager
             );
 
             if ($rows !== []) {
-                DB::table('user_site_permission_denials')->insert($rows);
+                DB::table('user_target_permission_denials')->insert($rows);
             }
 
             $this->recordRequired(sprintf(
-                'user-site-access-update:%d:%s',
+                'user-target-access-update:%d:%s',
                 $lockedUser->id,
-                $site->site_id,
+                $target->target_id,
             ));
         });
     }
@@ -174,11 +183,11 @@ final readonly class UserAccessManager
     }
 
     /** @return array{access_rule:string,denied_permissions:list<string>} */
-    public function siteRule(User $user, Site $site): array
+    public function targetRule(User $user, Target $target): array
     {
-        $allowed = DB::table('user_site_access')
+        $allowed = DB::table('user_target_access')
             ->where('user_id', $user->getKey())
-            ->where('site_record_id', $site->getKey())
+            ->where('target_record_id', $target->getKey())
             ->value('allowed');
 
         $accessRule = $allowed === null
@@ -187,9 +196,9 @@ final readonly class UserAccessManager
 
         return [
             'access_rule' => $accessRule,
-            'denied_permissions' => DB::table('user_site_permission_denials')
+            'denied_permissions' => DB::table('user_target_permission_denials')
                 ->where('user_id', $user->getKey())
-                ->where('site_record_id', $site->getKey())
+                ->where('target_record_id', $target->getKey())
                 ->orderBy('permission')
                 ->pluck('permission')
                 ->map(static fn (mixed $value): string => (string) $value)
@@ -198,35 +207,35 @@ final readonly class UserAccessManager
     }
 
     /**
-     * @param  list<Site>  $sites
+     * @param  list<Target>  $targets
      * @return array<string,array{access_rule:string,denied_count:int}>
      */
-    public function siteRuleSummaries(User $user, array $sites): array
+    public function targetRuleSummaries(User $user, array $targets): array
     {
         $ids = array_map(
-            static fn (Site $site): string => (string) $site->getKey(),
-            $sites,
+            static fn (Target $target): string => (string) $target->getKey(),
+            $targets,
         );
 
         if ($ids === []) {
             return [];
         }
 
-        $access = DB::table('user_site_access')
+        $access = DB::table('user_target_access')
             ->where('user_id', $user->getKey())
-            ->whereIn('site_record_id', $ids)
-            ->pluck('allowed', 'site_record_id');
+            ->whereIn('target_record_id', $ids)
+            ->pluck('allowed', 'target_record_id');
 
-        $deniedCounts = DB::table('user_site_permission_denials')
-            ->selectRaw('site_record_id, COUNT(*) as aggregate')
+        $deniedCounts = DB::table('user_target_permission_denials')
+            ->selectRaw('target_record_id, COUNT(*) as aggregate')
             ->where('user_id', $user->getKey())
-            ->whereIn('site_record_id', $ids)
-            ->groupBy('site_record_id')
-            ->pluck('aggregate', 'site_record_id');
+            ->whereIn('target_record_id', $ids)
+            ->groupBy('target_record_id')
+            ->pluck('aggregate', 'target_record_id');
 
         $result = [];
-        foreach ($sites as $site) {
-            $id = (string) $site->getKey();
+        foreach ($targets as $target) {
+            $id = (string) $target->getKey();
             $allowed = $access->get($id);
 
             $result[$id] = [
@@ -239,9 +248,44 @@ final readonly class UserAccessManager
     }
 
     /** @return list<GatewayPermission> */
-    public function sitePermissions(): array
+    public function targetPermissions(): array
     {
-        return GatewayPermission::siteScoped();
+        return GatewayPermission::targetScoped();
+    }
+
+    /** @return list<string> */
+    private function defaultConnectorDenials(GatewayRole $role): array
+    {
+        if ($role === GatewayRole::Owner) {
+            return [];
+        }
+
+        $allowedByDefault = [
+            GatewayPermission::AgentEnvironmentRead,
+            GatewayPermission::AgentCommandRun,
+        ];
+
+        return array_values(array_map(
+            static fn (GatewayPermission $permission): string => $permission->value,
+            array_filter($role->permissions(), static fn (GatewayPermission $permission): bool => (str_starts_with($permission->value, 'agent.')
+                    && ! in_array($permission, $allowedByDefault, true))
+                || str_starts_with($permission->value, 'ssh.'),
+            ),
+        ));
+    }
+
+    /** @return list<string> */
+    private function existingConnectorDenials(User $user): array
+    {
+        return DB::table('user_permission_denials')
+            ->where('user_id', $user->getKey())
+            ->where(function ($query): void {
+                $query->where('permission', 'like', 'agent.%')
+                    ->orWhere('permission', 'like', 'ssh.%');
+            })
+            ->pluck('permission')
+            ->map(static fn (mixed $value): string => (string) $value)
+            ->all();
     }
 
     /** @param  list<string>  $deniedPermissions */
@@ -277,21 +321,21 @@ final readonly class UserAccessManager
     private function normalizedDenials(
         GatewayRole $role,
         array $values,
-        bool $siteOnly = false,
+        bool $targetOnly = false,
     ): array {
         if ($role === GatewayRole::Owner) {
             return [];
         }
 
         $rolePermissions = $role->permissions();
-        $sitePermissions = $siteOnly ? $this->sitePermissions() : null;
+        $targetPermissions = $targetOnly ? $this->targetPermissions() : null;
         $result = [];
 
         foreach (array_unique($values) as $value) {
             $permission = GatewayPermission::tryFrom($value);
             if ($permission === null
                 || in_array($permission, $rolePermissions, true) === false
-                || ($sitePermissions !== null && in_array($permission, $sitePermissions, true) === false)) {
+                || ($targetPermissions !== null && in_array($permission, $targetPermissions, true) === false)) {
                 continue;
             }
 
@@ -307,12 +351,12 @@ final readonly class UserAccessManager
             return;
         }
 
-        $user->forceFill(['site_scope_mode' => SiteScopeMode::All->value])->save();
+        $user->forceFill(['target_scope_mode' => TargetScopeMode::All->value])->save();
 
         DB::table('user_permission_denials')->where('user_id', $user->getKey())->delete();
-        DB::table('user_site_access')->where('user_id', $user->getKey())->delete();
-        DB::table('user_site_permission_denials')->where('user_id', $user->getKey())->delete();
-        DB::table('site_group_users')->where('user_id', $user->getKey())->delete();
+        DB::table('user_target_access')->where('user_id', $user->getKey())->delete();
+        DB::table('user_target_permission_denials')->where('user_id', $user->getKey())->delete();
+        DB::table('target_group_users')->where('user_id', $user->getKey())->delete();
     }
 
     private function role(User $user): GatewayRole

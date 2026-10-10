@@ -14,7 +14,7 @@ return [
     'client' => [
         'id' => $baseUrl.'/oauth/client.json',
         'name' => (string) env('APP_NAME', 'MCP Gateway'),
-        'redirect_uri' => $baseUrl.'/oauth/sites/callback',
+        'redirect_uri' => $baseUrl.'/oauth/targets/callback',
         'jwks_uri' => $baseUrl.'/oauth/jwks.json',
         'assertion_ttl_seconds' => (int) env('BRIDGE_CLIENT_ASSERTION_TTL_SECONDS', 300),
     ],

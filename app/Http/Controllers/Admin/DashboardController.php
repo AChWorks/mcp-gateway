@@ -3,10 +3,9 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
-use App\Application\Sites\SiteHealth;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Sites\Site;
-use App\Domain\Sites\SiteConnectionState;
+use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityFeed;
 use App\Models\User;
@@ -20,51 +19,32 @@ final class DashboardController extends Controller
         Request $request,
         AccessControl $access,
         ActivityFeed $activity,
-        SiteHealth $health,
     ): View {
         Gate::authorize(GatewayPermission::DashboardView->value);
 
         $user = $request->user();
         abort_unless($user instanceof User, 401);
 
-        $sites = $access->scopeSites(
-            Site::query(),
+        $targets = $access->scopeTargets(
+            Target::query(),
             $user,
-            GatewayPermission::SitesView,
+            GatewayPermission::TargetsView,
         );
 
-        $staleCutoff = $health->staleCutoff();
-
         return view('admin.dashboard', [
-            'siteCount' => (clone $sites)->count(),
-            'connectedCount' => (clone $sites)
-                ->where('connection_state', SiteConnectionState::Connected->value)
+            'targetCount' => (clone $targets)->count(),
+            'connectedCount' => (clone $targets)
+                ->where('connection_state', TargetConnectionState::Connected->value)
                 ->count(),
-            'attentionCount' => (clone $sites)
+            'attentionCount' => (clone $targets)
                 ->whereIn('connection_state', [
-                    SiteConnectionState::ReconnectRequired->value,
-                    SiteConnectionState::Error->value,
-                    SiteConnectionState::Reassigning->value,
+                    TargetConnectionState::ReconnectRequired->value,
+                    TargetConnectionState::Error->value,
+                    TargetConnectionState::Reassigning->value,
                 ])
                 ->count(),
-            'staleCount' => (clone $sites)
-                ->where('connection_state', SiteConnectionState::Connected->value)
-                ->where(function ($query) use ($staleCutoff): void {
-                    $query
-                        ->where(function ($query) use ($staleCutoff): void {
-                            $query->whereNull('last_success_at')
-                                ->orWhere('last_success_at', '<', $staleCutoff);
-                        })
-                        ->where(function ($query) use ($staleCutoff): void {
-                            $query->whereNull('connected_at')
-                                ->orWhere('connected_at', '<', $staleCutoff);
-                        })
-                        ->where(function ($query) use ($staleCutoff): void {
-                            $query->whereNotNull('last_error_code')
-                                ->orWhereNull('last_tested_at')
-                                ->orWhere('last_tested_at', '<', $staleCutoff);
-                        });
-                })
+            'configuredCount' => (clone $targets)
+                ->where('connection_state', TargetConnectionState::Disconnected->value)
                 ->count(),
             'recentActivity' => Gate::allows(GatewayPermission::ActivityView->value)
                 ? $activity->page($user, 1, 5)['items']

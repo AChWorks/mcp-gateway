@@ -247,13 +247,17 @@ final class OAuthTokenConcurrencyTest extends TestCase
             throw new RuntimeException('Database test connection is unavailable.');
         }
 
-        $pdo = new PDO(
-            sprintf(
+        $socket = (string) ($connection['unix_socket'] ?? '');
+        $dsn = $socket !== ''
+            ? sprintf('mysql:unix_socket=%s;dbname=%s;charset=utf8mb4', $socket, (string) ($connection['database'] ?? ''))
+            : sprintf(
                 'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
                 (string) ($connection['host'] ?? '127.0.0.1'),
                 (string) ($connection['port'] ?? '3306'),
                 (string) ($connection['database'] ?? ''),
-            ),
+            );
+        $pdo = new PDO(
+            $dsn,
             (string) ($connection['username'] ?? ''),
             (string) ($connection['password'] ?? ''),
             [

@@ -14,8 +14,8 @@
 <section class="panel panel-wide">
     <form class="filter-grid" method="get" action="{{ route('admin.activity') }}">
         <div class="field">
-            <label for="site_id">{{ __('Site ID') }}</label>
-            <input id="site_id" name="site_id" type="text" maxlength="128" value="{{ $filters['site_id'] ?? '' }}">
+            <label for="target_id">{{ __('Target ID') }}</label>
+            <input id="target_id" name="target_id" type="text" maxlength="64" value="{{ $filters['target_id'] ?? '' }}">
         </div>
         <div class="field">
             <label for="operation">{{ __('Operation') }}</label>
@@ -35,7 +35,7 @@
                 <thead>
                 <tr>
                     <th scope="col">{{ __('Time') }}</th>
-                    <th scope="col">{{ __('Site') }}</th>
+                    <th scope="col">{{ __('Target') }}</th>
                     <th scope="col">{{ __('Client profile') }}</th>
                     <th scope="col">{{ __('Operation') }}</th>
                     <th scope="col">{{ __('Outcome') }}</th>
@@ -47,7 +47,7 @@
                 @foreach ($feed['items'] as $item)
                     <tr>
                         <td><time datetime="{{ $item['created_at'] }}">{{ $item['created_at'] }}</time></td>
-                        <td><code>{{ $item['site_id'] ?? '—' }}</code></td>
+                        <td><code>{{ $item['target_id'] ?? '—' }}</code></td>
                         <td><code>{{ $item['client_profile_key'] ?? '—' }}</code></td>
                         <td>{{ $item['operation'] }}</td>
                         <td><span class="badge badge-{{ $item['outcome'] === 'success' ? 'success' : 'danger' }}">{{ $item['outcome'] }}</span></td>
@@ -62,7 +62,7 @@
 
     @php
         $baseQuery = array_filter([
-            'site_id' => $filters['site_id'] ?? null,
+            'target_id' => $filters['target_id'] ?? null,
             'operation' => $filters['operation'] ?? null,
         ], static fn ($value) => $value !== null && $value !== '');
     @endphp

@@ -232,6 +232,16 @@ php artisan activity:prune
 
 Pruning serializes only competing prune runs and deletes expired/overflow records in fixed-size batches; ordinary Activity writers do not acquire the retention lock. The command reports only expired/overflow deletion counts and the remaining row count. It does not dump Activity records or credentials.
 
+### WordPress Target credential idle maintenance (next Target major)
+
+The same Laravel scheduler also runs the bounded gateway:wordpress-credentials-maintain command once per minute with overlap protection. For each connected WordPress Target with due encrypted credentials, the Gateway renews the rotating refresh-token generation at the earlier half-life of the access token or WordPress's refresh_token_expires_in hint. The encrypted token is never written to logs, queue payloads or scheduled-task arguments; each renewal is fenced by the existing database-backed Target refresh intent and does not perform remote I/O inside a transaction. WordPress may revoke a grant or expire a token sooner than the lifetime hint.
+
+Without the host scheduler, active MCP traffic can still trigger on-demand renewal but **idle** WordPress Target authorizations may eventually expire and require reauthorization. Check that php artisan schedule:list includes gateway:wordpress-credentials-maintain; run a bounded non-production maintenance check with:
+
+    php artisan gateway:wordpress-credentials-maintain --limit=20
+
+The default batch size is 50 and the hard maximum is 200 due Targets per run. Failure of a remote rotating exchange never authorizes blind auto-replay; unresolved intents require the WordPress authorization/reconciliation procedure. An expired refresh token is not sent to the remote provider. The scheduled command reports only aggregate counters, not bearer credentials.
+
 ## 6. Generate signing keys (advanced path)
 
 The web installer performs this automatically. For CLI deployment:
@@ -318,7 +328,7 @@ Before using **Connect** for any WP AI Bridge site, the site's WordPress adminis
 <GATEWAY_ORIGIN>/oauth/client.json
 ```
 
-The Gateway metadata document is authoritative for its redirect and signing-key endpoints. WP AI Bridge discovers the exact `<GATEWAY_ORIGIN>/oauth/sites/callback` redirect URI and `<GATEWAY_ORIGIN>/oauth/jwks.json` JWKS URI from that document; do not configure those URLs separately and never copy a private key or shared secret into WordPress. Keep the built-in direct ChatGPT client available when direct ChatGPT -> WP AI Bridge access is desired. Additional-client approval only makes the Gateway eligible to connect: WP AI Bridge access groups and the WordPress user authorizing OAuth still bound the resulting authority.
+The Gateway metadata document is authoritative for its redirect and signing-key endpoints. WP AI Bridge discovers the exact `<GATEWAY_ORIGIN>/oauth/targets/callback` redirect URI and `<GATEWAY_ORIGIN>/oauth/jwks.json` JWKS URI from that document; do not configure those URLs separately and never copy a private key or shared secret into WordPress. Keep the built-in direct ChatGPT client available when direct ChatGPT -> WP AI Bridge access is desired. Additional-client approval only makes the Gateway eligible to connect: WP AI Bridge access groups and the WordPress user authorizing OAuth still bound the resulting authority.
 
 If an existing site later reports `invalid_client`, first confirm the exact current client metadata URL is still approved and reachable. A Gateway reinstall or move that changes `GATEWAY_ORIGIN` creates a different client identity and requires approval of the new metadata URL before reconnecting. Intentional Bridge-client key rotation on the same origin keeps the client ID stable; the metadata-declared JWKS endpoint remains the source of truth and WP AI Bridge performs bounded key refresh behavior rather than requiring a manually pasted JWKS URL.
 

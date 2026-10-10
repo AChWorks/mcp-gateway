@@ -30,9 +30,8 @@ final class ActivityWriteDatabaseTest extends TestCase
 
         app(ActivityRecorder::class)->record(
             (string) Str::uuid(),
-            'site-ability-execute',
+            'wordpress-ability-execute',
             'success',
-            'site-00001',
         );
 
         $queries = DB::getQueryLog();

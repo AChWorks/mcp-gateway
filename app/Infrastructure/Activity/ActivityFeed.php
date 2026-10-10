@@ -4,7 +4,7 @@ namespace App\Infrastructure\Activity;
 
 use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Sites\Site;
+use App\Domain\Targets\Target;
 use App\Models\User;
 use DateTimeInterface;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -20,7 +20,7 @@ final readonly class ActivityFeed
         User $user,
         int $page = 1,
         int $perPage = 25,
-        ?string $siteId = null,
+        ?string $targetId = null,
         ?string $operation = null,
     ): array {
         if (! $this->access->allows($user, GatewayPermission::ActivityView)) {
@@ -31,13 +31,13 @@ final readonly class ActivityFeed
         $maxRows = max(1, (int) config('activity.max_rows', 5000));
         $maxPage = intdiv($maxRows + $perPage - 1, $perPage) + 1;
         $page = max(1, min($maxPage, $page));
-        $siteId = $this->filter($siteId, 128);
+        $targetId = $this->filter($targetId, 64);
         $operation = $this->filter($operation, 128);
 
-        $allowedSites = $this->access->scopeSites(
-            Site::query()->select('site_id'),
+        $allowedTargets = $this->access->scopeTargets(
+            Target::query()->select('id'),
             $user,
-            GatewayPermission::SitesView,
+            GatewayPermission::TargetsView,
         );
 
         $query = DB::table('activity_events')
@@ -47,26 +47,41 @@ final readonly class ActivityFeed
                 'actor_type',
                 'actor_id',
                 'client_profile_key',
-                'site_id',
+                'target_id',
+                'target_record_id',
+                'connector_type_snapshot',
                 'operation',
                 'outcome',
                 'error_code',
                 'created_at',
             ]);
 
-        if (! $this->access->hasUnrestrictedSiteScope($user)) {
-            $query->where(function ($query) use ($user, $allowedSites): void {
-                if ($this->access->hasAllSiteScope($user)) {
-                    $query->whereNull('site_id')
-                        ->orWhereIn('site_id', $allowedSites);
+        if (! $this->access->hasUnrestrictedTargetScope($user)) {
+            $query->where(function ($query) use ($user, $allowedTargets): void {
+                if ($this->access->hasAllTargetScope($user)) {
+                    $query->whereNull('target_record_id')
+                        ->orWhereIn('target_record_id', $allowedTargets);
                 } else {
-                    $query->whereIn('site_id', $allowedSites);
+                    $query->whereIn('target_record_id', $allowedTargets);
                 }
             });
         }
 
+        if ($targetId !== null) {
+            if ($this->access->hasUnrestrictedTargetScope($user)) {
+                // Owners can inspect retained snapshots even after Target removal.
+                $query->where('target_id', $targetId);
+            } else {
+                $scopedTarget = $this->access->scopeTargets(
+                    Target::query()->where('target_id', $targetId),
+                    $user,
+                    GatewayPermission::TargetsView,
+                )->first(['id']);
+                $query->where('target_record_id', $scopedTarget?->getKey() ?? '');
+            }
+        }
+
         $query
-            ->when($siteId !== null, fn ($query) => $query->where('site_id', $siteId))
             ->when($operation !== null, fn ($query) => $query->where('operation', $operation))
             ->orderByDesc('created_at')
             ->orderByDesc('id');
@@ -85,7 +100,10 @@ final readonly class ActivityFeed
                 'correlation_id' => (string) $row->correlation_id,
                 'actor_type' => (string) $row->actor_type,
                 'actor_id' => $row->actor_id === null ? null : (string) $row->actor_id,
-                'site_id' => $row->site_id === null ? null : (string) $row->site_id,
+                'client_profile_key' => $row->client_profile_key === null ? null : (string) $row->client_profile_key,
+                'target_id' => $row->target_id === null ? null : (string) $row->target_id,
+                'target_record_id' => $row->target_record_id === null ? null : (string) $row->target_record_id,
+                'connector_type_snapshot' => $row->connector_type_snapshot === null ? null : (string) $row->connector_type_snapshot,
                 'operation' => (string) $row->operation,
                 'outcome' => (string) $row->outcome,
                 'error_code' => $row->error_code === null ? null : (string) $row->error_code,

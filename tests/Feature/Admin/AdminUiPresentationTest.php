@@ -3,7 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Domain\Access\GatewayRole;
-use App\Domain\Access\SiteScopeMode;
+use App\Domain\Access\TargetScopeMode;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -17,7 +17,7 @@ final class AdminUiPresentationTest extends TestCase
         $this->actingAs($this->owner())
             ->get('/admin/users/create')
             ->assertOk()
-            ->assertSee('css/admin.css?v=1.2.1', false);
+            ->assertSee('css/admin.css?v='.trim((string) file_get_contents(base_path('VERSION'))), false);
     }
 
     public function test_permission_controls_explain_title_scope_and_effective_behavior(): void
@@ -27,11 +27,11 @@ final class AdminUiPresentationTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertSee('Remove sites')
-            ->assertSee('sites.remove')
-            ->assertSee('Site-scoped')
-            ->assertSee('effective site scope')
-            ->assertSee('not limited to sites the user created');
+            ->assertSee('Remove Targets')
+            ->assertSee('targets.remove')
+            ->assertSee('Target-scoped')
+            ->assertSee('effective Target scope')
+            ->assertSee('not limited to Targets the user created');
     }
 
     private function owner(): User
@@ -41,7 +41,7 @@ final class AdminUiPresentationTest extends TestCase
             'email' => 'owner-'.uniqid().'@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
-            'site_scope_mode' => SiteScopeMode::All->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
             'access_enabled' => true,
         ]);
     }

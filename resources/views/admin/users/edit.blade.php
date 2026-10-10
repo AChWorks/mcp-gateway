@@ -10,14 +10,14 @@
         <p class="muted">{{ $managedUser->email }}</p>
     </div>
     <div class="action-row">
-        <a class="button button-secondary" href="{{ route('admin.users.sites.index', ['user' => $managedUser->id]) }}">{{ __('Site access') }}</a>
+        <a class="button button-secondary" href="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">{{ __('Target access') }}</a>
         <a href="{{ route('admin.users.index') }}">{{ __('Back to users') }}</a>
     </div>
 </div>
 
 <section class="panel panel-wide">
     @if ($managedUser->role->value === 'owner')
-        <div class="alert alert-success" role="status">{{ __('Owners retain unrestricted all-site authority for recovery. Global/per-site denials and site-group assignments are cleared for this role.') }}</div>
+        <div class="alert alert-success" role="status">{{ __('Owners retain unrestricted all-target authority for recovery. Global/per-target denials and target-group assignments are cleared for this role.') }}</div>
     @endif
 
     <form class="form-stack" method="post" action="{{ route('admin.users.update', ['user' => $managedUser->id]) }}">
@@ -47,13 +47,13 @@
                 </select>
             </div>
             <div class="field">
-                <label for="site_scope_mode">{{ __('Site scope') }}</label>
-                <select id="site_scope_mode" name="site_scope_mode" required>
-                    @foreach ($siteScopeModes as $mode)
-                        <option value="{{ $mode->value }}" @selected(old('site_scope_mode', $managedUser->site_scope_mode->value) === $mode->value)>{{ $mode->title() }}</option>
+                <label for="target_scope_mode">{{ __('Target scope') }}</label>
+                <select id="target_scope_mode" name="target_scope_mode" required>
+                    @foreach ($targetScopeModes as $mode)
+                        <option value="{{ $mode->value }}" @selected(old('target_scope_mode', $managedUser->target_scope_mode->value) === $mode->value)>{{ $mode->title() }}</option>
                     @endforeach
                 </select>
-                <p class="field-help">{{ __('All sites reaches the full fleet unless a direct site deny excludes a target. Selected sites reaches only direct allows and assigned groups; direct denies still win. Owners are always all-sites.') }}</p>
+                <p class="field-help">{{ __('All targets reaches the full fleet unless a direct target deny excludes a target. Selected targets reaches only direct allows and assigned groups; direct denies still win. Owners are always all-targets.') }}</p>
             </div>
         </div>
 
@@ -66,7 +66,7 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Global permission restrictions') }}</legend>
-            <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. The scope badge describes what the permission acts on; a Site-scoped denial here applies across every site in the user\'s effective scope. Owner restrictions are intentionally ignored and cleared.') }}</p>
+            <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. The scope badge describes what the permission acts on; a Target-scoped denial here applies across every target in the user\'s effective scope. Owner restrictions are intentionally ignored and cleared.') }}</p>
             @php($selectedDenials = old('denied_permissions', $deniedPermissions))
             <div class="checkbox-grid">
                 @foreach ($permissions as $permission)

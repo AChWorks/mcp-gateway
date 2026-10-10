@@ -67,7 +67,12 @@ DB_HOST_VALUE="${UPDATE_TEST_DB_HOST:-127.0.0.1}"
 DB_PORT_VALUE="${UPDATE_TEST_DB_PORT:-3306}"
 DB_DATABASE_VALUE="${UPDATE_TEST_DB_DATABASE:-mcp_gateway_update_test}"
 DB_USERNAME_VALUE="${UPDATE_TEST_DB_USERNAME:-mcp_gateway}"
-DB_PASSWORD_VALUE="${UPDATE_TEST_DB_PASSWORD:-test-password}"
+DB_PASSWORD_VALUE="${UPDATE_TEST_DB_PASSWORD-test-password}"
+DB_SOCKET_VALUE="${UPDATE_TEST_DB_SOCKET:-}"
+if [[ -n "$DB_SOCKET_VALUE" && ! "$DB_SOCKET_VALUE" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+  echo "Unsafe update-test DB_SOCKET path." >&2
+  exit 2
+fi
 
 cat > "$target/.env" <<EOF_ENV
 APP_NAME="MCP Gateway Update Test"
@@ -78,6 +83,7 @@ APP_URL=https://gateway-update.example.test
 DB_CONNECTION=mysql
 DB_HOST=$DB_HOST_VALUE
 DB_PORT=$DB_PORT_VALUE
+DB_SOCKET=$DB_SOCKET_VALUE
 DB_DATABASE=$DB_DATABASE_VALUE
 DB_USERNAME=$DB_USERNAME_VALUE
 DB_PASSWORD=$DB_PASSWORD_VALUE
@@ -122,6 +128,95 @@ env_hash_before="$(sha256sum "$target/.env" | awk '{print $1}')"
 private_hash_before="$(sha256sum "$target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')"
 old_version="$(tr -d '[:space:]' < "$target/VERSION")"
 
+# Released-v1.2.1 real-schema regression, not a synthetic post-transition
+# schema: seed connection data that is intentionally discarded and unrelated
+# identity/security data that must survive the breaking browser upgrade.
+if [[ "$old_version" == "1.2.1" ]]; then
+  (
+    cd "$target"
+    php -r '
+      require "vendor/autoload.php";
+      $app = require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      $db = Illuminate\Support\Facades\DB::class;
+      $owner = App\Models\User::query()->where("email", "admin@example.test")->firstOrFail();
+      // The baseline creates its first account *after* migrate:fresh.
+      // V1 defaults new accounts to Viewer; explicitly seed the owner role
+      // rather than incorrectly attributing the seed role to migration.
+      $owner->forceFill(["role" => "owner", "site_scope_mode" => "all", "access_enabled" => true])->save();
+      $operator = App\Models\User::query()->create([
+        "name" => "Legacy operator", "email" => "operator@example.test",
+        "password" => "CorrectHorse!234", "role" => "operator",
+        "site_scope_mode" => "selected", "access_enabled" => true,
+      ]);
+      $site = (string) Illuminate\Support\Str::ulid();
+      $base = "https://legacy-wordpress.example.test";
+      $db::table("sites")->insert([
+        "id" => $site, "site_id" => "legacy-wordpress",
+        "display_name" => "Historical WordPress", "base_url" => $base,
+        "base_url_hash" => hash("sha256", $base),
+        "connector_type" => "wp_ai_bridge", "connection_state" => "connected",
+        "mcp_resource_url" => $base."/wp-json/wp-ai-bridge/v1/mcp",
+        "oauth_issuer_url" => $base,
+        "oauth_authorization_url" => $base."/oauth/authorize",
+        "oauth_token_url" => $base."/oauth/token",
+        "oauth_revocation_url" => $base."/oauth/revoke",
+      ]);
+      $db::table("site_credentials")->insert([
+        "id" => (string) Illuminate\Support\Str::ulid(),
+        "site_record_id" => $site,
+        "client_id" => "https://gateway-update.example.test/oauth/client.json",
+        "resource_url" => $base."/wp-json/wp-ai-bridge/v1/mcp",
+        "binding_hash" => hash("sha256", "test-binding"),
+        "encrypted_payload" => Illuminate\Support\Facades\Crypt::encryptString("historical-fixture"),
+      ]);
+      $db::table("user_site_access")->insert([
+        "user_id" => $operator->id, "site_record_id" => $site, "allowed" => true,
+      ]);
+      $group = (string) Illuminate\Support\Str::ulid();
+      $db::table("site_groups")->insert(["id" => $group, "name" => "Retired WordPress group"]);
+      $db::table("site_group_sites")->insert(["site_group_id" => $group, "site_record_id" => $site]);
+      $db::table("site_group_users")->insert(["site_group_id" => $group, "user_id" => $operator->id]);
+      $db::table("user_permission_denials")->insert([
+        "user_id" => $operator->id, "permission" => "sites.view",
+      ]);
+      foreach (["legacy-wordpress", null] as $siteId) {
+        $db::table("activity_events")->insert([
+          "id" => (string) Illuminate\Support\Str::ulid(),
+          "correlation_id" => (string) Illuminate\Support\Str::uuid(),
+          "actor_type" => "system", "site_id" => $siteId,
+          "operation" => $siteId === null ? "keep-global-event" : "discard-site-event",
+          "outcome" => "success",
+        ]);
+      }
+      $grant = (string) Illuminate\Support\Str::ulid();
+      $client = "https://chatgpt.com/oauth/client.json";
+      $resource = "https://gateway-update.example.test/mcp";
+      $data = ["authorization_id" => $grant, "client_id" => $client,
+        "user_id" => $owner->id, "resource" => $resource];
+      $db::table("oauth_authorizations")->insert([
+        "id" => $grant, "user_id" => $owner->id, "client_id" => $client,
+        "resource" => $resource, "resource_hash" => hash("sha256", $resource),
+        "scopes" => "[\"mcp:use\"]",
+      ]);
+      $db::table("oauth_access_tokens")->insert([
+        ...$data, "id" => "browser-old-access",
+        "scopes" => "[\"mcp:use\"]", "expires_at" => now()->addHour(),
+      ]);
+      $db::table("oauth_refresh_tokens")->insert([
+        ...$data, "id" => "browser-old-refresh",
+        "access_token_id" => "browser-old-access",
+        "expires_at" => now()->addDay(),
+      ]);
+      if ($db::getSchemaBuilder()->hasTable("oauth_client_profiles")) {
+        file_put_contents("storage/app/private/v121-client-profiles-present", "yes");
+      }
+    '
+    php artisan gateway:check --no-interaction >/dev/null
+  )
+  echo "Seeded actual published v1.2.1 WordPress connection, Target scope/group, ChatGPT OAuth grant/access/refresh and unrelated identity/Activity."
+fi
+
 candidate="$tmp/candidate"
 mkdir -p "$candidate"
 unzip -q "$update_zip" -d "$candidate"
@@ -154,7 +249,14 @@ php -r '
   require $base."/update/WebUpdater.php";
   $token = str_repeat("a", 64);
   $updater = new McpGatewayUpdate\WebUpdater($base, $base."/update");
-  $stage = $updater->stage($token);
+  $reset = $updater->targetResetPreflight();
+  $attest = $reset["required"] ? [
+      "reset_acknowledged" => "RESET_TARGET_STATE",
+      "database_backup_verified" => "RESTORABLE_DATABASE_BACKUP_VERIFIED",
+      "confirmed_target_version" => $reset["to"],
+      "package_sha256" => $reset["package_sha256"],
+  ] : [];
+  $stage = $updater->stage($token, $attest);
   file_put_contents($base."/artisan", "\n# force pre-migration restore regression\n", FILE_APPEND);
   try {
     $updater->finish($token, $stage["continuation"]);
@@ -320,6 +422,23 @@ curl -fsS -L -D "$tmp/login-flow.headers" -c "$jar" -b "$jar" -H "$https_header"
 grep -F "Installed:</strong> $old_version" "$tmp/update.html" >/dev/null || { cat "$tmp/update.html" >&2; echo "Administrator login did not return directly to the browser updater." >&2; exit 1; }
 grep -F "Target:</strong> $new_version" "$tmp/update.html" >/dev/null || { echo "Browser updater did not show the target version after login." >&2; exit 1; }
 
+# Browser consent is a fresh operator action tied to the exact uploaded
+# package, never simply .env flags or a generic update button.
+reset_post=()
+if [[ "$old_version" == "1.2.1" ]]; then
+  grep -F 'Breaking v2.0 Target/OAuth reset' "$tmp/update.html" >/dev/null || { echo "Destructive preflight warning is absent." >&2; exit 1; }
+  grep -F 'Gateway OAuth client grants (including ChatGPT tokens)' "$tmp/update.html" >/dev/null || { echo "OAuth reset affected-state summary is absent." >&2; exit 1; }
+  grep -F 'independent database backup REQUIRED' "$tmp/update.html" >/dev/null || { echo "Independent DB backup warning is absent." >&2; exit 1; }
+  package_hash="$(grep -o 'name="package_sha256" value="[a-f0-9]*"' "$tmp/update.html" | head -n 1 | sed 's/.*value="\([a-f0-9]*\)"/\1/')"
+  [[ "$package_hash" =~ ^[a-f0-9]{64}$ ]] || { echo "Package binding is absent from the consent form." >&2; exit 1; }
+  reset_post=(
+    --data-urlencode 'reset_acknowledged=RESET_TARGET_STATE'
+    --data-urlencode 'database_backup_verified=RESTORABLE_DATABASE_BACKUP_VERIFIED'
+    --data-urlencode "confirmed_target_version=$new_version"
+    --data-urlencode "package_sha256=$package_hash"
+  )
+fi
+
 update_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/update.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
 update_cookie="$(grep -i '^Set-Cookie: mcp_gateway_update_session=' "$tmp/login-flow.headers" | tail -n 1 | sed -E 's/^[^=]+=([^;]+).*/\1/' | tr -d '\r')"
 [[ -n "$update_csrf" && "$update_cookie" =~ ^[a-f0-9]{64}$ ]] || { echo "Browser updater session/CSRF material was not issued." >&2; exit 1; }
@@ -339,9 +458,33 @@ else
   cookie_header="mcp_gateway_update_session=$update_cookie"
 fi
 
+if [[ "$old_version" == "1.2.1" ]]; then
+  # A legitimate authenticated user clicking Start without the fresh
+  # confirmations must not enter maintenance or mutate managed files.
+  denied_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
+    --data-urlencode "_token=$update_csrf" --data-urlencode 'action=start' \
+    -o "$tmp/reset-denied.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$denied_code" == "500" ]] || { echo "Unacknowledged destructive upgrade unexpectedly accepted (HTTP $denied_code)." >&2; exit 1; }
+  grep -F 'both explicit browser confirmations' "$tmp/reset-denied.html" >/dev/null || { echo "Missing consent did not return actionable error." >&2; exit 1; }
+  [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" ]] || { echo "Denied consent modified runtime VERSION." >&2; exit 1; }
+  [[ -f "$target/app/obsolete-update-test.txt" ]] || { echo "Denied consent removed managed files." >&2; exit 1; }
+  [[ ! -f "$target/storage/app/private/update-state.json" ]] || { echo "Denied consent wrote updater mutation state." >&2; exit 1; }
+  [[ ! -e "$target/storage/framework/down" ]] || { echo "Denied consent entered maintenance." >&2; exit 1; }
+
+  stale_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
+    --data-urlencode "_token=$update_csrf" --data-urlencode 'action=start' \
+    --data-urlencode 'reset_acknowledged=RESET_TARGET_STATE' \
+    --data-urlencode 'database_backup_verified=RESTORABLE_DATABASE_BACKUP_VERIFIED' \
+    --data-urlencode "confirmed_target_version=$new_version" \
+    --data-urlencode "package_sha256=$(printf '0%.0s' {1..64})" \
+    -o "$tmp/reset-wrong-package.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$stale_code" == "500" ]] || { echo "Incorrect update-package fingerprint bypassed the reset gate (HTTP $stale_code)." >&2; exit 1; }
+  [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" && ! -f "$target/storage/app/private/update-state.json" ]] || { echo "Incorrect package acknowledgment mutated the installation." >&2; exit 1; }
+fi
+
 curl -fsS -H "$https_header" -H "Cookie: $cookie_header" \
   --data-urlencode "_token=$update_csrf" \
-  --data-urlencode 'action=start' \
+  --data-urlencode 'action=start' "${reset_post[@]}" \
   "$base_url/update/" > "$tmp/stage.html"
 continuation="$(grep -o 'name="continuation" value="[a-f0-9]*"' "$tmp/stage.html" | head -n 1 | sed 's/.*value="\([a-f0-9]*\)"/\1/')"
 [[ "$continuation" =~ ^[a-f0-9]{64}$ ]] || { cat "$tmp/stage.html" >&2; echo "Browser updater did not return a valid continuation token." >&2; exit 1; }
@@ -353,6 +496,48 @@ curl -fsS -H "$https_header" -H "Cookie: $cookie_header" \
 grep -F 'Update complete.' "$tmp/finish.html" >/dev/null || { cat "$tmp/finish.html" >&2; echo "Browser updater did not report successful completion." >&2; exit 1; }
 
 [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$new_version" ]] || { echo "Target VERSION was not updated." >&2; exit 1; }
+if [[ "$old_version" == "1.2.1" ]]; then
+  (
+    cd "$target"
+    php -r '
+      require "vendor/autoload.php";
+      $app = require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      $db = Illuminate\Support\Facades\DB::class;
+      $schema = $db::getSchemaBuilder();
+      $owner = $db::table("users")->where("email", "admin@example.test")->first();
+      $operator = $db::table("users")->where("email", "operator@example.test")->first();
+      $checks = [
+        "owner_preserved" => $owner !== null && $owner->role === "owner",
+        "operator_preserved" => $operator !== null && $operator->role === "operator",
+        "selected_scope_preserved" => $operator !== null && $operator->target_scope_mode === "selected",
+        "old_target_assignments_reset" => $db::table("user_target_access")->count() === 0,
+        "old_targets_reset" => $db::table("targets")->count() === 0,
+        "global_denial_translated" => $operator !== null && $db::table("user_permission_denials")
+          ->where("user_id", $operator->id)->where("permission", "targets.view")->count() === 1,
+        "oauth_authorizations_reset" => $db::table("oauth_authorizations")->count() === 0,
+        "oauth_access_tokens_reset" => $db::table("oauth_access_tokens")->count() === 0,
+        "oauth_refresh_tokens_reset" => $db::table("oauth_refresh_tokens")->count() === 0,
+        "global_activity_preserved" => $db::table("activity_events")
+          ->where("operation", "keep-global-event")->count() === 1,
+        "site_activity_reset" => $db::table("activity_events")
+          ->where("operation", "discard-site-event")->count() === 0,
+        "legacy_site_schema_removed" => !$schema->hasTable("sites") && !$schema->hasTable("site_credentials"),
+      ];
+      $failed = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
+      if ($failed !== []) {
+          fwrite(STDERR, "Published v1.2.1 reset/preservation checks failed: ".implode(", ", $failed)."\n");
+          exit(1);
+      }
+      if (is_file("storage/app/private/v121-client-profiles-present")
+          && !$schema->hasTable("oauth_client_profiles")) {
+          fwrite(STDERR, "Pre-existing OAuth client profiles were not preserved.\n");
+          exit(1);
+      }
+    '
+  )
+  echo "Seeded v1.2.1 reset boundary: old WordPress/ChatGPT credentials removed; users/roles/global denies and unrelated Activity preserved."
+fi
 [[ ! -e "$target/app/obsolete-update-test.txt" ]] || { echo "Stale managed file survived update." >&2; exit 1; }
 [[ "$(sha256sum "$target/.env" | awk '{print $1}')" == "$env_hash_before" ]] || { echo ".env changed during update." >&2; exit 1; }
 [[ "$(sha256sum "$target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')" == "$private_hash_before" ]] || { echo "Persistent private state changed during update." >&2; exit 1; }

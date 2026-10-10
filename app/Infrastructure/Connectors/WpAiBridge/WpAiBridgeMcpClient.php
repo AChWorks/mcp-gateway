@@ -2,16 +2,12 @@
 
 namespace App\Infrastructure\Connectors\WpAiBridge;
 
-use App\Application\Sites\SiteConnectionException;
-use App\Application\Sites\SiteConnectionService;
-use App\Application\Sites\SiteLifecycleLock;
+use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Access\AbilityExecutionClass;
-use App\Domain\Sites\Site;
-use App\Domain\Sites\SiteCredential;
+use App\Domain\Targets\Target;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
-use App\Infrastructure\OAuth\SiteCredentialVaultException;
 
 final readonly class WpAiBridgeMcpClient
 {
@@ -22,14 +18,13 @@ final readonly class WpAiBridgeMcpClient
     private const CATALOG_ABILITY = 'wp-ai-bridge/abilities-read';
 
     public function __construct(
-        private SiteConnectionService $connections,
-        private SiteLifecycleLock $lifecycle,
         private SafeHttpClient $http,
+        private WpAiBridgeTargetConnectionService $targetConnections,
     ) {}
 
     /** @return array<string, mixed> */
     public function readAbilities(
-        Site $site,
+        Target $target,
         string $correlationId,
         ?string $ability = null,
         int $page = 1,
@@ -47,7 +42,7 @@ final readonly class WpAiBridgeMcpClient
                 'search' => $search,
             ], static fn (mixed $value): bool => $value !== null);
 
-        $result = $this->callAbility($site, self::CATALOG_ABILITY, $parameters, false, $correlationId);
+        $result = $this->callAbility($target, self::CATALOG_ABILITY, $parameters, false, $correlationId);
         if (! is_array($result)) {
             throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an invalid ability catalog result.');
         }
@@ -56,12 +51,12 @@ final readonly class WpAiBridgeMcpClient
     }
 
     public function classifyAbility(
-        Site $site,
+        Target $target,
         string $ability,
         string $correlationId,
     ): AbilityExecutionClass {
         return $this->abilityExecutionClass(
-            $this->routingContext($site),
+            $this->routingContext($target),
             $ability,
             $correlationId,
         );
@@ -69,13 +64,13 @@ final readonly class WpAiBridgeMcpClient
 
     /** @param array<string, mixed> $input */
     public function executeAbility(
-        Site $site,
+        Target $target,
         string $ability,
         array $input,
         string $correlationId,
         ?AbilityExecutionClass $executionClass = null,
     ): mixed {
-        $routing = $this->routingContext($site);
+        $routing = $this->routingContext($target);
         $executionClass ??= $this->abilityExecutionClass($routing, $ability, $correlationId);
 
         return $this->callAbilityOnRouting(
@@ -87,20 +82,53 @@ final readonly class WpAiBridgeMcpClient
         );
     }
 
-    /** @param array{resource_url:string,access_token:string} $routing */
+    /**
+     * Execute under the SAME request-owned downstream session used for
+     * classification. The caller must have resolved a bounded, request-local
+     * permission snapshot before any downstream connection is opened.
+     *
+     * @param  array<string,mixed>  $input
+     * @param  callable(AbilityExecutionClass):bool  $authorizeClass
+     */
+    public function executeAuthorizedAbility(
+        Target $target,
+        string $ability,
+        array $input,
+        string $correlationId,
+        callable $authorizeClass,
+    ): mixed {
+        $routing = $this->routingContext($target);
+
+        return $this->withLegacySession($routing, $correlationId, function (string $url, array $headers) use ($routing, $ability, $input, $correlationId, $authorizeClass): mixed {
+            $executionClass = $this->abilityExecutionClass($routing, $ability, $correlationId, $headers);
+            if (! $authorizeClass($executionClass)) {
+                throw new WpAiBridgeMcpException('forbidden', 'The classified WordPress Ability is not authorized.');
+            }
+
+            return $this->callTool($url, $headers, $ability, $input, $executionClass->hasMutationRisk(), 3);
+        });
+    }
+
+    /**
+     * @param  array{resource_url:string,access_token:string}  $routing
+     * @param  array<string,string>|null  $sessionHeaders
+     */
     private function abilityExecutionClass(
         array $routing,
         string $ability,
         string $correlationId,
+        ?array $sessionHeaders = null,
     ): AbilityExecutionClass {
         try {
-            $catalog = $this->callAbilityOnRouting(
-                $routing,
-                self::CATALOG_ABILITY,
-                ['action' => 'get', 'name' => $ability],
-                false,
-                $correlationId,
-            );
+            $catalog = $sessionHeaders === null
+                ? $this->callAbilityOnRouting(
+                    $routing,
+                    self::CATALOG_ABILITY,
+                    ['action' => 'get', 'name' => $ability],
+                    false,
+                    $correlationId,
+                )
+                : $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY, ['action' => 'get', 'name' => $ability], false);
         } catch (WpAiBridgeMcpException) {
             return AbilityExecutionClass::Unclassified;
         }
@@ -145,10 +173,10 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @param array<string, mixed> $input */
-    private function callAbility(Site $site, string $ability, array $input, bool $mutationRisk, string $correlationId): mixed
+    private function callAbility(Target $target, string $ability, array $input, bool $mutationRisk, string $correlationId): mixed
     {
         return $this->callAbilityOnRouting(
-            $this->routingContext($site),
+            $this->routingContext($target),
             $ability,
             $input,
             $mutationRisk,
@@ -167,6 +195,19 @@ final readonly class WpAiBridgeMcpClient
         bool $mutationRisk,
         string $correlationId,
     ): mixed {
+        return $this->withLegacySession(
+            $routing,
+            $correlationId,
+            fn (string $url, array $headers): mixed => $this->callTool($url, $headers, $ability, $input, $mutationRisk),
+        );
+    }
+
+    /**
+     * @param  array{resource_url:string,access_token:string}  $routing
+     * @param  callable(string,array<string,string>):mixed  $operation
+     */
+    private function withLegacySession(array $routing, string $correlationId, callable $operation): mixed
+    {
         $headers = [
             'Authorization' => 'Bearer '.$routing['access_token'],
             'Accept' => 'application/json, text/event-stream',
@@ -178,41 +219,23 @@ final readonly class WpAiBridgeMcpClient
         $headers['Mcp-Session-Id'] = $sessionId;
 
         try {
-            return $this->callTool($routing['resource_url'], $headers, $ability, $input, $mutationRisk);
+            return $operation($routing['resource_url'], $headers);
         } finally {
             $this->closeSession($routing['resource_url'], $headers);
         }
     }
 
     /** @return array{resource_url:string,access_token:string} */
-    private function routingContext(Site $site): array
+    private function routingContext(Target $target): array
     {
-        return $this->lifecycle->run($site, function (Site $lockedSite): array {
-            if ($lockedSite->connector_type !== (string) config('bridge.connector_type', 'wp_ai_bridge')) {
-                throw new WpAiBridgeMcpException('unsupported_connector', 'The selected site does not use the WP AI Bridge connector.');
-            }
+        if ($target->connector_type !== 'wp_ai_bridge') {
+            throw new WpAiBridgeMcpException(
+                'unsupported_connector',
+                'Only an authorized WordPress Target can access this MCP connector.',
+            );
+        }
 
-            try {
-                $accessToken = $this->connections->accessToken($lockedSite);
-            } catch (SiteConnectionException $exception) {
-                throw $exception;
-            } catch (SiteCredentialVaultException $exception) {
-                throw new WpAiBridgeMcpException(
-                    'credential_unavailable',
-                    'The selected site credential could not be opened safely.',
-                    $exception,
-                );
-            }
-
-            $credential = $lockedSite->credential()->first();
-            $resourceUrl = $lockedSite->mcp_resource_url;
-
-            if (! $credential instanceof SiteCredential || $resourceUrl === '' || ! hash_equals($resourceUrl, $credential->resource_url)) {
-                throw new SiteConnectionException('credential_target_mismatch', 'The selected site credential is not bound to its current MCP resource.');
-            }
-
-            return ['resource_url' => $resourceUrl, 'access_token' => $accessToken];
-        });
+        return $this->targetConnections->routingContext($target);
     }
 
     /** @param array<string, string> $headers */
@@ -259,12 +282,12 @@ final readonly class WpAiBridgeMcpClient
      * @param  array<string, string>  $headers
      * @param  array<string, mixed>  $input
      */
-    private function callTool(string $resourceUrl, array $headers, string $ability, array $input, bool $mutationRisk): mixed
+    private function callTool(string $resourceUrl, array $headers, string $ability, array $input, bool $mutationRisk, int $requestId = 2): mixed
     {
         try {
             $response = $this->http->postJson($resourceUrl, [
                 'jsonrpc' => '2.0',
-                'id' => 2,
+                'id' => $requestId,
                 'method' => 'tools/call',
                 'params' => [
                     'name' => self::EXECUTE_TOOL,
@@ -311,7 +334,7 @@ final readonly class WpAiBridgeMcpClient
             throw new WpAiBridgeMcpException($reason, $message, $exception);
         }
 
-        if (($payload['jsonrpc'] ?? null) !== '2.0' || ($payload['id'] ?? null) !== 2) {
+        if (($payload['jsonrpc'] ?? null) !== '2.0' || ($payload['id'] ?? null) !== $requestId) {
             $reason = $mutationRisk ? 'outcome_unknown' : 'protocol_error';
             throw new WpAiBridgeMcpException($reason, $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'

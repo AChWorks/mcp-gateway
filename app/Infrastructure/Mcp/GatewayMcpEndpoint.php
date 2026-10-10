@@ -2,9 +2,11 @@
 
 namespace App\Infrastructure\Mcp;
 
-use App\Application\Mcp\PendingGatewayToolHandlers;
+use App\Application\Mcp\TargetMcpToolHandlers;
+use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Mcp\Schema\ToolAnnotations;
 use Mcp\Server;
 use Mcp\Server\Session\FileSessionStore;
 use Mcp\Server\Transport\Http\Middleware\CorsMiddleware;
@@ -16,15 +18,20 @@ use Symfony\Component\HttpFoundation\Response;
 
 final readonly class GatewayMcpEndpoint
 {
-    public function __construct(private PendingGatewayToolHandlers $handlers) {}
+    public function __construct(
+        private TargetMcpToolHandlers $handlers,
+        private WordpressTargetMcpToolHandlers $wordpress,
+    ) {}
 
     public function handle(Request $request): Response
     {
+        // Expose only operationally implemented tool families. Connector
+        // execution tools will be enabled after their runtime/credentials land.
         $server = Server::builder()
             ->setServerInfo(
                 name: 'mcp-gateway',
-                version: '0.1.0',
-                description: 'Authenticated multi-site MCP Gateway.',
+                version: (string) config('app.release_version'),
+                description: 'Authenticated Target-aware MCP Gateway.',
             )
             ->setSession(new FileSessionStore(
                 directory: storage_path('framework/mcp-sessions'),
@@ -36,15 +43,18 @@ final readonly class GatewayMcpEndpoint
                     int $limit = 100,
                     ?string $search = null,
                     ?string $connection_state = null,
-                ): array => $this->handlers->sitesList(
+                    ?string $connector_type = null,
+                ): array => $this->handlers->targetsList(
                     $this->user($request),
                     $cursor,
                     $limit,
                     $search,
                     $connection_state,
+                    $connector_type,
                 ),
-                name: 'sites-list',
-                description: 'List configured Gateway sites without exposing credentials.',
+                name: 'targets-list',
+                description: 'List authorized registered Targets without fetching remote data.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: false),
                 inputSchema: [
                     'type' => 'object',
                     'properties' => [
@@ -53,14 +63,11 @@ final readonly class GatewayMcpEndpoint
                         'search' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 160],
                         'connection_state' => [
                             'type' => 'string',
-                            'enum' => [
-                                'disconnected',
-                                'pending',
-                                'connected',
-                                'reassigning',
-                                'reconnect_required',
-                                'error',
-                            ],
+                            'enum' => ['disconnected', 'pending', 'connected', 'reassigning', 'reconnect_required', 'error'],
+                        ],
+                        'connector_type' => [
+                            'type' => 'string',
+                            'enum' => ['wp_ai_bridge', 'ssh_direct'],
                         ],
                     ],
                     'required' => [],
@@ -68,72 +75,72 @@ final readonly class GatewayMcpEndpoint
                 ],
             )
             ->addTool(
-                handler: fn (string $site_id): array => $this->handlers->siteContext(
+                handler: fn (string $target_id): array => $this->handlers->targetContext(
                     $this->user($request),
-                    $site_id,
+                    $target_id,
                 ),
-                name: 'site-context',
-                description: 'Inspect the context and connection state of one explicit site.',
+                name: 'target-context',
+                description: 'Inspect safe stored context for one authorized Target.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: false),
                 inputSchema: [
                     'type' => 'object',
                     'properties' => [
-                        'site_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                     ],
-                    'required' => ['site_id'],
+                    'required' => ['target_id'],
                     'additionalProperties' => false,
                 ],
             )
             ->addTool(
                 handler: fn (
-                    string $site_id,
+                    string $target_id,
                     ?string $ability = null,
                     int $page = 1,
                     int $per_page = 10,
                     ?string $namespace = null,
                     ?string $search = null,
-                ): array => $this->handlers->siteAbilitiesRead(
-                    $this->user($request),
-                    $site_id,
-                    $ability,
-                    $page,
-                    $per_page,
-                    $namespace,
-                    $search,
+                ): array => $this->wordpress->read(
+                    $this->user($request), $target_id, $ability, $page, $per_page, $namespace, $search,
                 ),
-                name: 'site-abilities-read',
-                description: 'List or inspect current WP AI Bridge Ability contracts for one explicit site.',
+                name: 'wordpress-abilities-read',
+                description: 'Read WordPress Ability metadata for an explicitly authorized Target.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
                     'properties' => [
-                        'site_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
-                        'ability' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
-                        'page' => ['type' => 'integer', 'minimum' => 1, 'default' => 1],
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'ability' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
+                        'page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100000, 'default' => 1],
                         'per_page' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 10],
-                        'namespace' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
-                        'search' => ['type' => ['string', 'null'], 'minLength' => 1, 'maxLength' => 255],
+                        'namespace' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
+                        'search' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
                     ],
-                    'required' => ['site_id'],
+                    'required' => ['target_id'],
                     'additionalProperties' => false,
                 ],
             )
             ->addTool(
-                handler: fn (string $site_id, string $ability, array $input): array => $this->handlers
-                    ->siteAbilityExecute($this->user($request), $site_id, $ability, $input),
-                name: 'site-ability-execute',
-                description: 'Execute one exact downstream Ability against one explicit site.',
+                handler: fn (string $target_id, string $ability, array $input = []): array => $this->wordpress->execute($this->user($request), $target_id, $ability, $input),
+                name: 'wordpress-ability-execute',
+                description: 'Execute one explicitly authorized WordPress Ability with runtime safety-class enforcement.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
                     'properties' => [
-                        'site_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 128],
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                         'ability' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 255],
+                        // MCP SDK normalizes an empty JSON object to an
+                        // empty PHP array during schema validation. Admit only
+                        // that zero-item array representation, not arbitrary
+                        // JSON arrays, and keep the downstream object shape.
                         'input' => [
-                            'oneOf' => [
+                            'anyOf' => [
                                 ['type' => 'object'],
                                 ['type' => 'array', 'maxItems' => 0],
                             ],
                         ],
                     ],
-                    'required' => ['site_id', 'ability', 'input'],
+                    'required' => ['target_id', 'ability'],
                     'additionalProperties' => false,
                 ],
             )
