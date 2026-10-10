@@ -55,7 +55,7 @@ fixture_user="${fixture_user:0:30}"
 root="${RUNNER_TEMP:-/tmp}/mcp-gateway-ssh-fixture-${run_id}"
 password='GatewaySshFixture!234'
 key_passphrase='fixture-key-passphrase'
-ports=(46231 46232 46233 46234 46235)
+ports=(46231 46232 46233 46234 46235 46236)
 
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   printf '::add-mask::%s\n' "${password}"
@@ -147,11 +147,13 @@ EOF_CONFIG
   exit 1
 }
 
-start_daemon modern "${ports[0]}"
+start_daemon modern "${ports[0]}" "Subsystem sftp internal-sftp"
 start_daemon legacy-rsa "${ports[1]}"   "HostKeyAlgorithms ssh-rsa"   "KexAlgorithms curve25519-sha256"   "Ciphers aes128-ctr"   "MACs hmac-sha2-256"
 start_daemon weak-kex "${ports[2]}"   "HostKeyAlgorithms ssh-ed25519"   "KexAlgorithms diffie-hellman-group14-sha1"   "Ciphers aes128-ctr"   "MACs hmac-sha2-256"
 start_daemon weak-cipher "${ports[3]}"   "HostKeyAlgorithms ssh-ed25519"   "KexAlgorithms curve25519-sha256"   "Ciphers aes128-cbc"   "MACs hmac-sha2-256"
 start_daemon weak-mac "${ports[4]}"   "HostKeyAlgorithms ssh-ed25519"   "KexAlgorithms curve25519-sha256"   "Ciphers aes128-ctr"   "MACs hmac-sha1"
+# Intentionally no Subsystem sftp: library must not fall back to shell exec.
+start_daemon no-sftp "${ports[5]}"
 
 if [[ -n "${env_file}" ]]; then
   cat >> "${env_file}" <<EOF_ENV
@@ -169,6 +171,7 @@ SSH_FIXTURE_PORT_LEGACY_RSA=${ports[1]}
 SSH_FIXTURE_PORT_WEAK_KEX=${ports[2]}
 SSH_FIXTURE_PORT_WEAK_CIPHER=${ports[3]}
 SSH_FIXTURE_PORT_WEAK_MAC=${ports[4]}
+SSH_FIXTURE_PORT_NO_SFTP=${ports[5]}
 SSH_FIXTURE_LOG_MODERN=${root}/sshd-modern.log
 SSH_FIXTURE_LOG_LEGACY_RSA=${root}/sshd-legacy-rsa.log
 SSH_FIXTURE_LOG_WEAK_KEX=${root}/sshd-weak-kex.log

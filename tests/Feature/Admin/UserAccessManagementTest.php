@@ -94,11 +94,21 @@ final class UserAccessManagementTest extends TestCase
         $this->put('/admin/users/'.$operator->id, [
             ...$payload,
             'confirm_ssh_permission_changes' => '1',
-            // Omitted SFTP switches must remain denied until those tools are implemented.
+            // All three SSH tools are visible: this explicitly grants each
+            // capability on the selected Target.
             'denied_permissions' => [],
         ])->assertRedirect();
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
-        self::assertFalse($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
+        self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
+        self::assertTrue($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
+
+        // An explicit Owner edit can restrict only write without restricting read.
+        $this->put('/admin/users/'.$operator->id, [
+            ...$payload,
+            'confirm_ssh_permission_changes' => '1',
+            'denied_permissions' => [GatewayPermission::SshFileWrite->value],
+        ])->assertRedirect();
+        self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
         self::assertFalse($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
 
         // Broadening to all-target scope must not preserve shell privileges.
