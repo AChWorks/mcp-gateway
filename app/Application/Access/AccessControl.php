@@ -71,7 +71,8 @@ final readonly class AccessControl
         $eligible = [];
         foreach ($permissions as $permission) {
             if ($role->allows($permission) && $this->permissionMatchesTarget($permission, $target)
-                && (! str_starts_with($permission->value, 'ssh.') || $this->scopeMode($user) === TargetScopeMode::Selected)) {
+                && (! str_starts_with($permission->value, 'ssh.')
+                    || $role === GatewayRole::Owner || $this->scopeMode($user) === TargetScopeMode::Selected)) {
                 $eligible[$permission->value] = true;
             }
         }

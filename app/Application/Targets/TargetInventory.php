@@ -6,6 +6,7 @@ use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
@@ -19,6 +20,16 @@ final class TargetInventory
     public const MCP_DEFAULT_LIMIT = 100;
 
     public const MCP_MAX_LIMIT = 100;
+
+    // Bounded left join instead of one extra eager-load query per inventory
+    // page. Never select pinned host keys or credential payloads in lists.
+    private const SSH_COLUMNS = [
+        'sshc.host as ssh_cfg_host',
+        'sshc.port as ssh_cfg_port',
+        'sshc.username as ssh_cfg_username',
+        'sshc.observed_peer_ip as ssh_cfg_peer',
+        'sshc.observed_at as ssh_cfg_observed',
+    ];
 
     /**
      * @return array{items:list<Target>,page:int,per_page:int,has_more:bool}
@@ -59,22 +70,25 @@ final class TargetInventory
         if ($pageRows->isEmpty()) {
             $items = [];
         } else {
-            $detailQuery = Target::query()->select([
-                'id',
-                'target_id',
-                'display_name',
-                'connector_type',
-                'connection_state',
-                'last_error_code',
-                'last_tested_at',
-                'connected_at',
-                'last_success_at',
-                'last_failure_at',
-                'last_failure_code',
-            ]);
+            $detailQuery = Target::query()
+                ->leftJoin('ssh_direct_target_configs as sshc', 'sshc.target_record_id', '=', 'targets.id')
+                ->select([
+                    'targets.id',
+                    'targets.target_id',
+                    'targets.display_name',
+                    'targets.connector_type',
+                    'targets.connection_state',
+                    'targets.last_error_code',
+                    'targets.last_tested_at',
+                    'targets.connected_at',
+                    'targets.last_success_at',
+                    'targets.last_failure_at',
+                    'targets.last_failure_code',
+                    ...self::SSH_COLUMNS,
+                ]);
             $targetsById = $this->access
                 ->scopeTargets($detailQuery, $user, GatewayPermission::TargetsView)
-                ->whereIn('id', $pageRows->pluck('id')->all())
+                ->whereIn('targets.id', $pageRows->pluck('id')->all())
                 ->get()
                 ->keyBy('id');
 
@@ -83,6 +97,7 @@ final class TargetInventory
                 ->filter(static fn (?Target $target): bool => $target instanceof Target)
                 ->values()
                 ->all();
+            $this->bindProjectedSshConfig($items);
         }
 
         return [
@@ -117,12 +132,16 @@ final class TargetInventory
         $connectorType = $this->connectorType($connectorType);
 
         $query = $this->access->scopeTargets(
-            Target::query()->select([
-                'target_id',
-                'display_name',
-                'connector_type',
-                'connection_state',
-            ]),
+            Target::query()
+                ->leftJoin('ssh_direct_target_configs as sshc', 'sshc.target_record_id', '=', 'targets.id')
+                ->select([
+                    'targets.id',
+                    'targets.target_id',
+                    'targets.display_name',
+                    'targets.connector_type',
+                    'targets.connection_state',
+                    ...self::SSH_COLUMNS,
+                ]),
             $user,
             GatewayPermission::TargetsView,
         );
@@ -138,6 +157,7 @@ final class TargetInventory
             ->limit($limit + 1)
             ->get();
         $items = $rows->take($limit)->values();
+        $this->bindProjectedSshConfig($items->all());
         $hasMore = $rows->count() > $limit;
         $last = $items->last();
 
@@ -153,10 +173,24 @@ final class TargetInventory
     private function applyFilters(Builder $query, ?string $search, ?string $connectionState, ?string $connectorType): void
     {
         if ($search !== null) {
-            $query->where(function (Builder $query) use ($search): void {
+            [$lookupHost, $lookupPort, $lookupUsername] = $this->sshLookup($search);
+            $query->where(function (Builder $query) use ($search, $lookupHost, $lookupPort, $lookupUsername): void {
                 $query
                     ->where('display_name', 'like', '%'.$search.'%')
-                    ->orWhere('target_id', 'like', '%'.$search.'%');
+                    ->orWhere('target_id', 'like', '%'.$search.'%')
+                    // An authorized local lookup, no DNS/network/credential access.
+                    // Same-IP accounts remain distinct and require explicit target_id.
+                    ->orWhereHas('sshConfig', static function (Builder $ssh) use ($lookupHost, $lookupPort, $lookupUsername): void {
+                        $ssh->where(static function (Builder $addresses) use ($lookupHost): void {
+                            $addresses->where('host', $lookupHost)->orWhere('observed_peer_ip', $lookupHost);
+                        });
+                        if ($lookupPort !== null) {
+                            $ssh->where('port', $lookupPort);
+                        }
+                        if ($lookupUsername !== null) {
+                            $ssh->where('username', $lookupUsername);
+                        }
+                    });
             });
         }
 
@@ -165,6 +199,68 @@ final class TargetInventory
         }
         if ($connectorType !== null) {
             $query->where('connector_type', $connectorType);
+        }
+    }
+
+    /**
+     * Normalize local SSH host/IP/optional port and account search only.
+     * A search term never selects the remote target for an action.
+     *
+     * @return array{string,?int,?string}
+     */
+    private function sshLookup(string $search): array
+    {
+        $host = strtolower($search);
+        $username = null;
+        if (str_contains($host, '@')) {
+            [$username, $host] = explode('@', $host, 2);
+        }
+
+        $port = null;
+        if (preg_match('/^\[([^\]]+)\]:(\d{1,5})$/D', $host, $matches) === 1
+            || preg_match('/^([^:]+):(\d{1,5})$/D', $host, $matches) === 1) {
+            $host = $matches[1];
+            $port = (int) $matches[2];
+            if ($port < 1 || $port > 65535) {
+                return ['', null, null];
+            }
+        } elseif (preg_match('/^\[([^\]]+)\]$/D', $host, $matches) === 1) {
+            $host = $matches[1];
+        }
+
+        $ip = @inet_pton($host);
+        if ($ip !== false) {
+            $host = (string) inet_ntop($ip);
+        }
+
+        return [$host, $port, $username];
+    }
+
+    /**
+     * Hydrate a read-only SSH presentation relation from a unique indexed
+     * left join. Inventory never fetches sensitive pin/credential material.
+     *
+     * @param  list<Target>  $targets
+     */
+    private function bindProjectedSshConfig(array $targets): void
+    {
+        foreach ($targets as $target) {
+            $host = $target->getAttribute('ssh_cfg_host');
+            $config = null;
+            if (is_string($host) && $host !== '') {
+                $config = new SshTargetConfig;
+                $config->forceFill([
+                    'host' => $host,
+                    'port' => $target->getAttribute('ssh_cfg_port'),
+                    'username' => $target->getAttribute('ssh_cfg_username'),
+                    'observed_peer_ip' => $target->getAttribute('ssh_cfg_peer'),
+                    'observed_at' => $target->getAttribute('ssh_cfg_observed'),
+                ]);
+            }
+            $target->setRelation('sshConfig', $config);
+            foreach (['ssh_cfg_host', 'ssh_cfg_port', 'ssh_cfg_username', 'ssh_cfg_peer', 'ssh_cfg_observed'] as $column) {
+                $target->offsetUnset($column);
+            }
         }
     }
 

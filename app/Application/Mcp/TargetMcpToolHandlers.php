@@ -8,6 +8,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshTargetIdentity;
 use App\Models\User;
 use App\Support\CorrelationId;
 use DateTimeInterface;
@@ -47,12 +48,16 @@ final readonly class TargetMcpToolHandlers
         $targets = [];
         foreach ($page['items'] as $target) {
             $state = $target->getAttribute('connection_state');
-            $targets[] = [
+            $item = [
                 'target_id' => $target->target_id,
                 'display_name' => $target->display_name,
                 'connector_type' => $target->connector_type,
                 'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
             ];
+            if ($target->connector_type === 'ssh_direct') {
+                $item['ssh'] = SshTargetIdentity::safeMetadata($target);
+            }
+            $targets[] = $item;
         }
 
         $this->activity->record($correlationId, 'targets-list', 'success');
@@ -78,7 +83,7 @@ final readonly class TargetMcpToolHandlers
         }
 
         $target = $this->access
-            ->scopeTargets(Target::query(), $user, GatewayPermission::TargetsView)
+            ->scopeTargets(Target::query()->with('sshConfig'), $user, GatewayPermission::TargetsView)
             ->where('target_id', $targetId)
             ->first();
 
@@ -93,17 +98,19 @@ final readonly class TargetMcpToolHandlers
         $connectedAt = $target->getAttribute('connected_at');
         $state = $target->getAttribute('connection_state');
 
-        return [
-            'ok' => true,
-            'target' => [
-                'target_id' => $target->target_id,
-                'display_name' => $target->display_name,
-                'connector_type' => $target->connector_type,
-                'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
-                'last_error_code' => $target->last_error_code,
-                'connected_at' => $connectedAt instanceof DateTimeInterface ? $connectedAt->format(DATE_ATOM) : null,
-            ],
+        $context = [
+            'target_id' => $target->target_id,
+            'display_name' => $target->display_name,
+            'connector_type' => $target->connector_type,
+            'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
+            'last_error_code' => $target->last_error_code,
+            'connected_at' => $connectedAt instanceof DateTimeInterface ? $connectedAt->format(DATE_ATOM) : null,
         ];
+        if ($target->connector_type === 'ssh_direct') {
+            $context['ssh'] = SshTargetIdentity::safeMetadata($target);
+        }
+
+        return ['ok' => true, 'target' => $context];
     }
 
     /** @return array<string,mixed> */

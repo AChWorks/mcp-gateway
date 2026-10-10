@@ -2,11 +2,13 @@
 
 namespace App\Domain\Targets;
 
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Support\Database\MicrosecondImmutableDateTimeCast;
 use DomainException;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 final class Target extends Model
 {
@@ -59,6 +61,12 @@ final class Target extends Model
                 throw new DomainException('Unsupported built-in Target connector type.');
             }
         });
+    }
+
+    /** @return HasOne<SshTargetConfig, $this> */
+    public function sshConfig(): HasOne
+    {
+        return $this->hasOne(SshTargetConfig::class, 'target_record_id');
     }
 
     /** @return HasMany<TargetCredential, $this> */

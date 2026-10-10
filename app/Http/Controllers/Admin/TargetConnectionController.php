@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Access\GatewayPermission;
@@ -16,41 +18,68 @@ use Illuminate\Support\Facades\Gate;
 
 final class TargetConnectionController extends Controller
 {
-    public function connect(Target $target, WpAiBridgeTargetConnectionService $connections): RedirectResponse
+    public function connect(Target $target, WpAiBridgeTargetConnectionService $connections, SshTargetConnectionService $ssh): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsConnect->value, $target);
 
         try {
+            if ($target->connector_type === 'ssh_direct') {
+                $ssh->test($target);
+
+                return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+                    ->with('status', __('SSH host key, numeric TCP peer and login verified. No command was run.'));
+            }
+
             return redirect()->away($connections->begin($target));
+        } catch (SshTargetConnectionException $exception) {
+            return $this->failedSsh($target, $exception);
         } catch (WpAiBridgeTargetConnectionException $exception) {
             return $this->failed($target, $exception);
         }
     }
 
-    public function reconnect(Target $target, WpAiBridgeTargetConnectionService $connections): RedirectResponse
+    public function reconnect(Target $target, WpAiBridgeTargetConnectionService $connections, SshTargetConnectionService $ssh): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsReconnect->value, $target);
         Gate::authorize(GatewayPermission::TargetsDisconnect->value, $target);
         Gate::authorize(GatewayPermission::TargetsConnect->value, $target);
 
         try {
+            if ($target->connector_type === 'ssh_direct') {
+                $ssh->test($target);
+
+                return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+                    ->with('status', __('SSH recheck verified the pinned host key and login.'));
+            }
+
             $connections->disconnect($target);
 
             return redirect()->away($connections->begin($target));
+        } catch (SshTargetConnectionException $exception) {
+            return $this->failedSsh($target, $exception);
         } catch (WpAiBridgeTargetConnectionException $exception) {
             return $this->failed($target, $exception);
         }
     }
 
-    public function disconnect(Target $target, WpAiBridgeTargetConnectionService $connections): RedirectResponse
+    public function disconnect(Target $target, WpAiBridgeTargetConnectionService $connections, SshTargetConnectionService $ssh): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsDisconnect->value, $target);
 
         try {
+            if ($target->connector_type === 'ssh_direct') {
+                $ssh->disconnect($target);
+
+                return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+                    ->with('status', __('SSH credential deleted from this Gateway. This does NOT revoke the remote Unix account or terminate external sessions.'));
+            }
+
             $connections->disconnect($target);
 
             return redirect()->route('admin.targets.show', ['target' => $target->target_id])
                 ->with('status', __('WordPress Target disconnected after confirmed credential revocation.'));
+        } catch (SshTargetConnectionException $exception) {
+            return $this->failedSsh($target, $exception);
         } catch (WpAiBridgeTargetConnectionException $exception) {
             return $this->failed($target, $exception);
         }
@@ -98,18 +127,47 @@ final class TargetConnectionController extends Controller
         }
     }
 
-    public function test(Target $target, WpAiBridgeTargetConnectionService $connections): RedirectResponse
+    public function test(Target $target, WpAiBridgeTargetConnectionService $connections, SshTargetConnectionService $ssh): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsTest->value, $target);
 
         try {
+            if ($target->connector_type === 'ssh_direct') {
+                $ssh->test($target);
+
+                return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+                    ->with('status', __('SSH TCP peer, pinned host key and login verified.'));
+            }
+
             $connections->testConnection($target);
 
             return redirect()->route('admin.targets.show', ['target' => $target->target_id])
                 ->with('status', __('WordPress metadata is reachable and compatible.'));
+        } catch (SshTargetConnectionException $exception) {
+            return $this->failedSsh($target, $exception);
         } catch (WpAiBridgeTargetConnectionException $exception) {
             return $this->failed($target, $exception);
         }
+    }
+
+    private function failedSsh(Target $target, SshTargetConnectionException $exception): RedirectResponse
+    {
+        $message = match ($exception->reason) {
+            'egress_denied' => __('The registered SSH destination is not permitted by the TCP/DNS policy.'),
+            'tcp_peer_mismatch', 'host_key_mismatch', 'ssh_handshake_failed' => __('SSH server identity could not be verified. No credentials were sent after a host-key mismatch.'),
+            'authentication_failed' => __('SSH authentication failed after server identity verification.'),
+            'tcp_unreachable' => __('The approved numeric SSH endpoint could not be reached.'),
+            'credential_invalid', 'credential_unavailable' => __('The stored SSH credential is unavailable or invalid.'),
+            'connection_busy' => __('Another SSH verification is already in progress for this Target.'),
+            'rate_limited' => __('Too many SSH verification attempts were made for this Target. Try again later.'),
+            'admission_unavailable' => __('SSH verification is temporarily unavailable because its safety guard could not be acquired.'),
+            'target_changed' => __('The SSH Target changed while verification was in progress. Retry after reviewing it.'),
+            'verification_superseded' => __('A newer SSH verification has superseded this result. Reload the Target status.'),
+            default => __('The SSH connection could not be verified safely.'),
+        };
+
+        return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+            ->withErrors(['target' => $message]);
     }
 
     private function failed(Target $target, WpAiBridgeTargetConnectionException $exception): RedirectResponse

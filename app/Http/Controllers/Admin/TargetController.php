@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
+use App\Application\Targets\SshTargetRegistration;
 use App\Application\Targets\TargetInventory;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
@@ -11,6 +12,8 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Models\User;
@@ -66,6 +69,7 @@ final class TargetController extends Controller
     public function store(
         Request $request,
         WpAiBridgeTargetRegistration $registration,
+        SshTargetRegistration $sshRegistration,
         AccessControl $access,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
@@ -73,36 +77,61 @@ final class TargetController extends Controller
         abort_unless($user instanceof User, 401);
 
         $validated = $request->validate([
-            'connector_type' => ['required', Rule::in(['wp_ai_bridge'])],
+            'connector_type' => ['required', Rule::in(['wp_ai_bridge', 'ssh_direct'])],
             'target_id' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
             'display_name' => ['required', 'string', 'max:160'],
-            'base_url' => ['required', 'string', 'url:https', 'max:2048'],
+            'base_url' => ['required_if:connector_type,wp_ai_bridge', 'nullable', 'string', 'url:https', 'max:2048'],
+            'ssh_host' => ['required_if:connector_type,ssh_direct', 'nullable', 'string', 'max:253'],
+            'ssh_port' => ['required_if:connector_type,ssh_direct', 'nullable', 'integer', 'min:1', 'max:65535'],
+            'ssh_username' => ['required_if:connector_type,ssh_direct', 'nullable', 'string', 'max:128'],
+            'ssh_host_key' => ['required_if:connector_type,ssh_direct', 'nullable', 'string', 'max:4096'],
+            'ssh_auth_method' => ['required_if:connector_type,ssh_direct', 'nullable', Rule::in(['password', 'private_key'])],
+            'ssh_password' => ['required_if:ssh_auth_method,password', 'nullable', 'string', 'max:4096'],
+            'ssh_private_key' => ['required_if:ssh_auth_method,private_key', 'nullable', 'string', 'max:16384'],
+            'ssh_passphrase' => ['nullable', 'string', 'max:4096'],
+            'ssh_trust_confirmed' => ['required_if:connector_type,ssh_direct', 'in:yes'],
         ]);
 
-        try {
-            $target = $registration->register(
-                (string) $validated['target_id'],
-                (string) $validated['display_name'],
-                (string) $validated['base_url'],
-            );
-        } catch (BridgeDiscoveryException $exception) {
-            // Never reflect remote response payload or a requested URL in errors.
-            return back()->withInput()->withErrors([
-                'base_url' => __('The WordPress connector metadata could not be verified (:reason).', [
-                    'reason' => $exception->reason,
-                ]),
-            ]);
-        } catch (InvalidArgumentException) {
-            return back()->withInput()->withErrors([
-                'target_id' => __('The Target ID or WordPress endpoint is invalid or already registered.'),
-            ]);
+        if ($validated['connector_type'] === 'ssh_direct') {
+            try {
+                $method = (string) $validated['ssh_auth_method'];
+                $target = $sshRegistration->register(
+                    (string) $validated['target_id'],
+                    (string) $validated['display_name'],
+                    (string) $validated['ssh_host'],
+                    (int) $validated['ssh_port'],
+                    (string) $validated['ssh_username'],
+                    (string) $validated['ssh_host_key'],
+                    $method,
+                    (string) ($validated[$method === 'password' ? 'ssh_password' : 'ssh_private_key'] ?? ''),
+                    $method === 'private_key' ? ($validated['ssh_passphrase'] ?? null) : null,
+                );
+            } catch (InvalidArgumentException|RuntimeException) {
+                return back()->withInput($request->except(['ssh_password', 'ssh_private_key', 'ssh_passphrase']))
+                    ->withErrors(['ssh_host' => __('SSH registration could not be validated. Check the endpoint, trusted host key, authentication material and unique Target ID.')]);
+            }
+            $status = __('SSH Target registered with encrypted credentials and an out-of-band host-key pin. Authentication has NOT yet been verified.');
+        } else {
+            try {
+                $target = $registration->register(
+                    (string) $validated['target_id'],
+                    (string) $validated['display_name'],
+                    (string) $validated['base_url'],
+                );
+            } catch (BridgeDiscoveryException $exception) {
+                return back()->withInput($request->except(['ssh_password', 'ssh_private_key', 'ssh_passphrase']))
+                    ->withErrors(['base_url' => __('The WordPress connector metadata could not be verified (:reason).', ['reason' => $exception->reason])]);
+            } catch (InvalidArgumentException) {
+                return back()->withInput($request->except(['ssh_password', 'ssh_private_key', 'ssh_passphrase']))
+                    ->withErrors(['target_id' => __('The Target ID or WordPress endpoint is invalid or already registered.')]);
+            }
+            $status = __('WordPress Target registered. Connection authorization is not yet configured.');
         }
 
         $access->includeCreatedTarget($user, $target);
 
-        return redirect()
-            ->route('admin.targets.show', ['target' => $target->target_id])
-            ->with('status', __('WordPress Target registered. Connection authorization is not yet configured.'));
+        return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+            ->with('status', $status);
     }
 
     public function show(Target $target): View
@@ -113,9 +142,18 @@ final class TargetController extends Controller
             ? WpAiBridgeTargetConfig::query()->where('target_record_id', $target->getKey())->first()
             : null;
 
+        $sshConfig = $target->connector_type === 'ssh_direct'
+            ? SshTargetConfig::query()->where('target_record_id', $target->getKey())->first()
+            : null;
+
         return view('admin.targets.show', [
             'target' => $target,
             'wpConfig' => $config,
+            'sshConfig' => $sshConfig,
+            'sshFingerprint' => $sshConfig instanceof SshTargetConfig ? SshHostKeyPin::fromLine($sshConfig->pinned_host_key)->fingerprint() : null,
+            'sshHasCredential' => $target->connector_type === 'ssh_direct' && TargetCredential::query()
+                ->where('target_record_id', $target->getKey())->where('connector_type', 'ssh_direct')
+                ->where('purpose', 'ssh_auth')->exists(),
             'hasCredential' => $target->connector_type === 'wp_ai_bridge' && TargetCredential::query()
                 ->where('target_record_id', $target->getKey())
                 ->where('connector_type', 'wp_ai_bridge')

@@ -18,7 +18,7 @@
     <h2 id="targets-list-title" class="sr-only">{{ __('Registered Targets') }}</h2>
     <form method="get" action="{{ route('admin.targets.index') }}" class="filter-grid">
         <div class="field">
-            <label for="search">{{ __('Search Target name or ID') }}</label>
+            <label for="search">{{ __('Search Target name, ID, SSH host or IP') }}</label>
             <input id="search" name="search" type="search" maxlength="160" value="{{ $filters['search'] ?? '' }}">
         </div>
         <div class="field">
@@ -54,6 +54,11 @@
                         <tr>
                             <td><strong>{{ $target->display_name }}</strong>
                                 <code class="small-code">{{ $target->target_id }}</code>
+                                @if ($target->connector_type === 'ssh_direct' && $target->sshConfig !== null)
+                                    @php($sshIdentity = \App\Infrastructure\Connectors\SshDirect\SshTargetIdentity::safeMetadata($target))
+                                    <small><code class="small-code">{{ $sshIdentity['destination_label'] }}</code></small>
+                                    <small>{{ __('SSH IP status') }}: {{ str_replace('_', ' ', $sshIdentity['ip_status']) }}</small>
+                                @endif
                             </td>
                             <td>
                                 <strong>{{ $target->connector_type === 'wp_ai_bridge' ? __('WordPress') : $target->connector_type }}</strong>

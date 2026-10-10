@@ -47,6 +47,15 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Prepare isolated OpenSSH transport fixture
+        shell: bash
+        run: |
+          if ! command -v sshd >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
+          fi
+          bash tests/Support/ssh-fixture.sh start "$GITHUB_ENV"
+
       - name: Validate Composer metadata
         run: composer validate --strict
 
@@ -97,3 +106,8 @@ jobs:
           bash bin/verify-release-package.sh dist/mcp-gateway-ci.zip mcp-gateway-ci
           bash bin/build-update-package.sh mcp-gateway-update-ci dist/mcp-gateway-ci
           bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip
+
+      - name: Stop isolated OpenSSH transport fixture
+        if: always()
+        shell: bash
+        run: bash tests/Support/ssh-fixture.sh stop

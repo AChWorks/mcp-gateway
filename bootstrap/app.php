@@ -26,6 +26,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // MCP routes are registered outside the stateful web middleware group.
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // SSH secrets are not session-flashed after failed validation.
+        $exceptions->dontFlash(['ssh_password', 'ssh_private_key', 'ssh_passphrase']);
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
