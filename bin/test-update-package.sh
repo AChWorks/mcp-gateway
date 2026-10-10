@@ -557,17 +557,110 @@ fi
 curl -fsS -H "$https_header" -H "Cookie: $cookie_header" \
   --data-urlencode "_token=$update_csrf" \
   --data-urlencode 'action=start' "${reset_post[@]}" \
+  -D "$tmp/stage.headers" \
   "$base_url/update/" > "$tmp/stage.html"
 continuation="$(grep -o 'name="continuation" value="[a-f0-9]*"' "$tmp/stage.html" | head -n 1 | sed 's/.*value="\([a-f0-9]*\)"/\1/')"
 [[ "$continuation" =~ ^[a-f0-9]{64}$ ]] || { cat "$tmp/stage.html" >&2; echo "Browser updater did not return a valid continuation token." >&2; exit 1; }
+# A previously valid but nearly expired preflight cookie must be renewed at
+# accepted Start, with its final expiry based on the end of a potentially long stage.
+php -r '
+  $lines = file($argv[1]);
+  $cookies = array_values(array_filter($lines, static fn ($line) =>
+    stripos($line, "Set-Cookie: mcp_gateway_update_session=") === 0));
+  if ($cookies === []) { fwrite(STDERR, "Start did not renew updater cookie.\n"); exit(1); }
+  $last = end($cookies);
+  if (!preg_match("/expires=([^;]+)/i", $last, $m)) { exit(2); }
+  $remaining = strtotime($m[1]) - time();
+  if ($remaining < 1740 || $remaining > 1805) {
+    fwrite(STDERR, "Updater cookie TTL was not fresh after stage: ".$remaining." sec.\n"); exit(3);
+  }
+' "$tmp/stage.headers"
+php -r '
+  $s = json_decode(file_get_contents($argv[1]), true, 512, JSON_THROW_ON_ERROR);
+  $remaining = $s["continuation_expires_at"] - time();
+  if ($s["phase"] !== "files-replaced" || $remaining < 1740 || $remaining > 1805) {
+    fwrite(STDERR, "Continuation was not renewed after file staging.\n"); exit(1);
+  }
+' "$target/storage/app/private/update-state.json"
+
+# The first phase is usable with JavaScript disabled, while modern browsers
+# should initiate exactly one asynchronous finish request with visible status.
+grep -F 'id="continue-update"' "$tmp/stage.html" >/dev/null || { echo "Missing final-step form." >&2; exit 1; }
+grep -F 'fetch(form.action' "$tmp/stage.html" >/dev/null || { echo "Automatic final-step handoff is absent." >&2; exit 1; }
+grep -F 'id="manual-continue"' "$tmp/stage.html" >/dev/null || { echo "Script-disabled continuation fallback is absent." >&2; exit 1; }
+
+# Reload after stage must resume safely without asking Laravel to authenticate
+# an already maintenance-bound browser session.
+resume_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/resume.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$resume_code" == "200" ]] || { echo "Staged update cannot resume (HTTP $resume_code)." >&2; exit 1; }
+grep -F 'Resume MCP Gateway Update' "$tmp/resume.html" >/dev/null || { echo "Safe resume form missing." >&2; exit 1; }
+
+# An active finish request must not permit a second POST to enter migrations.
+lockfile="$target/storage/app/private/update-execution.lock"
+php -r '$h=fopen($argv[1],"c"); flock($h,LOCK_EX); file_put_contents($argv[2],"ready"); usleep(2500000);' "$lockfile" "$tmp/updater-locked" &
+holder_pid=$!
+for attempt in $(seq 1 30); do
+  [[ -f "$tmp/updater-locked" ]] && break
+  sleep 0.1
+done
+[[ -f "$tmp/updater-locked" ]] || { echo "Could not acquire test operation lock." >&2; exit 1; }
+busy_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/busy.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$busy_code" == "202" ]] || { echo "Concurrent update did not show safe progress (HTTP $busy_code)." >&2; exit 1; }
+grep -F '<noscript>' "$tmp/busy.html" >/dev/null || { echo "Running updater has no no-JS instructions." >&2; exit 1; }
+grep -F 'check update status in this same browser session' "$tmp/busy.html" >/dev/null || { echo "Running no-JS updater lacks a recovery action." >&2; exit 1; }
+duplicate_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" --data-urlencode 'action=finish' --data-urlencode "continuation=$continuation" -o "$tmp/duplicate.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$duplicate_code" == "202" ]] || { echo "Concurrent finish was not refused (HTTP $duplicate_code)." >&2; exit 1; }
+grep -F '<noscript>' "$tmp/duplicate.html" >/dev/null || { echo "Duplicate finish has no no-JS instructions." >&2; exit 1; }
+grep -F 'Do not submit Start or Continue again' "$tmp/duplicate.html" >/dev/null || { echo "Duplicate finish lacks a safe manual action." >&2; exit 1; }
+wait "$holder_pid"
+rm -f "$tmp/updater-locked"
+
+# Simulate a request killed after crossing the migration boundary: the next
+# GET must NOT emit a false 403 or permit a second migration.
+state_file="$target/storage/app/private/update-state.json"
+php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p), true, 512, JSON_THROW_ON_ERROR); $s["phase"]="migrate"; $s["migration_started"]=true; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
+stalled_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/stalled.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$stalled_code" == "503" ]] || { echo "Interrupted migration did not stop safely (HTTP $stalled_code)." >&2; exit 1; }
+grep -F 'MCP Gateway Postflight Status Unverified' "$tmp/stalled.html" >/dev/null || { echo "Idle migration did not show indeterminate postflight status." >&2; exit 1; }
+grep -F 'The updater recorded the start of database migration, but no final outcome.' "$tmp/stalled.html" >/dev/null || { echo "Idle migration was incorrectly classified as an established failure." >&2; exit 1; }
+grep -F 'Do not repeat migrations' "$tmp/stalled.html" >/dev/null || { echo "Unverified postflight lacks safe operator recovery guidance." >&2; exit 1; }
+if grep -Fi 'database may be partially migrated' "$tmp/stalled.html" >/dev/null; then
+  echo "Stale migration was falsely presented as an established partial migration." >&2; exit 1
+fi
+if grep -F 'Administrator authentication could not be verified.' "$tmp/stalled.html" >/dev/null; then
+  echo "Maintenance reload emitted the misleading authentication failure." >&2; exit 1
+fi
+php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p), true, 512, JSON_THROW_ON_ERROR); $s["phase"]="files-replaced"; $s["migration_started"]=false; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
+
+# Reproduce cleanup failure *after* successful migrate/check/up. The current
+# backup must remain among the newest three; only the synthetic oldest backup
+# is made non-removable to force pruneBackups() to throw.
+prune_fixture_root=""
+if [[ "$old_version" == "2.0.0" && "$EUID" -ne 0 ]]; then
+  prune_fixture_root="$target/storage/app/private/update-backups"
+  mkdir -p "$prune_fixture_root/0000-locked/blocked" "$prune_fixture_root/0001-fixture" "$prune_fixture_root/0002-fixture"
+  printf 'retained-backup-sentinel\n' > "$prune_fixture_root/0000-locked/blocked/sentinel"
+  chmod 0500 "$prune_fixture_root/0000-locked/blocked"
+fi
 
 curl -fsS -H "$https_header" -H "Cookie: $cookie_header" \
   --data-urlencode 'action=finish' \
   --data-urlencode "continuation=$continuation" \
   "$base_url/update/" > "$tmp/finish.html"
 grep -F 'Update complete.' "$tmp/finish.html" >/dev/null || { cat "$tmp/finish.html" >&2; echo "Browser updater did not report successful completion." >&2; exit 1; }
+if [[ -n "$prune_fixture_root" ]]; then
+  grep -F 'Old code backups could not be pruned' "$tmp/finish.html" >/dev/null || { echo "Prune failure incorrectly looked like a migration failure." >&2; exit 1; }
+  [[ -f "$prune_fixture_root/0000-locked/blocked/sentinel" ]] || { echo "Protected old backup was unexpectedly removed." >&2; exit 1; }
+  [[ ! -e "$target/storage/app/private/update-state.json" ]] || { echo "Stale migrate phase survived successful postflight." >&2; exit 1; }
+  chmod 0700 "$prune_fixture_root/0000-locked/blocked"
+  rm -r "$prune_fixture_root/0000-locked" "$prune_fixture_root/0001-fixture" "$prune_fixture_root/0002-fixture"
+fi
 
 [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$new_version" ]] || { echo "Target VERSION was not updated." >&2; exit 1; }
+grep -F 'RewriteRule ^update/?$ - [G,L]' "$target/public/.htaccess" >/dev/null || {
+  echo "Installed package does not protect temporary /update URLs against OpenLiteSpeed slash redirect loops." >&2
+  exit 1
+}
 if [[ "$old_version" == "1.2.1" ]]; then
   (
     cd "$target"
@@ -676,6 +769,8 @@ backup_dir="$(find "$target/storage/app/private/update-backups" -mindepth 1 -max
   php artisan gateway:check --no-interaction >/dev/null
 )
 
+post_cleanup_code_without_slash="$(curl -sS -o /dev/null -w '%{http_code}' -H "$https_header" "$base_url/update")"
+[[ "$post_cleanup_code_without_slash" == "404" ]] || { echo "Temporary /update endpoint remained reachable (HTTP $post_cleanup_code_without_slash)." >&2; exit 1; }
 post_cleanup_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "$https_header" "$base_url/update/")"
 [[ "$post_cleanup_code" == "404" ]] || { echo "Temporary /update/ endpoint remained reachable after successful cleanup (HTTP $post_cleanup_code)." >&2; exit 1; }
 

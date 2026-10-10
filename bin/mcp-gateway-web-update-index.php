@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Http\Request;
+use McpGatewayUpdate\UpdateBusyException;
 use McpGatewayUpdate\WebUpdater;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 
@@ -43,7 +44,7 @@ function updaterIsHttps(array $server): bool
     return $forwarded === 'https';
 }
 
-function updaterRender(string $title, string $body, int $status = 200): never
+function updaterRender(string $title, string $body, int $status = 200, ?string $script = null): never
 {
     http_response_code($status);
     header('Content-Type: text/html; charset=UTF-8');
@@ -52,19 +53,124 @@ function updaterRender(string $title, string $body, int $status = 200): never
     header('X-Robots-Tag: noindex, nofollow, noarchive');
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: no-referrer');
-    header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+    $interactive = $script === null ? '' : " script-src 'unsafe-inline'; connect-src 'self';";
+    header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline';".$interactive." form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
 
     echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">';
     echo '<title>'.updaterEscape($title).'</title><style>';
-    echo ':root{font-family:system-ui,sans-serif;color-scheme:light dark}body{margin:0;background:#f4f5f7;color:#1f2937}main{max-width:760px;margin:40px auto;padding:0 20px 48px}.card{background:#fff;border:1px solid #d9dde3;border-radius:12px;padding:24px;box-shadow:0 8px 24px rgba(0,0,0,.05)}h1{margin-top:0}p,li{line-height:1.55}.checks{list-style:none;padding:0}.checks li{padding:4px 0}.ok{color:#087f23}.error{color:#b42318}.notice{padding:12px 14px;border-radius:8px;background:#fff6e5;margin:14px 0}.success{padding:16px;border-radius:8px;background:#e9f8ee;color:#116329}button{padding:11px 18px;border:0;border-radius:8px;background:#111827;color:#fff;font-weight:700;cursor:pointer}code{background:#eef0f3;padding:2px 5px;border-radius:4px}@media(prefers-color-scheme:dark){body{background:#111827;color:#e5e7eb}.card{background:#1f2937;border-color:#374151}.notice{background:#3b2f16}.success{background:#12351f;color:#9be4ae}code{background:#374151}}';
-    echo '</style></head><body><main><div class="card"><h1>'.updaterEscape($title).'</h1>'.$body.'</div></main></body></html>';
+    echo ':root{font-family:system-ui,-apple-system,sans-serif;color-scheme:light dark}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;min-height:100vh;background:#f2f5f9;color:#1e293b}main{max-width:820px;margin:clamp(20px,5vw,72px) auto;padding:0 18px 60px}.card{background:#fff;border:1px solid #dbe3ee;border-radius:18px;padding:clamp(22px,4vw,38px);box-shadow:0 16px 50px rgba(17,42,77,.08)}.brand{display:flex;align-items:center;gap:10px;font-size:.85rem;font-weight:750;letter-spacing:.07em;text-transform:uppercase;color:#2463a6;margin-bottom:22px}.brand:before{content:"";width:13px;height:13px;border:3px solid currentColor;border-radius:50%}h1{font-size:clamp(1.45rem,3.3vw,2rem);line-height:1.2;margin:0 0 20px;letter-spacing:-.03em}h2{font-size:1.1rem;margin:26px 0 12px}p,li{line-height:1.65}a{color:#176cb0;text-underline-offset:3px}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid #60a5fa;outline-offset:3px}.checks{list-style:none;padding:0}.checks li{padding:5px 0}.ok{color:#137d49}.error{color:#b42318}.notice,.success,.attention{padding:16px 18px;border-radius:10px;margin:18px 0;border:1px solid transparent}.notice{background:#fff6e5;border-color:#f4d6a3}.success{background:#ecfdf3;color:#116329;border-color:#bbebcc}.attention{background:#fff1f2;color:#9f1239;border-color:#fecdd3}button{padding:12px 20px;border:0;border-radius:9px;background:#155e9d;color:#fff;font-weight:700;font-size:1rem;cursor:pointer}button:disabled{opacity:.6;cursor:progress}code{background:#eaf0f8;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}.steps{display:flex;flex-wrap:wrap;gap:8px;list-style:none;padding:0;margin:0 0 25px}.steps li{font-size:.83rem;padding:5px 9px;border-radius:8px;background:#eef3fa;color:#41556d}.steps .current{background:#dbeafe;color:#124e93;font-weight:750}.busy{display:flex;align-items:flex-start;gap:15px;padding:18px;background:#eff7ff;border:1px solid #bfdbfe;border-radius:10px}.busy p{margin:0}.spinner{flex:none;display:inline-block;height:24px;width:24px;border:3px solid #93c5fd;border-top-color:#155e9d;border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.muted{color:#64748b;font-size:.91rem}.actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:20px}@media(prefers-reduced-motion:reduce){.spinner{animation:none;border-style:dotted}}@media(prefers-color-scheme:dark){body{background:#0b1421;color:#e2e8f0}.card{background:#152235;border-color:#304257;box-shadow:none}.brand,a{color:#93c5fd}.checks .ok{color:#6ee7b7}.error{color:#fda4af}.notice{background:#372b1b;border-color:#75532a}.success{background:#13382a;color:#a7f3d0;border-color:#286c49}.attention{background:#3f1d29;color:#fecdd3;border-color:#85384b}code{background:#26384e}.steps li{background:#243348;color:#cbd5e1}.steps .current{background:#234c78;color:#dbeafe}.busy{background:#182e49;border-color:#375c86}.muted{color:#94a3b8}}';
+    echo '</style></head><body><main><div class="card"><div class="brand">MCP Gateway / Update</div><h1>'.updaterEscape($title).'</h1>'.$body.'</div></main>';
+    if ($script !== null) {
+        echo '<script>'.$script.'</script>';
+    }
+    echo '</body></html>';
     exit;
+}
+
+function updaterSteps(string $active): string
+{
+    $steps = [
+        'preflight' => 'Preflight',
+        'files' => 'Backup & files',
+        'postflight' => 'Database & health',
+        'complete' => 'Completion',
+    ];
+    $result = '<ol class="steps" aria-label="Update phases">';
+    foreach ($steps as $key => $label) {
+        $current = $key === $active;
+        $result .= '<li'.($current ? ' class="current" aria-current="step"' : '').'>'.updaterEscape($label).'</li>';
+    }
+
+    return $result.'</ol>';
+}
+
+function updaterAutoFinishScript(): string
+{
+    return <<<'JS'
+(() => {
+    const form = document.getElementById('continue-update');
+    const manual = document.getElementById('manual-continue');
+    if (!form || !window.fetch) return;
+    if (manual) manual.hidden = true;
+    fetch(form.action, {method: 'POST', body: new FormData(form),
+        credentials: 'same-origin', cache: 'no-store', redirect: 'error'})
+        .then(async response => {
+            const html = await response.text();
+            document.open();
+            document.write(html);
+            document.close();
+        })
+        .catch(() => {
+            document.getElementById('progress-message').textContent =
+                'The browser connection was interrupted. Completion is not confirmed. Do not start another update.';
+            document.getElementById('recovery-link').hidden = false;
+        });
+})();
+JS;
+}
+
+function updaterPollScript(): string
+{
+    return <<<'JS'
+(() => {
+    const status = document.getElementById('progress-message');
+    const fallback = document.getElementById('recovery-link');
+    let attempts = 0;
+    async function check() {
+        try {
+            const response = await fetch('/update/', {credentials: 'same-origin',
+                cache: 'no-store', redirect: 'error'});
+            if (response.status === 202 && ++attempts < 60) {
+                setTimeout(check, 8000);
+                return;
+            }
+            if (response.status === 404 || response.status === 410 || attempts >= 60) {
+                status.textContent = 'The temporary updater is no longer reporting progress. Check the administrator panel to verify service before taking further action.';
+                fallback.hidden = false;
+                return;
+            }
+            const html = await response.text();
+            document.open();
+            document.write(html);
+            document.close();
+        } catch (_) {
+            status.textContent = 'Progress cannot be verified from this browser. The server may still be working; do not restart the update.';
+            fallback.hidden = false;
+        }
+    }
+    setTimeout(check, 8000);
+})();
+JS;
+}
+
+function updaterNoScriptBusy(): string
+{
+    return '<noscript><p class="notice">JavaScript is disabled, so this page cannot check progress automatically. Do not submit Start or Continue again. After the running request has had time to finish, <a href="/update/">check update status in this same browser session</a>. If the page shows a recovery warning or is no longer available, verify the administrator panel and contact the operator before taking further action.</p></noscript>';
+}
+
+function updaterStartScript(): string
+{
+    return <<<'JS'
+(() => {
+    const form = document.getElementById('start-update');
+    if (!form) return;
+    form.addEventListener('submit', () => {
+        const button = form.querySelector('button[type="submit"]');
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Preparing backup and staging files…';
+        }
+        const state = document.getElementById('start-progress');
+        if (state) state.hidden = false;
+    });
+})();
+JS;
 }
 
 function updaterCookie(string $value): void
 {
     setcookie('mcp_gateway_update_session', $value, [
-        'expires' => time() + 1800,
+        'expires' => time() + WebUpdater::BROWSER_SESSION_TTL_SECONDS,
         'path' => '/update/',
         'secure' => true,
         'httponly' => true,
@@ -118,7 +224,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
     try {
         $app->make(ConsoleKernel::class)->bootstrap();
         $result = $updater->finish($browserToken, $continuation);
-        updaterClearCookie();
+        if ($result['state_retained']) {
+            // Keep the authorized browser tied to its completed recovery record.
+            // Clearing it here would turn successful postflight into a false 403.
+            updaterCookie($browserToken);
+        } else {
+            updaterClearCookie();
+        }
 
         $warning = $result['cleanup_warning'] === null
             ? '<p>The temporary updater, staging payload, and canonical uploaded update ZIP were cleaned up automatically.</p>'
@@ -126,8 +238,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
 
         updaterRender(
             'MCP Gateway Updated',
-            '<div class="success"><strong>Update complete.</strong><p>MCP Gateway '.updaterEscape($result['from']).' → '.updaterEscape($result['to']).' is installed and the application is live.</p></div>'.$warning.'<p><a href="/admin">Open administrator panel</a></p>',
+            updaterSteps('complete').'<div class="success" role="status"><strong>Update complete.</strong><p>MCP Gateway '.updaterEscape($result['from']).' → '.updaterEscape($result['to']).' is installed and the application is live.</p></div>'.$warning.'<p><a href="/admin">Open administrator panel</a></p>',
         );
+    } catch (UpdateBusyException) {
+        updaterRender('MCP Gateway Update In Progress',
+            updaterSteps('postflight')
+            .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Another authorized update step is already running. No second operation was started.</p></div>'
+            .'<p id="recovery-link" class="notice" hidden>Unable to verify progress. Check <a href="/admin">the administrator panel</a> without restarting the update.</p>'
+            .updaterNoScriptBusy(),
+            202, updaterPollScript());
     } catch (Throwable $exception) {
         updaterRender(
             'MCP Gateway Update Needs Attention',
@@ -137,29 +256,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
     }
 }
 
-// If the first response was interrupted after managed files were replaced,
-// allow the same browser session to resume the post-update phase safely.
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && $browserToken !== '') {
-    $pending = $updater->pendingContinuation($browserToken);
-    if ($pending !== null) {
-        updaterRender(
-            'Resume MCP Gateway Update',
-            '<p>The application files are staged and ready for the final update checks.</p><form method="post"><input type="hidden" name="action" value="finish"><input type="hidden" name="continuation" value="'.updaterEscape($pending).'"><button type="submit">Continue update</button></form>',
-        );
+// During maintenance, never attempt /admin authentication for the browser
+// bound to an active update. That request can return a misleading HTTP 403.
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $status = $browserToken !== '' ? $updater->browserUpdateStatus($browserToken) : null;
+    if ($status !== null) {
+        $phase = $status['phase'];
+        if (str_starts_with($phase, 'failed-')) {
+            $message = $phase === 'failed-after-migration-start'
+                ? 'The previous update reached the database-migration boundary and did not finish safely.'
+                : 'The previous update failed before migration and automatic code restoration could not finish safely.';
+            updaterRender('MCP Gateway Update Needs Attention',
+                updaterSteps('postflight').'<div class="attention" role="alert">'.updaterEscape($message).'</div>'
+                .'<p>Do not start another update or roll back database migrations blindly. Maintenance and the private code backup must be assessed by the operator.</p>',
+                503);
+        }
+
+        if ($phase === 'completed') {
+            updaterRender('MCP Gateway Updated',
+                updaterSteps('complete')
+                .'<div class="success" role="status"><strong>Update complete.</strong><p>Database migrations, application health checks and maintenance exit finished successfully.</p></div>'
+                .'<div class="notice">Private update completion state remains because housekeeping was interrupted. Do not run the update again. Ask the operator to inspect and safely remove the temporary updater state.</div>'
+                .'<p><a href="/admin">Open administrator panel</a></p>',
+                200);
+        }
+
+        if ($phase === 'postflight-unverified') {
+            updaterRender('MCP Gateway Postflight Status Unverified',
+                updaterSteps('postflight')
+                .'<div class="attention" role="alert">The updater recorded the start of database migration, but no final outcome. The request may have stopped during migration, or it may have finished successfully without recording completion. The retained state cannot distinguish these cases.</div>'
+                .'<p>Do not repeat migrations, start another update, delete updater state, or roll back the database. Preserve private state and backups; have the operator verify the installed version, application health, maintenance status, and sanitized updater logs before deciding on recovery.</p>',
+                503);
+        }
+
+        if ($phase === 'files-replaced' && $status['continuation'] !== null) {
+            updaterRender('Resume MCP Gateway Update',
+                updaterSteps('postflight')
+                .'<p>Application files are staged. Database migrations and final health checks have <strong>not</strong> started. This browser can safely continue this exact staged update.</p>'
+                .'<form id="continue-update" method="post" action="/update/"><input type="hidden" name="action" value="finish"><input type="hidden" name="continuation" value="'.updaterEscape($status['continuation']).'">'
+                .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Continuing database and health checks. Keep this page open; no manual refresh is needed.</p></div>'
+                .'<div class="actions"><button id="manual-continue" type="submit">Continue update</button></div></form>'
+                .'<p class="muted">Without JavaScript, select Continue update once. Do not run a second update package.</p>'
+                .'<p id="recovery-link" class="notice" hidden>Connection uncertain. <a href="/update/">Check update status in this browser</a> or <a href="/admin">verify the administrator panel</a>. Do not start again blindly.</p>',
+                200, updaterAutoFinishScript());
+        }
+
+        if ($status['running']) {
+            $filePhase = $phase === 'replace-files';
+            updaterRender('MCP Gateway Update In Progress',
+                updaterSteps($filePhase ? 'files' : 'postflight')
+                .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span>'
+                .'<p id="progress-message">'.($filePhase
+                    ? 'The server is replacing managed files from the verified package.'
+                    : 'Database and health checks are running on the server. This can take longer than file replacement.')
+                .' Do not submit the update again.</p></div>'
+                .'<p class="muted">With JavaScript enabled, this page checks for state changes automatically. No percentage or completion time is estimated.</p>'
+                .'<p id="recovery-link" class="notice" hidden>Progress cannot be confirmed. Check <a href="/admin">the administrator panel</a>; do not retry migrations or delete recovery state.</p>'
+                .updaterNoScriptBusy(),
+                202, updaterPollScript());
+        }
+
+        $explanation = $status['expired']
+            ? 'The browser continuation session expired before the final step.'
+            : 'The update stopped in a state that cannot be resumed automatically.';
+        updaterRender('MCP Gateway Update Needs Attention',
+            updaterSteps($phase === 'replace-files' ? 'files' : 'postflight')
+            .'<div class="attention" role="alert">'.updaterEscape($explanation).'</div>'
+            .'<p>Preserve the private updater state and code backup. Do not restart the update or run migration rollback without verifying recovery state.</p>',
+            503);
     }
 
-    $failed = $updater->failedState($browserToken);
-    if ($failed !== null) {
-        $phase = is_string($failed['phase'] ?? null) ? $failed['phase'] : 'failed';
-        $message = $phase === 'failed-after-migration-start'
-            ? 'A previous update reached the database-migration boundary and did not complete safely.'
-            : 'A previous update failed before database migration and automatic code restore did not complete safely.';
-
-        updaterRender(
-            'MCP Gateway Update Needs Attention',
-            '<p class="error">'.updaterEscape($message).'</p><div class="notice">Do not start another update. The Gateway remains in maintenance mode and the private code backup is retained for recovery.</div>',
-            500,
-        );
+    if (is_file($basePath.'/storage/app/private/update-state.json')) {
+        updaterRender('Update Session Cannot Be Verified',
+            '<div class="attention" role="alert">An update or recovery state exists, but this browser is not authorized to resume it.</div>'
+            .'<p>Return to the original update browser session. Do not start another update, change cookies or bypass administrator authentication.</p>',
+            403);
     }
 }
 
@@ -221,6 +392,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
         updaterRender('MCP Gateway Update', '<p class="error">The administrator session expired. Reload this page and try again.</p>', 419);
     }
 
+    // This authenticated, CSRF-checked Start is a fresh authorization action.
+    // Renew even a previously valid cookie; safety checks may have taken time.
+    updaterCookie($browserToken);
+
     try {
         $result = $updater->stage($browserToken, [
             'reset_acknowledged' => is_string($_POST['reset_acknowledged'] ?? null) ? $_POST['reset_acknowledged'] : '',
@@ -228,19 +403,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
             'confirmed_target_version' => is_string($_POST['confirmed_target_version'] ?? null) ? $_POST['confirmed_target_version'] : '',
             'package_sha256' => is_string($_POST['package_sha256'] ?? null) ? $_POST['package_sha256'] : '',
         ]);
-        header('Content-Type: text/html; charset=UTF-8');
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Pragma: no-cache');
-        header('X-Robots-Tag: noindex, nofollow, noarchive');
-        header('X-Frame-Options: DENY');
-        header('Referrer-Policy: no-referrer');
-        header("Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
-        echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Continuing MCP Gateway Update</title></head><body>';
-        echo '<p>Application files are installed. Continuing database and health checks…</p>';
-        echo '<form id="continue-update" method="post" action="/update/"><input type="hidden" name="action" value="finish"><input type="hidden" name="continuation" value="'.updaterEscape($result['continuation']).'"></form>';
-        echo '<script>document.getElementById("continue-update").submit();</script><noscript><button form="continue-update" type="submit">Continue update</button></noscript>';
-        echo '</body></html>';
-        exit;
+        // Set expiry when stage actually finishes, not when the potentially
+        // long backup/file-replacement request began.
+        updaterCookie($browserToken);
+        updaterRender('Finalizing MCP Gateway Update',
+            updaterSteps('postflight')
+            .'<p>Backup and managed-file replacement completed. Database/cache migrations and health checks are the next server-side step.</p>'
+            .'<form id="continue-update" method="post" action="/update/"><input type="hidden" name="action" value="finish"><input type="hidden" name="continuation" value="'.updaterEscape($result['continuation']).'">'
+            .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Completing database and health checks. This page will show the result when the server responds; do not refresh or start a second update.</p></div>'
+            .'<div class="actions"><button id="manual-continue" type="submit">Continue update</button></div></form>'
+            .'<p class="muted">Without JavaScript, select Continue update once to perform the final step.</p>'
+            .'<p id="recovery-link" class="notice" hidden>Completion cannot be confirmed. <a href="/update/">Check this update in the same browser</a> or <a href="/admin">verify the administrator panel</a>. Do not retry an uncertain migration.</p>',
+            200, updaterAutoFinishScript());
+    } catch (UpdateBusyException) {
+        updaterRender('Another Update Step Is Running',
+            updaterSteps('files').'<div class="notice" role="status">This request did not start a second update. Return to the original browser tab; do not submit again.</div>',
+            409);
     } catch (Throwable $exception) {
         updaterRender(
             'MCP Gateway Update Failed',
@@ -277,9 +455,11 @@ if ($resetPlan['required']) {
 
 updaterRender(
     'Update MCP Gateway',
-    '<p>This temporary updater will upgrade the current Gateway without SSH, Git, or Composer.</p><p><strong>Installed:</strong> '.updaterEscape($info['installed']).'<br><strong>Target:</strong> '.updaterEscape($info['target']).'</p><h2>Preflight</h2><ul class="checks">'.$checks.'</ul><div class="notice">The existing <code>.env</code> and persistent <code>storage/</code> are preserved. A private code backup is retained before any managed files are replaced.</div>'
+    updaterSteps('preflight').'<p>This temporary updater will upgrade the current Gateway without SSH, Git, or Composer.</p><p><strong>Installed:</strong> '.updaterEscape($info['installed']).'<br><strong>Target:</strong> '.updaterEscape($info['target']).'</p><h2>Preflight</h2><ul class="checks">'.$checks.'</ul><div class="notice">The existing <code>.env</code> and persistent <code>storage/</code> are preserved. A private code backup is retained before any managed files are replaced.</div>'
     .$resetWarning
-    .'<form method="post"><input type="hidden" name="_token" value="'.updaterEscape($csrf).'"><input type="hidden" name="action" value="start">'
+    .'<form id="start-update" method="post"><input type="hidden" name="_token" value="'.updaterEscape($csrf).'"><input type="hidden" name="action" value="start">'
     .'<input type="hidden" name="confirmed_target_version" value="'.updaterEscape($resetPlan['to']).'"><input type="hidden" name="package_sha256" value="'.updaterEscape($resetPlan['package_sha256']).'">'
-    .$resetFields.'<button type="submit">Update MCP Gateway</button></form>',
+    .$resetFields.'<button type="submit">Update MCP Gateway</button></form>'
+    .'<div id="start-progress" class="busy" role="status" aria-live="polite" hidden><span class="spinner" aria-hidden="true"></span><p>Creating the private code backup and replacing managed files. Keep this page open.</p></div>',
+    200, updaterStartScript(),
 );
