@@ -13,17 +13,15 @@ use phpseclib4\Net\SFTP\FileType;
 use Throwable;
 
 /**
- * Byte-stream primitives for a future authenticated data plane.
- *
- * Neither method is a public MCP tool or an HTTP endpoint. Callers must first
- * enforce their own finite transfer quota and stage untrusted input/output
- * outside the public web root; never publish an unverified partial sink.
+ * Internal SFTP byte-stream primitives. No public binary ingress/egress API.
+ * Caller-owned local streams must remain private until integrity is verified.
  */
 trait StreamsSshFiles
 {
+    private const MAX_SFTP_UPLOAD_BLOCK = 65536;
+
     /**
-     * Download a whole regular file to a caller-owned writable stream.
-     * The caller must discard the sink on ANY failure (including source_changed).
+     * Read into a caller-owned private sink; discard that sink on any failure.
      *
      * @param  resource  $sink
      * @return array<string, mixed>
@@ -36,7 +34,7 @@ trait StreamsSshFiles
         $this->validateStream($sink);
         $this->validateTransferLimit($maxBytes);
         $this->validateStreamDeadline($maxSeconds);
-        $deadline = hrtime(true) + $maxSeconds * 1000000000;
+        $deadline = hrtime(true) + $maxSeconds * 1_000_000_000;
         $this->validatePrecondition($expectedSize, $expectedMtime);
         $this->validateSha256($expectedSha256);
 
@@ -105,57 +103,71 @@ trait StreamsSshFiles
                     'source_check' => $expectedSha256 === null
                         ? 'size_mtime_best_effort' : 'size_mtime_and_sha256',
                 ];
-            });
+            }, $deadline);
     }
 
     /**
-     * Upload a known-size stream to an unpredictable remote temporary file,
-     * verify its exact SHA-256 by reading it back, then publish atomically.
-     * This may read the SFTP bytes twice, deliberately trading bandwidth for
-     * end-to-end integrity. Remote effects can be unknown after dispatch.
+     * Upload a known-size byte stream into an ALREADY PROVISIONED private
+     * SFTP directory with mode 0700, on the same filesystem as the target.
+     * Do not create a private directory via SFTP::mkdir(): phpseclib 4.0.2
+     * first creates it using ambient permissions, then chmods it, which
+     * permits a confidentiality window.
+     *
+     * Generic streamed overwrite is deliberately NOT offered. SFTP
+     * lstat+posix_rename is atomic replacement, NOT atomic conditional
+     * replacement / compare-and-swap.
      *
      * @param  resource  $source
      * @return array<string, mixed>
      */
     public function uploadFromStream(
         User $user, Target $target, string $path, mixed $source, int $expectedBytes,
-        string $expectedSha256, int $maxBytes, int $maxSeconds,
+        string $expectedSha256, int $maxBytes, int $maxSeconds, string $privateStagingDir,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
     ): array {
         $this->validatePath($path);
+        $this->validatePath($privateStagingDir);
         $this->validateStream($source);
         $this->validateTransferLimit($maxBytes);
         $this->validateStreamDeadline($maxSeconds);
-        $deadline = hrtime(true) + $maxSeconds * 1000000000;
+        $deadline = hrtime(true) + $maxSeconds * 1_000_000_000;
         $this->validateSha256($expectedSha256);
         $this->validatePrecondition($expectedSize, $expectedMtime);
+        if ($overwrite || $expectedSize !== null || $expectedMtime !== null) {
+            // A concurrent writer can win between lstat and POSIX rename.
+            // Fail before any remote mutation until a true CAS is available.
+            throw new SshTargetConnectionException('overwrite_unsupported');
+        }
         if ($path === '/' || str_ends_with($path, '/') || $expectedBytes < 0
-            || $expectedBytes > $maxBytes || (($expectedSize !== null) !== $overwrite)) {
+            || $expectedBytes > $maxBytes || $privateStagingDir === '/'
+            || str_ends_with($privateStagingDir, '/') || $path === $privateStagingDir) {
             throw new SshTargetConnectionException('invalid_input');
         }
 
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
-                $path, $source, $expectedBytes, $expectedSha256, $deadline,
-                $overwrite, $expectedSize, $expectedMtime,
+                $path, $source, $expectedBytes, $expectedSha256, $deadline, $privateStagingDir,
             ): array {
                 $sftp->disableStatCache();
                 try {
                     $this->ensureStreamDeadline($deadline);
-                    $existing = $sftp->lstat($path);
-                    if (! $overwrite) {
-                        throw new SshTargetConnectionException('file_exists');
+                    $directory = $sftp->lstat($privateStagingDir);
+                    // A pre-existing directory with mode 0700 is the sole
+                    // confidentiality boundary during SFTP::put(), which
+                    // otherwise uses the SFTP server's ambient create mode.
+                    if (($directory['type'] ?? null) !== FileType::DIRECTORY
+                        || ! isset($directory['mode'])
+                        || ($directory['mode'] & 0777) !== 0700) {
+                        throw new SshTargetConnectionException('staging_not_private');
                     }
-                    if (($existing['type'] ?? null) !== FileType::REGULAR) {
-                        throw new SshTargetConnectionException('unsupported_file_type');
-                    }
-                    $this->requireVersion($existing, $expectedSize, $expectedMtime);
+
+                    // No overwrite, even when caller sends a different source
+                    // or a competing operation creates this pathname.
+                    $sftp->lstat($path);
+                    throw new SshTargetConnectionException('file_exists');
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
                 } catch (FileSystemException $exception) {
-                    if ($overwrite) {
-                        throw new SshTargetConnectionException('source_changed');
-                    }
                     if (! in_array($exception->getCode(), [2, 10], true)) {
                         throw new SshTargetConnectionException('file_unavailable');
                     }
@@ -163,44 +175,41 @@ trait StreamsSshFiles
                     throw new SshTargetConnectionException('file_unavailable');
                 }
 
-                $dir = dirname($path);
-                $temporary = ($dir === '/' ? '' : $dir).'/.gateway-stream-'.bin2hex(random_bytes(12)).'.tmp';
+                $temporary = $privateStagingDir.'/.gateway-stream-'.bin2hex(random_bytes(16)).'.tmp';
                 $submittedBytes = 0;
                 $submittedDigest = hash_init('sha256');
 
                 try {
-                    $sftp->put($temporary, static function (int $limit) use (
-                        $source, $expectedBytes, &$submittedBytes, $submittedDigest, $deadline,
-                    ): ?string {
-                        if (hrtime(true) > $deadline) {
-                            throw new SshTargetConnectionException('transfer_timed_out');
-                        }
-                        if ($submittedBytes === $expectedBytes) {
-                            return null;
-                        }
-                        $next = fread($source, min($limit, $expectedBytes - $submittedBytes));
-                        if (! is_string($next) || ($next === '' && ! feof($source))) {
+                    // Deliberately submit at most 64 KiB to each SFTP::put.
+                    // The locked library otherwise buffers up to 1024
+                    // outstanding WRITE STATUS replies before checking the
+                    // application callback deadline again.
+                    do {
+                        $this->ensureStreamDeadline($deadline);
+                        $remaining = $expectedBytes - $submittedBytes;
+                        $next = $remaining > 0
+                            ? fread($source, min(self::MAX_SFTP_UPLOAD_BLOCK, $remaining))
+                            : '';
+                        if (! is_string($next) || ($next === '' && $expectedBytes !== 0)) {
                             throw new SshTargetConnectionException('input_unavailable');
                         }
-                        if ($next === '') {
-                            return null;
-                        }
+
+                        $sftp->put($temporary, $next, SFTP::SOURCE_STRING, $submittedBytes);
                         $submittedBytes += strlen($next);
                         hash_update($submittedDigest, $next);
-
-                        return $next;
-                    }, SFTP::SOURCE_CALLBACK);
+                    } while ($submittedBytes < $expectedBytes);
 
                     $this->ensureStreamDeadline($deadline);
                     $extra = fread($source, 1);
-                    if ($submittedBytes !== $expectedBytes || $extra !== ''
+                    if ($extra !== '' || $submittedBytes !== $expectedBytes
                         || ! hash_equals($expectedSha256, hash_final($submittedDigest))) {
                         throw new SshTargetConnectionException('input_changed');
                     }
 
                     $sftp->clearStatCache();
-                    $attributes = $sftp->stat($temporary);
-                    if (($attributes['size'] ?? null) !== $expectedBytes) {
+                    $attributes = $sftp->lstat($temporary);
+                    if (($attributes['type'] ?? null) !== FileType::REGULAR
+                        || ($attributes['size'] ?? null) !== $expectedBytes) {
                         throw new SshTargetConnectionException('write_incomplete');
                     }
 
@@ -225,21 +234,31 @@ trait StreamsSshFiles
                         throw new SshTargetConnectionException('write_unverified');
                     }
 
+                    // Set the new inode's publication policy BEFORE linking
+                    // it into an unrestricted destination directory.
                     $this->ensureStreamDeadline($deadline);
+                    $sftp->chmod($temporary, 0600);
                     $sftp->clearStatCache();
-                    if ($overwrite) {
-                        $latest = $sftp->lstat($path);
-                        $this->requireVersion($latest, $expectedSize, $expectedMtime);
-                        $sftp->posix_rename($temporary, $path);
-                    } else {
-                        // No check-then-rename fallback: exclusive hardlink
-                        // ensures a concurrent writer cannot be overwritten.
-                        $sftp->hardlink($temporary, $path);
-                        $sftp->delete($temporary, false);
+                    $restricted = $sftp->lstat($temporary);
+                    if (($restricted['type'] ?? null) !== FileType::REGULAR
+                        || ! isset($restricted['mode'])
+                        || ($restricted['mode'] & 0777) !== 0600) {
+                        throw new SshTargetConnectionException('staging_not_private');
                     }
+
+                    // The server hardlink extension is the actual no-clobber
+                    // atomic primitive. It fails for an existing destination
+                    // or unsupported cross-filesystem link; no rename fallback.
+                    $this->ensureStreamDeadline($deadline);
+                    $sftp->hardlink($temporary, $path);
+                    $sftp->delete($temporary, false);
+
                     $sftp->clearStatCache();
-                    $published = $sftp->stat($path);
-                    if (($published['size'] ?? null) !== $expectedBytes) {
+                    $published = $sftp->lstat($path);
+                    if (($published['type'] ?? null) !== FileType::REGULAR
+                        || ($published['size'] ?? null) !== $expectedBytes
+                        || ! isset($published['mode'])
+                        || ($published['mode'] & 0777) !== 0600) {
                         throw new SshTargetConnectionException('write_unverified');
                     }
                 } catch (Throwable) {
@@ -248,7 +267,7 @@ trait StreamsSshFiles
                         $sftp->delete($temporary, false);
                         $cleanup = true;
                     } catch (Throwable) {
-                        // Hard disconnect may leave an uncertain temporary file.
+                        // Remote temp effects remain unknown on disconnect.
                     }
 
                     return [
@@ -268,10 +287,11 @@ trait StreamsSshFiles
                     'sha256' => $expectedSha256,
                     'integrity_check' => 'remote_readback_sha256',
                     'atomic_publish' => true,
-                    'publish_method' => $overwrite ? 'posix_replace' : 'exclusive_hardlink',
-                    'overwrote' => $overwrite,
+                    'publish_method' => 'exclusive_hardlink',
+                    'overwrote' => false,
+                    'published_mode' => '0600',
                 ];
-            });
+            }, $deadline);
     }
 
     private function validateTransferLimit(int $maxBytes): void
@@ -281,11 +301,6 @@ trait StreamsSshFiles
         }
     }
 
-    /**
-     * Bound in-flight operations below the existing 90-second Target lock
-     * lease. This is an internal PHP request safety budget, not a universal
-     * end-user file size or product duration policy.
-     */
     private function validateStreamDeadline(int $maxSeconds): void
     {
         if ($maxSeconds < 1 || $maxSeconds > 40) {

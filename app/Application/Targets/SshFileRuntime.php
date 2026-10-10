@@ -9,6 +9,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshFileAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshSubsystemOnlySftp;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
@@ -292,7 +293,7 @@ final readonly class SshFileRuntime
     /** @param Closure(SFTP,string,SshTargetConfig):array<string,mixed> $operation
      * @return array<string,mixed>
      */
-    private function operate(User $user, Target $target, GatewayPermission $permission, Closure $operation): array
+    private function operate(User $user, Target $target, GatewayPermission $permission, Closure $operation, ?int $deadlineNs = null): array
     {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
@@ -304,7 +305,7 @@ final readonly class SshFileRuntime
         }
 
         return $this->admission->run((string) $target->getKey(), function () use (
-            $user, $target, $permission, $operation,
+            $user, $target, $permission, $operation, $deadlineNs,
         ): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
@@ -332,7 +333,7 @@ final readonly class SshFileRuntime
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SFTP $sftp, string $ip) use (
-                    $user, $target, $permission, $config, $credential, $operation,
+                    $user, $target, $permission, $config, $credential, $operation, $deadlineNs,
                 ): array {
                     $currentTarget = Target::query()->whereKey($target->getKey())->first();
                     $currentUser = User::query()->whereKey($user->getKey())->first();
@@ -352,6 +353,16 @@ final readonly class SshFileRuntime
                     }
 
                     $sftp->setTimeout(12);
+
+                    if ($deadlineNs !== null) {
+                        if (! $sftp instanceof SshSubsystemOnlySftp) {
+                            throw new SshTargetConnectionException('sftp_unavailable');
+                        }
+
+                        return $sftp->withTransferDeadline(
+                            $deadlineNs, fn (): array => $operation($sftp, $ip, $config),
+                        );
+                    }
 
                     return $operation($sftp, $ip, $config);
                 },
