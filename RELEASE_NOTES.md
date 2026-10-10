@@ -1,3 +1,32 @@
+# MCP Gateway v2.0.2
+
+**Backward-compatible updater reliability maintenance release.** This patch incorporates the independently reviewed browser-updater corrections from [PR #137](https://github.com/AChWorks/mcp-gateway/pull/137) for existing Target-era installations. It does not introduce a new connector runtime, an intentional connection reset, or a new application database migration. Publishing the Release does **not** install it on an operator's server.
+
+## Changes since v2.0.1
+
+- **Browser update continuity:** stage-to-postflight automatic continuation, authenticated bounded browser-session renewal, and safe single-operation behavior for concurrent, interrupted, or repeated requests. The operator should not need to repeatedly reload the page to trigger normal completion.
+- **Actionable progress and recovery:** distinguish running, recoverable, expired, interrupted, and postflight-unverified states; retain usable instructions and a same-browser status action without JavaScript. Do not mislabel a maintenance window as an authorization failure or silently repeat migrations after an ambiguous result.
+- **Postflight honesty:** persist successful migration/check/maintenance exit before noncritical cleanup. Report cleanup warnings without falsely reporting a migration failure, and handle combined completion-state persistence/deletion failures without unsafe retries.
+- **OpenLiteSpeed URL cleanup:** a conditional, package-owned 410 guard prevents a /update ↔ /update/ trailing-slash redirect loop after temporary updater staging is removed. No production hosting/Cloudflare rewrite settings are changed by publishing this release.
+
+## Updating an installed v2.0.1 Gateway
+
+1. Download **`mcp-gateway-update-v2.0.2.zip`** and **`mcp-gateway-update-v2.0.2.zip.sha256`** from this version's GitHub Release, and verify the ZIP checksum. Do **not** use the fresh-install `mcp-gateway-v2.0.2.zip` on an existing installation.
+2. Before changing live files, preserve a **consistent independently restorable database backup** and secure copies of the matching `.env`, `APP_KEY`, Gateway OAuth and Bridge signing keys. Confirm sufficient free space and a recoverable rollback/roll-forward plan. Updater code backups **do not** include the database.
+3. Upload and extract the browser-update ZIP in the existing application root (containing `.env`, `artisan`, `public/`, and `storage/`). This prepares temporary updater files; it does not replace live managed files until the authorized browser Start action.
+4. Open `https://<your-gateway>/update/` in the same browser, authenticate as an authorized administrator, verify **Installed 2.0.1 → Target 2.0.2**, and initiate the update once. Allow the automatic postflight transition; use the presented status/resume instructions if the browser loses the response. Do not repeatedly click Start, re-extract, delete state, or retry migration after an ambiguous postflight.
+5. Confirm explicit success and version `2.0.2`, then validate `/up`, OAuth metadata, WordPress Targets and encrypted credentials, Users/Target Groups/denials, ChatGPT grants and capabilities, and the absence of redirect loops on removed temporary update URLs. Preserve the independent backup until acceptance is complete.
+
+Earlier released baselines retain their original compatibility requirements. **v1.2.1 → v2.0.2 is a breaking Site → Target transition** requiring exact-version reset consent, independent database backup, and renewed affected connector/client authorization; consult [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). v2.0.0/v2.0.1 Target-era patch upgrades must preserve existing connections, permissions, and authorizations without intentional resets.
+
+## Verification and remaining limits
+
+- [Issue #138](https://github.com/AChWorks/mcp-gateway/issues/138) owns the new-version release gate, including exact-candidate PHP 8.4 / MariaDB 10.11 released-baseline upgrade and backup integrity evidence. A Release/CI job alone does not prove installation on the operator's server.
+- [Issue #135](https://github.com/AChWorks/mcp-gateway/issues/135) remains **open** for real origin-vs-Cloudflare/aaPanel timing evidence, the historical approximately two-minute handoff, and production operator acceptance. Repository fixes and a successful release do not establish its production root cause.
+- Dashboard monitoring [#136](https://github.com/AChWorks/mcp-gateway/issues/136) is deferred; AI Server Agent Target [#111](https://github.com/AChWorks/mcp-gateway/issues/111) remains paused.
+
+---
+
 # MCP Gateway v2.0.1
 
 **Backward-compatible maintenance update from v2.0.0.** This release delivers the previously reviewed Target Admin / AI client UX and documentation improvements without adding a connector runtime, changing the public MCP tool contract, adding database migrations or intentionally resetting existing WordPress Targets, Target Groups, credentials, users, permissions, or ChatGPT OAuth grants. Publishing these packages does **not** install anything on an operator's server.

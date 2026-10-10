@@ -126,6 +126,11 @@ EOF_ENV
 
 env_hash_before="$(sha256sum "$target/.env" | awk '{print $1}')"
 private_hash_before="$(sha256sum "$target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')"
+(cd "$target" && sha256sum \
+  storage/app/private/oauth/private.key \
+  storage/app/private/oauth/public.key \
+  storage/app/private/bridge-client/private.key \
+  storage/app/private/bridge-client/public.key) > "$tmp/signing-keys.before.sha256"
 old_version="$(tr -d '[:space:]' < "$target/VERSION")"
 
 # Released-v1.2.1 real-schema regression, not a synthetic post-transition
@@ -217,9 +222,9 @@ if [[ "$old_version" == "1.2.1" ]]; then
   echo "Seeded actual published v1.2.1 WordPress connection, Target scope/group, ChatGPT OAuth grant/access/refresh and unrelated identity/Activity."
 fi
 
-# The first post-Target maintenance update must preserve already-installed
-# v2.0.0 identities, group ACLs and credentials; it is not a new Site reset.
-if [[ "$old_version" == "2.0.0" ]]; then
+# Published Target-era patch upgrades must preserve installed v2.0.x
+# identities, group ACLs, encrypted credentials and OAuth authorization.
+if [[ "$old_version" == "2.0.0" || "$old_version" == "2.0.1" ]]; then
   (
     cd "$target"
     php -r '
@@ -286,7 +291,7 @@ if [[ "$old_version" == "2.0.0" ]]; then
       }
     '
   )
-  echo "Seeded published v2.0.0 Target, credential, Target Group, user rules, denials and ChatGPT authorization for patch-upgrade preservation."
+  echo "Seeded published $old_version Target, credential, Target Group, user rules, denials and ChatGPT authorization for patch-upgrade preservation."
 fi
 
 candidate="$tmp/candidate"
@@ -703,7 +708,7 @@ if [[ "$old_version" == "1.2.1" ]]; then
   )
   echo "Seeded v1.2.1 reset boundary: old WordPress/ChatGPT credentials removed; users/roles/global denies and unrelated Activity preserved."
 fi
-if [[ "$old_version" == "2.0.0" ]]; then
+if [[ "$old_version" == "2.0.0" || "$old_version" == "2.0.1" ]]; then
   (
     cd "$target"
     php -r '
@@ -737,16 +742,17 @@ if [[ "$old_version" == "2.0.0" ]]; then
       }
       $failed = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
       if ($failed !== []) {
-        fwrite(STDERR, "Released v2.0.0 patch-upgrade state preservation failed: ".implode(", ", $failed)."\n");
+        fwrite(STDERR, "Released Target-era patch-upgrade state preservation failed: ".implode(", ", $failed)."\n");
         exit(1);
       }
     '
   )
-  echo "Released v2.0.0 patch-upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant remain intact."
+  echo "Released $old_version patch-upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant remain intact."
 fi
 [[ ! -e "$target/app/obsolete-update-test.txt" ]] || { echo "Stale managed file survived update." >&2; exit 1; }
 [[ "$(sha256sum "$target/.env" | awk '{print $1}')" == "$env_hash_before" ]] || { echo ".env changed during update." >&2; exit 1; }
 [[ "$(sha256sum "$target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')" == "$private_hash_before" ]] || { echo "Persistent private state changed during update." >&2; exit 1; }
+(cd "$target" && sha256sum --check --strict "$tmp/signing-keys.before.sha256" >/dev/null) || { echo "Gateway OAuth or Bridge signing key changed during update." >&2; exit 1; }
 [[ "$(sha256sum "$target/public/.user.ini" | awk '{print $1}')" == "$user_ini_hash_before" ]] || { echo "Successful update changed host-managed public/.user.ini." >&2; exit 1; }
 [[ "$(stat -c '%u:%g:%a' "$target/public/.user.ini")" == "$user_ini_meta_before" ]] || { echo "Successful update changed public/.user.ini ownership or mode." >&2; exit 1; }
 [[ "$(stat -c '%u:%g:%a' "$target/public")" == "$public_dir_meta_before" ]] || { echo "Successful update changed host-managed public directory ownership or mode." >&2; exit 1; }

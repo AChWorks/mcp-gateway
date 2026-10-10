@@ -105,10 +105,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
             gh release download "v$version" \
-              --pattern "mcp-gateway-v$version.zip" \
+              --pattern "mcp-gateway-v$version.zip*" \
               --dir dist/baseline
+            (
+              cd dist/baseline
+              sha256sum --check --strict "mcp-gateway-v$version.zip.sha256"
+            )
           done
 
       - name: Verify released-baseline browser updates
@@ -120,7 +124,7 @@ jobs:
           UPDATE_TEST_DB_PASSWORD: test-password
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
             bash bin/test-update-package.sh \
               dist/mcp-gateway-update-ci.zip \
               "dist/baseline/mcp-gateway-v$version.zip"
@@ -134,7 +138,7 @@ jobs:
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
             bash bin/test-update-backup-integrity.sh \
               dist/mcp-gateway-update-ci.zip \
               "dist/baseline/mcp-gateway-v$version.zip"
