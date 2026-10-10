@@ -101,5 +101,4 @@ final readonly class SshTargetConnectionService
             $this->activity->recordRequired(CorrelationId::current(), 'ssh-credential-disconnect', 'success', $locked);
         });
     }
-
 }
