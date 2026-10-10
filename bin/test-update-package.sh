@@ -217,6 +217,78 @@ if [[ "$old_version" == "1.2.1" ]]; then
   echo "Seeded actual published v1.2.1 WordPress connection, Target scope/group, ChatGPT OAuth grant/access/refresh and unrelated identity/Activity."
 fi
 
+# The first post-Target maintenance update must preserve already-installed
+# v2.0.0 identities, group ACLs and credentials; it is not a new Site reset.
+if [[ "$old_version" == "2.0.0" ]]; then
+  (
+    cd "$target"
+    php -r '
+      require "vendor/autoload.php";
+      $app = require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      $db = Illuminate\Support\Facades\DB::class;
+      $owner = App\Models\User::query()->where("email", "admin@example.test")->firstOrFail();
+      $owner->forceFill(["role" => "owner", "target_scope_mode" => "all", "access_enabled" => true])->save();
+      $operator = App\Models\User::query()->create([
+        "name" => "Existing v2 operator", "email" => "v200-operator@example.test",
+        "password" => "CorrectHorse!234", "role" => "operator",
+        "target_scope_mode" => "selected", "access_enabled" => true,
+      ]);
+      $existing = App\Domain\Targets\Target::query()->create([
+        "target_id" => "v200-wordpress", "display_name" => "Existing WordPress",
+        "connector_type" => "wp_ai_bridge", "connection_state" => "disconnected",
+      ]);
+      $group = App\Domain\Targets\TargetGroup::query()->create(["name" => "Existing v2 group"]);
+      $credential = App\Domain\Targets\TargetCredential::query()->create([
+        "target_record_id" => $existing->getKey(), "connector_type" => "wp_ai_bridge",
+        "purpose" => "wordpress_oauth",
+        "encrypted_payload" => Illuminate\Support\Facades\Crypt::encryptString("v200-test-credential"),
+      ]);
+      $now = now();
+      $db::table("target_group_targets")->insert([
+        "target_group_id" => $group->getKey(), "target_record_id" => $existing->getKey(),
+        "created_at" => $now, "updated_at" => $now,
+      ]);
+      $db::table("target_group_users")->insert([
+        "target_group_id" => $group->getKey(), "user_id" => $operator->getKey(),
+        "created_at" => $now, "updated_at" => $now,
+      ]);
+      $db::table("user_target_access")->insert([
+        "target_record_id" => $existing->getKey(), "user_id" => $operator->getKey(),
+        "allowed" => true, "created_at" => $now, "updated_at" => $now,
+      ]);
+      $db::table("user_target_permission_denials")->insert([
+        "target_record_id" => $existing->getKey(), "user_id" => $operator->getKey(),
+        "permission" => "wordpress.abilities.execute.mutating",
+        "created_at" => $now, "updated_at" => $now,
+      ]);
+      $db::table("target_group_permission_denials")->insert([
+        "target_group_id" => $group->getKey(),
+        "permission" => "wordpress.abilities.execute.destructive",
+        "created_at" => $now, "updated_at" => $now,
+      ]);
+      $db::table("user_permission_denials")->insert([
+        "user_id" => $operator->getKey(), "permission" => "ssh.command.run",
+        "created_at" => $now, "updated_at" => $now,
+      ]);
+      $resource = "https://gateway-update.example.test/mcp";
+      $db::table("oauth_authorizations")->insert([
+        "id" => (string) Illuminate\Support\Str::ulid(),
+        "user_id" => $owner->getKey(),
+        "client_id" => (string) config("oauth.client.id"),
+        "client_profile_key" => "chatgpt",
+        "client_profile_generation" => 1,
+        "resource" => $resource, "resource_hash" => hash("sha256", $resource),
+        "scopes" => "[\"mcp:use\"]",
+      ]);
+      if (! $credential->exists) {
+        throw new RuntimeException("Could not seed v2 credential persistence fixture.");
+      }
+    '
+  )
+  echo "Seeded published v2.0.0 Target, credential, Target Group, user rules, denials and ChatGPT authorization for patch-upgrade preservation."
+fi
+
 candidate="$tmp/candidate"
 mkdir -p "$candidate"
 unzip -q "$update_zip" -d "$candidate"
@@ -537,6 +609,47 @@ if [[ "$old_version" == "1.2.1" ]]; then
     '
   )
   echo "Seeded v1.2.1 reset boundary: old WordPress/ChatGPT credentials removed; users/roles/global denies and unrelated Activity preserved."
+fi
+if [[ "$old_version" == "2.0.0" ]]; then
+  (
+    cd "$target"
+    php -r '
+      require "vendor/autoload.php";
+      $app = require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      $db = Illuminate\Support\Facades\DB::class;
+      $target = $db::table("targets")->where("target_id", "v200-wordpress")->first();
+      $user = $db::table("users")->where("email", "v200-operator@example.test")->first();
+      $group = $db::table("target_groups")->where("name", "Existing v2 group")->first();
+      $checks = [
+        "existing_target_preserved" => $target !== null && $target->connector_type === "wp_ai_bridge",
+        "existing_user_preserved" => $user !== null && $user->role === "operator" && $user->target_scope_mode === "selected",
+        "existing_group_preserved" => $group !== null,
+        "chatgpt_profile_preserved" => $db::table("oauth_client_profiles")->where("profile_key", "chatgpt")->count() === 1,
+        "chatgpt_authorization_preserved" => $db::table("oauth_authorizations")
+          ->where("client_profile_key", "chatgpt")->where("client_profile_generation", 1)->count() === 1,
+      ];
+      if ($target !== null && $user !== null && $group !== null) {
+        $checks += [
+          "target_membership_preserved" => $db::table("target_group_targets")->where("target_group_id", $group->id)->where("target_record_id", $target->id)->count() === 1,
+          "user_group_membership_preserved" => $db::table("target_group_users")->where("target_group_id", $group->id)->where("user_id", $user->id)->count() === 1,
+          "user_target_allow_preserved" => $db::table("user_target_access")->where("user_id", $user->id)->where("target_record_id", $target->id)->where("allowed", true)->count() === 1,
+          "target_denial_preserved" => $db::table("user_target_permission_denials")->where("user_id", $user->id)->where("target_record_id", $target->id)->where("permission", "wordpress.abilities.execute.mutating")->count() === 1,
+          "group_denial_preserved" => $db::table("target_group_permission_denials")->where("target_group_id", $group->id)->where("permission", "wordpress.abilities.execute.destructive")->count() === 1,
+          "global_denial_preserved" => $db::table("user_permission_denials")->where("user_id", $user->id)->where("permission", "ssh.command.run")->count() === 1,
+        ];
+        $encrypted = $db::table("target_credentials")->where("target_record_id", $target->id)->where("connector_type", "wp_ai_bridge")->where("purpose", "wordpress_oauth")->value("encrypted_payload");
+        $checks["encrypted_credential_preserved"] = is_string($encrypted)
+          && Illuminate\Support\Facades\Crypt::decryptString($encrypted) === "v200-test-credential";
+      }
+      $failed = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
+      if ($failed !== []) {
+        fwrite(STDERR, "Released v2.0.0 patch-upgrade state preservation failed: ".implode(", ", $failed)."\n");
+        exit(1);
+      }
+    '
+  )
+  echo "Released v2.0.0 patch-upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant remain intact."
 fi
 [[ ! -e "$target/app/obsolete-update-test.txt" ]] || { echo "Stale managed file survived update." >&2; exit 1; }
 [[ "$(sha256sum "$target/.env" | awk '{print $1}')" == "$env_hash_before" ]] || { echo ".env changed during update." >&2; exit 1; }

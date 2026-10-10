@@ -52,7 +52,7 @@ jobs:
   upgrade-from-released-baselines:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
 
     services:
       mariadb:
@@ -93,7 +93,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
-          for version in 1.1.2 1.1.10 1.2.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0; do
             gh release download "v$version" \
               --pattern "mcp-gateway-v$version.zip" \
               --dir dist/baseline
@@ -108,7 +108,7 @@ jobs:
           UPDATE_TEST_DB_PASSWORD: test-password
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
         run: |
-          for version in 1.1.2 1.1.10 1.2.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0; do
             bash bin/test-update-package.sh \
               dist/mcp-gateway-update-ci.zip \
               "dist/baseline/mcp-gateway-v$version.zip"
@@ -122,7 +122,7 @@ jobs:
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
         run: |
-          for version in 1.1.2 1.1.10 1.2.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0; do
             bash bin/test-update-backup-integrity.sh \
               dist/mcp-gateway-update-ci.zip \
               "dist/baseline/mcp-gateway-v$version.zip"

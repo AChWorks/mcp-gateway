@@ -16,7 +16,7 @@ A Target has a stable `target_id`, explicit Gateway user/client/Target access ch
 - HTTPS/DNS/redirect protections, `php artisan gateway:check` diagnostics, and PHP 8.4 + MariaDB 10.11 primary deployment compatibility.
 - Clean deployment ZIP/web installer and guarded browser-update ZIP for aaPanel and compatible hosting.
 
-**Breaking upgrade:** historical Site registrations, Site permissions/groups and incompatible WordPress/ChatGPT authorizations are intentionally reset by the Target transition. The updater requires version/package-bound reset consent and an independently verified, restorable **database** backup before destructive migration. A code backup is not a database backup. See [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md) and [release notes](RELEASE_NOTES.md).
+**Upgrade compatibility:** an installation already using the Target model on v2.0.0 can update to v2.0.1 without an intentional connection or authorization reset. Earlier **Site-era v1.x → Target v2.x** upgrades are breaking: retired Site registrations, Site groups, and incompatible WordPress/ChatGPT authorizations must be reset under exact package-bound consent and an independently restorable database backup. An updater code backup is not a database backup. See [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md) and [release notes](RELEASE_NOTES.md).
 
 ## Requirements
 
@@ -216,11 +216,11 @@ Every WordPress Target needs a compatible WP AI Bridge installation. The Gateway
 
 For each WordPress Target:
 
-1. Sign in to `<GATEWAY_ORIGIN>/admin/login`, open **Targets**, then **Register WordPress Target**.
+1. Sign in to `<GATEWAY_ORIGIN>/admin/login`, open **Targets**, choose **Add Target**, and select **WordPress (WP AI Bridge)** as the connector type (the only supported enrollment option in v2.0.1).
 2. Enter a unique immutable `target_id` (lowercase letters, digits and hyphens, at most 64 characters), display name and canonical public HTTPS WordPress base URL.
-3. Choose **Verify and register WordPress Target**. Registration validates public discovery and does not itself grant WordPress credentials.
-4. Open the Target details, select **Connect**, and complete WP AI Bridge OAuth consent as the exact WordPress principal to delegate.
-5. Confirm **Connected** and use **Test connection** on Target details. Assign intended Gateway users/Target Groups deliberately; selected-scope users do not receive automatic access.
+3. Choose **Verify and add WordPress Target**. Registration validates public discovery and does not itself grant WordPress credentials.
+4. Open the Target details, select **Authorize WordPress**, and complete WP AI Bridge OAuth consent as the exact WordPress principal to delegate.
+5. Confirm **Connected** and use **Check WordPress metadata** on Target details when diagnostic verification is required. Assign intended Gateway users/Target Groups deliberately; selected-scope users do not receive automatic access.
 6. Repeat for other WordPress Targets. Credentials, revocation and authorization remain Target-specific.
 
 If WP AI Bridge reports `invalid_client`, verify the exact approved Gateway client metadata URL and its reachability. A new Gateway origin requires new approval. Do not replace OAuth keys, paste tokens, or bypass approval/permission checks to resolve an ordinary connection problem.
@@ -269,7 +269,7 @@ Permission checks remain server-authoritative. A Target connection does not bypa
 
 ## Upgrade
 
-**For legacy Site-era installations, this is a breaking database/data transition.** Before running the browser updater, follow [the Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md), verify an independently restorable database backup, understand the retired connections/grants, and complete the exact package-bound confirmations. Do not re-run a partial MariaDB migration or assume code rollback reverses DDL.
+**Already on v2.0.0?** The v2.0.1 package is a maintenance update without a new Site/Target schema transition. Existing Target registrations, WP AI Bridge connection credentials, user/group restrictions, and ChatGPT grants are intended to survive. Take a verified database and secret recovery backup, run the normal guarded browser updater, then confirm version 2.0.1, Target connection, AI clients grant and User/Target Group forms. No voluntary disconnect/re-enrollment is required. **Pre-v2 Site-era installations remain different:** those upgrades involve an intentional breaking database/data transition. Follow [the Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md), verify an independently restorable database backup, understand retired connections/grants and complete package-bound confirmations. Never blindly retry a partial MariaDB migration or assume code rollback reverses DDL.
 
 The web installer is only for a **fresh installation**. Do not use `/install` to upgrade an existing Gateway.
 
