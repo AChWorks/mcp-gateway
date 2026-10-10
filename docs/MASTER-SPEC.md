@@ -16,7 +16,7 @@ MCP Gateway is a small self-hosted **connector-neutral Target control plane with
 
 WordPress/WP AI Bridge was the first connector and proved the original operational problem: connecting ChatGPT directly to many independent backends creates one client/App connection per backend. MCP Gateway provides one stable public MCP endpoint and a bounded administration surface so Targets can be added, removed, connected, tested, authorized, and routed without creating another ChatGPT App for every Target.
 
-The accepted next foundation adds AI Server Agent as the second MCP-speaking connector and `ssh_direct` as a separate third connector, replaces generic Site/WordPress-shaped core concepts with Target-oriented domain/persistence/access/Admin/MCP contracts, and removes the single-ChatGPT assumption from the shared client authorization boundary. ChatGPT remains the first supported client profile. The detailed breaking design is owned by `docs/TARGET-CONNECTOR-FOUNDATION.md`, Program Issue #106, and client-edge Issue #117 until implementation is integrated.
+The integrated Target-era foundation replaces the former generic Site/WordPress-shaped core with Target identity, scoped persistence/access, Admin and MCP contracts, and a reviewed client-profile authorization edge. WordPress remains the first shipped Target connector; Direct SSH login and bounded noninteractive commands are integrated in main source, with file/SFTP, release and deployment independently gated. AI Server Agent is a separately accepted owner-paused future MCP-speaking connector (#111), not an implemented dependency or reason to block WP+SSH acceptance. ChatGPT is the first supported client profile. For detailed Target and client identity rules see the Target Connector Foundation, Program #106 and client-edge #117; confirm PR, Release and installation state separately.
 
 The project must remain simple enough to deploy on an ordinary aaPanel host or compatible shared PHP hosting while keeping clean connector boundaries so future clients, administration/automation surfaces, and backend connector types can be added without rewriting the core.
 
@@ -26,13 +26,13 @@ The Gateway is a lightweight control plane, not a permanently WordPress-specific
 
 The durable product outcome is that an operator can deploy one MCP Gateway instance, register many Targets of supported connector types, connect one or more explicitly supported MCP/AI client applications to the same stable Gateway endpoint, and safely inspect or operate an explicitly selected Target through that connector's own authorization and safety boundaries.
 
-The completed V1 proof used multiple WP AI Bridge sites through ChatGPT. The accepted next breaking foundation generalizes that proof into Target semantics, adds AI Server Agent and Direct SSH as built-in connectors, and generalizes the client edge so future supported clients do not require a second Gateway authorization core. Adding/removing a Target never requires another Gateway endpoint; adding a new supported client profile likewise does not create another Target fleet.
+The completed V1 proof used multiple WP AI Bridge sites through ChatGPT. The subsequent Target-era foundation now supports WordPress and an independently built Direct SSH source path under one common Target/client identity system; SFTP and actual client-to-Target file handoff still require their own acceptance gates, while AI Server Agent remains paused. Adding or removing an authorized Target must not require a new Gateway endpoint; adding a reviewed client profile must reuse the same Target fleet and authorization core.
 
 V1-specific WordPress success criteria remain historical product evidence below; they do not define the generic core domain for new development.
 
 ## 3. Intended operator and deployment model
 
-V1 is a private, self-hosted gateway for a trusted operator or small trusted workspace, not a public multi-tenant SaaS product.
+The supported Gateway is a private, self-hosted tool for a trusted operator or small trusted workspace, not a public multi-tenant SaaS product.
 
 Primary deployment target:
 
@@ -47,7 +47,7 @@ Primary deployment target:
 - the web server must expose only the application's `public/` directory;
 - no required Docker, Redis, Node.js runtime, message broker, queue daemon, or separate microservice.
 
-The application must remain usable on a conventional shared-style PHP request lifecycle. Long-running daemons must not be required for normal V1 operation.
+The application must remain usable on a conventional shared-style PHP request lifecycle. Long-running daemons must not be required for normal Gateway operation.
 
 The recommended fresh-install experience should remain intentionally small: upload/extract the official deployment ZIP, point the HTTPS domain at `public/`, open the one-page installer, provide an empty MariaDB database (recommended) or MySQL-compatible database plus first-administrator details, and finish. The installer must not become a general hosting control plane or command runner, and after a successful installation it must fail closed against reinstallation.
 

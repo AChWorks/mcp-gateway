@@ -12,7 +12,7 @@ Use the source that owns the kind of truth you need:
 - [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md) — proportionate resource budgets, bounded responses, file transfer and failure semantics (#122/#123/#147).
 - [`DIRECT-SSH-CONNECTOR.md`](./DIRECT-SSH-CONNECTOR.md) — owner-accepted direct SSH password/key, OS-account commands and SFTP design (#123).
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
-- [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported V1 aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
+- [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
 - [`../achworks.yaml`](../achworks.yaml) — stable machine-readable AChWorks component identity, capabilities, interfaces, and source pointers; it must not mirror live work/runtime state.
 - [Koinon (`AChWorks/koinon`)](https://github.com/AChWorks/koinon) — ecosystem-level governance, discovery, and generic cross-project contracts; it is not an MCP Gateway runtime dependency.
 - [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
