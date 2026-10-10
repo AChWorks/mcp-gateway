@@ -232,7 +232,7 @@ php artisan activity:prune
 
 Pruning serializes only competing prune runs and deletes expired/overflow records in fixed-size batches; ordinary Activity writers do not acquire the retention lock. The command reports only expired/overflow deletion counts and the remaining row count. It does not dump Activity records or credentials.
 
-### WordPress Target credential idle maintenance (next Target major)
+### WordPress Target credential idle maintenance (Target-era v2 releases)
 
 The same Laravel scheduler also runs the bounded gateway:wordpress-credentials-maintain command once per minute with overlap protection. For each connected WordPress Target with due encrypted credentials, the Gateway renews the rotating refresh-token generation at the earlier half-life of the access token or WordPress's refresh_token_expires_in hint. The encrypted token is never written to logs, queue payloads or scheduled-task arguments; each renewal is fenced by the existing database-backed Target refresh intent and does not perform remote I/O inside a transaction. WordPress may revoke a grant or expire a token sooner than the lifetime hint.
 
