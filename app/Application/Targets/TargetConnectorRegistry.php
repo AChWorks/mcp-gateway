@@ -31,6 +31,24 @@ final class TargetConnectorRegistry
         return array_keys(self::IMPLEMENTED);
     }
 
+    /**
+     * Historical stored types remain inventory-filterable even when their
+     * implementation is paused or not available for enrollment.
+     *
+     * @return list<string>
+     */
+    public function storedTypes(): array
+    {
+        return Target::KNOWN_CONNECTOR_TYPES;
+    }
+
+    public function availableForTarget(Target $target): ?TargetConnectorAdapter
+    {
+        return isset(self::IMPLEMENTED[$target->connector_type])
+            ? $this->forType($target->connector_type)
+            : null;
+    }
+
     public function forType(string $type): TargetConnectorAdapter
     {
         $class = self::IMPLEMENTED[$type]
@@ -41,7 +59,8 @@ final class TargetConnectorRegistry
 
     public function forTarget(Target $target): TargetConnectorAdapter
     {
-        return $this->forType($target->connector_type);
+        return $this->availableForTarget($target)
+            ?? throw new TargetConnectorFailure(__('This Target connector is not currently available.'));
     }
 
     /**

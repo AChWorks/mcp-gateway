@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
+use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Application\Targets\TargetInventory;
@@ -72,6 +73,7 @@ final class TargetController extends Controller
 
         // Validate the actual connector type before its own fields. This avoids
         // making unrelated connector fields mandatory for every new adapter.
+        $adapter = null;
         try {
             $choice = $request->validate([
                 'connector_type' => ['required', Rule::in($connectors->types())],
@@ -89,13 +91,13 @@ final class TargetController extends Controller
                 throw $exception;
             }
 
-            return back()->withInput($this->safeOldInput($request))->withErrors($exception->errors());
+            return back()->withInput($this->safeOldInput($request, $adapter))->withErrors($exception->errors());
         }
 
         try {
             $target = $adapter->register($validated);
         } catch (TargetConnectorFailure $exception) {
-            return back()->withInput($this->safeOldInput($request))
+            return back()->withInput($this->safeOldInput($request, $adapter))
                 ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()]);
         }
 
@@ -109,7 +111,7 @@ final class TargetController extends Controller
     {
         Gate::authorize(GatewayPermission::TargetsView->value, $target);
 
-        $adapter = $connectors->forTarget($target);
+        $adapter = $connectors->availableForTarget($target);
         $id = $target->getKey();
 
         $canRemoveSafely = ! TargetCredential::query()->where('target_record_id', $id)->exists()
@@ -133,7 +135,7 @@ final class TargetController extends Controller
             'refreshIntent' => null,
             'refreshPending' => false,
             'canRemoveSafely' => $canRemoveSafely,
-            ...$adapter->adminDetails($target),
+            ...($adapter?->adminDetails($target) ?? []),
         ]);
     }
 
@@ -196,9 +198,18 @@ final class TargetController extends Controller
     }
 
     /** @return array<string, mixed> */
-    private function safeOldInput(Request $request): array
-    {
-        return $request->except(['ssh_password', 'ssh_private_key', 'ssh_passphrase']);
+    private function safeOldInput(
+        Request $request,
+        ?TargetConnectorAdapter $adapter,
+    ): array {
+        // Allowlist replayable fields; new connector secrets stay private by
+        // default even when the adapter introduces an unfamiliar form field.
+        return $request->only([
+            'connector_type',
+            'target_id',
+            'display_name',
+            ...($adapter?->safeOldInputFields() ?? []),
+        ]);
     }
 
     private function trimmed(?string $text): ?string

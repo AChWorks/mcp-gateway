@@ -303,7 +303,7 @@ final class TargetInventory
     private function connectorType(?string $value): ?string
     {
         $value = $this->nullableTrim($value);
-        if ($value !== null && ! in_array($value, $this->connectors->types(), true)) {
+        if ($value !== null && ! in_array($value, $this->connectors->storedTypes(), true)) {
             throw new InvalidArgumentException('connector_type is not supported.');
         }
 

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Application\Targets\TargetInventory;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Http\DnsResolver;
@@ -66,6 +67,31 @@ final class TargetManagementAdminTest extends TestCase
             ->assertSee('WordPress blog')
             ->assertSee('https://wordpress.example.test')
             ->assertSee('Authorize this Target to connect WordPress securely');
+    }
+
+    public function test_paused_stored_agent_target_remains_readable_without_enabling_its_connector(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        $target = $this->target('paused-agent', 'ai_server_agent');
+
+        $this->get('/admin/targets/'.$target->target_id)
+            ->assertOk()
+            ->assertSee('This connector is not yet available for enrollment.');
+
+        foreach (['connect', 'reconnect', 'disconnect', 'test'] as $action) {
+            $this->post(route('admin.targets.'.$action, ['target' => $target->target_id], false))
+                ->assertRedirect('/admin/targets/'.$target->target_id)
+                ->assertSessionHasErrors('target');
+        }
+
+        $inventory = app(TargetInventory::class)
+            ->mcpPage($this->user('owner', 'all'), connectorType: 'ai_server_agent');
+        self::assertSame(['paused-agent'], array_map(
+            static fn (Target $item): string => $item->target_id,
+            $inventory['items'],
+        ));
+
+        Http::assertNothingSent();
     }
 
     public function test_selected_scope_operator_cannot_discover_other_target_or_enroll_new_connector(): void
@@ -137,11 +163,12 @@ final class TargetManagementAdminTest extends TestCase
             'ssh_private_key' => 'SECRET_PRIVATE_KEY_SHOULD_NOT_ENTER_SESSION',
             'ssh_passphrase' => 'SECRET_PASSPHRASE_SHOULD_NOT_ENTER_SESSION',
             'ssh_password' => 'SECRET_PASSWORD_SHOULD_NOT_ENTER_SESSION',
+            'future_api_token' => 'SECRET_UNKNOWN_CONNECTOR_TOKEN',
             'ssh_trust_confirmed' => 'yes',
         ])->assertSessionHasErrors('ssh_host');
 
         $old = session()->getOldInput();
-        foreach (['ssh_private_key', 'ssh_passphrase', 'ssh_password'] as $secret) {
+        foreach (['ssh_private_key', 'ssh_passphrase', 'ssh_password', 'future_api_token'] as $secret) {
             self::assertArrayNotHasKey($secret, $old);
         }
 

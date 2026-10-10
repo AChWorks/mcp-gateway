@@ -40,6 +40,15 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
         ];
     }
 
+    public function safeOldInputFields(): array
+    {
+        // ssh_host_key is the server's PUBLIC pin; no login secrets are flashed.
+        return [
+            'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
+            'ssh_auth_method', 'ssh_trust_confirmed',
+        ];
+    }
+
     public function register(array $input): Target
     {
         try {

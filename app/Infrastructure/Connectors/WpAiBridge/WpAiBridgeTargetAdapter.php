@@ -31,6 +31,11 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
         ];
     }
 
+    public function safeOldInputFields(): array
+    {
+        return ['base_url'];
+    }
+
     public function register(array $input): Target
     {
         try {

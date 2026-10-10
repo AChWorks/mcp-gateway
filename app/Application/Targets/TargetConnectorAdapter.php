@@ -11,6 +11,15 @@ interface TargetConnectorAdapter
     /** @return array<string, array<int, mixed>> */
     public function registrationRules(): array;
 
+    /**
+     * Only these non-secret registration fields may be flashed back to the
+     * browser after failed validation. Unknown future fields are private
+     * by default; every new connector must explicitly choose safe fields.
+     *
+     * @return list<string>
+     */
+    public function safeOldInputFields(): array;
+
     /** @param array<string, mixed> $input */
     public function register(array $input): Target;
 

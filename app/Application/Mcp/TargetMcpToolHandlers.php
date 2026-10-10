@@ -55,7 +55,7 @@ final readonly class TargetMcpToolHandlers
                 'connector_type' => $target->connector_type,
                 'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
             ];
-            $item = [...$item, ...$this->connectors->publicMetadata($target)];
+            $item = [...$this->connectors->publicMetadata($target), ...$item];
             $targets[] = $item;
         }
 
@@ -105,7 +105,7 @@ final readonly class TargetMcpToolHandlers
             'last_error_code' => $target->last_error_code,
             'connected_at' => $connectedAt instanceof DateTimeInterface ? $connectedAt->format(DATE_ATOM) : null,
         ];
-        $context = [...$context, ...$this->connectors->publicMetadata($target)];
+        $context = [...$this->connectors->publicMetadata($target), ...$context];
 
         return ['ok' => true, 'target' => $context];
     }

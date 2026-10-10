@@ -21,10 +21,10 @@ use Symfony\Component\HttpFoundation\Response;
 final readonly class GatewayMcpEndpoint
 {
     public function __construct(
+        private TargetConnectorRegistry $connectors,
         private TargetMcpToolHandlers $handlers,
         private WordpressTargetMcpToolHandlers $wordpress,
         private SshCommandMcpToolHandlers $sshCommands,
-        private TargetConnectorRegistry $connectors,
     ) {}
 
     public function handle(Request $request): Response
