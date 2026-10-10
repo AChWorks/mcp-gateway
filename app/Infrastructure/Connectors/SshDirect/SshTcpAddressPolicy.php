@@ -30,7 +30,11 @@ final class SshTcpAddressPolicy
     public function approvedDialAddresses(SshRegisteredEndpoint $endpoint): array
     {
         $literal = $endpoint->configuredIp();
-        $answers = $literal === null ? $this->dns->resolve($endpoint->host) : [$literal];
+        // A canonical registered DNS hostname is displayed without its root
+        // dot, but must always resolve as an absolute FQDN. Otherwise the
+        // system resolver may append search domains and authorize a different
+        // (even publicly addressed) destination.
+        $answers = $literal === null ? $this->dns->resolve($endpoint->host.'.') : [$literal];
 
         if ($answers === [] || count($answers) > self::MAX_DNS_ADDRESSES) {
             throw new RuntimeException('SSH destination has no bounded approved DNS address set.');
