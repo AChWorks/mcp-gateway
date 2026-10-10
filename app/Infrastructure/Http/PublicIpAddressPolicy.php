@@ -28,10 +28,17 @@ final class PublicIpAddressPolicy
         '::/128',
         '::1/128',
         '64:ff9b::/96',
+        // IANA IPv6 special-purpose registry: globally reachable = false.
+        // PHP 8.4's FILTER_FLAG_GLOBAL_RANGE alone still accepts these
+        // newer prefixes; keep explicit policy denies even with that flag.
+        '64:ff9b:1::/48',   // RFC 8215: local-use IPv4/IPv6 translation
         '100::/64',
+        '100:0:0:1::/64',   // RFC 9780: dummy IPv6 prefix
         '2001::/23',
         '2001:db8::/32',
         '2002::/16',
+        '3fff::/20',       // RFC 9637: documentation
+        '5f00::/16',       // RFC 9602: SRv6 SIDs
         'fc00::/7',
         'fec0::/10',
         'fe80::/10',
@@ -61,7 +68,7 @@ final class PublicIpAddressPolicy
         return filter_var(
             $address,
             FILTER_VALIDATE_IP,
-            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE,
+            FILTER_FLAG_GLOBAL_RANGE | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE,
         ) !== false;
     }
 
