@@ -297,6 +297,11 @@ final readonly class SshFileRuntime
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
         }
+        // Internal streaming callers do not necessarily pass through the
+        // public MCP handler's scoped query. Reject before SSH login too.
+        if (! $this->access->allows($user, $permission, $target)) {
+            throw new SshTargetConnectionException('target_not_found');
+        }
 
         return $this->admission->run((string) $target->getKey(), function () use (
             $user, $target, $permission, $operation,
@@ -311,6 +316,9 @@ final readonly class SshFileRuntime
                 || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)
                 || ! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
                 throw new SshTargetConnectionException('credential_unavailable');
+            }
+            if (! $this->access->allows($user, $permission, $fresh)) {
+                throw new SshTargetConnectionException('target_not_found');
             }
 
             try {

@@ -262,6 +262,41 @@ final class SshFileFixtureTest extends TestCase
         fclose($sink);
     }
 
+    public function test_internal_streaming_api_denies_revoked_user_before_remote_login(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        $owner->access_enabled = false;
+        $owner->save();
+        $runtime = app(SshFileRuntime::class);
+        $sink = fopen('php://temp', 'w+b');
+        self::assertIsResource($sink);
+        try {
+            $runtime->downloadToStream(
+                $owner, $target, $this->home().'/no-contact-needed',
+                $sink, 1024,
+            );
+            self::fail('Revoked user must not establish a streaming SSH session.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('target_not_found', $e->reason);
+        }
+        self::assertSame(0, ftell($sink));
+        fclose($sink);
+
+        $source = fopen('php://temp', 'w+b');
+        self::assertIsResource($source);
+        try {
+            $runtime->uploadFromStream(
+                $owner, $target, $this->home().'/no-contact-needed',
+                $source, 0, hash('sha256', ''), 1024,
+            );
+            self::fail('Revoked user must not upload.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('target_not_found', $e->reason);
+        }
+        fclose($source);
+    }
+
     private function target(string $method, ?int $port = null): Target
     {
         $secret = $method === 'password'
