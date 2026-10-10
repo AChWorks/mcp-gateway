@@ -40,6 +40,16 @@ final class PublicIpAddressPolicyTest extends TestCase
             'ipv6-link-local' => ['fe80::1'],
             'ipv6-multicast' => ['ff02::1'],
             'ipv6-6to4' => ['2002:0a00:0001::1'],
+            // IANA Special-Purpose IPv6 Registry: Globally Reachable = False.
+            // PHP 8.4.24 FILTER_FLAG_GLOBAL_RANGE does not by itself reject
+            // these newer prefixes, so each must be explicitly denied.
+            'ipv6-local-use-translation-start' => ['64:ff9b:1::1'],
+            'ipv6-local-use-translation-within-prefix' => ['64:ff9b:1:ffff::1234'],
+            'ipv6-dummy-prefix' => ['100:0:0:1::1'],
+            'ipv6-documentation-new' => ['3fff::1'],
+            'ipv6-documentation-new-upper-bound' => ['3fff:fff::1'],
+            'ipv6-srv6-sids' => ['5f00::1'],
+            'ipv6-srv6-sids-in-prefix' => ['5f00:aaaa::1'],
             'ipv4-mapped-private' => ['::ffff:127.0.0.1'],
         ];
     }

@@ -39,6 +39,32 @@ final class OutboundTargetPolicyTest extends TestCase
         }
     }
 
+    public function test_shared_https_policy_also_rejects_non_global_ipv6_even_with_public_dns_answers(): void
+    {
+        $policy = $this->policy([
+            'local-translation.example.test' => ['64:ff9b:1::1'],
+            'dummy.example.test' => ['100:0:0:1::1'],
+            'documentation.example.test' => ['3fff::1'],
+            'srv6.example.test' => ['5f00::1'],
+            'mixed.example.test' => ['8.8.8.8', '64:ff9b:1::1'],
+        ]);
+
+        foreach ([
+            'local-translation.example.test',
+            'dummy.example.test',
+            'documentation.example.test',
+            'srv6.example.test',
+            'mixed.example.test',
+        ] as $host) {
+            try {
+                $policy->validate('https://'.$host);
+                self::fail('Non-global IPv6 destination passed shared HTTP outbound policy: '.$host);
+            } catch (UnsafeOutboundTarget $exception) {
+                self::assertStringContainsString('non-public', $exception->getMessage());
+            }
+        }
+    }
+
     public function test_ambiguous_and_cross_origin_targets_are_rejected(): void
     {
         $policy = $this->policy([
