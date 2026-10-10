@@ -28,14 +28,10 @@
                 <legend>{{ __('Group capability restrictions') }}</legend>
                 <p class="field-help">{{ __('Denials from overlapping assigned groups accumulate. Direct target permission denials remain the final capability-narrowing layer.') }}</p>
                 @php($selectedDenials = old('denied_permissions', $deniedPermissions))
-                <div class="checkbox-grid">
-                    @foreach ($targetPermissions as $permission)
-                        @include('admin.partials.permission-option', [
-                            'permission' => $permission,
-                            'checked' => in_array($permission->value, $selectedDenials, true),
-                        ])
-                    @endforeach
-                </div>
+                @include('admin.partials.permission-groups', [
+                    'permissions' => $targetPermissions,
+                    'selectedDenials' => $selectedDenials,
+                ])
             </fieldset>
 
             <div class="field">

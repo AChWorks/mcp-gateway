@@ -10,7 +10,7 @@
         <p class="muted">{{ __('One stable Target ID per connector endpoint. Results are limited to your permitted Targets.') }}</p>
     </div>
     @can('targets.create')
-        <a class="button button-primary" href="{{ route('admin.targets.create') }}">{{ __('Add WordPress Target') }}</a>
+        <a class="button button-primary" href="{{ route('admin.targets.create') }}">{{ __('Add Target') }}</a>
     @endcan
 </div>
 
@@ -55,7 +55,10 @@
                             <td><strong>{{ $target->display_name }}</strong>
                                 <code class="small-code">{{ $target->target_id }}</code>
                             </td>
-                            <td><code>{{ $target->connector_type }}</code></td>
+                            <td>
+                                <strong>{{ $target->connector_type === 'wp_ai_bridge' ? __('WordPress') : $target->connector_type }}</strong>
+                                <small><code class="small-code">{{ $target->connector_type }}</code></small>
+                            </td>
                             <td>
                                 <span class="badge badge-{{ $target->connection_state->value === 'connected' ? 'success' : 'neutral' }}">
                                     {{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}

@@ -65,17 +65,13 @@
         @error('access_enabled')<p class="field-error">{{ $message }}</p>@enderror
 
         <fieldset class="permission-fieldset">
-            <legend>{{ __('Global permission restrictions') }}</legend>
+            <legend>{{ __('Permission restrictions (deny only)') }}</legend>
             <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. The scope badge describes what the permission acts on; a Target-scoped denial here applies across every target in the user\'s effective scope. Owner restrictions are intentionally ignored and cleared.') }}</p>
             @php($selectedDenials = old('denied_permissions', $deniedPermissions))
-            <div class="checkbox-grid">
-                @foreach ($permissions as $permission)
-                    @include('admin.partials.permission-option', [
-                        'permission' => $permission,
-                        'checked' => in_array($permission->value, $selectedDenials, true),
-                    ])
-                @endforeach
-            </div>
+            @include('admin.partials.permission-groups', [
+                'permissions' => $permissions,
+                'selectedDenials' => $selectedDenials,
+            ])
         </fieldset>
 
         <div class="form-grid">

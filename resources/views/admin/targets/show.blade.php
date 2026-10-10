@@ -20,7 +20,7 @@
 <section class="panel panel-wide" aria-label="{{ __('Target information') }}">
     <dl class="detail-list">
         <dt>{{ __('Target ID') }}</dt><dd><code>{{ $target->target_id }}</code></dd>
-        <dt>{{ __('Connector') }}</dt><dd><code>{{ $target->connector_type }}</code></dd>
+        <dt>{{ __('Connector') }}</dt><dd>{{ $target->connector_type === 'wp_ai_bridge' ? __('WordPress (WP AI Bridge)') : $target->connector_type }} <code class="small-code">{{ $target->connector_type }}</code></dd>
         <dt>{{ __('Connection state') }}</dt><dd>{{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}</dd>
         <dt>{{ __('Last tested') }}</dt><dd>{{ $target->last_tested_at?->toIso8601String() ?? __('Not yet tested') }}</dd>
         <dt>{{ __('Last error') }}</dt><dd>{{ $target->last_error_code ?? __('No recorded error') }}</dd>

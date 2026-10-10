@@ -371,13 +371,77 @@ input[type="radio"]:checked::before {
 }
 
 .permission-fieldset legend {
-    padding-inline: 0.35rem;
+    padding: 0.12rem 0.5rem;
+    border-radius: 0.4rem;
+    background: var(--ui-surface-subtle);
     font-weight: 700;
+}
+
+.form-subheading {
+    margin: 0.25rem 0 -0.2rem;
+    font-size: 1.05rem;
+}
+
+.permission-category + .permission-category {
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--ui-border);
+}
+
+.permission-category-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+}
+
+.permission-category h3 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.permission-category-heading small,
+.permission-reserved-note {
+    color: var(--ui-muted);
+}
+
+.permission-category .field-help {
+    margin: 0.4rem 0 0.85rem;
+}
+
+.permission-category-collapsible {
+    padding: 0.7rem 0.85rem;
+    border: 1px solid var(--ui-border);
+    border-radius: 0.7rem;
+    background: var(--ui-surface);
+}
+
+.permission-category-collapsible summary {
+    width: fit-content;
+    font-weight: 650;
+    cursor: pointer;
+}
+
+.permission-category-collapsible summary:focus-visible {
+    outline: 3px solid var(--ui-focus);
+    outline-offset: 2px;
+}
+
+.permission-reserved-list {
+    margin: 0.85rem 0 0;
+    padding-inline-start: 1.25rem;
+}
+
+.permission-reserved-list li + li {
+    margin-top: 0.4rem;
+}
+
+.permission-reserved-list code {
+    font-size: 0.8rem;
 }
 
 .checkbox-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
     gap: 0.65rem;
 }
 

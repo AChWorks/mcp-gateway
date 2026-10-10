@@ -2,7 +2,10 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
+use App\Domain\Targets\Target;
+use Illuminate\Support\Facades\DB;
 use App\Domain\Access\TargetScopeMode;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -45,6 +48,87 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Target-scoped')
             ->assertSee('effective Target scope')
             ->assertSee('not limited to Targets the user created');
+    }
+
+    public function test_target_entry_is_neutral_but_only_wordpress_can_be_selected(): void
+    {
+        $owner = $this->owner();
+
+        $this->actingAs($owner)
+            ->get('/admin/targets')
+            ->assertOk()
+            ->assertSee('Add Target')
+            ->assertDontSee('Add WordPress Target');
+
+        $this->actingAs($owner)
+            ->get('/admin/targets/create')
+            ->assertOk()
+            ->assertSee('Connector type')
+            ->assertSee('value="wp_ai_bridge"', false)
+            ->assertDontSee('value="ssh_direct"', false)
+            ->assertDontSee('value="ai_server_agent"', false)
+            ->assertSee('WordPress public HTTPS URL');
+    }
+
+    public function test_user_and_group_denials_are_grouped_without_exposing_future_connectors_as_active(): void
+    {
+        $owner = $this->owner();
+
+        foreach (['/admin/users/create', '/admin/target-groups/create'] as $url) {
+            $this->actingAs($owner)->get($url)
+                ->assertOk()
+                ->assertSee('Shared Target management')
+                ->assertSee('WordPress (WP AI Bridge)')
+                ->assertSee('Direct SSH')
+                ->assertSee('Not available')
+                ->assertSee('AI Server Agent')
+                ->assertSee('Paused')
+                ->assertSee('Review reserved permission definitions');
+        }
+
+        $this->actingAs($owner)->get('/admin/users/create')
+            ->assertSee('Gateway administration');
+        self::assertSame('gateway', GatewayPermission::SecurityManage->adminGroup());
+        self::assertSame('targets', GatewayPermission::TargetsView->adminGroup());
+        self::assertSame('wordpress', GatewayPermission::WordpressAbilitiesInspect->adminGroup());
+        self::assertSame('ssh', GatewayPermission::SshCommandRun->adminGroup());
+        self::assertSame('agent', GatewayPermission::AgentCommandRun->adminGroup());
+    }
+
+    public function test_specific_wordpress_target_hides_other_connector_permissions_but_preserves_old_denials(): void
+    {
+        $owner = $this->owner();
+        $operator = User::query()->create([
+            'name' => 'Operator',
+            'email' => 'operator-'.uniqid().'@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+            'access_enabled' => true,
+        ]);
+        $target = Target::query()->create([
+            'target_id' => 'wp-demo',
+            'display_name' => 'WP Demo',
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->actingAs($owner)
+            ->get('/admin/users/'.$operator->getKey().'/targets/'.$target->target_id.'/edit')
+            ->assertOk()
+            ->assertSee('Shared Target management')
+            ->assertSee('WordPress (WP AI Bridge)')
+            ->assertDontSee('Review reserved permission definitions')
+            ->assertDontSee('Run SSH remote commands')
+            ->assertDontSee('AI Server Agent')
+            ->assertSee('name="denied_permissions[]" value="ssh.command.run"', false)
+            ->assertSee('Existing restrictions for other connector types are preserved');
     }
 
     private function owner(): User

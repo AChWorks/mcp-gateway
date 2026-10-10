@@ -68,16 +68,12 @@
         </label>
 
         <fieldset class="permission-fieldset">
-            <legend>{{ __('Global permission restrictions') }}</legend>
+            <legend>{{ __('Permission restrictions (deny only)') }}</legend>
             <p class="field-help">{{ __('Checked permissions are denied. The scope badge describes what the permission acts on; checking a Target-scoped permission here denies it on every target in the user\'s effective scope. Restrictions never add authority beyond the selected role.') }}</p>
-            <div class="checkbox-grid">
-                @foreach ($permissions as $permission)
-                    @include('admin.partials.permission-option', [
-                        'permission' => $permission,
-                        'checked' => in_array($permission->value, old('denied_permissions', []), true),
-                    ])
-                @endforeach
-            </div>
+            @include('admin.partials.permission-groups', [
+                'permissions' => $permissions,
+                'selectedDenials' => old('denied_permissions', []),
+            ])
         </fieldset>
 
         <div class="field">

@@ -24,7 +24,7 @@
             <label for="display_name">{{ __('Display name') }}</label>
             <input id="display_name" name="display_name" type="text" required maxlength="160"
                 value="{{ old('display_name', $target->display_name) }}" aria-describedby="display_name_help">
-            <p id="display_name_help" class="muted">{{ __('Changing this label does not reauthorize or change the remote WordPress endpoint.') }}</p>
+            <p id="display_name_help" class="muted">{{ __('Changing this label does not reauthorize or change the connector endpoint.') }}</p>
             @error('display_name')
                 <p class="form-error" role="alert">{{ $message }}</p>
             @enderror

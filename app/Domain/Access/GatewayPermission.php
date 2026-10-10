@@ -84,7 +84,7 @@ enum GatewayPermission: string
             self::TargetsCreate => 'Add a new Target to the Gateway. This is Gateway-wide. If the creator uses Selected Target scope, the new Target is automatically added to that user\'s scope.',
             self::TargetsUpdate => 'Change only the display name of an in-scope Target when this permission is allowed. Target identity, connector type and WordPress endpoint remain immutable.',
             self::TargetsRemove => 'Remove any Target inside the user\'s effective Target scope when this permission is allowed for that Target. Creation ownership is not considered; it is not limited to Targets the user created.',
-            self::TargetsConnect => 'Start OAuth authorization for any Target inside the user\'s effective Target scope when this permission is allowed for that Target.',
+            self::TargetsConnect => 'Start the supported connection workflow for an in-scope Target. WordPress currently uses OAuth; future connectors may use different authentication.',
             self::TargetsReconnect => 'Replace/re-authorize the stored connection for any in-scope Target when this permission is allowed for that Target.',
             self::TargetsDisconnect => 'Disconnect any in-scope Target and finalize its stored credential lifecycle when this permission is allowed for that Target.',
             self::TargetsTest => 'Run connection/health checks for Targets inside the user\'s effective Target scope when this permission is allowed for those Targets.',
@@ -109,7 +109,22 @@ enum GatewayPermission: string
             self::ActivityView => 'Open the activity feed. Non-owner results are constrained to Targets visible through targets.view and the effective Target scope; owners retain unrestricted recovery visibility.',
             self::UsersView => 'View local Gateway user accounts. This is Gateway-wide and does not itself allow changing access.',
             self::UsersManage => 'Create and edit Gateway users, per-Target access rules, Target groups, and group membership. This is Gateway-wide access administration.',
-            self::SecurityManage => 'Reserved Gateway-wide security administration permission. No current admin screen performs a security.manage action directly.',
+            self::SecurityManage => 'Manage approved AI client applications and revoke individual grants through the Owner-only security administration pages.',
+        };
+    }
+
+    /**
+     * Admin-only presentation category. Does not grant or evaluate authority.
+     * Keep authorization decisions in AccessControl and role/denial policy.
+     */
+    public function adminGroup(): string
+    {
+        return match (true) {
+            str_starts_with($this->value, 'wordpress.') => 'wordpress',
+            str_starts_with($this->value, 'ssh.') => 'ssh',
+            str_starts_with($this->value, 'agent.') => 'agent',
+            str_starts_with($this->value, 'targets.') => 'targets',
+            default => 'gateway',
         };
     }
 

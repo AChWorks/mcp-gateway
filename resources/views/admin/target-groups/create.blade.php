@@ -24,15 +24,11 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Group capability restrictions') }}</legend>
-            <p class="field-help">{{ __('Checked target-scoped capabilities are denied on every target in this group for assigned users. A group can never grant authority above the user role/global ceiling.') }}</p>
-            <div class="checkbox-grid">
-                @foreach ($targetPermissions as $permission)
-                    @include('admin.partials.permission-option', [
-                        'permission' => $permission,
-                        'checked' => in_array($permission->value, old('denied_permissions', []), true),
-                    ])
-                @endforeach
-            </div>
+            <p class="field-help">{{ __('Checked permissions are denied on matching Targets for assigned users. Groups can add Target reachability but never grant capabilities beyond the user role or global restrictions.') }}</p>
+            @include('admin.partials.permission-groups', [
+                'permissions' => $targetPermissions,
+                'selectedDenials' => old('denied_permissions', []),
+            ])
         </fieldset>
 
         <div class="field">
