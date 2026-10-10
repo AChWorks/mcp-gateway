@@ -53,7 +53,7 @@ final readonly class SshVerifiedTransport
     public function withAuthenticatedSftpSession(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        Closure $operation,
+        Closure $operation, ?int $deadlineNs = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase,
@@ -64,7 +64,7 @@ final readonly class SshVerifiedTransport
 
                 return $operation($ssh, $peerIp);
             },
-            true,
+            true, $deadlineNs,
         );
     }
 
@@ -72,7 +72,7 @@ final readonly class SshVerifiedTransport
     private function withAuthenticatedOperation(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        Closure $operation, bool $requireSftp,
+        Closure $operation, bool $requireSftp, ?int $deadlineNs = null,
     ): mixed {
         $privateKey = null;
         $rsaClientAuthentication = false;
@@ -120,6 +120,12 @@ final readonly class SshVerifiedTransport
             if ($peerPort !== $endpoint->port || @inet_pton($peerIp) === false
                 || ! hash_equals((string) inet_pton($ip), (string) inet_pton($peerIp))) {
                 throw new SshTargetConnectionException('tcp_peer_mismatch');
+            }
+
+            if ($requireSftp && $deadlineNs !== null) {
+                // This must be established before SSH handshake/login as
+                // those operations are inside the same Target admission lease.
+                SshSocketDeadline::attach($socket, $deadlineNs);
             }
 
             try {

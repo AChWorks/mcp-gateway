@@ -366,6 +366,7 @@ final readonly class SshFileRuntime
 
                     return $operation($sftp, $ip, $config);
                 },
+                $deadlineNs,
             );
         });
     }
