@@ -102,6 +102,28 @@ final class SshTargetRegistrationTest extends TestCase
         app(SshTargetVault::class)->open($other, $otherConfig, $credential);
     }
 
+    public function test_unauthorized_request_cannot_consume_an_ssh_verification_attempt(): void
+    {
+        config()->set('ssh.verification.max_attempts_per_minute', 1);
+        $owner = $this->user('owner');
+        $operator = $this->user('operator');
+        $target = app(SshTargetRegistration::class)->register(
+            'guarded', 'Guarded', '127.0.0.1', 22, 'deploy',
+            $this->key(), 'password', 'password-secret-test', null,
+        );
+
+        $this->actingAs($operator)->post('/admin/targets/guarded/test')->assertForbidden();
+
+        $this->actingAs($owner)->post('/admin/targets/guarded/test')
+            ->assertRedirect('/admin/targets/guarded')
+            ->assertSessionHasErrors('target');
+        self::assertSame('egress_denied', $target->refresh()->last_error_code);
+        self::assertSame(1, DB::table('activity_events')
+            ->where('operation', 'ssh-login-verify')
+            ->where('error_code', 'egress_denied')
+            ->count());
+    }
+
     public function test_registered_unsafe_literal_is_never_contacted_and_gateway_denies_default_ssh_authority(): void
     {
         $owner = $this->user('owner');

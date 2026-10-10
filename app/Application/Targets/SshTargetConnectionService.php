@@ -6,6 +6,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshConnectionAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
@@ -19,6 +20,7 @@ final readonly class SshTargetConnectionService
     public function __construct(
         private SshTargetVault $vault,
         private SshVerifiedTransport $transport,
+        private SshConnectionAdmission $admission,
         private ActivityRecorder $activity,
     ) {}
 
@@ -38,13 +40,18 @@ final readonly class SshTargetConnectionService
         }
 
         try {
-            $material = $this->vault->open($target, $config, $credential);
-            $ip = $this->transport->authenticate(
-                $config->endpoint(), SshHostKeyPin::fromLine($config->pinned_host_key),
-                $config->auth_method, $material['secret'], $material['passphrase'],
-            );
+            $ip = $this->admission->run((string) $target->getKey(), function () use ($target, $config, $credential): string {
+                $material = $this->vault->open($target, $config, $credential);
+
+                return $this->transport->authenticate(
+                    $config->endpoint(), SshHostKeyPin::fromLine($config->pinned_host_key),
+                    $config->auth_method, $material['secret'], $material['passphrase'],
+                );
+            });
         } catch (SshTargetConnectionException $exception) {
-            $this->recordFailure($target, $credential, $exception->reason);
+            if (! in_array($exception->reason, ['connection_busy', 'rate_limited', 'admission_unavailable'], true)) {
+                $this->recordFailure($target, $credential, $exception->reason);
+            }
             throw $exception;
         } catch (Throwable) {
             $this->recordFailure($target, $credential, 'credential_unavailable');

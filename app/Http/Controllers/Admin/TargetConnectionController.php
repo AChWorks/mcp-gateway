@@ -157,7 +157,10 @@ final class TargetConnectionController extends Controller
             'tcp_peer_mismatch', 'host_key_mismatch', 'ssh_handshake_failed' => __('SSH server identity could not be verified. No credentials were sent after a host-key mismatch.'),
             'authentication_failed' => __('SSH authentication failed after server identity verification.'),
             'tcp_unreachable' => __('The approved numeric SSH endpoint could not be reached.'),
-            'credential_unavailable' => __('The stored SSH credential is unavailable or invalid.'),
+            'credential_invalid', 'credential_unavailable' => __('The stored SSH credential is unavailable or invalid.'),
+            'connection_busy' => __('Another SSH verification is already in progress for this Target.'),
+            'rate_limited' => __('Too many SSH verification attempts were made for this Target. Try again later.'),
+            'admission_unavailable' => __('SSH verification is temporarily unavailable because its safety guard could not be acquired.'),
             'target_changed' => __('The SSH Target changed while verification was in progress. Retry after reviewing it.'),
             default => __('The SSH connection could not be verified safely.'),
         };

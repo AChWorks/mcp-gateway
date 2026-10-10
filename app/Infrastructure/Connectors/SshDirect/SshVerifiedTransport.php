@@ -4,6 +4,7 @@ namespace App\Infrastructure\Connectors\SshDirect;
 
 use App\Application\Targets\SshTargetConnectionException;
 use phpseclib4\Crypt\PublicKeyLoader;
+use phpseclib4\Crypt\RSA;
 use phpseclib4\Net\SSH2;
 use Throwable;
 
@@ -14,12 +15,32 @@ use Throwable;
  */
 final readonly class SshVerifiedTransport
 {
-    public function __construct(private SshDialAddressPolicy $policy) {}
+    public function __construct(
+        private SshDialAddressPolicy $policy,
+        private SshAlgorithmPolicy $algorithms,
+    ) {}
 
     public function authenticate(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
     ): string {
+        $privateKey = null;
+        $rsaClientAuthentication = false;
+        if ($authMethod === 'password') {
+            if ($passphrase !== null) {
+                throw new SshTargetConnectionException('credential_invalid');
+            }
+        } elseif ($authMethod === 'private_key') {
+            try {
+                $privateKey = PublicKeyLoader::loadPrivateKey($secret, $passphrase);
+                $rsaClientAuthentication = $privateKey instanceof RSA;
+            } catch (Throwable) {
+                throw new SshTargetConnectionException('credential_invalid');
+            }
+        } else {
+            throw new SshTargetConnectionException('credential_invalid');
+        }
+
         try {
             $approved = $this->policy->approvedDialAddresses($endpoint);
         } catch (Throwable) {
@@ -51,9 +72,12 @@ final readonly class SshVerifiedTransport
                 throw new SshTargetConnectionException('tcp_peer_mismatch');
             }
 
-            $ssh = new SSH2($socket, $endpoint->port, 8);
-            $ssh->setTimeout(8);
             try {
+                $ssh = new SSH2($socket, $endpoint->port, 8);
+                $ssh->setTimeout(8);
+                $ssh->setPreferredAlgorithms(
+                    $this->algorithms->preferredAlgorithms($pin, $rsaClientAuthentication),
+                );
                 $serverKey = $ssh->getServerPublicHostKey();
             } catch (Throwable) {
                 throw new SshTargetConnectionException('ssh_handshake_failed');
@@ -63,16 +87,9 @@ final readonly class SshVerifiedTransport
             }
 
             try {
-                if ($authMethod === 'password' && $passphrase === null) {
-                    $authenticated = $ssh->login($endpoint->username, $secret);
-                } elseif ($authMethod === 'private_key') {
-                    $privateKey = PublicKeyLoader::loadPrivateKey($secret, $passphrase);
-                    $authenticated = $ssh->login($endpoint->username, $privateKey);
-                } else {
-                    throw new SshTargetConnectionException('credential_invalid');
-                }
-            } catch (SshTargetConnectionException $exception) {
-                throw $exception;
+                $authenticated = $authMethod === 'password'
+                    ? $ssh->login($endpoint->username, $secret)
+                    : $ssh->login($endpoint->username, $privateKey);
             } catch (Throwable) {
                 throw new SshTargetConnectionException('authentication_failed');
             }
