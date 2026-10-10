@@ -12,12 +12,15 @@ on:
       - 'app/Http/Controllers/OAuth/GatewayBridgeClientMetadataController.php'
       - 'app/Http/Controllers/OAuth/SiteOAuthCallbackController.php'
       - 'app/Infrastructure/Connectors/WpAiBridge/**'
+      # The WordPress connector also uses the shared outbound HTTP/DNS/IP safety boundary.
+      - 'app/Infrastructure/Http/**'
       - 'app/Infrastructure/OAuth/GatewayBridgeClientIdentity.php'
       - 'app/Infrastructure/OAuth/SiteCredential*.php'
       - 'app/Infrastructure/OAuth/SiteOAuthFlow*.php'
       - 'config/bridge.php'
       - 'routes/oauth.php'
       - 'tests/Contract/**'
+      - 'tests/Unit/Infrastructure/Http/**'
       - 'bin/check-wp-ai-bridge-contract.sh'
       - '.github/workflows/wp-ai-bridge-contract.yml'
   pull_request:
@@ -34,12 +37,15 @@ on:
       - 'app/Http/Controllers/OAuth/GatewayBridgeClientMetadataController.php'
       - 'app/Http/Controllers/OAuth/SiteOAuthCallbackController.php'
       - 'app/Infrastructure/Connectors/WpAiBridge/**'
+      # The WordPress connector also uses the shared outbound HTTP/DNS/IP safety boundary.
+      - 'app/Infrastructure/Http/**'
       - 'app/Infrastructure/OAuth/GatewayBridgeClientIdentity.php'
       - 'app/Infrastructure/OAuth/SiteCredential*.php'
       - 'app/Infrastructure/OAuth/SiteOAuthFlow*.php'
       - 'config/bridge.php'
       - 'routes/oauth.php'
       - 'tests/Contract/**'
+      - 'tests/Unit/Infrastructure/Http/**'
       - 'bin/check-wp-ai-bridge-contract.sh'
       - '.github/workflows/wp-ai-bridge-contract.yml'
 
