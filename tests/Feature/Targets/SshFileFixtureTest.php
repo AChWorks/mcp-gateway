@@ -149,7 +149,7 @@ final class SshFileFixtureTest extends TestCase
         fwrite($source, $bytes);
         rewind($source);
 
-        $uploaded = $runtime->uploadFromStream($owner, $target, $path, $source, strlen($bytes), $hash, 300000);
+        $uploaded = $runtime->uploadFromStream($owner, $target, $path, $source, strlen($bytes), $hash, 300000, 30);
         fclose($source);
         self::assertSame('completed', $uploaded['status']);
         self::assertTrue($uploaded['complete']);
@@ -160,7 +160,7 @@ final class SshFileFixtureTest extends TestCase
 
         $sink = fopen('php://temp', 'w+b');
         self::assertIsResource($sink);
-        $downloaded = $runtime->downloadToStream($owner, $target, $path, $sink, 300000, $hash);
+        $downloaded = $runtime->downloadToStream($owner, $target, $path, $sink, 300000, 30, $hash);
         self::assertSame('completed', $downloaded['status']);
         self::assertSame(strlen($bytes), $downloaded['bytes_read']);
         self::assertSame($hash, $downloaded['sha256']);
@@ -180,14 +180,14 @@ final class SshFileFixtureTest extends TestCase
         rewind($source2);
         $replace = $runtime->uploadFromStream(
             $owner, $target, $path, $source2, strlen($replacement), hash('sha256', $replacement),
-            250000, true, strlen($bytes), $mtime,
+            250000, 30, true, strlen($bytes), $mtime,
         );
         fclose($source2);
         self::assertSame('completed', $replace['status']);
         self::assertSame('posix_replace', $replace['publish_method']);
         $sink2 = fopen('php://temp', 'w+b');
         self::assertIsResource($sink2);
-        $read2 = $runtime->downloadToStream($owner, $target, $path, $sink2, 250000);
+        $read2 = $runtime->downloadToStream($owner, $target, $path, $sink2, 250000, 30);
         self::assertSame(hash('sha256', $replacement), $read2['sha256']);
         rewind($sink2);
         self::assertSame($replacement, stream_get_contents($sink2));
@@ -207,7 +207,7 @@ final class SshFileFixtureTest extends TestCase
         rewind($source);
 
         $bad = $runtime->uploadFromStream(
-            $owner, $target, $path, $source, strlen($bytes), str_repeat('0', 64), 10000,
+            $owner, $target, $path, $source, strlen($bytes), str_repeat('0', 64), 10000, 30,
         );
         self::assertSame('outcome_unknown', $bad['status']);
         self::assertFalse($bad['complete']);
@@ -218,7 +218,7 @@ final class SshFileFixtureTest extends TestCase
         rewind($source);
         $badLength = $runtime->uploadFromStream(
             $owner, $target, $path, $source, strlen($bytes) - 1,
-            hash('sha256', substr($bytes, 0, -1)), 10000,
+            hash('sha256', substr($bytes, 0, -1)), 10000, 30,
         );
         self::assertSame('outcome_unknown', $badLength['status']);
         self::assertTrue($badLength['temporary_cleanup_confirmed']);
@@ -243,7 +243,7 @@ final class SshFileFixtureTest extends TestCase
         $sink = fopen('php://temp', 'w+b');
         self::assertIsResource($sink);
         try {
-            $runtime->downloadToStream($owner, $target, $path, $sink, 16000);
+            $runtime->downloadToStream($owner, $target, $path, $sink, 16000, 30);
             self::fail('Expected a typed size limit exception.');
         } catch (SshTargetConnectionException $e) {
             self::assertSame('file_too_large', $e->reason);
@@ -251,7 +251,14 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame(0, ftell($sink));
 
         try {
-            $runtime->downloadToStream($owner, $target, $path, $sink, 20000, str_repeat('f', 64));
+            $runtime->downloadToStream($owner, $target, $path, $sink, 20000, 41);
+            self::fail('Invalid stream runtime budget must fail before SSH login.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('invalid_input', $e->reason);
+        }
+
+        try {
+            $runtime->downloadToStream($owner, $target, $path, $sink, 20000, 30, str_repeat('f', 64));
             self::fail('Expected a typed source-integrity exception.');
         } catch (SshTargetConnectionException $e) {
             self::assertSame('source_changed', $e->reason);
@@ -274,7 +281,7 @@ final class SshFileFixtureTest extends TestCase
         try {
             $runtime->downloadToStream(
                 $owner, $target, $this->home().'/no-contact-needed',
-                $sink, 1024,
+                $sink, 1024, 30,
             );
             self::fail('Revoked user must not establish a streaming SSH session.');
         } catch (SshTargetConnectionException $e) {
@@ -288,7 +295,7 @@ final class SshFileFixtureTest extends TestCase
         try {
             $runtime->uploadFromStream(
                 $owner, $target, $this->home().'/no-contact-needed',
-                $source, 0, hash('sha256', ''), 1024,
+                $source, 0, hash('sha256', ''), 1024, 30,
             );
             self::fail('Revoked user must not upload.');
         } catch (SshTargetConnectionException $e) {

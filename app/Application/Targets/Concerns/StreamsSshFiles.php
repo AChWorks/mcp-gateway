@@ -29,21 +29,24 @@ trait StreamsSshFiles
      * @return array<string, mixed>
      */
     public function downloadToStream(
-        User $user, Target $target, string $path, mixed $sink, int $maxBytes,
+        User $user, Target $target, string $path, mixed $sink, int $maxBytes, int $maxSeconds,
         ?string $expectedSha256 = null, ?int $expectedSize = null, ?int $expectedMtime = null,
     ): array {
         $this->validatePath($path);
         $this->validateStream($sink);
         $this->validateTransferLimit($maxBytes);
+        $this->validateStreamDeadline($maxSeconds);
+        $deadline = hrtime(true) + $maxSeconds * 1000000000;
         $this->validatePrecondition($expectedSize, $expectedMtime);
         $this->validateSha256($expectedSha256);
 
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
             function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
-                $path, $sink, $maxBytes, $expectedSha256, $expectedSize, $expectedMtime,
+                $path, $sink, $maxBytes, $deadline, $expectedSha256, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
                 try {
+                    $this->ensureStreamDeadline($deadline);
                     $before = $this->stableRegularFile($sftp, $path);
                     $this->requireVersion($before, $expectedSize, $expectedMtime);
                     if ($before['size'] > $maxBytes) {
@@ -54,8 +57,11 @@ trait StreamsSshFiles
                     $received = 0;
                     if ($before['size'] > 0) {
                         $sftp->get($path, static function (string $bytes) use (
-                            $sink, &$received, $digest, $before, $maxBytes,
+                            $sink, &$received, $digest, $before, $maxBytes, $deadline,
                         ): void {
+                            if (hrtime(true) > $deadline) {
+                                throw new SshTargetConnectionException('transfer_timed_out');
+                            }
                             $length = strlen($bytes);
                             if ($received + $length > $before['size'] || $received + $length > $maxBytes) {
                                 throw new SshTargetConnectionException('source_changed');
@@ -75,6 +81,7 @@ trait StreamsSshFiles
                     if ($received !== $before['size']) {
                         throw new SshTargetConnectionException('source_changed');
                     }
+                    $this->ensureStreamDeadline($deadline);
                     $after = $this->stableRegularFile($sftp, $path);
                     $this->requireVersion($after, $before['size'], $before['mtime']);
                     $sha256 = hash_final($digest);
@@ -112,12 +119,14 @@ trait StreamsSshFiles
      */
     public function uploadFromStream(
         User $user, Target $target, string $path, mixed $source, int $expectedBytes,
-        string $expectedSha256, int $maxBytes,
+        string $expectedSha256, int $maxBytes, int $maxSeconds,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
     ): array {
         $this->validatePath($path);
         $this->validateStream($source);
         $this->validateTransferLimit($maxBytes);
+        $this->validateStreamDeadline($maxSeconds);
+        $deadline = hrtime(true) + $maxSeconds * 1000000000;
         $this->validateSha256($expectedSha256);
         $this->validatePrecondition($expectedSize, $expectedMtime);
         if ($path === '/' || str_ends_with($path, '/') || $expectedBytes < 0
@@ -127,11 +136,12 @@ trait StreamsSshFiles
 
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
-                $path, $source, $expectedBytes, $expectedSha256,
+                $path, $source, $expectedBytes, $expectedSha256, $deadline,
                 $overwrite, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
                 try {
+                    $this->ensureStreamDeadline($deadline);
                     $existing = $sftp->lstat($path);
                     if (! $overwrite) {
                         throw new SshTargetConnectionException('file_exists');
@@ -160,8 +170,11 @@ trait StreamsSshFiles
 
                 try {
                     $sftp->put($temporary, static function (int $limit) use (
-                        $source, $expectedBytes, &$submittedBytes, $submittedDigest,
+                        $source, $expectedBytes, &$submittedBytes, $submittedDigest, $deadline,
                     ): ?string {
+                        if (hrtime(true) > $deadline) {
+                            throw new SshTargetConnectionException('transfer_timed_out');
+                        }
                         if ($submittedBytes === $expectedBytes) {
                             return null;
                         }
@@ -178,6 +191,7 @@ trait StreamsSshFiles
                         return $next;
                     }, SFTP::SOURCE_CALLBACK);
 
+                    $this->ensureStreamDeadline($deadline);
                     $extra = fread($source, 1);
                     if ($submittedBytes !== $expectedBytes || $extra !== ''
                         || ! hash_equals($expectedSha256, hash_final($submittedDigest))) {
@@ -194,8 +208,11 @@ trait StreamsSshFiles
                     $verifiedDigest = hash_init('sha256');
                     if ($expectedBytes > 0) {
                         $sftp->get($temporary, static function (string $bytes) use (
-                            &$verifiedBytes, $verifiedDigest, $expectedBytes,
+                            &$verifiedBytes, $verifiedDigest, $expectedBytes, $deadline,
                         ): void {
+                            if (hrtime(true) > $deadline) {
+                                throw new SshTargetConnectionException('transfer_timed_out');
+                            }
                             $verifiedBytes += strlen($bytes);
                             if ($verifiedBytes > $expectedBytes) {
                                 throw new SshTargetConnectionException('write_unverified');
@@ -208,6 +225,7 @@ trait StreamsSshFiles
                         throw new SshTargetConnectionException('write_unverified');
                     }
 
+                    $this->ensureStreamDeadline($deadline);
                     $sftp->clearStatCache();
                     if ($overwrite) {
                         $latest = $sftp->lstat($path);
@@ -260,6 +278,25 @@ trait StreamsSshFiles
     {
         if ($maxBytes < 1) {
             throw new SshTargetConnectionException('invalid_input');
+        }
+    }
+
+    /**
+     * Bound in-flight operations below the existing 90-second Target lock
+     * lease. This is an internal PHP request safety budget, not a universal
+     * end-user file size or product duration policy.
+     */
+    private function validateStreamDeadline(int $maxSeconds): void
+    {
+        if ($maxSeconds < 1 || $maxSeconds > 40) {
+            throw new SshTargetConnectionException('invalid_input');
+        }
+    }
+
+    private function ensureStreamDeadline(int $deadline): void
+    {
+        if (hrtime(true) > $deadline) {
+            throw new SshTargetConnectionException('transfer_timed_out');
         }
     }
 
