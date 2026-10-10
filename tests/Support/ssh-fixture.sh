@@ -57,6 +57,11 @@ password='GatewaySshFixture!234'
 key_passphrase='fixture-key-passphrase'
 ports=(46231 46232 46233 46234 46235)
 
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  printf '::add-mask::%s\n' "${password}"
+  printf '::add-mask::%s\n' "${key_passphrase}"
+fi
+
 if [[ -e "${root}" ]]; then
   echo "Refusing to reuse an existing SSH fixture root: ${root}" >&2
   exit 1
