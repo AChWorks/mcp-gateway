@@ -105,7 +105,7 @@ final class TargetManagementAdminTest extends TestCase
             'target_id' => 'unauthorized',
             'display_name' => 'Unreviewed',
             'base_url' => 'https://wordpress.example.test',
-        ])->assertSessionHasErrors('connector_type');
+        ])->assertSessionHasErrors('ssh_host');
 
         $this->post('/admin/targets', [
             'connector_type' => 'wp_ai_bridge',

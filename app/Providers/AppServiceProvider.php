@@ -6,6 +6,8 @@ use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
+use App\Infrastructure\Connectors\SshDirect\SshTcpAddressPolicy;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\SystemDnsResolver;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
@@ -25,6 +27,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(DnsResolver::class, SystemDnsResolver::class);
+        $this->app->bind(SshDialAddressPolicy::class, SshTcpAddressPolicy::class);
 
         // Default file-backed rate counters must not lose updates when several
         // PHP workers hit the same edge/client bucket simultaneously.

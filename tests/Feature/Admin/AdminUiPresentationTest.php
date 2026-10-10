@@ -51,7 +51,7 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('not limited to Targets the user created');
     }
 
-    public function test_target_entry_is_neutral_but_only_wordpress_can_be_selected(): void
+    public function test_target_entry_remains_neutral_and_available_connectors_have_registration_flows(): void
     {
         $owner = $this->owner();
 
@@ -64,11 +64,14 @@ final class AdminUiPresentationTest extends TestCase
         $this->actingAs($owner)
             ->get('/admin/targets/create')
             ->assertOk()
-            ->assertSee('Connector type')
+            ->assertSee('WordPress (WP AI Bridge)')
+            ->assertSee('Direct SSH')
             ->assertSee('value="wp_ai_bridge"', false)
-            ->assertDontSee('value="ssh_direct"', false)
+            ->assertSee('value="ssh_direct"', false)
             ->assertDontSee('value="ai_server_agent"', false)
-            ->assertSee('WordPress public HTTPS URL');
+            ->assertSee('WordPress public HTTPS URL')
+            ->assertSee('Trusted OpenSSH server public host key')
+            ->assertSee('out-of-band');
     }
 
     public function test_user_and_group_denials_are_grouped_without_exposing_future_connectors_as_active(): void

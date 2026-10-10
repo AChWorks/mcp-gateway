@@ -1,8 +1,18 @@
 # Direct SSH Target Connector
 
-Status: **Owner-accepted target-state design**, implementation pending [Issue #123](https://github.com/AChWorks/mcp-gateway/issues/123).
+Status: **Owner-accepted target-state design**; initial SSH registration / trust / login-test slice is under review, not released. Full execution/SFTP integration remains pending in [Issue #123](https://github.com/AChWorks/mcp-gateway/issues/123).
 Parent: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106).
 See also [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [remote I/O contract](./REMOTE-IO-CONTRACT.md).
+
+## Initial SSH registration and verified-login slice (not yet shipped)
+
+The first independent implementation slice adds connector-owned `ssh_direct_target_configs` (host/port/username, selected password or private-key authentication, out-of-band pinned SSH **server** public key, last observed verified numeric peer IP with timestamp), encrypted purpose-bound `target_credentials`, an accessible Target registration/inspect/test/disconnect Admin workflow, authorization-filtered IP-inclusive Admin and MCP Target inventory, and `phpseclib/phpseclib` transport code.
+
+The order of operations is mandatory: exact stored `target_id` and Target-scoped Gateway authorization, registered endpoint validation, bounded public numeric DNS/TCP policy, numeric TCP dial, **actual TCP peer comparison**, cryptographically verified server host key and exact pinned key comparison, **then** password/private-key login. Passwords, login private keys and key passphrases are write-only encrypted data; no incoming request may override the saved destination. A changed/unknown host key fails closed. No DNS or remote calls happen during inventory. The initial registration uses an explicit operator attestation of independently verified host-key material; it never trusts a key merely obtained from the destination.
+
+A successful login test authenticates and disconnects without running a command. Last-verified IP/time must not be confused with a live heartbeat; prior observations display as stale when Target connection state is not connected. "Disconnect" removes the **local Gateway SSH credential**, not the remote OS account or other active SSH sessions. The verified host key / endpoint binding is immutable; deliberate enrollment/replacement/rotation remains a separately reviewed lifecycle. Arbitrary shell execution, SFTP, streamed transfer, command error/outcome semantics, private/VPN owner-scoped egress policy, and full cross-connector acceptance are **not implemented by this slice**. The corresponding public SSH MCP tools must remain unadvertised until their complete independently accepted operation is ready. This slice alone must not close #123 or #112, or trigger a release.
+
+Security tests cover out-of-band host-key pin parsing, encrypted bound credentials, IP-inclusive authorization-filtered inventory, default SSH capability denials, public-only policy and WordPress regressions. Disposable unprivileged localhost OpenSSH fixture testing can inject an explicitly fixture-only dial-policy implementation; that does **not** relax production `SshTcpAddressPolicy`, which rejects loopback. Initial local fixture results on 2026-10-10: private-key login, encrypted-private-key passphrase, fail-closed wrong host key before authentication, and default loopback egress denial passed. Password **success**, host-key rotation, SSH command/SFTP behavior, interruption/uncertain outcomes and mixed WP+SSH release validation are still required.
 
 ## Product boundary
 

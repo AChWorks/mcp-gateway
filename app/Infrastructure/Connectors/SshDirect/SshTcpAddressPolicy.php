@@ -17,7 +17,7 @@ use RuntimeException;
  * Registered private/VPN endpoints require a future explicit, Target-scoped
  * owner policy and must never become reachable via a permissive fallback.
  */
-final class SshTcpAddressPolicy
+final class SshTcpAddressPolicy implements SshDialAddressPolicy
 {
     private const MAX_DNS_ADDRESSES = 16;
 

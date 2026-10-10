@@ -30,6 +30,21 @@
             <dt>{{ __('MCP resource') }}</dt><dd><code class="small-code">{{ $wpConfig->mcp_resource_url }}</code></dd>
             <dt>{{ __('OAuth issuer') }}</dt><dd><code class="small-code">{{ $wpConfig->oauth_issuer_url }}</code></dd>
         @endif
+        @if ($sshConfig !== null)
+            <dt>{{ __('SSH registered endpoint') }}</dt><dd><code class="small-code">{{ $sshConfig->endpoint()->destinationLabel() }}</code></dd>
+            <dt>{{ __('SSH verified address') }}</dt>
+            <dd>
+                @if ($sshConfig->observed_peer_ip !== null)
+                    <code class="small-code">{{ $sshConfig->username.'@'.(str_contains($sshConfig->observed_peer_ip, ':') ? '['.$sshConfig->observed_peer_ip.']' : $sshConfig->observed_peer_ip).':'.$sshConfig->port }}</code>
+                    <small>{{ $target->connection_state->value === 'connected' ? __('Last verified, not a live heartbeat') : __('Stale prior verification, not current reachability') }}</small>
+                    <small>{{ $sshConfig->observed_at?->toIso8601String() }}</small>
+                @else
+                    {{ __('IP not yet verified') }}
+                @endif
+            </dd>
+            <dt>{{ __('SSH pinned host key') }}</dt><dd><code class="small-code">{{ $sshFingerprint }}</code></dd>
+            <dt>{{ __('Authentication mode') }}</dt><dd>{{ $sshConfig->auth_method === 'private_key' ? __('Private key') : __('Password') }} ({{ __('encrypted and write-only') }})</dd>
+        @endif
     </dl>
     @if ($target->connector_type === 'wp_ai_bridge')
         <div class="filter-actions">
@@ -99,6 +114,26 @@
             <p class="muted">{{ __('Credential revocation is pending. Retry Disconnect when WordPress is reachable; other operations remain blocked.') }}</p>
         @elseif (! $hasCredential)
             <p class="muted">{{ __('Authorize this Target to connect WordPress securely.') }}</p>
+        @endif
+    @elseif ($target->connector_type === 'ssh_direct' && $sshConfig !== null)
+        @if ($sshHasCredential)
+            <p class="muted">{{ __('SSH login credentials are stored locally. You can test the pinned host key and login; commands and SFTP are not yet available.') }}</p>
+            <div class="filter-actions">
+                @can('targets.test', $target)
+                    <form method="post" action="{{ route('admin.targets.test', ['target' => $target->target_id]) }}">
+                        @csrf
+                        <button class="button button-primary" type="submit">{{ __('Verify SSH host and login') }}</button>
+                    </form>
+                @endcan
+                @can('targets.disconnect', $target)
+                    <form method="post" action="{{ route('admin.targets.disconnect', ['target' => $target->target_id]) }}">
+                        @csrf
+                        <button class="button button-secondary" type="submit">{{ __('Delete Gateway SSH credential') }}</button>
+                    </form>
+                @endcan
+            </div>
+        @else
+            <p class="muted">{{ __('No SSH credential remains. Register a new Target for a fresh independently verified host key and login secret. Removing the local credential does not revoke the remote Unix account.') }}</p>
         @endif
     @else
         <p class="muted">{{ __('This connector is not yet available for enrollment.') }}</p>
