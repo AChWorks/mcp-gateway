@@ -158,6 +158,11 @@ code {
     width: 100%;
 }
 
+/* The AI client page contains two separate panels, not one joined card. */
+.ai-client-authorizations {
+    margin-top: 1.25rem;
+}
+
 .panel-danger {
     width: 100%;
     max-width: none;
@@ -695,6 +700,28 @@ td input[type="checkbox"] {
 .filter-actions {
     flex: 0 0 auto;
     justify-content: flex-start;
+}
+
+/* Keep grant revocation fields readable inside an overflowable table cell. */
+.client-grant-revoke-form {
+    display: grid;
+    gap: 0.5rem;
+    width: min(100%, 16rem);
+    min-width: 12rem;
+}
+
+.client-grant-revoke-form label {
+    font-weight: 650;
+    line-height: 1.4;
+}
+
+.client-grant-revoke-form input[type="password"] {
+    width: 100%;
+    min-width: 0;
+}
+
+.client-grant-revoke-form .button {
+    justify-self: start;
 }
 
 .table-footer {
