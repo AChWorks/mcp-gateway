@@ -50,6 +50,15 @@ The WP AI Bridge OAuth contract includes refresh_token_expires_in; each encrypte
 
 **Focused evidence:** 55 tests / 866 assertions PASS across Target WordPress connection (including due-idle isolation, ambiguous replay and expired token), Target MCP, Gateway OAuth client metadata, Target Admin, ChatGPT OAuth and client-profile isolation. Targeted PHPStan PASS. The scheduler's actual schedule:list output confirms once-per-minute invocation. **Not a production cron observation**, not an external WordPress E2E or historical MariaDB migration proof. Requires the normal host cron documented in docs/DEPLOYMENT.md and separate deployment acceptance.
 
+## Browser-based breaking v2.0 upgrade preflight and consent
+    
+The uploaded update ZIP stages only the temporary updater until an authenticated administrator authorizes the update. Before clicking **Update MCP Gateway**, the updater re-examines the *installed* v1 Site/OAuth schema and displays which categories contain reset-relevant state (WordPress registrations/credentials; Target assignments/groups/operations; Target-scoped Activity; Gateway OAuth grants/tokens). When any category is present, both confirmations are mandatory:
+    
+1. Approve irreversible removal of retired Site/WordPress connection state, Target assignments/groups and relevant historical Activity, plus old Gateway OAuth grants and access/refresh artifacts (ChatGPT must reconnect).
+2. Attest that a **consistent full database backup** was created *outside* the application/code archive and that restoration into an independent database was verified, with the rollback/partial-DDL procedure available.
+    
+The confirmation is tied to the exact update manifest hash and target version, checked *before* maintenance and file replacement, persisted only in the single-use updater state and revalidated before the migration boundary. There is **no** permanent `.env` consent flag set by the browser UI. The existing migration guards remain a separate fail-closed defense. If confirmed migration enters DDL and then fails, do not assume PHP/code rollback restores database state: use the independently verified database restore runbook. Published v1.2.1 seeded browser-upgrade tests must prove both the no-consent no-mutation path and preservation of owners/users/roles/global denials and unrelated Activity after the approved reset.
+    
 ## Manual recovery after ambiguous rotating WordPress refresh — current candidate
 
 **Use only when Target details show a blocked refresh intent.** The Gateway deliberately will not use, disconnect, reauthorize or silently discard a credential while the remote issuer might have rotated it without delivering the successor. A definitive remote rejection can also preserve a blocked intent. Neither logout from the WordPress dashboard nor revoking the known old refresh token certifies revocation of an unknown successor.

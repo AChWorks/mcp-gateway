@@ -45,6 +45,96 @@ final readonly class AccessControl
     }
 
     /**
+     * Evaluate several Target-scoped rights from one bounded request-local
+     * authorization snapshot. No cross-request cache or second policy engine:
+     * the same role ceiling, explicit deny precedence and group rules as
+     * allows() are applied to every requested permission.
+     *
+     * @param  list<GatewayPermission>  $permissions
+     * @return array<string,bool> Permission values keyed to decisions.
+     */
+    public function allowsTargetPermissions(User $user, Target $target, array $permissions): array
+    {
+        $decisions = [];
+        foreach ($permissions as $permission) {
+            $decisions[$permission->value] = false;
+        }
+        if ($decisions === []) {
+            return $decisions;
+        }
+
+        $role = $this->role($user);
+        if (! (bool) $user->getAttribute('access_enabled') || ! $role instanceof GatewayRole) {
+            return $decisions;
+        }
+
+        $eligible = [];
+        foreach ($permissions as $permission) {
+            if ($role->allows($permission) && $this->permissionMatchesTarget($permission, $target)
+                && (! str_starts_with($permission->value, 'ssh.') || $this->scopeMode($user) === TargetScopeMode::Selected)) {
+                $eligible[$permission->value] = true;
+            }
+        }
+        if ($eligible === []) {
+            return $decisions;
+        }
+        if ($role === GatewayRole::Owner) {
+            foreach (array_keys($eligible) as $name) {
+                $decisions[$name] = true;
+            }
+
+            return $decisions;
+        }
+
+        $scope = $this->scopeMode($user);
+        if (! $scope instanceof TargetScopeMode) {
+            return $decisions;
+        }
+
+        $names = array_keys($eligible);
+        $globalDenials = DB::table('user_permission_denials')
+            ->where('user_id', $user->getKey())
+            ->whereIn('permission', $names)
+            ->pluck('permission')->all();
+        $direct = DB::table('user_target_access')
+            ->where('user_id', $user->getKey())
+            ->where('target_record_id', $target->getKey())
+            ->value('allowed');
+        if ($direct !== null && ! (bool) $direct) {
+            return $decisions;
+        }
+
+        // Membership is loaded exactly once, reused for Selected scope AND
+        // applicable group permission denials, regardless of permission count.
+        $groups = DB::table('target_group_users')
+            ->join('target_group_targets', 'target_group_targets.target_group_id', '=', 'target_group_users.target_group_id')
+            ->where('target_group_users.user_id', $user->getKey())
+            ->where('target_group_targets.target_record_id', $target->getKey())
+            ->pluck('target_group_users.target_group_id')->all();
+        if ($scope === TargetScopeMode::Selected && $direct === null && $groups === []) {
+            return $decisions;
+        }
+
+        $groupDenials = $groups === [] ? [] : DB::table('target_group_permission_denials')
+            ->whereIn('target_group_id', $groups)
+            ->whereIn('permission', $names)
+            ->pluck('permission')->all();
+        $directDenials = DB::table('user_target_permission_denials')
+            ->where('user_id', $user->getKey())
+            ->where('target_record_id', $target->getKey())
+            ->whereIn('permission', $names)
+            ->pluck('permission')->all();
+
+        foreach ($names as $name) {
+            $decisions[$name] = ! in_array($name, $globalDenials, true)
+                && ! in_array($name, $groupDenials, true)
+                && ! in_array($name, $directDenials, true);
+        }
+
+        return $decisions;
+    }
+
+    /**
      * Applies principal target membership only. Functional permission is deliberately separate so
      * a selected target can be write-only, read-only, or otherwise narrowed by capability.
      *

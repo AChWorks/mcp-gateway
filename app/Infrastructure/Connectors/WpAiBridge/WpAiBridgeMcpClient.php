@@ -82,20 +82,50 @@ final readonly class WpAiBridgeMcpClient
         );
     }
 
+    /**
+     * Execute under the SAME request-owned downstream session used for
+     * classification. The caller must have resolved a bounded, request-local
+     * permission snapshot before any downstream connection is opened.
+     *
+     * @param  array<string,mixed>  $input
+     * @param  callable(AbilityExecutionClass):bool  $authorizeClass
+     */
+    public function executeAuthorizedAbility(
+        Target $target,
+        string $ability,
+        array $input,
+        string $correlationId,
+        callable $authorizeClass,
+    ): mixed {
+        $routing = $this->routingContext($target);
+
+        return $this->withLegacySession($routing, $correlationId, function (string $url, array $headers) use ($routing, $ability, $input, $correlationId, $authorizeClass): mixed {
+            $executionClass = $this->abilityExecutionClass($routing, $ability, $correlationId, $headers);
+            if (! $authorizeClass($executionClass)) {
+                throw new WpAiBridgeMcpException('forbidden', 'The classified WordPress Ability is not authorized.');
+            }
+
+            return $this->callTool($url, $headers, $ability, $input, $executionClass->hasMutationRisk(), 3);
+        });
+    }
+
     /** @param array{resource_url:string,access_token:string} $routing */
     private function abilityExecutionClass(
         array $routing,
         string $ability,
         string $correlationId,
+        ?array $sessionHeaders = null,
     ): AbilityExecutionClass {
         try {
-            $catalog = $this->callAbilityOnRouting(
-                $routing,
-                self::CATALOG_ABILITY,
-                ['action' => 'get', 'name' => $ability],
-                false,
-                $correlationId,
-            );
+            $catalog = $sessionHeaders === null
+                ? $this->callAbilityOnRouting(
+                    $routing,
+                    self::CATALOG_ABILITY,
+                    ['action' => 'get', 'name' => $ability],
+                    false,
+                    $correlationId,
+                )
+                : $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY, ['action' => 'get', 'name' => $ability], false);
         } catch (WpAiBridgeMcpException) {
             return AbilityExecutionClass::Unclassified;
         }
@@ -162,6 +192,19 @@ final readonly class WpAiBridgeMcpClient
         bool $mutationRisk,
         string $correlationId,
     ): mixed {
+        return $this->withLegacySession(
+            $routing,
+            $correlationId,
+            fn (string $url, array $headers): mixed => $this->callTool($url, $headers, $ability, $input, $mutationRisk),
+        );
+    }
+
+    /**
+     * @param  array{resource_url:string,access_token:string}  $routing
+     * @param  callable(string,array<string,string>):mixed  $operation
+     */
+    private function withLegacySession(array $routing, string $correlationId, callable $operation): mixed
+    {
         $headers = [
             'Authorization' => 'Bearer '.$routing['access_token'],
             'Accept' => 'application/json, text/event-stream',
@@ -173,7 +216,7 @@ final readonly class WpAiBridgeMcpClient
         $headers['Mcp-Session-Id'] = $sessionId;
 
         try {
-            return $this->callTool($routing['resource_url'], $headers, $ability, $input, $mutationRisk);
+            return $operation($routing['resource_url'], $headers);
         } finally {
             $this->closeSession($routing['resource_url'], $headers);
         }
@@ -236,12 +279,12 @@ final readonly class WpAiBridgeMcpClient
      * @param  array<string, string>  $headers
      * @param  array<string, mixed>  $input
      */
-    private function callTool(string $resourceUrl, array $headers, string $ability, array $input, bool $mutationRisk): mixed
+    private function callTool(string $resourceUrl, array $headers, string $ability, array $input, bool $mutationRisk, int $requestId = 2): mixed
     {
         try {
             $response = $this->http->postJson($resourceUrl, [
                 'jsonrpc' => '2.0',
-                'id' => 2,
+                'id' => $requestId,
                 'method' => 'tools/call',
                 'params' => [
                     'name' => self::EXECUTE_TOOL,
@@ -288,7 +331,7 @@ final readonly class WpAiBridgeMcpClient
             throw new WpAiBridgeMcpException($reason, $message, $exception);
         }
 
-        if (($payload['jsonrpc'] ?? null) !== '2.0' || ($payload['id'] ?? null) !== 2) {
+        if (($payload['jsonrpc'] ?? null) !== '2.0' || ($payload['id'] ?? null) !== $requestId) {
             $reason = $mutationRisk ? 'outcome_unknown' : 'protocol_error';
             throw new WpAiBridgeMcpException($reason, $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'

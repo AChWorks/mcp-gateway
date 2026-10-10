@@ -82,7 +82,7 @@ enum GatewayPermission: string
             self::GatewayConnectionView => 'View the Gateway MCP endpoint and OAuth/client metadata. This is Gateway-wide and does not grant access to any Target.',
             self::TargetsView => 'List and open Targets inside the user\'s effective Target scope. It never makes an out-of-scope Target visible.',
             self::TargetsCreate => 'Add a new Target to the Gateway. This is Gateway-wide. If the creator uses Selected Target scope, the new Target is automatically added to that user\'s scope.',
-            self::TargetsUpdate => 'Change the name or WordPress URL of any Target inside the user\'s effective Target scope when this permission is allowed for that Target.',
+            self::TargetsUpdate => 'Change only the display name of an in-scope Target when this permission is allowed. Target identity, connector type and WordPress endpoint remain immutable.',
             self::TargetsRemove => 'Remove any Target inside the user\'s effective Target scope when this permission is allowed for that Target. Creation ownership is not considered; it is not limited to Targets the user created.',
             self::TargetsConnect => 'Start OAuth authorization for any Target inside the user\'s effective Target scope when this permission is allowed for that Target.',
             self::TargetsReconnect => 'Replace/re-authorize the stored connection for any in-scope Target when this permission is allowed for that Target.',

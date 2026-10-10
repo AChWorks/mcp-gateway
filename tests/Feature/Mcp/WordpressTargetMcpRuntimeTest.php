@@ -7,6 +7,7 @@ use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
+use App\Domain\Targets\TargetGroup;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
@@ -26,6 +27,9 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
 
     /** @var list<array{host:string,ability:string,authorization:string,transaction:int}> */
     private array $downstream = [];
+
+    /** @var list<array{host:string,method:string,session:string}> */
+    private array $sessionTraffic = [];
 
     protected function setUp(): void
     {
@@ -70,6 +74,60 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         foreach ($this->downstream as $call) {
             self::assertSame($baseline, $call['transaction'], 'WordPress MCP transport ran under a database transaction.');
         }
+    }
+
+    public function test_execute_uses_one_legacy_session_for_classification_and_execution_then_closes_it(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->sessionTraffic = [];
+
+        $result = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'demo/read', []);
+        self::assertTrue($result['ok']);
+        self::assertSame(
+            ['initialize', 'tools/call', 'tools/call', 'DELETE'],
+            array_column($this->sessionTraffic, 'method'),
+        );
+        self::assertSame(['', 'test-session', 'test-session', 'test-session'],
+            array_column($this->sessionTraffic, 'session'));
+        self::assertSame(['wp-ai-bridge/abilities-read', 'demo/read'],
+            array_slice(array_column($this->downstream, 'ability'), -2));
+    }
+
+    public function test_selected_group_execution_has_bounded_membership_queries_and_keeps_denials(): void
+    {
+        $operator = $this->user('operator');
+        $target = $this->pair('alpha');
+        $group = TargetGroup::query()->create(['name' => 'Authorized operators']);
+        $group->users()->attach($operator->getKey());
+        $group->targets()->attach($target->getKey());
+
+        $queries = [];
+        DB::listen(static function (\Illuminate\Database\Events\QueryExecuted $query) use (&$queries): void {
+            $queries[] = $query->sql;
+        });
+        $handlers = app(WordpressTargetMcpToolHandlers::class);
+        self::assertTrue($handlers->execute($operator, 'alpha', 'demo/read', [])['ok']);
+        $membershipQueries = array_filter($queries, static fn (string $sql): bool => str_contains($sql, 'target_group_users'));
+        self::assertLessThanOrEqual(2, count($membershipQueries),
+            'One Ability execution must not repeat group membership SQL per execution permission.');
+
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::WordpressAbilitiesExecuteReadonly->value,
+        ]);
+        $outboundBefore = count($this->downstream);
+        $denied = $handlers->execute($operator, 'alpha', 'demo/read', []);
+        self::assertSame('forbidden', $denied['error']['code']);
+        self::assertSame(['wp-ai-bridge/abilities-read'],
+            array_slice(array_column($this->downstream, 'ability'), $outboundBefore));
+
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => false,
+        ]);
+        $outboundBefore = count($this->downstream);
+        self::assertSame('target_not_found', $handlers->execute($operator, 'alpha', 'demo/read', [])['error']['code']);
+        self::assertCount($outboundBefore, $this->downstream);
     }
 
     public function test_target_scope_and_execution_class_denials_do_not_leak_or_send_unauthorized_requests(): void
@@ -223,6 +281,13 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
                 'scope' => 'mcp:use offline_access',
             ], 200);
         }
+        if ($path === '/wp-json/wp-ai-bridge/v1/mcp') {
+            $this->sessionTraffic[] = [
+                'host' => $host,
+                'method' => $request->method() === 'DELETE' ? 'DELETE' : (string) ($request->data()['method'] ?? ''),
+                'session' => (string) ($request->header('Mcp-Session-Id')[0] ?? ''),
+            ];
+        }
         if ($path === '/wp-json/wp-ai-bridge/v1/mcp' && $request->method() === 'POST') {
             $payload = $request->data();
             if (($payload['method'] ?? null) === 'initialize') {
@@ -257,7 +322,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
 
                 return Http::response([
                     'jsonrpc' => '2.0',
-                    'id' => 2,
+                    'id' => $payload['id'] ?? 2,
                     'result' => [
                         'isError' => false,
                         'structuredContent' => ['success' => true, 'data' => $data],

@@ -81,28 +81,26 @@ final readonly class WordpressTargetMcpToolHandlers
             return $this->failed($operation, $target, 'invalid_input', 'Ability input must be valid JSON.');
         }
 
-        $canExecute = false;
-        foreach ([
+        // A single Target-scoped authorization snapshot bounds DB work and
+        // freezes the decisions for this one logical request (not a cache).
+        $allowed = $this->access->allowsTargetPermissions($user, $target, [
             GatewayPermission::WordpressAbilitiesExecuteReadonly,
             GatewayPermission::WordpressAbilitiesExecuteMutating,
             GatewayPermission::WordpressAbilitiesExecuteDestructive,
             GatewayPermission::WordpressAbilitiesExecuteUnclassified,
-        ] as $permission) {
-            if ($this->access->allows($user, $permission, $target)) {
-                $canExecute = true;
-                break;
-            }
-        }
-        if (! $canExecute) {
+        ]);
+        if (! in_array(true, $allowed, true)) {
             return $this->failed($operation, $target, 'forbidden', 'WordPress execution is not authorized.');
         }
 
         try {
-            $class = $this->bridge->classifyAbility($target, $ability, CorrelationId::current());
-            if (! $this->access->allows($user, $class->permission(), $target)) {
-                return $this->failed($operation, $target, 'forbidden', 'This Ability execution class is not authorized.');
-            }
-            $result = $this->bridge->executeAbility($target, $ability, $input, CorrelationId::current(), $class);
+            $result = $this->bridge->executeAuthorizedAbility(
+                $target,
+                $ability,
+                $input,
+                CorrelationId::current(),
+                static fn (\App\Domain\Access\AbilityExecutionClass $class): bool => $allowed[$class->permission()->value] ?? false,
+            );
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
             return $this->failed($operation, $target, $exception->reason, 'WordPress Ability could not complete safely.');
         }
