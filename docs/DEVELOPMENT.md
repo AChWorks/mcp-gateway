@@ -68,9 +68,9 @@ php artisan gateway:admin:create --name="Gateway Admin" --email="admin@example.t
 
 The password is always requested interactively through a hidden prompt and is never accepted as a command-line option. It must contain at least 12 characters with mixed case, a number, and a symbol. The command normalizes the email address and relies on the `User` model's framework hashing cast; there is no committed/default administrator password, public registration route, or password-reset flow in V1.
 
-The first local account created by the installer or `gateway:admin:create` is an enabled `owner` with all-site recovery authority. Later CLI-created accounts are enabled `administrator` users with all-site scope; use the Admin access-control UI for least-privilege Operator/Viewer accounts and site-specific restrictions.
+The first local account created by the installer or `gateway:admin:create` is an enabled `owner` with all-Target recovery authority. Later CLI-created accounts are enabled `administrator` users with all-Target scope; use Admin access controls for least-privilege Operator/Viewer accounts and Target-specific restrictions.
 
-Once the application is running, administrator sign-in is available at `/admin/login`. Owner-only user/access management is under `/admin/users`. Roles are permission ceilings; global permission checkboxes and per-site rules only narrow authority. Site access is edited through a bounded, paginated fleet view, so access administration does not load the entire site fleet into one request. Per-site rules support inherit/allow/deny scope plus capability denials, including read-only or write-only-style exceptions beneath the role ceiling.
+Once the application is running, administrator sign-in is available at `/admin/login`. Owner-only user/access management is under `/admin/users`. Roles are permission ceilings; global permission checkboxes and per-Target rules only narrow authority. Target access is edited through a bounded, paginated fleet view, so access administration does not load the full Target fleet into one request. Per-Target rules support inherit/allow/deny scope plus capability denials, including read/write distinctions beneath the role ceiling.
 
 Access-control mutations require the acting Owner's current password, preserve at least one enabled recoverable Owner, and record required bounded Activity evidence transactionally. Disabling a user blocks new login, invalidates existing Admin/OAuth-consent sessions on their next request, and makes existing MCP bearer tokens unusable because current user state is rechecked. The admin routes continue to use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
@@ -85,7 +85,7 @@ Use these shared conventions:
 - text/select controls belong in `.field`; selects use the shared custom appearance and must not rely on the browser-default arrow/chrome;
 - boolean choices use the shared `.checkbox-option` treatment so the full label is the click target and checked/focus/disabled states remain consistent;
 - permission-denial lists use `admin.partials.permission-option`. Human title, scope, and behavioral help come from `GatewayPermission`; do not duplicate permission explanations in individual Blade views;
-- permission help must explain whether the permission is Gateway-wide or site-scoped and, for site-scoped permissions, that the effective site scope comes from the user's scope mode, direct site rules, and assigned groups. Permission descriptions must not imply creator ownership unless the authorization model actually enforces it;
+- permission help must explain whether the permission is Gateway-wide or Target-scoped and, for Target-scoped permissions, that the effective Target scope comes from the user's scope mode, direct Target rules, and assigned Target groups. Permission descriptions must not imply creator ownership unless the authorization model actually enforces it;
 - filters use `.filter-grid` + `.filter-actions`; tabular fleet/access views use `.table-wrap`, shared badges, and `.table-footer` for explanatory text plus actions;
 - keyboard focus must remain visible, label/control hit targets must remain usable at narrow widths, and light/dark plus reduced-motion behavior must be preserved;
 - the admin stylesheet URL is versioned from `VERSION`, so an application update cannot intentionally serve new Blade markup with a stale cached pre-update stylesheet.
@@ -100,7 +100,7 @@ During implementation:
 
 - run the narrowest tests or static checks that can detect regressions in the surface being changed;
 - do not rerun an already-green broad suite after every small edit when that edit cannot invalidate its evidence;
-- keep the pull request closed until the implementation is functionally complete and self-review is clean, unless PR-based evidence is specifically needed earlier;
+- keep actively changing work on an isolated branch; open a PR when it can benefit from review or PR-based CI, then request final independent review only after the meaningful candidate has stabilized;
 - avoid independent review while the implementation is still moving materially.
 
 Useful targeted commands include:
