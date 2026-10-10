@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshConnectionAdmission;

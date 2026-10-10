@@ -28,7 +28,8 @@ final readonly class SshVerificationState
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
             $currentCredential = TargetCredential::query()->whereKey($credential->getKey())->first();
             $currentConfig = SshTargetConfig::query()->whereKey($config->getKey())->first();
-            if (! $this->sameIdentity($locked, $currentConfig, $currentCredential, $target, $config, $credential)) {
+            if (! $locked instanceof Target || ! $currentConfig instanceof SshTargetConfig
+                || ! $this->sameIdentity($locked, $currentConfig, $currentCredential, $target, $config, $credential)) {
                 throw new SshTargetConnectionException('target_changed');
             }
 
@@ -48,7 +49,8 @@ final readonly class SshVerificationState
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
             $currentCredential = TargetCredential::query()->whereKey($credential->getKey())->first();
             $currentConfig = SshTargetConfig::query()->whereKey($config->getKey())->first();
-            if (! $this->sameIdentity($locked, $currentConfig, $currentCredential, $target, $config, $credential)) {
+            if (! $locked instanceof Target || ! $currentConfig instanceof SshTargetConfig
+                || ! $this->sameIdentity($locked, $currentConfig, $currentCredential, $target, $config, $credential)) {
                 throw new SshTargetConnectionException('target_changed');
             }
             if (! hash_equals($attemptId, (string) $currentConfig->verification_attempt_id)) {
@@ -80,7 +82,8 @@ final readonly class SshVerificationState
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
             $currentCredential = TargetCredential::query()->whereKey($credential->getKey())->first();
             $currentConfig = SshTargetConfig::query()->whereKey($config->getKey())->first();
-            if (! $this->sameIdentity($locked, $currentConfig, $currentCredential, $target, $config, $credential)
+            if (! $locked instanceof Target || ! $currentConfig instanceof SshTargetConfig
+                || ! $this->sameIdentity($locked, $currentConfig, $currentCredential, $target, $config, $credential)
                 || ! hash_equals($attemptId, (string) $currentConfig->verification_attempt_id)) {
                 // A later attempt, credential replacement or disconnect owns
                 // Target health. Suppress stale failure writes and audit.
