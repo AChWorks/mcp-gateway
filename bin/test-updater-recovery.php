@@ -79,7 +79,14 @@ try {
 
     $write('migrate', $now + WebUpdater::BROWSER_SESSION_TTL_SECONDS);
     $status = $updater->browserUpdateStatus($browser);
-    check($status !== null && ! $status['running'] && $status['continuation'] === null, 'interrupted migration not resumable');
+    check($status !== null && $status['phase'] === 'postflight-unverified'
+        && ! $status['running'] && $status['continuation'] === null,
+        'idle migration record is indeterminate and not resumable');
+    $write('migrate', $now - 1);
+    $status = $updater->browserUpdateStatus($browser);
+    check($status !== null && $status['phase'] === 'postflight-unverified'
+        && ! $status['expired'] && $status['continuation'] === null,
+        'expired stale migrate record must not imply the final step never finished');
     $write('failed-after-migration-start', $now + WebUpdater::BROWSER_SESSION_TTL_SECONDS);
     check($updater->failedState($browser) !== null, 'failed migration preserved');
     check($updater->pendingContinuation($browser) === null, 'failed migration not resumed');

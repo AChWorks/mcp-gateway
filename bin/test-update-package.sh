@@ -621,7 +621,12 @@ state_file="$target/storage/app/private/update-state.json"
 php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p), true, 512, JSON_THROW_ON_ERROR); $s["phase"]="migrate"; $s["migration_started"]=true; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
 stalled_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/stalled.html" -w '%{http_code}' "$base_url/update/")"
 [[ "$stalled_code" == "503" ]] || { echo "Interrupted migration did not stop safely (HTTP $stalled_code)." >&2; exit 1; }
-grep -Fi 'database may be partially migrated' "$tmp/stalled.html" >/dev/null || { echo "Interrupted migration was not explained." >&2; exit 1; }
+grep -F 'MCP Gateway Postflight Status Unverified' "$tmp/stalled.html" >/dev/null || { echo "Idle migration did not show indeterminate postflight status." >&2; exit 1; }
+grep -F 'The updater recorded the start of database migration, but no final outcome.' "$tmp/stalled.html" >/dev/null || { echo "Idle migration was incorrectly classified as an established failure." >&2; exit 1; }
+grep -F 'Do not repeat migrations' "$tmp/stalled.html" >/dev/null || { echo "Unverified postflight lacks safe operator recovery guidance." >&2; exit 1; }
+if grep -Fi 'database may be partially migrated' "$tmp/stalled.html" >/dev/null; then
+  echo "Stale migration was falsely presented as an established partial migration." >&2; exit 1
+fi
 if grep -F 'Administrator authentication could not be verified.' "$tmp/stalled.html" >/dev/null; then
   echo "Maintenance reload emitted the misleading authentication failure." >&2; exit 1
 fi

@@ -281,6 +281,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 200);
         }
 
+        if ($phase === 'postflight-unverified') {
+            updaterRender('MCP Gateway Postflight Status Unverified',
+                updaterSteps('postflight')
+                .'<div class="attention" role="alert">The updater recorded the start of database migration, but no final outcome. The request may have stopped during migration, or it may have finished successfully without recording completion. The retained state cannot distinguish these cases.</div>'
+                .'<p>Do not repeat migrations, start another update, delete updater state, or roll back the database. Preserve private state and backups; have the operator verify the installed version, application health, maintenance status, and sanitized updater logs before deciding on recovery.</p>',
+                503);
+        }
+
         if ($phase === 'files-replaced' && $status['continuation'] !== null) {
             updaterRender('Resume MCP Gateway Update',
                 updaterSteps('postflight')
@@ -310,9 +318,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
         $explanation = $status['expired']
             ? 'The browser continuation session expired before the final step.'
-            : ($phase === 'migrate'
-                ? 'The final step started but is no longer running. The database may be partially migrated.'
-                : 'The update stopped in a state that cannot be resumed automatically.');
+            : 'The update stopped in a state that cannot be resumed automatically.';
         updaterRender('MCP Gateway Update Needs Attention',
             updaterSteps($phase === 'replace-files' ? 'files' : 'postflight')
             .'<div class="attention" role="alert">'.updaterEscape($explanation).'</div>'

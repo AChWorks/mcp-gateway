@@ -481,8 +481,14 @@ final class WebUpdater
                 $phase = 'unknown';
             }
             $running = $this->executionInProgress();
+            // An idle migrate record may be a crashed migration OR a completed
+            // postflight whose final state write and unlink both failed.
+            // Without a durable completion marker, neither outcome is proven.
+            if ($phase === 'migrate' && ! $running) {
+                $phase = 'postflight-unverified';
+            }
             $expiry = $state['continuation_expires_at'] ?? null;
-            $expired = is_int($expiry) && $this->now() > $expiry;
+            $expired = $phase === 'files-replaced' && is_int($expiry) && $this->now() > $expiry;
             $token = $state['continuation_token'] ?? null;
             $continuation = $phase === 'files-replaced' && ! $running && ! $expired
                 && is_string($token) && preg_match('/^[a-f0-9]{64}$/D', $token) === 1
