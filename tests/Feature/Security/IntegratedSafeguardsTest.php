@@ -213,7 +213,7 @@ final class IntegratedSafeguardsTest extends TestCase
 
             return Http::response([
                 'jsonrpc' => '2.0',
-                'id' => 2,
+                'id' => $payload['id'] ?? null,
                 'result' => [
                     'isError' => true,
                     'content' => [[
@@ -289,7 +289,7 @@ final class IntegratedSafeguardsTest extends TestCase
 
             return Http::response([
                 'jsonrpc' => '2.0',
-                'id' => 2,
+                'id' => $payload['id'] ?? null,
                 'result' => [
                     'isError' => false,
                     'structuredContent' => ['success' => true, 'data' => ['site' => $siteId]],

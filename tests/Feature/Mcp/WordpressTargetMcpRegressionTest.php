@@ -578,7 +578,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
                 && ($payload['params']['arguments']['ability_name'] ?? null) === 'demo/read') {
                 return Http::response([
                     'jsonrpc' => '2.0',
-                    'id' => 2,
+                    'id' => $payload['id'] ?? null,
                     'result' => [
                         'isError' => false,
                         'structuredContent' => [
@@ -726,7 +726,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         if ($ability === 'demo/denied') {
             return Http::response([
                 'jsonrpc' => '2.0',
-                'id' => 2,
+                'id' => $payload['id'] ?? null,
                 'result' => [
                     'content' => [['type' => 'text', 'text' => 'Permission denied by WordPress.']],
                     'structuredContent' => null,
@@ -769,14 +769,14 @@ final class WordpressTargetMcpRegressionTest extends TestCase
                 'execution_permission' => 'not_evaluated',
             ];
 
-            return $this->toolSuccess($data);
+            return $this->toolSuccess($data, (int) ($payload['id'] ?? 2));
         }
 
         if ($ability === 'demo/write') {
-            return $this->toolSuccess(['target' => $siteId, 'kind' => 'write', 'updated' => true]);
+            return $this->toolSuccess(['target' => $siteId, 'kind' => 'write', 'updated' => true], (int) ($payload['id'] ?? 2));
         }
 
-        return $this->toolSuccess(['target' => $siteId, 'kind' => 'read']);
+        return $this->toolSuccess(['target' => $siteId, 'kind' => 'read'], (int) ($payload['id'] ?? 2));
     }
 
     private function requestHeader(Request $request, string $name): string
@@ -784,11 +784,11 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         return (string) ($request->header($name)[0] ?? '');
     }
 
-    private function toolSuccess(mixed $data)
+    private function toolSuccess(mixed $data, int $requestId)
     {
         return Http::response([
             'jsonrpc' => '2.0',
-            'id' => 2,
+            'id' => $requestId,
             'result' => [
                 'content' => [['type' => 'text', 'text' => json_encode(['success' => true, 'data' => $data], JSON_THROW_ON_ERROR)]],
                 'structuredContent' => ['success' => true, 'data' => $data],
