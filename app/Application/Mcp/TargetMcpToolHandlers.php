@@ -3,12 +3,12 @@
 namespace App\Application\Mcp;
 
 use App\Application\Access\AccessControl;
+use App\Application\Targets\TargetConnectorRegistry;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Activity\ActivityRecorder;
-use App\Infrastructure\Connectors\SshDirect\SshTargetIdentity;
 use App\Models\User;
 use App\Support\CorrelationId;
 use DateTimeInterface;
@@ -18,6 +18,7 @@ final readonly class TargetMcpToolHandlers
 {
     public function __construct(
         private TargetInventory $inventory,
+        private TargetConnectorRegistry $connectors,
         private AccessControl $access,
         private ActivityRecorder $activity,
     ) {}
@@ -54,9 +55,7 @@ final readonly class TargetMcpToolHandlers
                 'connector_type' => $target->connector_type,
                 'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
             ];
-            if ($target->connector_type === 'ssh_direct') {
-                $item['ssh'] = SshTargetIdentity::safeMetadata($target);
-            }
+            $item = [...$this->connectors->publicMetadata($target), ...$item];
             $targets[] = $item;
         }
 
@@ -106,9 +105,7 @@ final readonly class TargetMcpToolHandlers
             'last_error_code' => $target->last_error_code,
             'connected_at' => $connectedAt instanceof DateTimeInterface ? $connectedAt->format(DATE_ATOM) : null,
         ];
-        if ($target->connector_type === 'ssh_direct') {
-            $context['ssh'] = SshTargetIdentity::safeMetadata($target);
-        }
+        $context = [...$this->connectors->publicMetadata($target), ...$context];
 
         return ['ok' => true, 'target' => $context];
     }

@@ -14,6 +14,18 @@ final class Target extends Model
 {
     use HasUlids;
 
+    /**
+     * Persisted Target identity types, including an owner-paused historical
+     * connector. This is NOT a list of executable/enrollable adapters.
+     *
+     * @var list<string>
+     */
+    public const KNOWN_CONNECTOR_TYPES = [
+        'wp_ai_bridge',
+        'ai_server_agent',
+        'ssh_direct',
+    ];
+
     /** @var list<string> */
     protected $fillable = [
         'target_id',
@@ -53,11 +65,7 @@ final class Target extends Model
                 throw new DomainException('Target ID must be a lowercase slug of at most 64 characters.');
             }
 
-            if (! in_array((string) $target->getAttribute('connector_type'), [
-                'wp_ai_bridge',
-                'ai_server_agent',
-                'ssh_direct',
-            ], true)) {
+            if (! in_array((string) $target->getAttribute('connector_type'), self::KNOWN_CONNECTOR_TYPES, true)) {
                 throw new DomainException('Unsupported built-in Target connector type.');
             }
         });
