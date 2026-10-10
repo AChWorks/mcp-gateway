@@ -140,6 +140,18 @@ After integration:
 
 If a validation layer fails, diagnose the smallest root cause and run the discriminating check first. Do not bounce between full CI and broad review while implementation is still incomplete.
 
+## Fast, capability-driven changes without hiding regressions
+
+When extending a supported Target/client, first distinguish **new Target inventory**, **new operation in a reviewed capability family**, **new connector transport**, **new security/permission class** and **new client OAuth identity**:
+
+- A new registered Target or compatible WordPress Ability should need **no** Gateway public-tool/schema code or deployment change. Prove with a controlled changed downstream catalog that the existing discovery + execution path accepts the compatible schema while runtime authorization and downstream permissions still apply.
+- For a future MCP-speaking connector, derive capability/version/operation metadata from the real authenticated Target and reuse the protocol adapter. Do not duplicate JSON-RPC transport, OAuth/client identity, permission/transfer engine or register one tool for each downstream version. Unknown effect classes and newly privileged/incompatible schemas must be unavailable until reviewed.
+- Test both supported unchanged-version and changed-version fixtures, stale/invalid capability evidence, altered permissions, wrong Target/client, and realistic hot-path call count. A catalog cache may reduce repeated work but must not authorize execution or require an always-on per-Target refresh. Optional MCP list-change subscriptions need negotiated client support and do not guarantee external App tool refresh.
+- Establish a representative performance baseline **before** adding abstractions, increasing or lowering payload ceilings or requiring extra services. Compare actual small payloads under a higher permitted cap, medium files, concurrent operations, round trips/SSH sessions, p50/p95 latency, PHP peak memory, CPU and transient disk. A tiny fixed cap is not a performance optimization by itself.
+- Keep related fixes in one coherent slice; run targeted checks during editing, exact affected broad/security/contract checks only for a stable candidate, and preserve still-valid evidence. A documentation-only change does not justify manually rerunning SFTP/WordPress integration suites unless the changed material actually affects executable acceptance.
+
+For the current architectural rules see [MASTER-SPEC.md](./MASTER-SPEC.md) §4.9, [ARCHITECTURE.md](./ARCHITECTURE.md) §4 and [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md).
+
 ## Deterministic validation
 
 The normal repository checks are:
@@ -274,16 +286,16 @@ The stable public protocol paths are:
 
 The required OAuth resource scope is `mcp`. For the fixed ChatGPT client, an approved `mcp` authorization is refreshable even when ChatGPT omits `offline_access`, because the client must be able to renew the bounded access token without a manual reconnect. `offline_access` remains accepted and advertised for compatibility. Refresh rotation, replay protection, expiry, exact client/resource/user binding, and authorization-wide revocation remain mandatory. If a refresh credential authorized for `mcp offline_access` is explicitly narrowed to an `mcp` access token, the Gateway does not issue a successor refresh token: RFC 6749 permits the narrower access token, while any replacement refresh token would have to retain the predecessor refresh token's identical scope.
 
-The V1 MCP tool registry is stable even before site routing is implemented:
+The **Target-era** Gateway MCP tool-family baseline is:
 
 ```text
-sites-list
-site-context
-site-abilities-read
-site-ability-execute
+targets-list
+target-context
+wordpress-abilities-read
+wordpress-ability-execute
 ```
 
-The site-routing workstream replaces the application handlers behind those names; it does not add one MCP tool or endpoint per WordPress site.
+SSH command and file tools are present only when their exact integration/release status allows. Do not restore retired `sites-*` aliases or register one public tool per Target or downstream WordPress Ability. A compatible new WordPress Ability is discovered using the existing Target-scoped metadata/execute tools rather than by changing the Gateway tool catalog.
 
 To verify the currently configured public ChatGPT CIMD/JWKS contract without printing key material:
 
