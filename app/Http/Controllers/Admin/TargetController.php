@@ -191,7 +191,7 @@ final class TargetController extends Controller
             });
         } catch (DomainException) {
             return back()->withErrors([
-                'target' => __('Disconnect and reconcile any pending WordPress credential or authorization before removing the Target.'),
+                'target' => __('Disconnect and reconcile any pending connector credential or authorization before removing the Target.'),
             ]);
         }
 
