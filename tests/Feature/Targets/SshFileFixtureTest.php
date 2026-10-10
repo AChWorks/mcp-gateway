@@ -45,7 +45,8 @@ final class SshFileFixtureTest extends TestCase
         self::assertTrue($write['ok'], json_encode($write));
         self::assertSame('completed', $write['result']['status']);
         self::assertSame(strlen($bytes), $write['result']['bytes_written']);
-        self::assertTrue($write['result']['atomic_rename']);
+        self::assertTrue($write['result']['atomic_publish']);
+        self::assertSame('exclusive_hardlink', $write['result']['publish_method']);
         self::assertSame('127.0.0.1', $write['result']['connected_ip']);
 
         $stat = $tools->stat($owner, $target->target_id, $path);
@@ -83,6 +84,7 @@ final class SshFileFixtureTest extends TestCase
         $replaced = $tools->write($owner, $target->target_id, $path, base64_encode($replacement), true, 4, $mtime);
         self::assertTrue($replaced['ok'], json_encode($replaced));
         self::assertTrue($replaced['result']['overwrote']);
+        self::assertSame('posix_replace', $replaced['result']['publish_method']);
         $final = $tools->read($owner, $target->target_id, $path);
         self::assertTrue($final['ok'], json_encode($final));
         self::assertSame($replacement, base64_decode($final['result']['data'], true));

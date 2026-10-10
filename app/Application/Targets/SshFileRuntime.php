@@ -234,9 +234,15 @@ final readonly class SshFileRuntime
 
                     $sftp->clearStatCache();
                     if (! $overwrite) {
-                        // Standard SSH_FXP_RENAME refuses an existing destination
-                        // under the SFTP v3 protocol (no-clobber).
-                        $sftp->rename($temporary, $path);
+                        // Some SFTP servers implement rename using POSIX
+                        // replacement semantics. A check-then-rename is NOT
+                        // reliably no-clobber under concurrent writers.
+                        // OpenSSH hardlink is atomic/exclusive: if the final
+                        // path already exists, it cannot be replaced.
+                        // Without that extension fail closed, never fall back
+                        // to a possibly overwriting standard rename.
+                        $sftp->hardlink($temporary, $path);
+                        $sftp->delete($temporary, false);
                     } else {
                         // Only servers supporting atomic POSIX replacement can
                         // replace a file; never delete the original as fallback.
@@ -273,7 +279,8 @@ final readonly class SshFileRuntime
                     'complete' => true,
                     'bytes_written' => strlen($data),
                     'submitted_sha256' => hash('sha256', $data),
-                    'atomic_rename' => true,
+                    'atomic_publish' => true,
+                    'publish_method' => $overwrite ? 'posix_replace' : 'exclusive_hardlink',
                     'overwrote' => $overwrite,
                 ];
             });
