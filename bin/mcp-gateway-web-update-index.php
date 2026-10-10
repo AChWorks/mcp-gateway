@@ -143,6 +143,11 @@ function updaterPollScript(): string
 JS;
 }
 
+function updaterNoScriptBusy(): string
+{
+    return '<noscript><p class="notice">JavaScript is disabled, so this page cannot check progress automatically. Do not submit Start or Continue again. After the running request has had time to finish, <a href="/update/">check update status in this same browser session</a>. If the page shows a recovery warning or is no longer available, verify the administrator panel and contact the operator before taking further action.</p></noscript>';
+}
+
 function updaterStartScript(): string
 {
     return <<<'JS'
@@ -165,7 +170,7 @@ JS;
 function updaterCookie(string $value): void
 {
     setcookie('mcp_gateway_update_session', $value, [
-        'expires' => time() + 1800,
+        'expires' => time() + WebUpdater::BROWSER_SESSION_TTL_SECONDS,
         'path' => '/update/',
         'secure' => true,
         'httponly' => true,
@@ -219,7 +224,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
     try {
         $app->make(ConsoleKernel::class)->bootstrap();
         $result = $updater->finish($browserToken, $continuation);
-        updaterClearCookie();
+        if ($result['state_retained']) {
+            // Keep the authorized browser tied to its completed recovery record.
+            // Clearing it here would turn successful postflight into a false 403.
+            updaterCookie($browserToken);
+        } else {
+            updaterClearCookie();
+        }
 
         $warning = $result['cleanup_warning'] === null
             ? '<p>The temporary updater, staging payload, and canonical uploaded update ZIP were cleaned up automatically.</p>'
@@ -233,7 +244,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
         updaterRender('MCP Gateway Update In Progress',
             updaterSteps('postflight')
             .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Another authorized update step is already running. No second operation was started.</p></div>'
-            .'<p id="recovery-link" class="notice" hidden>Unable to verify progress. Check <a href="/admin">the administrator panel</a> without restarting the update.</p>',
+            .'<p id="recovery-link" class="notice" hidden>Unable to verify progress. Check <a href="/admin">the administrator panel</a> without restarting the update.</p>'
+            .updaterNoScriptBusy(),
             202, updaterPollScript());
     } catch (Throwable $exception) {
         updaterRender(
@@ -260,6 +272,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 503);
         }
 
+        if ($phase === 'completed') {
+            updaterRender('MCP Gateway Updated',
+                updaterSteps('complete')
+                .'<div class="success" role="status"><strong>Update complete.</strong><p>Database migrations, application health checks and maintenance exit finished successfully.</p></div>'
+                .'<div class="notice">Private update completion state remains because housekeeping was interrupted. Do not run the update again. Ask the operator to inspect and safely remove the temporary updater state.</div>'
+                .'<p><a href="/admin">Open administrator panel</a></p>',
+                200);
+        }
+
         if ($phase === 'files-replaced' && $status['continuation'] !== null) {
             updaterRender('Resume MCP Gateway Update',
                 updaterSteps('postflight')
@@ -281,8 +302,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                     ? 'The server is replacing managed files from the verified package.'
                     : 'Database and health checks are running on the server. This can take longer than file replacement.')
                 .' Do not submit the update again.</p></div>'
-                .'<p class="muted">This page checks for a state change automatically. No percentage or completion time is estimated.</p>'
-                .'<p id="recovery-link" class="notice" hidden>Progress cannot be confirmed. Check <a href="/admin">the administrator panel</a>; do not retry migrations or delete recovery state.</p>',
+                .'<p class="muted">With JavaScript enabled, this page checks for state changes automatically. No percentage or completion time is estimated.</p>'
+                .'<p id="recovery-link" class="notice" hidden>Progress cannot be confirmed. Check <a href="/admin">the administrator panel</a>; do not retry migrations or delete recovery state.</p>'
+                .updaterNoScriptBusy(),
                 202, updaterPollScript());
         }
 
@@ -364,6 +386,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
         updaterRender('MCP Gateway Update', '<p class="error">The administrator session expired. Reload this page and try again.</p>', 419);
     }
 
+    // This authenticated, CSRF-checked Start is a fresh authorization action.
+    // Renew even a previously valid cookie; safety checks may have taken time.
+    updaterCookie($browserToken);
+
     try {
         $result = $updater->stage($browserToken, [
             'reset_acknowledged' => is_string($_POST['reset_acknowledged'] ?? null) ? $_POST['reset_acknowledged'] : '',
@@ -371,6 +397,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
             'confirmed_target_version' => is_string($_POST['confirmed_target_version'] ?? null) ? $_POST['confirmed_target_version'] : '',
             'package_sha256' => is_string($_POST['package_sha256'] ?? null) ? $_POST['package_sha256'] : '',
         ]);
+        // Set expiry when stage actually finishes, not when the potentially
+        // long backup/file-replacement request began.
+        updaterCookie($browserToken);
         updaterRender('Finalizing MCP Gateway Update',
             updaterSteps('postflight')
             .'<p>Backup and managed-file replacement completed. Database/cache migrations and health checks are the next server-side step.</p>'

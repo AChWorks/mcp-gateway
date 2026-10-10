@@ -14,6 +14,8 @@ final class UpdateBusyException extends RuntimeException {}
 
 final class WebUpdater
 {
+    public const BROWSER_SESSION_TTL_SECONDS = 1800;
+
     private const MANAGED_ROOT = [
         '.env.example',
         'LICENSE',
@@ -46,6 +48,7 @@ final class WebUpdater
     public function __construct(
         private readonly string $basePath,
         private readonly string $packagePath,
+        private readonly ?\Closure $clock = null,
     ) {}
 
     /** @return array{installed:string,target:string,checks:array<string,bool>} */
@@ -188,7 +191,6 @@ final class WebUpdater
             throw new RuntimeException('Breaking Target reset requires both explicit browser confirmations for this exact update package and an independently restorable database backup. No files were changed.');
         }
         $continuation = bin2hex(random_bytes(32));
-        $continuationExpiresAt = time() + 1800;
 
         $this->runArtisan('gateway:check', ['--no-interaction' => true], 'Current Gateway preflight failed. No files were changed.');
 
@@ -226,7 +228,6 @@ final class WebUpdater
                 'target_reset_package_sha256' => $plan['package_sha256'],
                 'browser_token_hash' => hash('sha256', $browserToken),
                 'continuation_token' => $continuation,
-                'continuation_expires_at' => $continuationExpiresAt,
             ]);
 
             $filesMutated = true;
@@ -250,7 +251,7 @@ final class WebUpdater
                 'target_reset_package_sha256' => $plan['package_sha256'],
                 'browser_token_hash' => hash('sha256', $browserToken),
                 'continuation_token' => $continuation,
-                'continuation_expires_at' => $continuationExpiresAt,
+                'continuation_expires_at' => $this->now() + self::BROWSER_SESSION_TTL_SECONDS,
             ]);
 
             return ['from' => $from, 'to' => $to, 'continuation' => $continuation];
@@ -295,7 +296,7 @@ final class WebUpdater
         }
     }
 
-    /** @return array{from:string,to:string,cleanup_warning:?string} */
+    /** @return array{from:string,to:string,cleanup_warning:?string,state_retained:bool} */
     public function finish(string $browserToken, string $continuation): array
     {
         return $this->withExecutionLock(fn (): array => $this->timed('finish-total', fn (): array => $this->finishLocked($browserToken, $continuation)));
@@ -399,15 +400,61 @@ final class WebUpdater
             );
         }
 
-        $this->pruneBackups();
-        @unlink($this->statePath());
-        $cleanupWarning = $this->cleanupUpdater($to);
-
+        // Migrations, health checks and maintenance exit already succeeded.
+        // Housekeeping errors must never be reported as database failures.
         return [
             'from' => $from,
             'to' => $to,
-            'cleanup_warning' => $cleanupWarning,
+            'cleanup_warning' => $this->finishSuccessfulUpdate($state, $to),
+            'state_retained' => is_file($this->statePath()),
         ];
+    }
+
+    /**
+     * Complete housekeeping only after all critical postflight checks succeed.
+     * The completion marker persists before pruning old backups, so interrupted
+     * cleanup cannot be mistaken for a partially migrated database.
+     *
+     * @param  array<string,mixed>  $state
+     */
+    private function finishSuccessfulUpdate(array $state, string $to): ?string
+    {
+        $warnings = [];
+        $state['phase'] = 'completed';
+        $state['postflight_completed_at'] = $this->now();
+
+        try {
+            $this->writeState($state);
+        } catch (Throwable) {
+            $warnings[] = 'Postflight succeeded, but its completion state could not be persisted.';
+            error_log('MCP Gateway updater completion marker write failed after successful postflight.');
+        }
+
+        try {
+            $this->pruneBackups();
+        } catch (Throwable) {
+            $warnings[] = 'Old code backups could not be pruned; operator cleanup is required.';
+            error_log('MCP Gateway updater backup pruning failed after successful postflight.');
+        }
+
+        if (is_file($this->statePath()) && ! @unlink($this->statePath())) {
+            $warnings[] = 'Private updater state could not be removed. The temporary updater was retained for safe inspection; do not start another update.';
+            error_log('MCP Gateway updater state cleanup failed after successful postflight.');
+
+            return implode(' ', $warnings);
+        }
+
+        try {
+            $cleanupWarning = $this->cleanupUpdater($to);
+            if ($cleanupWarning !== null) {
+                $warnings[] = $cleanupWarning;
+            }
+        } catch (Throwable) {
+            $warnings[] = 'Temporary updater cleanup could not finish; inspect staging before another update.';
+            error_log('MCP Gateway updater temporary cleanup failed after successful postflight.');
+        }
+
+        return $warnings === [] ? null : implode(' ', $warnings);
     }
 
     /**
@@ -427,7 +474,7 @@ final class WebUpdater
             }
             $phase = $state['phase'] ?? '';
             if (! is_string($phase) || ! in_array($phase, [
-                'replace-files', 'files-replaced', 'migrate',
+                'replace-files', 'files-replaced', 'migrate', 'completed',
                 'failed-before-migration-backup', 'failed-before-migration-restore',
                 'failed-after-migration-start',
             ], true)) {
@@ -435,7 +482,7 @@ final class WebUpdater
             }
             $running = $this->executionInProgress();
             $expiry = $state['continuation_expires_at'] ?? null;
-            $expired = is_int($expiry) && time() > $expiry;
+            $expired = is_int($expiry) && $this->now() > $expiry;
             $token = $state['continuation_token'] ?? null;
             $continuation = $phase === 'files-replaced' && ! $running && ! $expired
                 && is_string($token) && preg_match('/^[a-f0-9]{64}$/D', $token) === 1
@@ -1001,6 +1048,11 @@ final class WebUpdater
         }
     }
 
+    private function now(): int
+    {
+        return $this->clock === null ? time() : ($this->clock)();
+    }
+
     /** Log only bounded phase names and duration, never state or credentials. */
     private function timed(string $phase, callable $operation): mixed
     {
@@ -1112,7 +1164,7 @@ final class WebUpdater
             throw new RuntimeException('The browser update session is invalid or expired.');
         }
         $expiresAt = $state['continuation_expires_at'] ?? null;
-        if (is_int($expiresAt) && time() > $expiresAt) {
+        if (is_int($expiresAt) && $this->now() > $expiresAt) {
             throw new RuntimeException('The continuation has expired. Preserve update state and follow recovery guidance.');
         }
         $expected = $state['continuation_token'] ?? null;

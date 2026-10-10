@@ -17,6 +17,7 @@ on:
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
       - 'bin/test-updater-recovery.php'
+      - 'bin/test-updater-postflight.php'
       - 'bin/test-update-backup-integrity.sh'
       - 'bin/verify-update-package.sh'
       - '.github/workflows/update-package.yml'
@@ -39,6 +40,7 @@ on:
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
       - 'bin/test-updater-recovery.php'
+      - 'bin/test-updater-postflight.php'
       - 'bin/test-update-backup-integrity.sh'
       - 'bin/verify-update-package.sh'
       - '.github/workflows/update-package.yml'
@@ -86,6 +88,9 @@ jobs:
 
       - name: Verify browser update state and lock fail-safes
         run: php bin/test-updater-recovery.php
+
+      - name: Verify postflight cleanup cannot become a migration failure
+        run: php bin/test-updater-postflight.php
 
       - name: Build and verify browser update candidate
         run: |

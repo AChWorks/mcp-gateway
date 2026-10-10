@@ -20,7 +20,11 @@ check(mkdir($private, 0700, true), 'temporary state directory');
 $browser = str_repeat('a', 64);
 $other = str_repeat('c', 64);
 $token = str_repeat('b', 64);
-$updater = new WebUpdater($base, $base.'/update');
+$now = 2000000000;
+$clock = static function () use (&$now): int {
+    return $now;
+};
+$updater = new WebUpdater($base, $base.'/update', $clock);
 $statePath = $private.'/update-state.json';
 $lockPath = $private.'/update-execution.lock';
 
@@ -37,10 +41,15 @@ $write = static function (string $phase, int $expires) use ($statePath, $browser
 
 try {
     check($updater->browserUpdateStatus($browser) === null, 'no state');
-    $write('files-replaced', time() + 1800);
-    check($updater->pendingContinuation($browser) === $token, 'resume in matching browser');
+    // The clock advances deterministically: late preflight does not consume a
+    // continuation token, and the full TTL begins after staging completes.
+    $now += 3600; // Simulated prolonged backup/staging after preflight.
+    $write('files-replaced', $now + WebUpdater::BROWSER_SESSION_TTL_SECONDS);
+    check($updater->pendingContinuation($browser) === $token, 'long stage retains full continuation lifetime');
     check($updater->browserUpdateStatus($other) === null, 'no cross-browser status');
-    $write('files-replaced', time() - 1);
+    $now += WebUpdater::BROWSER_SESSION_TTL_SECONDS - 1;
+    check($updater->pendingContinuation($browser) === $token, 'session valid immediately before expiry');
+    $now += 2;
     check($updater->pendingContinuation($browser) === null, 'expired continuation denied');
     try {
         $updater->finish($browser, $token);
@@ -49,7 +58,7 @@ try {
         check(str_contains($exception->getMessage(), 'expired'), 'expired token rejected before mutation');
     }
 
-    $write('files-replaced', time() + 1800);
+    $write('files-replaced', $now + WebUpdater::BROWSER_SESSION_TTL_SECONDS);
     $lock = fopen($lockPath, 'c');
     check($lock !== false && flock($lock, LOCK_EX | LOCK_NB), 'exclusive operation lock');
     $status = $updater->browserUpdateStatus($browser);
@@ -68,12 +77,16 @@ try {
     flock($lock, LOCK_UN);
     fclose($lock);
 
-    $write('migrate', time() + 1800);
+    $write('migrate', $now + WebUpdater::BROWSER_SESSION_TTL_SECONDS);
     $status = $updater->browserUpdateStatus($browser);
     check($status !== null && ! $status['running'] && $status['continuation'] === null, 'interrupted migration not resumable');
-    $write('failed-after-migration-start', time() + 1800);
+    $write('failed-after-migration-start', $now + WebUpdater::BROWSER_SESSION_TTL_SECONDS);
     check($updater->failedState($browser) !== null, 'failed migration preserved');
     check($updater->pendingContinuation($browser) === null, 'failed migration not resumed');
+    $write('completed', $now - 1);
+    $completed = $updater->browserUpdateStatus($browser);
+    check($completed !== null && $completed['phase'] === 'completed'
+        && $completed['continuation'] === null, 'completed state never appears as a migration failure or restart');
     file_put_contents($statePath, '{invalid');
     check($updater->browserUpdateStatus($browser) === null, 'corrupt state cannot grant access');
     echo "Browser-bound recovery, expiry, serialization and interrupted-migration checks passed.\n";
