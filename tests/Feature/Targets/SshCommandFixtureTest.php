@@ -107,7 +107,7 @@ final class SshCommandFixtureTest extends TestCase
             : (string) file_get_contents($this->env('SSH_FIXTURE_RSA_LOGIN_KEY'));
 
         return app(SshTargetRegistration::class)->register(
-            'ssh-command-'.$method, 'Command fixture', 'fixture.example.test',
+            'ssh-command-'.str_replace('_', '-', $method), 'Command fixture', 'fixture.example.test',
             (int) $this->env('SSH_FIXTURE_PORT_MODERN'), $this->env('SSH_FIXTURE_USER'),
             trim((string) file_get_contents($this->env('SSH_FIXTURE_ED25519_HOST_PUB'))),
             $method, $secret, $method === 'password' ? null : $this->env('SSH_FIXTURE_KEY_PASSPHRASE'),
