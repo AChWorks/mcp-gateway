@@ -1,25 +1,22 @@
+
 # MCP Gateway
 
-MCP Gateway is a small self-hosted PHP application that exposes one stable MCP endpoint for multiple independently authorized backend sites.
+MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The current released connector is **WP AI Bridge** for WordPress. Direct SSH and AI Server Agent runtimes are not shipped.
 
-V1 ships with the [WP AI Bridge](https://github.com/AChWorks/wp-ai-bridge) connector. It lets one ChatGPT custom MCP App work with multiple WordPress sites without creating a separate ChatGPT App for every site.
+A Target has a stable `target_id`, explicit Gateway user/client/Target access checks and connector-owned credentials. For WordPress, the authenticated WordPress principal and WP AI Bridge access groups remain authoritative; Gateway does not widen their permissions.
 
-The Gateway is a routing and connection layer. WordPress and WP AI Bridge remain authoritative for WordPress permissions. MCP Gateway does not grant capabilities that the connected WordPress account or WP AI Bridge access policy denies.
+## Current release highlights
 
-## V1 highlights
+- Generic Target inventory, Target Groups, per-user access and scoped Activity.
+- Target Admin pages for WordPress registration, connection, status and management.
+- Target-specific WordPress OAuth PKCE, encrypted credentials, guarded rotating refresh/revocation and idle credential renewal.
+- Client-profile-based Gateway OAuth/MCP, currently with the reviewed ChatGPT application profile.
+- Four Target-era MCP tools: `targets-list`, `target-context`, `wordpress-abilities-read`, `wordpress-ability-execute`.
+- Explicit `target_id` routing, read/mutation effect authorization, bounded downstream I/O and fail-closed ambiguous outcomes.
+- HTTPS/DNS/redirect protections, `php artisan gateway:check` diagnostics, and PHP 8.4 + MariaDB 10.11 primary deployment compatibility.
+- Clean deployment ZIP/web installer and guarded browser-update ZIP for aaPanel and compatible hosting.
 
-- one public MCP endpoint for many connected WordPress sites;
-- current ChatGPT custom MCP App OAuth/MCP flow;
-- explicit `site_id` routing for every site-specific operation;
-- independent encrypted credentials and revocation per site;
-- a server-rendered administration panel for sites, connection status, activity, and client connection information;
-- stable Gateway tools for listing sites, reading site context, inspecting Ability contracts, and executing an exact Ability;
-- bounded outbound HTTP behavior with HTTPS validation, DNS pinning, redirect restrictions, timeouts, and response-size limits;
-- deployment/runtime diagnostics through `php artisan gateway:check`;
-- PHP 8.4 + MariaDB 10.11 primary deployment target with retained MySQL compatibility and OpenLiteSpeed/shared-hosting support;
-- a deployment-ready ZIP and one-page web installer for aaPanel/shared hosting;
-- a one-time browser updater for deployment-ZIP installations, with no SSH, Git, or Composer required on the target host;
-- documented backup and recovery requirements.
+**Breaking upgrade:** historical Site registrations, Site permissions/groups and incompatible WordPress/ChatGPT authorizations are intentionally reset by the Target transition. The updater requires version/package-bound reset consent and an independently verified, restorable **database** backup before destructive migration. A code backup is not a database backup. See [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md) and [release notes](RELEASE_NOTES.md).
 
 ## Requirements
 
@@ -208,106 +205,71 @@ curl --fail --silent --show-error --output /dev/null https://gateway.example.com
 
 Do not place access tokens, refresh tokens, authorization codes, assertions, passwords, `.env` contents, `APP_KEY`, or private-key contents in screenshots or logs.
 
-## Connect WordPress sites
 
-Each WordPress site needs a compatible WP AI Bridge installation. The current Gateway contract is validated against WP AI Bridge v0.4.2 at commit `1bc3693b21072d2a23aa9f7e534eff39591642c9`, including its bounded retry-safe rotating refresh-token recovery and canonical `wp-ai-bridge/*` Ability namespace.
+## Connect WordPress Targets
 
-Before the first **Connect** attempt for a WordPress site, approve the Gateway as an additional OAuth client in that site's WP AI Bridge:
+Every WordPress Target needs a compatible WP AI Bridge installation. The Gateway-to-Bridge OAuth client must be approved in WordPress **before** starting Target Connect:
 
-1. Confirm the Gateway publishes its client metadata at the exact URL derived from its canonical origin:
+1. Open **Gateway → Connection** (`/admin/connection`) and copy the Gateway's exact client metadata URL, `<GATEWAY_ORIGIN>/oauth/client.json`.
+2. In WordPress, open **WP AI Bridge → OAuth Clients** and add that exact URL to **Approved client metadata URLs**. Do not paste secrets, callback URLs or JWKS URLs. Built-in direct ChatGPT → WP AI Bridge approval is separate and may remain enabled.
+3. The advertised WordPress OAuth callback in the current Target contract is `<GATEWAY_ORIGIN>/oauth/targets/callback`; the Gateway metadata publishes it automatically.
 
-   ```text
-   <GATEWAY_ORIGIN>/oauth/client.json
-   ```
+For each WordPress Target:
 
-   For example, `https://gateway.example.com/oauth/client.json`.
-2. In WordPress, open **WP AI Bridge -> OAuth Clients**.
-3. Add that exact client metadata URL under **Approved client metadata URLs** and save. Do not add a callback URL, JWKS URL, shared secret, or private key.
-4. Leave the built-in ChatGPT client in place if direct ChatGPT -> WP AI Bridge access is also wanted. It is independent from the additional-client list and does not need to be added manually.
+1. Sign in to `<GATEWAY_ORIGIN>/admin/login`, open **Targets**, then **Register WordPress Target**.
+2. Enter a unique immutable `target_id` (lowercase letters, digits and hyphens, at most 64 characters), display name and canonical public HTTPS WordPress base URL.
+3. Choose **Verify and register WordPress Target**. Registration validates public discovery and does not itself grant WordPress credentials.
+4. Open the Target details, select **Connect**, and complete WP AI Bridge OAuth consent as the exact WordPress principal to delegate.
+5. Confirm **Connected** and use **Test connection** on Target details. Assign intended Gateway users/Target Groups deliberately; selected-scope users do not receive automatic access.
+6. Repeat for other WordPress Targets. Credentials, revocation and authorization remain Target-specific.
 
-WP AI Bridge fetches the approved client metadata itself. The document supplies the Gateway's exact `/oauth/sites/callback` redirect URI and `/oauth/jwks.json` signing-key URL, so operators must not paste either value separately into WordPress. Approval grants connection eligibility only; WP AI Bridge access groups and the authorizing WordPress user's capabilities remain authoritative for every operation.
+If WP AI Bridge reports `invalid_client`, verify the exact approved Gateway client metadata URL and its reachability. A new Gateway origin requires new approval. Do not replace OAuth keys, paste tokens, or bypass approval/permission checks to resolve an ordinary connection problem.
 
-For each site:
+**Upgrade users:** the legacy Site records and prior ChatGPT authorizations are not migrated into live Target grants. Register WordPress Targets again and separately reauthorize ChatGPT after the intentional reset. For ambiguous rotating-refresh outcomes, follow the Owner-only manual reconciliation warnings in the [Target runbook](docs/TARGET-TRANSITION-RUNBOOK.md) instead of blindly retrying or deleting credentials.
 
-1. Sign in to MCP Gateway at:
-
-   ```text
-   https://gateway.example.com/admin/login
-   ```
-
-2. Open **Sites** and choose **Add WordPress site**.
-3. Enter a human-readable site name and the site's canonical HTTPS WordPress base URL.
-4. Save the site. The Gateway validates/discovers the WP AI Bridge OAuth/MCP endpoints.
-5. Choose **Connect**.
-6. Complete the WordPress/WP AI Bridge OAuth consent flow as the WordPress user whose permissions should be delegated.
-7. Return to the Gateway and confirm the site shows as connected.
-8. Use **Test connection** to verify the current Bridge connection.
-9. Repeat for additional WordPress sites.
-
-Each site stores an independent encrypted authorization relationship. Disconnecting or revoking one site does not grant or revoke permissions on another site.
-
-WP AI Bridge access groups and WordPress capabilities still control what the Gateway can do. If Bridge denies an operation, the Gateway preserves that denial instead of bypassing it.
-
-If WordPress rejects the Gateway with `invalid_client` or reports that the OAuth client is not approved, verify that the exact current `<GATEWAY_ORIGIN>/oauth/client.json` URL is still present under **WP AI Bridge -> OAuth Clients** and is publicly reachable. After moving/reinstalling the Gateway on a different canonical origin, approve the new metadata URL before reconnecting. After intentionally replacing the Gateway Bridge-client signing keypair while keeping the same origin, keep the same approved metadata URL; WP AI Bridge obtains signing keys from the metadata-declared JWKS endpoint and may need a bounded JWKS refresh when it first sees the new key. Do not work around stale approval/key state by pasting tokens, callbacks, JWKS URLs, or shared secrets.
 
 ## Connect ChatGPT
 
-The canonical client connection information is shown in the authenticated Gateway page:
+The authenticated Gateway **Connection** page (`/admin/connection`) shows the canonical MCP endpoint, normally `https://gateway.example.com/mcp` for that deployment. Configure one ChatGPT custom MCP App against that endpoint and complete the Gateway's OAuth discovery/consent flow using an authorized Gateway user. No manually pasted bearer token is needed.
 
-```text
-https://gateway.example.com/admin/connection
-```
+The **AI clients** page (`/admin/oauth-clients`) lists approved application profiles and individual Gateway authorizations. It identifies authenticated *applications*, not individual AI accounts; a client label does not confer Target permissions. Disabling a profile and revoking an exact authorization are distinct operations with different consequences.
 
-For one ChatGPT custom MCP App, use this MCP server URL:
+After a breaking Site → Target upgrade and fresh OAuth consent, start a **new ChatGPT conversation** if an older conversation still advertises Site-era `sites-list` tools. Refresh/reconnect the supported app integration if a new conversation also retains an obsolete catalog. Do not create legacy API aliases or weaken OAuth to mask a cached tool definition.
 
-```text
-https://gateway.example.com/mcp
-```
-
-The Gateway exposes OAuth/protected-resource discovery metadata from the same canonical HTTPS origin. ChatGPT should use that discovery flow rather than a manually pasted bearer token.
-
-Before the first ChatGPT authorization, sign in to the Gateway administrator panel in the same browser. When ChatGPT starts OAuth authorization:
-
-1. the Gateway shows the authorization consent page;
-2. verify the displayed client/redirect information;
-3. approve the connection;
-4. ChatGPT exchanges the authorization code through the Gateway OAuth endpoint;
-5. authenticated MCP tool discovery becomes available to the App.
-
-One ChatGPT App is enough for all sites registered in the Gateway. Adding another WordPress site does not require changing the ChatGPT MCP endpoint.
 
 ## Gateway MCP tools
 
-V1 intentionally exposes a small stable tool surface:
+The released public tool catalog contains **exactly four** tools:
 
-- `sites-list` — list configured sites without exposing credentials;
-- `site-context` — inspect bounded connection/context information for one explicit site;
-- `site-abilities-read` — discover or inspect the selected site's WP AI Bridge Ability contracts;
-- `site-ability-execute` — execute one exact Ability against one explicit `site_id`.
+| Tool | Purpose |
+| --- | --- |
+| `targets-list` | List authorized Targets without credentials. |
+| `target-context` | Read non-secret context for one explicitly authorized `target_id`. |
+| `wordpress-abilities-read` | Inspect WordPress Ability metadata on one authorized WordPress Target. |
+| `wordpress-ability-execute` | Execute a schema-valid Ability for an explicit authorized WordPress Target, subject to effect-class and downstream permissions. |
 
-Typical client flow:
+Typical flow: call `targets-list`, select an exact `target_id`, read `target-context` and the selected Ability's schema, then execute only the required authorized operation. Never infer an implicit Target from conversation history. Read-only metadata does not authorize writes, and a client-profile display label never grants Target access.
 
-1. Call `sites-list` and identify the required `site_id`.
-2. Inspect that site's context or Ability catalog if needed.
-3. Select the exact Ability.
-4. Execute it with the explicit `site_id` and schema-valid input.
+SSH/Agent tool names and runtimes are **not available** in the current release.
 
-Do not rely on an implicit conversational "current site" for writes. Site selection is intentionally explicit.
 
 ## Administration
 
-Useful operator pages:
+| Path | Page |
+| --- | --- |
+| `/admin` | Dashboard |
+| `/admin/targets` | Target registry and WordPress connection management |
+| `/admin/target-groups` | Target Group assignments |
+| `/admin/users` | Gateway users and access |
+| `/admin/oauth-clients` | AI client profiles, grants and password-confirmed revocation |
+| `/admin/activity` | Bounded Activity |
+| `/admin/connection` | MCP and OAuth connection metadata |
 
-```text
-/admin              Dashboard
-/admin/sites        Site registry
-/admin/activity     Bounded recent activity
-/admin/connection   MCP/client connection information
-```
-
-The web panel supports adding/editing site metadata, connect/reconnect/disconnect, connection testing, site removal, and recent activity inspection.
+Permission checks remain server-authoritative. A Target connection does not bypass WordPress principal or Bridge access-group restrictions.
 
 ## Upgrade
+
+**For legacy Site-era installations, this is a breaking database/data transition.** Before running the browser updater, follow [the Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md), verify an independently restorable database backup, understand the retired connections/grants, and complete the exact package-bound confirmations. Do not re-run a partial MariaDB migration or assume code rollback reverses DDL.
 
 The web installer is only for a **fresh installation**. Do not use `/install` to upgrade an existing Gateway.
 
@@ -402,13 +364,14 @@ php artisan gateway:check
 
 For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
+
 ## Documentation
 
-- [`docs/MASTER-SPEC.md`](docs/MASTER-SPEC.md) — canonical V1 product requirements and boundaries.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and protocol boundaries.
-- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — detailed deployment, validation, backup, upgrade, and rollback guidance.
-- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — development and validation workflow.
-- [`docs/PROJECT-MAP.md`](docs/PROJECT-MAP.md) — maintainer/agent recovery map.
+- [Release notes](RELEASE_NOTES.md) — shipped changes and version-specific breaking-upgrade warnings.
+- [Target transition and recovery runbook](docs/TARGET-TRANSITION-RUNBOOK.md) — migration consent, data preservation and partial-DDL recovery.
+- [Client profile runbook](docs/CLIENT-PROFILE-RUNBOOK.md) — app identity, authorization isolation, grant revocation and recovery.
+- [Master spec](docs/MASTER-SPEC.md) and [architecture](docs/ARCHITECTURE.md) — target contracts, including clearly identified future/not-yet-shipped connectors.
+- [Deployment](docs/DEPLOYMENT.md), [development](docs/DEVELOPMENT.md) and [project map](docs/PROJECT-MAP.md) — operations and maintainer navigation.
 
 ## Release status
 
