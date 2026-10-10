@@ -32,6 +32,16 @@ The locked phpseclib 4.0.2 SFTP client has a shell exec fallback when the SFTP s
 
 Large authenticated binary-stream HTTP upload/download, strict immutable-source identity, interrupted large-transfer recovery, key rotation/re-enrollment and private/VPN destination approval are OUTSTANDING #123/#112 work. Do not call bounded base64 MCP payloads streamed transfer or claim this candidate is installed.
 
+## Stacked development candidate: bounded SFTP byte-stream backend (not public)
+
+A separate candidate built **on top of the unchanged PR #146 SHA** adds internal \`SshFileRuntime::downloadToStream\` and \`uploadFromStream\` APIs. It is **not** a new MCP tool, an authenticated HTTP binary endpoint, a ChatGPT file attachment transfer, a release, or production functionality.
+
+The APIs accept caller-owned PHP byte streams and caller-enforced finite \`maxBytes\` / expected byte count. They use the existing Target-scoped SFTP authorization, pinned endpoint/host key, actual numeric TCP peer check, admission and fresh post-login permission verification in a single SSH session. Neither body is serialized through MCP JSON/base64 or loaded whole into PHP memory. Download refuses known oversize before reading, checks exact length and before/after source size+mtime, calculates SHA-256, and optionally requires a supplied digest. All output **must remain in private staging until verified**; when a download fails the caller must discard any partial bytes.
+
+Upload reads source bytes incrementally, requires exact source byte count and SHA-256, writes to a random private remote temporary file, reads those bytes back through SFTP to verify the digest, and only then uses the existing **exclusive OpenSSH hardlink** create-only publication or guarded POSIX atomic overwrite. The remote readback intentionally adds bandwidth cost; benchmark before choosing file sizes and runtime limits. After any potentially remote write failure, the result is \`outcome_unknown\` and must never auto-retry; best-effort temp cleanup is not guaranteed rollback. Same-size/same-mtime source modification without an expected digest remains a known source-snapshot limitation.
+
+**No arbitrary product size cap is chosen here.** The future authenticated data-plane **caller** must enforce a tested finite per-user/per-Target quota, lifetime, private temp-disk/concurrency limit and client-specific ingress/egress. A successful SFTP backend stream does NOT show ChatGPT can supply its attachment bytes or consume an exported file; separately prove actual host file input and actual model-usable file output per [#147](https://github.com/AChWorks/mcp-gateway/issues/147). Do not claim full two-way transfer, release, deployment or #123/#112 acceptance based on this backend candidate.
+
 ## Product boundary
 
 `ssh_direct` is a **separate, built-in Target connector** for explicitly registered Linux/Unix SSH servers **without requiring AI Server Agent installation**. It supports username/password and username/private-key (+ optional passphrase) authentication. The user selects the remote OS account; the server's account permissions determine actual command privileges, including `sudo` and root when that account is legitimately configured for them.
