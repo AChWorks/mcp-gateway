@@ -1,6 +1,6 @@
-# MCP Gateway v2.0.0 — Breaking Target candidate (NOT PUBLISHED)
+# MCP Gateway v2.0.0
 
-**Development-only release candidate on the Target foundation branch.** No GitHub Release, production deployment, upgrade or database reset has been authorized. This major version replaces the Site model and is not backward-compatible with existing Site-era API paths or saved connections.
+**Breaking Target development candidate (NOT PUBLISHED)** on the Target foundation branch. No GitHub Release, production deployment, upgrade or database reset has been authorized. This major version replaces the Site model and is not backward-compatible with existing Site-era API paths or saved connections.
 
 ## Intended first major package
 
