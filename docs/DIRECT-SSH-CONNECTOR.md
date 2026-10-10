@@ -1,10 +1,10 @@
 # Direct SSH Target Connector
 
-Status: **Owner-accepted SSH design; integrated-source and published-release states differ.** Registration/trusted host-key/credential login and the bounded one-off noninteractive `ssh-command-run` are integrated in `main` through PRs #144/#145, **not yet in the latest published Gateway v2.0.2 release**. Small SFTP stat/list/ranged-read/write PR #146 and the stacked internal streaming backend PR #148 remain separately gated and unmerged at the current audited state. Client↔Target real binary file handoff is not proved and is owned by #147. Final WP+SSH integrated acceptance remains #112. Always refresh actual PR/CI/Release state before treating a dated description as current.
+Status: **Owner-accepted target-state design**; SSH registration, trusted-host-key pinning and credential login are integrated by PR #144 but not released. Command execution is a separately reviewed PR candidate, while SFTP and final integrated acceptance remain pending in [Issue #123](https://github.com/AChWorks/mcp-gateway/issues/123).
 Parent: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106).
 See also [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [remote I/O contract](./REMOTE-IO-CONTRACT.md).
 
-## Integrated-source SSH registration and verified login (not yet released in v2.0.2)
+## Initial SSH registration and verified-login slice (not yet shipped)
 
 The first independent implementation slice adds connector-owned `ssh_direct_target_configs` (host/port/username, selected password or private-key authentication, out-of-band pinned SSH **server** public key, last observed verified numeric peer IP with timestamp), encrypted purpose-bound `target_credentials`, an accessible Target registration/inspect/test/disconnect Admin workflow, authorization-filtered IP-inclusive Admin and MCP Target inventory, and `phpseclib/phpseclib` transport code.
 
@@ -14,13 +14,13 @@ A successful login test authenticates and disconnects without running a command.
 
 Security tests cover out-of-band host-key pin parsing, encrypted bound credentials, IP-inclusive authorization-filtered inventory, default SSH capability denials, public-only policy, per-Target connection admission/rate control and WordPress regressions. CI also provisions disposable loopback-only OpenSSH fixtures behind an explicitly fixture-only dial-policy implementation; that does **not** relax production `SshTcpAddressPolicy`, which rejects loopback. The fixture covers positive password authentication, encrypted RSA private-key/passphrase authentication with an Ed25519 host pin, RSA-SHA2 host-pin interoperability, wrong-password failure, wrong-host-key rejection before authentication, actual numeric peer verification, and fail-closed legacy-only RSA/SHA-1, weak-KEX, weak-cipher and weak-MAC negotiation. Host-key/credential rotation, SSH command/SFTP behavior, interruption/uncertain command outcomes and mixed WP+SSH release validation remain later acceptance work.
 
-## Integrated-source bounded SSH command exec (PR #145; release still separate)
+## Next operational slice: bounded SSH command exec (PR candidate)
 
-The integrated `ssh-command-run` tool authorizes exactly one stored `target_id` through `ssh.command.run`, and reuses the existing verified numeric peer, pinned server host key and encrypted Target-bound credential before a one-off, non-interactive exec. It does not authorize an arbitrary destination, install a daemon, or change WordPress operations. Remote shell text is not allowlisted. The selected remote OS account alone determines permitted commands, including `sudo`, root and access to remote files.
+The proposed `ssh-command-run` tool authorizes exactly one stored `target_id` through `ssh.command.run`, and reuses the existing verified numeric peer, pinned server host key and encrypted Target-bound credential before a one-off, non-interactive exec. It does not authorize an arbitrary destination, install a daemon, or change WordPress operations. Remote shell text is not allowlisted. The selected remote OS account alone determines permitted commands, including `sudo`, root and access to remote files.
 
 Per-command timeout is 1–15 seconds; command input is at most 8192 bytes. Captured stdout is limited to 16384 bytes, stderr to 8192 bytes, with independent UTF-8 or base64 representations, nullable exit status, completeness/truncation markers and the verified connection IP. A timeout, channel failure, or exceeded preview budget after possible dispatch is `outcome_unknown`; the command is never retried automatically, and no continuation/resume is invented. The remote process may continue after disconnect, so a caller must not repeat a mutating command without independent verification. Activity records do not include raw command strings or output.
 
-SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. SFTP and deliberate host-key/credential rotation remain separate development slices. The command feature is **integrated in source but not independently released**; SFTP candidates need their own independent security review and explicit merge authorization. Source integration is not deployment proof.
+SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. SFTP and deliberate host-key/credential rotation remain separate development slices. The feature is **not integrated or released** until review and merge gates pass.
 
 ## Product boundary
 
@@ -88,7 +88,7 @@ Do not add a required daemon/queue/SSH binary/PHP SSH extension to the ordinary 
 5. Public/private approved-target egress boundaries, DNS/port controls, host-key mismatch and cross-Target secret isolation are tested.
 6. Output flood, timeout, disconnect, cancellation and repeated-call behavior preserve caps and `outcome_unknown` (no blind retry).
 7. SFTP stat/list/ranged read/small write and bounded basic transfer succeed where supported; malformed path, permission denial, changing source, partial upload and binary data are handled without leakage/corruption.
-8. Existing WordPress behavior, shared-host release packaging and client auth/Target routing remain intact. Agent #111 is owner-paused and is not a current regression gate.
+8. Both existing WordPress and Agent connector behavior, shared-host release packaging and client auth/target routing remain intact.
 9. Normalized IPv4/IPv6 (including bracket formatting), verified effective DNS-connected IP versus unknown/stale IP states, and `name + username@IP:port + target_id` appear in authorized Admin/picker/MCP selection and connection context. Local IP search handles shared-IP/multi-account ambiguity, unauthorized access returns no endpoint metadata, and command/SFTP cannot route by arbitrary IP.
 
 ## Not in first delivery
