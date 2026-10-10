@@ -162,6 +162,7 @@ final class TargetConnectionController extends Controller
             'rate_limited' => __('Too many SSH verification attempts were made for this Target. Try again later.'),
             'admission_unavailable' => __('SSH verification is temporarily unavailable because its safety guard could not be acquired.'),
             'target_changed' => __('The SSH Target changed while verification was in progress. Retry after reviewing it.'),
+            'verification_superseded' => __('A newer SSH verification has superseded this result. Reload the Target status.'),
             default => __('The SSH connection could not be verified safely.'),
         };
 

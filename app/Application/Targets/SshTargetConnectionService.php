@@ -3,7 +3,6 @@
 namespace App\Application\Targets;
 
 use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshConnectionAdmission;
@@ -21,6 +20,7 @@ final readonly class SshTargetConnectionService
         private SshTargetVault $vault,
         private SshVerifiedTransport $transport,
         private SshConnectionAdmission $admission,
+        private SshVerificationState $verification,
         private ActivityRecorder $activity,
     ) {}
 
@@ -39,8 +39,15 @@ final readonly class SshTargetConnectionService
             throw new SshTargetConnectionException('credential_unavailable');
         }
 
+        // A persisted attempt fence is claimed while admission is held, before
+        // dialing. Even if its finite lease expires, stale completion cannot
+        // overwrite the result of a newer admitted attempt.
+        $attemptId = null;
         try {
-            $ip = $this->admission->run((string) $target->getKey(), function () use ($target, $config, $credential): string {
+            $ip = $this->admission->run((string) $target->getKey(), function () use (
+                $target, $config, $credential, &$attemptId,
+            ): string {
+                $attemptId = $this->verification->begin($target, $config, $credential);
                 $material = $this->vault->open($target, $config, $credential);
 
                 return $this->transport->authenticate(
@@ -49,37 +56,26 @@ final readonly class SshTargetConnectionService
                 );
             });
         } catch (SshTargetConnectionException $exception) {
-            if (! in_array($exception->reason, ['connection_busy', 'rate_limited', 'admission_unavailable'], true)) {
-                $this->recordFailure($target, $credential, $exception->reason);
+            if ($attemptId !== null && ! in_array($exception->reason, [
+                'connection_busy', 'rate_limited', 'admission_unavailable',
+            ], true)) {
+                $this->verification->failed($target, $config, $credential, $attemptId, $exception->reason);
             }
             throw $exception;
         } catch (Throwable) {
-            $this->recordFailure($target, $credential, 'credential_unavailable');
+            if ($attemptId !== null) {
+                $this->verification->failed($target, $config, $credential, $attemptId, 'credential_unavailable');
+            }
             throw new SshTargetConnectionException('credential_unavailable');
         }
 
-        // Never keep row locks across TCP, KEX, key verification or login.
-        // Late completion may not resurrect a removed/replaced credential.
-        DB::transaction(function () use ($target, $credential, $config, $ip): void {
-            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
-            $current = TargetCredential::query()->whereKey($credential->getKey())->first();
-            $endpoint = SshTargetConfig::query()->whereKey($config->getKey())->first();
-            if (! $locked instanceof Target || ! $current instanceof TargetCredential
-                || ! $endpoint instanceof SshTargetConfig
-                || ! hash_equals((string) $credential->encrypted_payload, (string) $current->encrypted_payload)
-                || ! hash_equals((string) $config->pinned_host_key, (string) $endpoint->pinned_host_key)) {
-                throw new SshTargetConnectionException('target_changed');
-            }
-            $endpoint->forceFill(['observed_peer_ip' => $ip, 'observed_at' => now()])->save();
-            $locked->forceFill([
-                'connection_state' => TargetConnectionState::Connected,
-                'last_error_code' => null,
-                'last_tested_at' => now(),
-                'connected_at' => now(),
-                'last_success_at' => now(),
-            ])->save();
-            $this->activity->recordRequired(CorrelationId::current(), 'ssh-login-verify', 'success', $locked);
-        });
+        if (! is_string($attemptId)) {
+            throw new SshTargetConnectionException('verification_superseded');
+        }
+
+        // Short state transaction after network I/O; it checks the attempt
+        // fence under the same Target row lock used to issue new fences.
+        $this->verification->succeeded($target, $config, $credential, $attemptId, $ip);
 
         return $ip;
     }
@@ -95,7 +91,7 @@ final readonly class SshTargetConnectionService
             TargetCredential::query()->where('target_record_id', $locked->getKey())
                 ->where('connector_type', 'ssh_direct')->delete();
             SshTargetConfig::query()->where('target_record_id', $locked->getKey())
-                ->update(['observed_peer_ip' => null, 'observed_at' => null]);
+                ->update(['verification_attempt_id' => null, 'observed_peer_ip' => null, 'observed_at' => null]);
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Disconnected,
                 'last_error_code' => null,
@@ -105,23 +101,4 @@ final readonly class SshTargetConnectionService
         });
     }
 
-    private function recordFailure(Target $target, TargetCredential $credential, string $reason): void
-    {
-        DB::transaction(function () use ($target, $credential, $reason): void {
-            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
-            $current = TargetCredential::query()->whereKey($credential->getKey())->first();
-            if (! $locked instanceof Target || ! $current instanceof TargetCredential
-                || ! hash_equals((string) $credential->encrypted_payload, (string) $current->encrypted_payload)) {
-                return;
-            }
-            $locked->forceFill([
-                'connection_state' => TargetConnectionState::Error,
-                'last_error_code' => $reason,
-                'last_tested_at' => now(),
-                'last_failure_at' => now(),
-                'last_failure_code' => $reason,
-            ])->save();
-            $this->activity->recordRequired(CorrelationId::current(), 'ssh-login-verify', 'failure', $locked, $reason);
-        });
-    }
 }

@@ -16,6 +16,9 @@ return new class extends Migration
             $table->string('username', 128);
             $table->string('auth_method', 32);
             $table->text('pinned_host_key');
+            // A one-time attempt fence; only the currently claimed attempt may
+            // persist login health, including after a cache lease expires.
+            $table->ulid('verification_attempt_id')->nullable();
             $table->string('observed_peer_ip', 45)->nullable();
             $table->timestamp('observed_at', 6)->nullable();
             $table->timestamps();
