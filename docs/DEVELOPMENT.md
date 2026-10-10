@@ -107,12 +107,12 @@ Useful targeted commands include:
 
 ```bash
 # One test file or one test method while iterating.
-composer test -- tests/Feature/Admin/AdminSiteManagementTest.php
+composer test -- tests/Feature/Admin/TargetManagementAdminTest.php
 composer test -- --filter=test_specific_behavior
 
 # Changed PHP files only when a whole-project pass adds no signal yet.
-vendor/bin/pint --test app/Http/Controllers/Admin/SiteController.php tests/Feature/Admin/AdminSiteManagementTest.php
-vendor/bin/phpstan analyse app/Http/Controllers/Admin/SiteController.php --memory-limit=1G
+vendor/bin/pint --test app/Http/Controllers/Admin/TargetController.php tests/Feature/Admin/TargetManagementAdminTest.php
+vendor/bin/phpstan analyse app/Http/Controllers/Admin/TargetController.php --memory-limit=1G
 ```
 
 Use the normal broader commands at candidate freeze when their evidence is required. Do not add custom wrappers merely to hide standard Laravel/PHPUnit/Pint/PHPStan syntax.
@@ -144,9 +144,9 @@ If a validation layer fails, diagnose the smallest root cause and run the discri
 
 When extending a supported Target/client, first distinguish **new Target inventory**, **new operation in a reviewed capability family**, **new connector transport**, **new security/permission class** and **new client OAuth identity**:
 
-- A new registered Target or compatible WordPress Ability should need **no** Gateway public-tool/schema code or deployment change. Prove with a controlled changed downstream catalog that the existing discovery + execution path accepts the compatible schema while runtime authorization and downstream permissions still apply.
-- For a future MCP-speaking connector, derive capability/version/operation metadata from the real authenticated Target and reuse the protocol adapter. Do not duplicate JSON-RPC transport, OAuth/client identity, permission/transfer engine or register one tool for each downstream version. Unknown effect classes and newly privileged/incompatible schemas must be unavailable until reviewed.
-- Test both supported unchanged-version and changed-version fixtures, stale/invalid capability evidence, altered permissions, wrong Target/client, and realistic hot-path call count. A catalog cache may reduce repeated work but must not authorize execution or require an always-on per-Target refresh. Optional MCP list-change subscriptions need negotiated client support and do not guarantee external App tool refresh.
+- A new registered Target or WordPress Ability (including an unfamiliar name) should need **no** Gateway public-tool/schema code or deployment change. Use a controlled changed downstream catalog and prove the existing family discovery/execute path works **when the user has the existing configured execution permission and WordPress permits it**. An unfamiliar or unclassified Ability is not a categorical denial: the latter uses the existing explicitly grantable `unclassified` permission. Separately prove a deliberately denied user remains denied.
+- For a future MCP-speaking connector, discover real authenticated Target operation names/schemas and reuse protocol adapters; do not duplicate transport, permission/transfer logic or create one Gateway tool for each downstream version. Novel names and missing effect annotations should use the existing configured broad/unclassified permission when applicable, not an invented per-name ban. Still reject actual unauthorized privilege, identity or invalid protocol/schema requests.
+- Test changed-operation-name/schema fixtures separately from a **new MCP protocol extension**: the first must not force Gateway code changes under the supported family; the second works when the required protocol method is actually implemented and both peers negotiate it. Exercise stale schemas, actual user/Target denials, wrong client/Target, feature-not-supported fallback and realistic hot-path calls. Cache metadata cannot grant permission; subscriptions are protocol-version-dependent and never guarantee external App refresh.
 - Establish a representative performance baseline **before** adding abstractions, increasing or lowering payload ceilings or requiring extra services. Compare actual small payloads under a higher permitted cap, medium files, concurrent operations, round trips/SSH sessions, p50/p95 latency, PHP peak memory, CPU and transient disk. A tiny fixed cap is not a performance optimization by itself.
 - Keep related fixes in one coherent slice; run targeted checks during editing, exact affected broad/security/contract checks only for a stable candidate, and preserve still-valid evidence. A documentation-only change does not justify manually rerunning SFTP/WordPress integration suites unless the changed material actually affects executable acceptance.
 
