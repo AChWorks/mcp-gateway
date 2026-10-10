@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Target-specific restriction') }}</div>
         <h1>{{ $target->display_name }}</h1>
-        <p class="muted">{{ $managedUser->name }} · <code>{{ $target->target_id }}</code></p>
+        <p class="muted">{{ $managedUser->name }} · <code>{{ $target->target_id }}</code> · {{ __('Connector') }}: {{ $target->connector_type === 'wp_ai_bridge' ? __('WordPress') : $target->connector_type }}</p>
     </div>
     <a href="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">{{ __('Back to target access') }}</a>
 </div>
