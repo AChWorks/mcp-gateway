@@ -125,6 +125,46 @@ final class TargetManagementAdminTest extends TestCase
         self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
     }
 
+    public function test_registration_uses_only_the_selected_connector_schema_and_does_not_flash_ssh_secrets(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'ssh-secret-guard',
+            'display_name' => 'SSH secret guard',
+            'ssh_auth_method' => 'private_key',
+            'ssh_private_key' => 'SECRET_PRIVATE_KEY_SHOULD_NOT_ENTER_SESSION',
+            'ssh_passphrase' => 'SECRET_PASSPHRASE_SHOULD_NOT_ENTER_SESSION',
+            'ssh_password' => 'SECRET_PASSWORD_SHOULD_NOT_ENTER_SESSION',
+            'ssh_trust_confirmed' => 'yes',
+        ])->assertSessionHasErrors('ssh_host');
+
+        $old = session()->getOldInput();
+        foreach (['ssh_private_key', 'ssh_passphrase', 'ssh_password'] as $secret) {
+            self::assertArrayNotHasKey($secret, $old);
+        }
+
+        // An explicitly unsupported connector type cannot use the common router.
+        $this->post('/admin/targets', [
+            'connector_type' => 'ai_server_agent',
+            'target_id' => 'unsupported-agent',
+            'display_name' => 'Unsupported',
+        ])->assertSessionHasErrors('connector_type');
+
+        // Irrelevant SSH fields must not make an ordinary WordPress Target invalid.
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'wp-schema-only',
+            'display_name' => 'WordPress schema only',
+            'base_url' => 'https://wordpress.example.test/',
+            'ssh_auth_method' => 'password',
+        ])->assertRedirect('/admin/targets/wp-schema-only');
+
+        self::assertSame(1, Target::query()->count());
+        self::assertSame('wp_ai_bridge', Target::query()->firstOrFail()->connector_type);
+    }
+
     public function test_owner_can_edit_label_without_mutating_immutable_target_identity_or_connector(): void
     {
         $owner = $this->user('owner', 'all');

@@ -5,6 +5,7 @@ namespace App\Infrastructure\Mcp;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
+use App\Application\Targets\TargetConnectorRegistry;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Mcp\Schema\ToolAnnotations;
@@ -23,6 +24,7 @@ final readonly class GatewayMcpEndpoint
         private TargetMcpToolHandlers $handlers,
         private WordpressTargetMcpToolHandlers $wordpress,
         private SshCommandMcpToolHandlers $sshCommands,
+        private TargetConnectorRegistry $connectors,
     ) {}
 
     public function handle(Request $request): Response
@@ -69,7 +71,7 @@ final readonly class GatewayMcpEndpoint
                         ],
                         'connector_type' => [
                             'type' => 'string',
-                            'enum' => ['wp_ai_bridge', 'ssh_direct'],
+                            'enum' => $this->connectors->types(),
                         ],
                     ],
                     'required' => [],
