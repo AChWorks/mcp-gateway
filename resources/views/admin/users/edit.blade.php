@@ -71,8 +71,16 @@
             @include('admin.partials.permission-groups', [
                 'permissions' => $permissions,
                 'selectedDenials' => $selectedDenials,
+                'sshPermissionsEditable' => $sshPermissionsEditable,
             ])
         </fieldset>
+
+        @if ($sshPermissionsEditable && $managedUser->role->value !== 'owner')
+            <label class="checkbox-option" for="confirm_ssh_permission_changes">
+                <input id="confirm_ssh_permission_changes" type="checkbox" name="confirm_ssh_permission_changes" value="1" @checked(old('confirm_ssh_permission_changes', false))>
+                <span>{{ __('Owner confirmation: explicitly apply the SSH permission choices above. Unchecked SSH denial boxes grant the remote OS-account capability to this user on approved Selected Targets. SSH commands may read/write files and use OS-permitted sudo/root; SFTP switches do not contain shell access.') }}</span>
+            </label>
+        @endif
 
         <div class="form-grid">
             <div class="field">

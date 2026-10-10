@@ -21,9 +21,9 @@
         ],
         'ssh' => [
             'title' => __('Direct SSH'),
-            'help' => __('Reserved for a future reviewed SSH connector. No SSH Target enrollment or SSH tools are available yet; existing denials are retained.'),
-            'status' => __('Not available'),
-            'future' => true,
+            'help' => __('SSH command execution grants remote OS-account authority, including permitted sudo/root and file access even when SFTP toggles are denied. Only a separately confirmed Owner edit may lift default-denied SSH permissions. SFTP tools are not yet available.'),
+            'status' => __('Command available; SFTP pending'),
+            'future' => ! ($sshPermissionsEditable ?? false),
         ],
         'agent' => [
             'title' => __('AI Server Agent'),

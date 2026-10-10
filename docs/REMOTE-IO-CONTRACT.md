@@ -1,6 +1,6 @@
 # Remote Results and File Transfer Contract
 
-Status: Accepted target-state design; **not implemented by the current runtime**.
+Status: Accepted target-state design. Bounded WP transport is integrated, and SSH command results are a proposed PR slice. SFTP/streaming and durable continuation remain unimplemented.
 Owners: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [bounded-response work #122](https://github.com/AChWorks/mcp-gateway/issues/122).
 Related: [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [Direct SSH connector](./DIRECT-SSH-CONNECTOR.md).
 

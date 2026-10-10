@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Mcp;
 
+use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Models\User;
@@ -21,6 +22,7 @@ final readonly class GatewayMcpEndpoint
     public function __construct(
         private TargetMcpToolHandlers $handlers,
         private WordpressTargetMcpToolHandlers $wordpress,
+        private SshCommandMcpToolHandlers $sshCommands,
     ) {}
 
     public function handle(Request $request): Response
@@ -141,6 +143,24 @@ final readonly class GatewayMcpEndpoint
                         ],
                     ],
                     'required' => ['target_id', 'ability'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (string $target_id, string $command, int $timeout_seconds = 10): array => $this->sshCommands->run(
+                    $this->user($request), $target_id, $command, $timeout_seconds,
+                ),
+                name: 'ssh-command-run',
+                description: 'Run one arbitrary non-interactive OS-account command on an explicitly authorized, host-key-pinned SSH Target. sudo/root privileges are controlled by the remote OS, not sandboxed by Gateway. No automatic retry.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'command' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 8192],
+                        'timeout_seconds' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 15, 'default' => 10],
+                    ],
+                    'required' => ['target_id', 'command'],
                     'additionalProperties' => false,
                 ],
             )
