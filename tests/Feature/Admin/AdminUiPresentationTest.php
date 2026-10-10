@@ -84,7 +84,7 @@ final class AdminUiPresentationTest extends TestCase
                 ->assertSee('Shared Target management')
                 ->assertSee('WordPress (WP AI Bridge)')
                 ->assertSee('Direct SSH')
-                ->assertSee('Not available')
+                ->assertSee('Command available; SFTP pending')
                 ->assertSee('AI Server Agent')
                 ->assertSee('Paused')
                 ->assertSee('Review reserved permission definitions');
@@ -166,8 +166,9 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Existing denial retained');
         $this->actingAs($owner)->get('/admin/users/'.$operator->getKey().'/edit')
             ->assertOk()
-            ->assertSee('name="denied_permissions[]" value="ssh.command.run"', false)
-            ->assertSee('Existing denial retained');
+            ->assertSee('ssh.command.run')
+            ->assertSee('confirm_ssh_permission_changes')
+            ->assertDontSee('Existing denial retained');
     }
 
     private function owner(): User

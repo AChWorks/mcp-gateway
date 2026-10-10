@@ -210,6 +210,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             'target-context',
             'wordpress-abilities-read',
             'wordpress-ability-execute',
+            'ssh-command-run',
         ], array_column((array) $modernTools->json('result.tools'), 'name'));
 
         $modernCall = $this->withHeaders([
@@ -281,6 +282,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             'target-context',
             'wordpress-abilities-read',
             'wordpress-ability-execute',
+            'ssh-command-run',
         ], $toolNames);
 
         $refreshResponse = $this->post('/oauth/token', [

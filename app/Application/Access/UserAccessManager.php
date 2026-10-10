@@ -54,7 +54,7 @@ final readonly class UserAccessManager
      * @param  array{name:string,email:string,password?:string|null,role:string,target_scope_mode:string,access_enabled:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
-    public function update(User $user, array $attributes, array $deniedPermissions): User
+    public function update(User $user, array $attributes, array $deniedPermissions, bool $allowSshPermissionChanges = false): User
     {
         $role = GatewayRole::from((string) $attributes['role']);
         $enabled = (bool) $attributes['access_enabled'];
@@ -62,7 +62,7 @@ final readonly class UserAccessManager
             ? TargetScopeMode::All
             : TargetScopeMode::from((string) $attributes['target_scope_mode']);
 
-        DB::transaction(function () use ($user, $attributes, $role, $enabled, $scope, $deniedPermissions): void {
+        DB::transaction(function () use ($user, $attributes, $role, $enabled, $scope, $deniedPermissions, $allowSshPermissionChanges): void {
             $enabledOwners = User::query()
                 ->where('role', GatewayRole::Owner->value)
                 ->where('access_enabled', true)
@@ -97,8 +97,19 @@ final readonly class UserAccessManager
             // denials merely because the form omitted newly introduced permissions.
             $this->replaceGlobalDenials($lockedUser, $role, [
                 ...$deniedPermissions,
-                ...$this->existingConnectorDenials($lockedUser),
+                // Existing Agent denials always survive regular user edits.
+                // A distinct, freshly authenticated Owner action is required
+                // to change any default-denied SSH permission.
+                ...array_filter($this->existingConnectorDenials($lockedUser),
+                    static fn (string $permission): bool => ! $allowSshPermissionChanges
+                        || $permission !== GatewayPermission::SshCommandRun->value),
                 ...($currentRole !== $role ? $this->defaultConnectorDenials($role) : []),
+                // Changing away from Selected always revokes dormant SSH grants;
+                // returning to Selected later requires a new explicit Owner grant.
+                ...($scope !== TargetScopeMode::Selected
+                    ? array_filter($this->defaultConnectorDenials($role),
+                        static fn (string $permission): bool => str_starts_with($permission, 'ssh.'))
+                    : []),
             ]);
             $this->normalizeOwnerState($lockedUser, $role);
             $this->recordRequired('user-access-update:'.$lockedUser->id);

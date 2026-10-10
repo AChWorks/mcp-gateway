@@ -1,6 +1,6 @@
 # Direct SSH Target Connector
 
-Status: **Owner-accepted target-state design**; initial SSH registration / trust / login-test slice is under review, not released. Full execution/SFTP integration remains pending in [Issue #123](https://github.com/AChWorks/mcp-gateway/issues/123).
+Status: **Owner-accepted target-state design**; SSH registration, trusted-host-key pinning and credential login are integrated by PR #144 but not released. Command execution is a separately reviewed PR candidate, while SFTP and final integrated acceptance remain pending in [Issue #123](https://github.com/AChWorks/mcp-gateway/issues/123).
 Parent: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106).
 See also [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [remote I/O contract](./REMOTE-IO-CONTRACT.md).
 
@@ -13,6 +13,14 @@ The order of operations is mandatory: exact stored `target_id` and Target-scoped
 A successful login test authenticates and disconnects without running a command. Last-verified IP/time must not be confused with a live heartbeat; prior observations display as stale when Target connection state is not connected. "Disconnect" removes the **local Gateway SSH credential**, not the remote OS account or other active SSH sessions. The verified host key / endpoint binding is immutable; deliberate enrollment/replacement/rotation remains a separately reviewed lifecycle. Arbitrary shell execution, SFTP, streamed transfer, command error/outcome semantics, private/VPN owner-scoped egress policy, and full cross-connector acceptance are **not implemented by this slice**. The corresponding public SSH MCP tools must remain unadvertised until their complete independently accepted operation is ready. This slice alone must not close #123 or #112, or trigger a release.
 
 Security tests cover out-of-band host-key pin parsing, encrypted bound credentials, IP-inclusive authorization-filtered inventory, default SSH capability denials, public-only policy, per-Target connection admission/rate control and WordPress regressions. CI also provisions disposable loopback-only OpenSSH fixtures behind an explicitly fixture-only dial-policy implementation; that does **not** relax production `SshTcpAddressPolicy`, which rejects loopback. The fixture covers positive password authentication, encrypted RSA private-key/passphrase authentication with an Ed25519 host pin, RSA-SHA2 host-pin interoperability, wrong-password failure, wrong-host-key rejection before authentication, actual numeric peer verification, and fail-closed legacy-only RSA/SHA-1, weak-KEX, weak-cipher and weak-MAC negotiation. Host-key/credential rotation, SSH command/SFTP behavior, interruption/uncertain command outcomes and mixed WP+SSH release validation remain later acceptance work.
+
+## Next operational slice: bounded SSH command exec (PR candidate)
+
+The proposed `ssh-command-run` tool authorizes exactly one stored `target_id` through `ssh.command.run`, and reuses the existing verified numeric peer, pinned server host key and encrypted Target-bound credential before a one-off, non-interactive exec. It does not authorize an arbitrary destination, install a daemon, or change WordPress operations. Remote shell text is not allowlisted. The selected remote OS account alone determines permitted commands, including `sudo`, root and access to remote files.
+
+Per-command timeout is 1–15 seconds; command input is at most 8192 bytes. Captured stdout is limited to 16384 bytes, stderr to 8192 bytes, with independent UTF-8 or base64 representations, nullable exit status, completeness/truncation markers and the verified connection IP. A timeout, channel failure, or exceeded preview budget after possible dispatch is `outcome_unknown`; the command is never retried automatically, and no continuation/resume is invented. The remote process may continue after disconnect, so a caller must not repeat a mutating command without independent verification. Activity records do not include raw command strings or output.
+
+SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. SFTP and deliberate host-key/credential rotation remain separate development slices. The feature is **not integrated or released** until review and merge gates pass.
 
 ## Product boundary
 

@@ -68,6 +68,7 @@ final class UserController extends Controller
             ...$this->formData(),
             'managedUser' => $user,
             'deniedPermissions' => $access->globalDenials($user),
+            'sshPermissionsEditable' => $this->isOwner(request()),
         ]);
     }
 
@@ -89,6 +90,9 @@ final class UserController extends Controller
                 $user,
                 $validated,
                 $this->deniedPermissions($validated),
+                $request->boolean('confirm_ssh_permission_changes')
+                    && $this->isOwner($request)
+                    && $validated['target_scope_mode'] === TargetScopeMode::Selected->value,
             );
         } catch (DomainException $exception) {
             if ($exception->getMessage() === 'last_owner') {
@@ -129,7 +133,15 @@ final class UserController extends Controller
             'access_enabled' => ['nullable', 'boolean'],
             'denied_permissions' => ['nullable', 'array'],
             'denied_permissions.*' => ['string', Rule::enum(GatewayPermission::class)],
+            'confirm_ssh_permission_changes' => ['nullable', 'boolean'],
         ]);
+    }
+
+    private function isOwner(Request $request): bool
+    {
+        $actor = $request->user();
+
+        return $actor !== null && $actor->getAttribute('role') === GatewayRole::Owner;
     }
 
     /** @param array<string,mixed> $validated

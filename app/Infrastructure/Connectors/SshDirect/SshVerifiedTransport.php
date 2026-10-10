@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Connectors\SshDirect;
 
 use App\Application\Targets\SshTargetConnectionException;
+use Closure;
 use phpseclib4\Crypt\PublicKeyLoader;
 use phpseclib4\Crypt\RSA;
 use phpseclib4\Net\SSH2;
@@ -24,6 +25,24 @@ final readonly class SshVerifiedTransport
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
     ): string {
+        return $this->withAuthenticatedSession(
+            $endpoint, $pin, $authMethod, $secret, $passphrase,
+            static fn (SSH2 $ssh, string $peerIp): string => $peerIp,
+        );
+    }
+
+    /**
+     * Invoke one operation on a verified and authenticated connection. The
+     * callback cannot bypass pin verification or select a different endpoint.
+     * All socket/session cleanup remains owned by this transport.
+     *
+     * @param  Closure(SSH2,string):mixed  $operation
+     */
+    public function withAuthenticatedSession(
+        SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
+        string $authMethod, string $secret, ?string $passphrase,
+        Closure $operation,
+    ): mixed {
         $privateKey = null;
         $rsaClientAuthentication = false;
         if ($authMethod === 'password') {
@@ -51,7 +70,6 @@ final readonly class SshVerifiedTransport
         // mismatch against a different DNS answer or silently rebind a Target.
         $ip = $approved[0];
         if (@inet_pton($ip) === false) {
-            // A policy adapter must never smuggle a hostname into the dialer.
             throw new SshTargetConnectionException('egress_denied');
         }
         $address = 'tcp://'.(str_contains($ip, ':') ? '['.$ip.']' : $ip).':'.$endpoint->port;
@@ -62,6 +80,7 @@ final readonly class SshVerifiedTransport
             throw new SshTargetConnectionException('tcp_unreachable');
         }
 
+        $ssh = null;
         try {
             $peer = @stream_socket_get_name($socket, true);
             $peerHost = is_string($peer) ? parse_url('tcp://'.$peer, PHP_URL_HOST) : false;
@@ -98,11 +117,16 @@ final readonly class SshVerifiedTransport
                 throw new SshTargetConnectionException('authentication_failed');
             }
 
-            $ssh->disconnect();
-
-            return $peerIp;
+            return $operation($ssh, $peerIp);
         } finally {
-            // phpseclib may already close the supplied stream in disconnect().
+            if ($ssh instanceof SSH2) {
+                try {
+                    $ssh->disconnect();
+                } catch (Throwable) {
+                    // Session/remote outcome is already known to the caller.
+                    // Closing the underlying socket is the final safeguard.
+                }
+            }
             if (get_resource_type($socket) === 'stream') {
                 fclose($socket);
             }

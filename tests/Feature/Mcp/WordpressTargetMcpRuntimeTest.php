@@ -167,7 +167,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertStringNotContainsString('alpha-access', json_encode($blocked, JSON_THROW_ON_ERROR));
     }
 
-    public function test_public_gateway_tool_manifest_contains_exact_wp_names_and_no_unsupported_connectors(): void
+    public function test_public_gateway_tool_manifest_contains_wp_and_ssh_without_unsupported_connectors(): void
     {
         $owner = $this->user('owner');
         $host = parse_url((string) config('oauth.resource'), PHP_URL_HOST);
@@ -208,10 +208,10 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $body = (string) ob_get_clean();
         $document = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
         $names = array_column($document['result']['tools'], 'name');
-        foreach (['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute'] as $name) {
+        foreach (['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute', 'ssh-command-run'] as $name) {
             self::assertContains($name, $names);
         }
-        foreach (['site-ability-execute', 'ssh-command-run', 'agent-run-command'] as $name) {
+        foreach (['site-ability-execute', 'agent-run-command'] as $name) {
             self::assertNotContains($name, $names);
         }
     }

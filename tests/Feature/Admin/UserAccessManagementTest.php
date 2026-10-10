@@ -3,6 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Application\Access\AccessControl;
+use App\Application\Access\UserAccessManager;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
@@ -51,6 +52,69 @@ final class UserAccessManagementTest extends TestCase
             'actor_id' => (string) $owner->id,
             'operation' => 'user-access-create:'.$user->id,
             'outcome' => 'success',
+        ]);
+    }
+
+    public function test_ssh_grant_requires_separate_explicit_owner_confirmation_and_selected_scope(): void
+    {
+        $owner = $this->owner();
+        $operator = app(UserAccessManager::class)->create([
+            'name' => 'SSH operator',
+            'email' => 'ssh-operator@example.test',
+            'password' => 'DifferentHorse!234',
+            'role' => 'operator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => true,
+        ], []);
+        $ssh = Target::query()->create([
+            'target_id' => 'ssh-grant-target',
+            'display_name' => 'SSH grant Target',
+            'connector_type' => 'ssh_direct',
+        ]);
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $ssh->getKey(),
+            'allowed' => true,
+        ]);
+
+        $access = app(AccessControl::class);
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
+        $payload = [
+            'name' => $operator->name,
+            'email' => $operator->email,
+            'role' => 'operator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => '1',
+            'current_password' => 'CorrectHorse!234',
+            // Missing deny checkboxes alone cannot silently grant SSH command.
+        ];
+        $this->actingAs($owner)->put('/admin/users/'.$operator->id, $payload)->assertRedirect();
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
+
+        $this->put('/admin/users/'.$operator->id, [
+            ...$payload,
+            'confirm_ssh_permission_changes' => '1',
+            // Omitted SFTP switches must remain denied until those tools are implemented.
+            'denied_permissions' => [],
+        ])->assertRedirect();
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
+        self::assertFalse($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
+        self::assertFalse($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
+
+        // Broadening to all-target scope must not preserve shell privileges.
+        $this->put('/admin/users/'.$operator->id, [
+            ...$payload,
+            'target_scope_mode' => 'all',
+            'confirm_ssh_permission_changes' => '1',
+        ])->assertRedirect();
+        self::assertFalse($access->allows($operator->refresh(), GatewayPermission::SshCommandRun, $ssh));
+        $this->assertDatabaseHas('user_permission_denials', [
+            'user_id' => $operator->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+        $this->assertDatabaseHas('user_permission_denials', [
+            'user_id' => $operator->id,
+            'permission' => GatewayPermission::SshFileRead->value,
         ]);
     }
 
