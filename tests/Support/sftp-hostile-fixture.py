@@ -4,9 +4,13 @@
 No network access or arbitrary shell interaction. 'oversize' advertises an
 oversized SFTP frame following an ordinary VERSION handshake. 'delay-write'
 proxies the real local OpenSSH sftp-server but holds WRITE STATUS responses
-after the remote operation has already been dispatched.
+after the remote operation has already been dispatched. 'unexpected-ids' proxies
+metadata/open but injects many legal-length responses with unissued IDs after
+its first READ, reproducing phpseclib's private requestBuffer growth.
 """
 import os
+import glob
+import stat
 import struct
 import subprocess
 import sys
@@ -119,10 +123,126 @@ def delayed_status():
             pass
 
 
+def unexpected_ids():
+    server = subprocess.Popen(
+        ["/usr/lib/openssh/sftp-server"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        bufsize=0,
+    )
+    injection_started = threading.Event()
+    output_lock = threading.Lock()
+
+    def forward_requests():
+        try:
+            while True:
+                packet = read_frame(sys.stdin.buffer)
+                if packet is None:
+                    break
+                if packet[4] == 5:  # SSH_FXP_READ
+                    if not injection_started.is_set():
+                        injection_started.set()
+                        # Every injected response is *individually valid*
+                        # (~64KiB), but all response IDs were never issued
+                        # by the client. A dependency buffering these private
+                        # packets without a connection-level budget will grow.
+                        payload = b'Q' * 65536
+                        for i in range(96):
+                            response = struct.pack(
+                                ">IBII", 9 + len(payload), 103, 0x60000000 + i, len(payload)
+                            ) + payload
+                            with output_lock:
+                                write_frame(sys.stdout.buffer, response)
+                    # Withhold the real READ reply entirely.
+                    continue
+                write_frame(server.stdin, packet)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            try:
+                server.stdin.close()
+            except OSError:
+                pass
+
+    worker = threading.Thread(target=forward_requests, daemon=True)
+    worker.start()
+    try:
+        while True:
+            packet = read_frame(server.stdout)
+            if packet is None:
+                break
+            with output_lock:
+                write_frame(sys.stdout.buffer, packet)
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
+    finally:
+        try:
+            server.terminate()
+        except OSError:
+            pass
+
+
+def observe_first_write():
+    server = subprocess.Popen(
+        ["/usr/lib/openssh/sftp-server"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        bufsize=0,
+    )
+    marker = os.path.expanduser("~/.mcp-sftp-first-write-mode")
+    seen = False
+
+    def forward_requests():
+        nonlocal seen
+        try:
+            while True:
+                packet = read_frame(sys.stdin.buffer)
+                if packet is None:
+                    break
+                if not seen and len(packet) > 9 and packet[4] == 6:  # SSH_FXP_WRITE
+                    seen = True
+                    candidates = glob.glob(
+                        os.path.expanduser("~/.mcp-stream-watch-private/.gateway-stream-*.tmp")
+                    )
+                    if len(candidates) == 1:
+                        state = os.lstat(candidates[0])
+                        observed = f"{stat.S_IMODE(state.st_mode):04o} {state.st_uid}"
+                    else:
+                        observed = f"missing-or-ambiguous:{len(candidates)}"
+                    with open(marker, "w", encoding="ascii") as event:
+                        event.write(observed)
+                write_frame(server.stdin, packet)
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            try:
+                server.stdin.close()
+            except OSError:
+                pass
+
+    worker = threading.Thread(target=forward_requests, daemon=True)
+    worker.start()
+    try:
+        while True:
+            packet = read_frame(server.stdout)
+            if packet is None:
+                break
+            write_frame(sys.stdout.buffer, packet)
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        try:
+            server.terminate()
+        except OSError:
+            pass
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ("oversize", "delay-write"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("oversize", "delay-write", "unexpected-ids", "watch-first-write"):
         sys.exit(2)
     if sys.argv[1] == "oversize":
         oversized()
-    else:
+    elif sys.argv[1] == "delay-write":
         delayed_status()
+    elif sys.argv[1] == "unexpected-ids":
+        unexpected_ids()
+    else:
+        observe_first_write()

@@ -19,11 +19,23 @@ final class SshSubsystemOnlySftp extends SFTP
 {
     private const MAX_SFTP_FRAME_PAYLOAD = 256 * 1024;
 
+    // Locked phpseclib 4.0.2 SFTP::get() queues at most 32 READ requests of
+    // 32 KiB per batch. Its private requestBuffer is otherwise UNBOUNDED
+    // for wrong-ID replies. Fail closed before the dependency can retain
+    // more than one bounded batch of responses, regardless of request ID.
+    private const MAX_READ_BATCH_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+    private const MAX_READ_BATCH_RESPONSES = 64;
+
     private string $incomingLengthBytes = '';
 
     private int $incomingFrameRemaining = 0;
 
     private ?int $transferDeadlineNs = null;
+
+    private ?int $readBatchResponseBytes = null;
+
+    private int $readBatchResponses = 0;
 
     /** @param Closure():mixed $action */
     public function withTransferDeadline(int $deadlineNs, Closure $action): mixed
@@ -38,6 +50,28 @@ final class SshSubsystemOnlySftp extends SFTP
         } finally {
             $this->transferDeadlineNs = null;
         }
+    }
+
+    protected function send_channel_packet(
+        int $client_channel,
+        #[\SensitiveParameter] string $data,
+    ): void {
+        // This is the complete SFTP request frame, assembled by the locked
+        // library's private send_sftp_packet(). READ=5 and request-id=0 marks
+        // the start of each (<=32 request) download batch. Parent's GET can
+        // process unbounded numbers of such batches without a global file cap.
+        if ($client_channel === self::CHANNEL && strlen($data) >= 9
+            && ord($data[4]) === 5 && unpack('Nlength', substr($data, 0, 4))['length'] === strlen($data) - 4) {
+            $id = unpack('Nid', substr($data, 5, 4))['id'];
+            if ($id === 0) {
+                $this->readBatchResponseBytes = 0;
+                $this->readBatchResponses = 0;
+            } elseif ($this->readBatchResponseBytes === null) {
+                throw new SshTargetConnectionException('sftp_response_budget_exceeded');
+            }
+        }
+
+        parent::send_channel_packet($client_channel, $data);
     }
 
     protected function get_channel_packet(int $client_channel, bool $skip_extended = false): string|bool
@@ -122,6 +156,18 @@ final class SshSubsystemOnlySftp extends SFTP
                 $this->incomingLengthBytes = '';
                 if ($payloadLength < 1 || $payloadLength > self::MAX_SFTP_FRAME_PAYLOAD) {
                     throw new SshTargetConnectionException('sftp_frame_too_large');
+                }
+                if ($this->readBatchResponseBytes !== null) {
+                    // Count ALL frames while phpseclib might buffer an
+                    // out-of-order READ response. Tiny frames are bounded
+                    // by count, large legal frames by aggregate bytes.
+                    // Never rely on PHP memory_limit or requestBuffer access.
+                    $this->readBatchResponseBytes += $payloadLength + 4;
+                    $this->readBatchResponses++;
+                    if ($this->readBatchResponseBytes > self::MAX_READ_BATCH_RESPONSE_BYTES
+                        || $this->readBatchResponses > self::MAX_READ_BATCH_RESPONSES) {
+                        throw new SshTargetConnectionException('sftp_response_budget_exceeded');
+                    }
                 }
                 $this->incomingFrameRemaining = $payloadLength;
             }

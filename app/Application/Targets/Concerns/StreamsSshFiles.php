@@ -152,15 +152,24 @@ trait StreamsSshFiles
                 try {
                     $this->ensureStreamDeadline($deadline);
                     $directory = $sftp->lstat($privateStagingDir);
-                    // A pre-existing directory with mode 0700 is the sole
-                    // confidentiality boundary during SFTP::put(), which
-                    // otherwise uses the SFTP server's ambient create mode.
+                    // Existing 0700 and authenticated-principal ownership
+                    // together protect the temporary bytes from first write.
+                    // Ownership is checked against a zero-byte probe below.
                     if (($directory['type'] ?? null) !== FileType::DIRECTORY
                         || ! isset($directory['mode'])
                         || ($directory['mode'] & 0777) !== 0700) {
                         throw new SshTargetConnectionException('staging_not_private');
                     }
 
+                } catch (SshTargetConnectionException $exception) {
+                    throw $exception;
+                } catch (Throwable) {
+                    // Missing/denied staging is NEVER equivalent to a
+                    // non-existing destination. Refuse before any mutation.
+                    throw new SshTargetConnectionException('staging_not_private');
+                }
+
+                try {
                     // No overwrite, even when caller sends a different source
                     // or a competing operation creates this pathname.
                     $sftp->lstat($path);
@@ -180,6 +189,32 @@ trait StreamsSshFiles
                 $submittedDigest = hash_init('sha256');
 
                 try {
+                    // CREATE a zero-byte candidate before accepting secrets.
+                    // A root/privileged Target could otherwise write into a
+                    // foreign-owned 0700 directory and expose the upload to
+                    // its owner until a later chmod. Compare the new inode's
+                    // owner to that of the directory and chmod to 0600
+                    // BEFORE the first nonzero payload byte is dispatched.
+                    $this->ensureStreamDeadline($deadline);
+                    $sftp->put($temporary, '', SFTP::SOURCE_STRING, 0);
+                    $sftp->clearStatCache();
+                    $zero = $sftp->lstat($temporary);
+                    if (($zero['type'] ?? null) !== FileType::REGULAR
+                        || ($zero['size'] ?? null) !== 0
+                        || ! $this->sameSftpOwner($directory, $zero, $sftp->getNegotiatedVersion())) {
+                        throw new SshTargetConnectionException('staging_not_private');
+                    }
+                    $sftp->chmod($temporary, 0600);
+                    $sftp->clearStatCache();
+                    $privateZero = $sftp->lstat($temporary);
+                    if (($privateZero['type'] ?? null) !== FileType::REGULAR
+                        || ($privateZero['size'] ?? null) !== 0
+                        || ! isset($privateZero['mode'])
+                        || ($privateZero['mode'] & 0777) !== 0600
+                        || ! $this->sameSftpOwner($directory, $privateZero, $sftp->getNegotiatedVersion())) {
+                        throw new SshTargetConnectionException('staging_not_private');
+                    }
+
                     // Deliberately submit at most 64 KiB to each SFTP::put.
                     // The locked library otherwise buffers up to 1024
                     // outstanding WRITE STATUS replies before checking the
@@ -209,7 +244,10 @@ trait StreamsSshFiles
                     $sftp->clearStatCache();
                     $attributes = $sftp->lstat($temporary);
                     if (($attributes['type'] ?? null) !== FileType::REGULAR
-                        || ($attributes['size'] ?? null) !== $expectedBytes) {
+                        || ($attributes['size'] ?? null) !== $expectedBytes
+                        || ! isset($attributes['mode'])
+                        || ($attributes['mode'] & 0777) !== 0600
+                        || ! $this->sameSftpOwner($directory, $attributes, $sftp->getNegotiatedVersion())) {
                         throw new SshTargetConnectionException('write_incomplete');
                     }
 
@@ -234,15 +272,15 @@ trait StreamsSshFiles
                         throw new SshTargetConnectionException('write_unverified');
                     }
 
-                    // Set the new inode's publication policy BEFORE linking
-                    // it into an unrestricted destination directory.
+                    // Verify the source inode is still private just before
+                    // the exclusive hardlink makes it visible at destination.
                     $this->ensureStreamDeadline($deadline);
-                    $sftp->chmod($temporary, 0600);
                     $sftp->clearStatCache();
                     $restricted = $sftp->lstat($temporary);
                     if (($restricted['type'] ?? null) !== FileType::REGULAR
                         || ! isset($restricted['mode'])
-                        || ($restricted['mode'] & 0777) !== 0600) {
+                        || ($restricted['mode'] & 0777) !== 0600
+                        || ! $this->sameSftpOwner($directory, $restricted, $sftp->getNegotiatedVersion())) {
                         throw new SshTargetConnectionException('staging_not_private');
                     }
 
@@ -292,6 +330,29 @@ trait StreamsSshFiles
                     'published_mode' => '0600',
                 ];
             }, $deadline);
+    }
+
+    /**
+     * Compare the owner of an inode just created by the authenticated
+     * SFTP principal with the pre-existing private directory's owner.
+     * V3 returns numeric uid; V4+ returns an owner-name string. Missing
+     * owner metadata fails closed instead of assuming 0700 is private.
+     *
+     * @param  array<string,mixed>  $directory
+     * @param  array<string,mixed>  $candidate
+     */
+    private function sameSftpOwner(array $directory, array $candidate, int $version): bool
+    {
+        if ($version <= 3) {
+            return isset($directory['uid'], $candidate['uid'])
+                && is_int($directory['uid']) && is_int($candidate['uid'])
+                && $directory['uid'] === $candidate['uid'];
+        }
+
+        return isset($directory['owner'], $candidate['owner'])
+            && is_string($directory['owner']) && is_string($candidate['owner'])
+            && $directory['owner'] !== ''
+            && hash_equals($directory['owner'], $candidate['owner']);
     }
 
     private function validateTransferLimit(int $maxBytes): void

@@ -411,6 +411,249 @@ final class SshFileFixtureTest extends TestCase
         self::assertLessThan(8 * 1024 * 1024, memory_get_peak_usage(true) - $beforeMemory);
     }
 
+    public function test_multiple_read_batches_support_a_file_larger_than_the_aggregate_buffer_budget(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        $path = $this->home().'/multi-batch-'.bin2hex(random_bytes(6));
+        $bytes = random_bytes(2 * 1024 * 1024 + 53);
+        $hash = hash('sha256', $bytes);
+        $source = fopen('php://temp', 'w+b');
+        $sink = fopen('php://temp', 'w+b');
+        self::assertIsResource($source);
+        self::assertIsResource($sink);
+        fwrite($source, $bytes);
+        rewind($source);
+
+        try {
+            $runtime = app(SshFileRuntime::class);
+            $result = $runtime->uploadFromStream(
+                $owner, $target, $path, $source, strlen($bytes), $hash,
+                3 * 1024 * 1024, 35, $this->env('SSH_FIXTURE_PRIVATE_STAGING'),
+            );
+            self::assertSame('completed', $result['status']);
+            $download = $runtime->downloadToStream(
+                $owner, $target, $path, $sink, 3 * 1024 * 1024, 35, $hash,
+            );
+            self::assertSame('completed', $download['status']);
+            self::assertSame(strlen($bytes), $download['bytes_read']);
+            self::assertSame($hash, $download['sha256']);
+            rewind($sink);
+            self::assertSame($bytes, stream_get_contents($sink));
+        } finally {
+            fclose($source);
+            fclose($sink);
+        }
+    }
+
+    public function test_empty_streamed_file_reuses_the_private_zero_byte_inode(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        $path = $this->home().'/empty-stream-'.bin2hex(random_bytes(6));
+        $source = fopen('php://temp', 'w+b');
+        $sink = fopen('php://temp', 'w+b');
+        self::assertIsResource($source);
+        self::assertIsResource($sink);
+        try {
+            $runtime = app(SshFileRuntime::class);
+            $uploaded = $runtime->uploadFromStream(
+                $owner, $target, $path, $source, 0, hash('sha256', ''),
+                4096, 30, $this->env('SSH_FIXTURE_PRIVATE_STAGING'),
+            );
+            self::assertSame('completed', $uploaded['status']);
+            self::assertSame('0600', $uploaded['published_mode']);
+            $download = $runtime->downloadToStream($owner, $target, $path, $sink, 4096, 30);
+            self::assertSame(0, $download['bytes_read']);
+            self::assertSame(hash('sha256', ''), $download['sha256']);
+        } finally {
+            fclose($source);
+            fclose($sink);
+        }
+    }
+
+    public function test_wrong_id_legal_sftp_responses_are_bounded_in_ranged_and_streamed_reads(): void
+    {
+        $owner = $this->owner();
+        $path = $this->home().'/wrong-id-'.bin2hex(random_bytes(6));
+        $normal = $this->target('password');
+        $created = app(SshFileMcpToolHandlers::class)->write(
+            $owner, $normal->target_id, $path, base64_encode(random_bytes(8192)),
+        );
+        self::assertTrue($created['ok'], json_encode($created));
+
+        $hostile = $this->target('password', (int) $this->env('SSH_FIXTURE_PORT_UNEXPECTED_IDS'));
+        $before = memory_get_peak_usage(true);
+        $result = app(SshFileMcpToolHandlers::class)->read($owner, $hostile->target_id, $path, 0, 8192);
+        self::assertFalse($result['ok']);
+        self::assertSame('sftp_response_budget_exceeded', $result['error']['code']);
+        self::assertLessThan(8 * 1024 * 1024, memory_get_peak_usage(true) - $before);
+
+        $sink = fopen('php://temp', 'w+b');
+        self::assertIsResource($sink);
+        try {
+            $before = memory_get_peak_usage(true);
+            try {
+                app(SshFileRuntime::class)->downloadToStream(
+                    $owner, $hostile, $path, $sink, 16000, 30,
+                );
+                self::fail('Stream must reject many legal-sized unsolicited response IDs.');
+            } catch (SshTargetConnectionException $e) {
+                self::assertSame('sftp_response_budget_exceeded', $e->reason);
+            }
+            self::assertLessThan(8 * 1024 * 1024, memory_get_peak_usage(true) - $before);
+            self::assertSame(0, ftell($sink));
+        } finally {
+            fclose($sink);
+        }
+    }
+
+    public function test_private_staging_owner_and_pre_first_write_mode_are_verified(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password', (int) $this->env('SSH_FIXTURE_PORT_WATCH_FIRST_WRITE'));
+        $path = $this->home().'/private-observed-'.bin2hex(random_bytes(6));
+        $bytes = random_bytes(70000);
+        $source = fopen('php://temp', 'w+b');
+        self::assertIsResource($source);
+        fwrite($source, $bytes);
+        rewind($source);
+        try {
+            $result = app(SshFileRuntime::class)->uploadFromStream(
+                $owner, $target, $path, $source, strlen($bytes), hash('sha256', $bytes),
+                90000, 30, $this->env('SSH_FIXTURE_WATCH_PRIVATE_STAGING'),
+            );
+            self::assertSame('completed', $result['status']);
+            self::assertSame('0600', $result['published_mode']);
+        } finally {
+            fclose($source);
+        }
+
+        // This proxy records the inode's mode/owner at the very first
+        // SFTP WRITE, BEFORE the remote sftp-server processes any data.
+        $observed = app(SshCommandMcpToolHandlers::class)->run(
+            $owner, $target->target_id,
+            'printf "uid=%s " "$(id -u)"; cat ~/.mcp-sftp-first-write-mode',
+        );
+        self::assertTrue($observed['ok'], json_encode($observed));
+        self::assertMatchesRegularExpression(
+            '/^uid=([0-9]+) 0600 \1$/D',
+            $observed['result']['stdout'],
+        );
+    }
+
+    public function test_cross_filesystem_exclusive_hardlink_fails_without_rename_fallback(): void
+    {
+        if (! is_dir('/dev/shm')) {
+            self::markTestSkipped('The temporary filesystem /dev/shm is unavailable on this runner.');
+        }
+
+        $owner = $this->owner();
+        $target = $this->target('password');
+        $isDistinct = app(SshCommandMcpToolHandlers::class)->run(
+            $owner, $target->target_id,
+            'test "$(stat -c %d /dev/shm)" != "$(stat -c %d ~/.mcp-stream-private)"',
+        );
+        self::assertTrue($isDistinct['ok'], json_encode($isDistinct));
+        if (($isDistinct['result']['exit_code'] ?? 1) !== 0) {
+            self::markTestSkipped('The runner has no distinct temporary filesystem.');
+        }
+        $destination = '/dev/shm/.gateway-cross-fs-'.bin2hex(random_bytes(8));
+        $source = fopen('php://temp', 'w+b');
+        self::assertIsResource($source);
+        fwrite($source, 'safe-payload');
+        rewind($source);
+        try {
+            $result = app(SshFileRuntime::class)->uploadFromStream(
+                $owner, $target, $destination, $source, 12,
+                hash('sha256', 'safe-payload'), 4096, 30,
+                $this->env('SSH_FIXTURE_PRIVATE_STAGING'),
+            );
+            self::assertSame('outcome_unknown', $result['status']);
+            self::assertFalse($result['complete']);
+            self::assertTrue($result['possible_remote_effect']);
+            self::assertFalse(
+                app(SshFileMcpToolHandlers::class)->stat($owner, $target->target_id, $destination)['ok'],
+            );
+        } finally {
+            fclose($source);
+        }
+    }
+
+    public function test_privileged_remote_sftp_rejects_foreign_owned_0700_staging_before_payload(): void
+    {
+        // Disposable loopback-only SFTP subsystem runs with elevated OS UID
+        // while SSH authentication is the fixture user. A foreign user's
+        // 0700 directory is accessible to root but NOT confidential from
+        // its real owner. The zero-byte probe must detect this mismatch.
+        $owner = $this->owner();
+        $target = $this->target('password', (int) $this->env('SSH_FIXTURE_PORT_ELEVATED_SFTP'));
+        $source = fopen('php://temp', 'w+b');
+        self::assertIsResource($source);
+        $payload = random_bytes(4096);
+        fwrite($source, $payload);
+        rewind($source);
+        $destination = $this->home().'/foreign-owned-privileged-'.bin2hex(random_bytes(6));
+
+        try {
+            $result = app(SshFileRuntime::class)->uploadFromStream(
+                $owner, $target, $destination, $source, strlen($payload),
+                hash('sha256', $payload), 10000, 30,
+                $this->env('SSH_FIXTURE_ELEVATED_PRIVATE_STAGING'),
+            );
+            self::assertSame('outcome_unknown', $result['status']);
+            self::assertFalse($result['complete']);
+            self::assertFalse(
+                app(SshFileMcpToolHandlers::class)->stat($owner, $target->target_id, $destination)['ok'],
+            );
+
+            // The directory is owned by the unprivileged login user, but
+            // SFTP writes would have occurred as root. No nonzero probe or
+            // payload must ever be written into that directory.
+            $check = app(SshCommandMcpToolHandlers::class)->run(
+                $owner, $target->target_id,
+                'test -z "$(find ~/.mcp-stream-elevated-private -maxdepth 1 -type f -size +0c -print -quit)"',
+            );
+            self::assertTrue($check['ok'], json_encode($check));
+            self::assertSame(0, $check['result']['exit_code']);
+        } finally {
+            fclose($source);
+        }
+    }
+
+    public function test_foreign_owned_and_symlink_staging_never_receive_sensitive_bytes(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        $bytes = random_bytes(1024);
+        $runtime = app(SshFileRuntime::class);
+        foreach (['SSH_FIXTURE_FOREIGN_STAGING', 'SSH_FIXTURE_SYMLINK_STAGING', 'SSH_FIXTURE_MISSING_STAGING'] as $stage) {
+            $source = fopen('php://temp', 'w+b');
+            self::assertIsResource($source);
+            fwrite($source, $bytes);
+            rewind($source);
+            $path = $this->home().'/rejected-stage-'.bin2hex(random_bytes(6));
+            try {
+                try {
+                    $result = $runtime->uploadFromStream(
+                        $owner, $target, $path, $source, strlen($bytes),
+                        hash('sha256', $bytes), 4096, 30, $this->env($stage),
+                    );
+                    self::assertSame('outcome_unknown', $result['status']);
+                    self::assertFalse($result['complete']);
+                } catch (SshTargetConnectionException $e) {
+                    self::assertSame('staging_not_private', $e->reason);
+                }
+            } finally {
+                fclose($source);
+            }
+            self::assertFalse(
+                app(SshFileMcpToolHandlers::class)->stat($owner, $target->target_id, $path)['ok'],
+                'Rejected staging must never publish the sensitive destination.',
+            );
+        }
+    }
+
     public function test_delayed_sftp_write_status_obeys_end_to_end_stream_deadline(): void
     {
         $owner = $this->owner();
