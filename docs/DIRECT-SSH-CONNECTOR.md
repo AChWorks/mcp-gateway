@@ -88,7 +88,7 @@ Do not add a required daemon/queue/SSH binary/PHP SSH extension to the ordinary 
 5. Public/private approved-target egress boundaries, DNS/port controls, host-key mismatch and cross-Target secret isolation are tested.
 6. Output flood, timeout, disconnect, cancellation and repeated-call behavior preserve caps and `outcome_unknown` (no blind retry).
 7. SFTP stat/list/ranged read/small write and bounded basic transfer succeed where supported; malformed path, permission denial, changing source, partial upload and binary data are handled without leakage/corruption.
-8. Both existing WordPress and Agent connector behavior, shared-host release packaging and client auth/target routing remain intact.
+8. Existing WordPress behavior, shared-host release packaging and client auth/Target routing remain intact. Agent #111 is owner-paused and is not a current regression gate.
 9. Normalized IPv4/IPv6 (including bracket formatting), verified effective DNS-connected IP versus unknown/stale IP states, and `name + username@IP:port + target_id` appear in authorized Admin/picker/MCP selection and connection context. Local IP search handles shared-IP/multi-account ambiguity, unauthorized access returns no endpoint metadata, and command/SFTP cannot route by arbitrary IP.
 
 ## Not in first delivery
