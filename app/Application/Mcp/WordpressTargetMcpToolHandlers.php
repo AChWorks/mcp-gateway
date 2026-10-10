@@ -4,6 +4,7 @@ namespace App\Application\Mcp;
 
 use App\Application\Access\AccessControl;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
+use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
@@ -99,7 +100,7 @@ final readonly class WordpressTargetMcpToolHandlers
                 $ability,
                 $input,
                 CorrelationId::current(),
-                static fn (\App\Domain\Access\AbilityExecutionClass $class): bool => $allowed[$class->permission()->value] ?? false,
+                static fn (AbilityExecutionClass $class): bool => $allowed[$class->permission()->value] ?? false,
             );
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
             return $this->failed($operation, $target, $exception->reason, 'WordPress Ability could not complete safely.');

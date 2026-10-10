@@ -7,12 +7,13 @@ use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Targets\TargetGroup;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
 use App\Models\User;
 use GuzzleHttp\Promise\PromiseInterface;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
@@ -103,7 +104,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $group->targets()->attach($target->getKey());
 
         $queries = [];
-        DB::listen(static function (\Illuminate\Database\Events\QueryExecuted $query) use (&$queries): void {
+        DB::listen(static function (QueryExecuted $query) use (&$queries): void {
             $queries[] = $query->sql;
         });
         $handlers = app(WordpressTargetMcpToolHandlers::class);

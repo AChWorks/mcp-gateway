@@ -140,6 +140,10 @@ if [[ "$old_version" == "1.2.1" ]]; then
       $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
       $db = Illuminate\Support\Facades\DB::class;
       $owner = App\Models\User::query()->where("email", "admin@example.test")->firstOrFail();
+      // The baseline creates its first account *after* migrate:fresh.
+      // V1 defaults new accounts to Viewer; explicitly seed the owner role
+      // rather than incorrectly attributing the fixture's role to migration.
+      $owner->forceFill(["role" => "owner", "site_scope_mode" => "all", "access_enabled" => true])->save();
       $operator = App\Models\User::query()->create([
         "name" => "Legacy operator", "email" => "operator@example.test",
         "password" => "CorrectHorse!234", "role" => "operator",
@@ -503,19 +507,26 @@ if [[ "$old_version" == "1.2.1" ]]; then
       $schema = $db::getSchemaBuilder();
       $owner = $db::table("users")->where("email", "admin@example.test")->first();
       $operator = $db::table("users")->where("email", "operator@example.test")->first();
-      if ($owner === null || $operator === null
-          || $owner->role !== "owner" || $operator->role !== "operator"
-          || $operator->target_scope_mode !== "selected"
-          || $db::table("user_target_access")->count() !== 0
-          || $db::table("targets")->count() !== 0
-          || $db::table("user_permission_denials")->where("user_id", $operator->id)->where("permission", "targets.view")->count() !== 1
-          || $db::table("oauth_authorizations")->count() !== 0
-          || $db::table("oauth_access_tokens")->count() !== 0
-          || $db::table("oauth_refresh_tokens")->count() !== 0
-          || $db::table("activity_events")->where("operation", "keep-global-event")->count() !== 1
-          || $db::table("activity_events")->where("operation", "discard-site-event")->count() !== 0
-          || $schema->hasTable("sites") || $schema->hasTable("site_credentials")) {
-          fwrite(STDERR, "Published v1.2.1 state was not reset/preserved to the exact accepted boundary.\n");
+      $checks = [
+        "owner_preserved" => $owner !== null && $owner->role === "owner",
+        "operator_preserved" => $operator !== null && $operator->role === "operator",
+        "selected_scope_preserved" => $operator !== null && $operator->target_scope_mode === "selected",
+        "old_target_assignments_reset" => $db::table("user_target_access")->count() === 0,
+        "old_targets_reset" => $db::table("targets")->count() === 0,
+        "global_denial_translated" => $operator !== null && $db::table("user_permission_denials")
+          ->where("user_id", $operator->id)->where("permission", "targets.view")->count() === 1,
+        "oauth_authorizations_reset" => $db::table("oauth_authorizations")->count() === 0,
+        "oauth_access_tokens_reset" => $db::table("oauth_access_tokens")->count() === 0,
+        "oauth_refresh_tokens_reset" => $db::table("oauth_refresh_tokens")->count() === 0,
+        "global_activity_preserved" => $db::table("activity_events")
+          ->where("operation", "keep-global-event")->count() === 1,
+        "site_activity_reset" => $db::table("activity_events")
+          ->where("operation", "discard-site-event")->count() === 0,
+        "legacy_site_schema_removed" => !$schema->hasTable("sites") && !$schema->hasTable("site_credentials"),
+      ];
+      $failed = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
+      if ($failed !== []) {
+          fwrite(STDERR, "Published v1.2.1 reset/preservation checks failed: ".implode(", ", $failed)."\n");
           exit(1);
       }
       if (is_file("storage/app/private/v121-client-profiles-present")
