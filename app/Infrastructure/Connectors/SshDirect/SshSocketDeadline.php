@@ -10,7 +10,7 @@ use php_user_filter;
  *
  * SFTP and SSH2 packet parsers are dependency-private. This transparent
  * stream filter makes the same deadline observable on every raw SSH read
- * and write, including authenticated negotiation and unsolicited replies.
+ * and write, including SFTP response drains and unsolicited replies after verified login.
  * Ordinary non-streaming SSH and SFTP calls do not install this filter.
  */
 final class SshSocketDeadline extends php_user_filter

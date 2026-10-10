@@ -122,12 +122,6 @@ final readonly class SshVerifiedTransport
                 throw new SshTargetConnectionException('tcp_peer_mismatch');
             }
 
-            if ($requireSftp && $deadlineNs !== null) {
-                // This must be established before SSH handshake/login as
-                // those operations are inside the same Target admission lease.
-                SshSocketDeadline::attach($socket, $deadlineNs);
-            }
-
             try {
                 $ssh = $requireSftp
                     ? new SshSubsystemOnlySftp($socket, $endpoint->port, 8)
@@ -154,6 +148,15 @@ final readonly class SshVerifiedTransport
 
             if (! $authenticated) {
                 throw new SshTargetConnectionException('authentication_failed');
+            }
+            if ($requireSftp && $deadlineNs !== null) {
+                // The library's SSH identification handshake uses
+                // stream_select() on its raw socket. PHP user filters on
+                // that socket break stream_select() on supported PHP builds.
+                // Install only AFTER SSH handshake and authentication;
+                // the dependency's separate handshake/login timeouts
+                // remain in force before a streamed SFTP operation.
+                SshSocketDeadline::attach($socket, $deadlineNs);
             }
 
             return $operation($ssh, $peerIp);
