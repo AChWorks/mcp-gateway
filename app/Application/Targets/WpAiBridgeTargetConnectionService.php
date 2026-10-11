@@ -10,6 +10,7 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
+use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Infrastructure\OAuth\GatewayBridgeClientIdentity;
 use DateTimeImmutable;
 use Illuminate\Support\Facades\DB;
@@ -461,16 +462,35 @@ final readonly class WpAiBridgeTargetConnectionService
     private function exchangeRefresh(string $recordId, array $plan): array
     {
         try {
+            // Local assertion generation happens AFTER the exact refresh
+            // intent is recorded, but BEFORE any token exchange. Scope the
+            // exception conversion to this call: never treat an arbitrary
+            // RuntimeException from network I/O as proof of no dispatch.
+            try {
+                $assertion = $this->identity->assertion($plan['token_url']);
+            } catch (RuntimeException) {
+                throw new OutboundRequestException('client_assertion_unavailable',
+                    'WordPress OAuth client assertion could not be prepared.', [], true);
+            }
+
             // Exact old token + client + resource is the WP Bridge's bounded
             // single-use recovery identity after a lost rotating response.
-            $response = $this->http->postForm($plan['token_url'], [
-                'grant_type' => 'refresh_token',
-                'refresh_token' => $plan['refresh_token'],
-                'client_id' => $plan['client_id'],
-                'resource' => $plan['resource_url'],
-                'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
-                'client_assertion' => $this->identity->assertion($plan['token_url']),
-            ]);
+            try {
+                $response = $this->http->postForm($plan['token_url'], [
+                    'grant_type' => 'refresh_token',
+                    'refresh_token' => $plan['refresh_token'],
+                    'client_id' => $plan['client_id'],
+                    'resource' => $plan['resource_url'],
+                    'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
+                    'client_assertion' => $assertion,
+                ]);
+            } catch (UnsafeOutboundTarget) {
+                // SafeHttpClient validates the entire destination before any
+                // HTTP dispatch; a fail-closed SSRF decision cannot consume a
+                // refresh token. Keep a separate safe machine cause code.
+                throw new OutboundRequestException('unsafe_target',
+                    'WordPress OAuth endpoint failed outbound security policy.', [], true);
+            }
         } catch (OutboundRequestException $exception) {
             // DNS/pre-dispatch failures provably cannot rotate the remote
             // token on a FIRST attempt. Preserve the offline grant and defer,

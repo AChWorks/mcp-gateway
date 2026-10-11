@@ -12,12 +12,16 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Models\User;
+use GuzzleHttp\Exception\ConnectTimeoutException as GuzzleConnectTimeoutException;
+use GuzzleHttp\Exception\NetworkTimeoutException as GuzzleNetworkTimeoutException;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -45,6 +49,12 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
     private bool $malformedRefresh = false;
 
     private int $refreshCalls = 0;
+
+    // A transport attempt is not proof that the remote token endpoint
+    // accepted an HTTP request. Track actual fixture-side processing apart.
+    private int $refreshHandledByBridge = 0;
+
+    private ?string $refreshTransportFailure = null;
 
     private bool $attemptConcurrentDisconnect = false;
 
@@ -387,6 +397,269 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         foreach ($this->outboundTransactionLevels as $level) {
             self::assertSame($baseline, $level, 'Refresh performed remote I/O inside a database transaction.');
         }
+    }
+
+    public function test_tcp_refusal_on_initial_refresh_is_definitively_unconsumed(): void
+    {
+        $this->assertFirstConnectionFailureDefersRefresh('connect');
+    }
+
+    public function test_tls_certificate_failure_on_initial_refresh_is_definitively_unconsumed(): void
+    {
+        $this->assertFirstConnectionFailureDefersRefresh('tls');
+    }
+
+    public function test_connection_timeout_on_initial_refresh_is_definitively_unconsumed(): void
+    {
+        $this->assertFirstConnectionFailureDefersRefresh('connect_timeout');
+    }
+
+    public function test_uncertain_network_timeout_does_not_clear_first_refresh_intent(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->refreshTransportFailure = 'network_timeout';
+
+        try {
+            $service->accessToken($target);
+            self::fail('An uncertain post-send timeout must not clear the rotating-token intent.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(0, $this->refreshHandledByBridge);
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame('refresh_ambiguous', $target->last_error_code);
+        self::assertSame(1, DB::table('target_credentials')->count());
+    }
+
+    public function test_connection_refusal_during_one_shot_recovery_does_not_clear_prior_ambiguity(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->failRefreshOnce = true;
+
+        try {
+            $service->accessToken($target);
+            self::fail('An ambiguous original refresh cannot count as completed.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        DB::table('wp_ai_bridge_refresh_intents')
+            ->update(['created_at' => now()->subSeconds(20)]);
+        $this->refreshTransportFailure = 'connect';
+
+        try {
+            $service->accessToken($target);
+            self::fail('A connection failure on recovery cannot erase a possibly rotated predecessor.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(1, $this->refreshHandledByBridge);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame(1, DB::table('target_credentials')->count());
+        $this->refreshTransportFailure = null;
+
+        try {
+            $service->accessToken($target);
+            self::fail('A third attempt must remain fenced even after TCP recovers.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(2, $this->refreshCalls);
+    }
+
+    public function test_mixed_dns_policy_on_first_refresh_preserves_grant_and_rejects_http_dispatch(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $before = app(WpAiBridgeTargetVault::class)
+            ->openCredential($target, $this->credential($target));
+
+        $dns = $this->installSwitchablePrivateDnsFixture();
+        $dns->reject = true;
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        Log::spy();
+
+        try {
+            $service->routingContextWithRecovery($target);
+            self::fail('Private DNS must be rejected before the token exchange.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_unavailable', $exception->reason);
+        }
+
+        self::assertSame(0, $this->refreshCalls);
+        self::assertSame(0, $this->refreshHandledByBridge);
+        Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh failed before dispatch.'
+            && ($context['cause_code'] ?? null) === 'unsafe_target'
+        )->once();
+        $this->assertDeferredFirstRefreshIsUnconsumed($target, $before['refresh_token']);
+
+        $dns->reject = false;
+        $this->makeRefreshDueNow($target);
+        self::assertSame('alpha-rotated-access', $service->accessToken($target));
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(1, $this->refreshHandledByBridge);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+    }
+
+    public function test_unavailable_signing_key_on_first_refresh_preserves_grant_and_retries_after_repair(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $before = app(WpAiBridgeTargetVault::class)
+            ->openCredential($target, $this->credential($target));
+        $originalKeyPath = (string) config('bridge.keys.private');
+        config()->set('bridge.keys.private', sys_get_temp_dir().'/absent-gateway-key-'.Str::random(20));
+        $service = app(WpAiBridgeTargetConnectionService::class);
+
+        try {
+            $service->routingContextWithRecovery($target);
+            self::fail('Missing signing material must not leave an orphan refresh intent.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_unavailable', $exception->reason);
+        } finally {
+            config()->set('bridge.keys.private', $originalKeyPath);
+        }
+
+        self::assertSame(0, $this->refreshCalls);
+        $this->assertDeferredFirstRefreshIsUnconsumed($target, $before['refresh_token']);
+        $this->makeRefreshDueNow($target);
+        self::assertSame('alpha-rotated-access', $service->accessToken($target));
+        self::assertSame(1, $this->refreshHandledByBridge);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+    }
+
+    public function test_mismatched_signing_key_on_first_refresh_is_unconsumed_and_recoverable(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $before = app(WpAiBridgeTargetVault::class)
+            ->openCredential($target, $this->credential($target));
+
+        // Generate an unrelated *test-only* RSA private key, never touch the
+        // currently configured Gateway signing material or real credentials.
+        $unrelated = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+        self::assertNotFalse($unrelated);
+        self::assertTrue(openssl_pkey_export($unrelated, $unrelatedPem));
+        $temporary = tempnam(sys_get_temp_dir(), 'mcp-gateway-key-fixture-');
+        self::assertNotFalse($temporary);
+        $original = (string) config('bridge.keys.private');
+        try {
+            self::assertNotFalse(file_put_contents($temporary, $unrelatedPem));
+            config()->set('bridge.keys.private', $temporary);
+            $service = app(WpAiBridgeTargetConnectionService::class);
+            try {
+                $service->accessToken($target);
+                self::fail('A mismatched RSA keypair must not leave a remote token attempt or an orphan intent.');
+            } catch (WpAiBridgeTargetConnectionException $exception) {
+                self::assertSame('refresh_unavailable', $exception->reason);
+            }
+        } finally {
+            config()->set('bridge.keys.private', $original);
+            unlink($temporary);
+        }
+
+        self::assertSame(0, $this->refreshCalls);
+        $this->assertDeferredFirstRefreshIsUnconsumed($target, $before['refresh_token']);
+        $this->makeRefreshDueNow($target);
+        self::assertSame('alpha-rotated-access', app(WpAiBridgeTargetConnectionService::class)->accessToken($target));
+        self::assertSame(1, $this->refreshHandledByBridge);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+    }
+
+    public function test_mixed_dns_policy_during_recovery_keeps_prior_unknown_rotation_fenced(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->failRefreshOnce = true;
+        try {
+            $service->accessToken($target);
+            self::fail('Original rotation must remain uncertain.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+        $this->failRefreshOnce = false;
+        DB::table('wp_ai_bridge_refresh_intents')
+            ->update(['created_at' => now()->subSeconds(20)]);
+
+        $dns = $this->installSwitchablePrivateDnsFixture();
+        $dns->reject = true;
+        $recover = app(WpAiBridgeTargetConnectionService::class);
+        try {
+            $recover->accessToken($target);
+            self::fail('A blocked second attempt cannot clear the unknown first rotation.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame(1, DB::table('target_credentials')->count());
+        $dns->reject = false;
+        try {
+            $recover->accessToken($target);
+            self::fail('Unsafe DNS recovery must not permit a third request.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
+    }
+
+    public function test_missing_signing_key_during_recovery_keeps_prior_unknown_rotation_fenced(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->failRefreshOnce = true;
+        try {
+            $service->accessToken($target);
+            self::fail('Original rotation must remain uncertain.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+        DB::table('wp_ai_bridge_refresh_intents')
+            ->update(['created_at' => now()->subSeconds(20)]);
+
+        $original = (string) config('bridge.keys.private');
+        config()->set('bridge.keys.private', sys_get_temp_dir().'/missing-gateway-key-'.Str::random(20));
+        try {
+            $service->accessToken($target);
+            self::fail('Missing assertion on recovery cannot clear a potentially used predecessor.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        } finally {
+            config()->set('bridge.keys.private', $original);
+        }
+
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame(1, DB::table('target_credentials')->count());
+        try {
+            $service->accessToken($target);
+            self::fail('A third request after unprepared recovery must be rejected.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
     }
 
     public function test_first_refresh_dns_pre_dispatch_failure_preserves_offline_credential_and_retries_later(): void
@@ -1287,6 +1560,84 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame('refresh_ambiguous', $target->last_error_code);
     }
 
+    private function assertFirstConnectionFailureDefersRefresh(string $mode): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $before = app(WpAiBridgeTargetVault::class)
+            ->openCredential($target, $this->credential($target));
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->refreshTransportFailure = $mode;
+
+        try {
+            $service->routingContextWithRecovery($target);
+            self::fail('A failed TCP/TLS handshake must not strand an unconsumed refresh grant.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_unavailable', $exception->reason);
+        }
+
+        self::assertSame(1, $this->refreshCalls, 'One transport attempt was made.');
+        self::assertSame(0, $this->refreshHandledByBridge, 'No token request reached the fixture endpoint.');
+        $this->assertDeferredFirstRefreshIsUnconsumed($target, $before['refresh_token']);
+        try {
+            $service->routingContextWithRecovery($target);
+            self::fail('A transient handshake failure must use bounded backoff.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_unavailable', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
+
+        $this->refreshTransportFailure = null;
+        $this->makeRefreshDueNow($target);
+        self::assertSame('alpha-rotated-access', $service->accessToken($target));
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(1, $this->refreshHandledByBridge);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+    }
+
+    private function assertDeferredFirstRefreshIsUnconsumed(Target $target, string $refreshToken): void
+    {
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame('refresh_unavailable', $target->last_error_code);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(1, DB::table('target_credentials')->count());
+        self::assertSame($refreshToken, app(WpAiBridgeTargetVault::class)
+            ->openCredential($target, $this->credential($target))['refresh_token']);
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())->value('generation'));
+        $dueAt = strtotime((string) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())->value('refresh_due_at'));
+        self::assertGreaterThan(time(), $dueAt);
+        self::assertLessThanOrEqual(time() + 60, $dueAt);
+    }
+
+    private function makeRefreshDueNow(Target $target): void
+    {
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())
+            ->update(['refresh_due_at' => now()->subSecond()]);
+    }
+
+    private function installSwitchablePrivateDnsFixture(): DnsResolver
+    {
+        $dns = new class implements DnsResolver
+        {
+            public bool $reject = false;
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $this->reject
+                    ? ['8.8.8.8', '10.0.0.8']
+                    : ['8.8.8.8'];
+            }
+        };
+        $this->app->instance(DnsResolver::class, $dns);
+
+        return $dns;
+    }
+
     private function expire(Target $target): void
     {
         $vault = app(WpAiBridgeTargetVault::class);
@@ -1370,6 +1721,22 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         if ($path === '/wp-json/wp-ai-bridge/v1/oauth/token') {
             if (($request->data()['grant_type'] ?? null) === 'refresh_token') {
                 $this->refreshCalls++;
+                if ($this->refreshTransportFailure !== null) {
+                    return match ($this->refreshTransportFailure) {
+                        'connect' => Http::failedConnection('Connection refused')($request),
+                        'tls' => Http::failedConnection('SSL certificate problem')($request),
+                        'connect_timeout' => Create::rejectionFor(new GuzzleConnectTimeoutException(
+                            'Connection timed out before TLS handshake.',
+                            $request->toPsrRequest(),
+                        )),
+                        'network_timeout' => Create::rejectionFor(new GuzzleNetworkTimeoutException(
+                            'Timed out after transmitting refresh request bytes.',
+                            $request->toPsrRequest(),
+                        )),
+                        default => self::fail('Unexpected transport fixture failure mode.'),
+                    };
+                }
+                $this->refreshHandledByBridge++;
                 if ($this->failClientAuthentication) {
                     // Real Bridge emits this before accessing any refresh
                     // source on temporary client-metadata or JWKS HTTP 503.

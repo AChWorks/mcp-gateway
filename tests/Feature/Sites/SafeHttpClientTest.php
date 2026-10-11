@@ -5,6 +5,7 @@ namespace Tests\Feature\Sites;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
+use GuzzleHttp\Exception\NetworkTimeoutException as GuzzleNetworkTimeoutException;
 use GuzzleHttp\Exception\ResponseException as GuzzleResponseException;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Psr7\Response as Psr7Response;
@@ -63,6 +64,7 @@ final class SafeHttpClientTest extends TestCase
             self::fail('TLS failure was accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('tls_failure', $exception->reason);
+            self::assertTrue($exception->preDispatch, 'TLS setup failure could not transmit HTTP.');
         }
         Http::assertSentCount(1);
     }
@@ -78,6 +80,31 @@ final class SafeHttpClientTest extends TestCase
             self::fail('Network failure was accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('network_failure', $exception->reason);
+            self::assertTrue($exception->preDispatch, 'TCP refusal could not transmit HTTP.');
+        }
+        Http::assertSentCount(1);
+    }
+
+    public function test_post_send_network_timeout_remains_ambiguous_even_when_no_response_arrives(): void
+    {
+        Http::fake(static function (Request $request) {
+            // Guzzle distinguishes an uncertain network transfer from
+            // ConnectException: a previous HTTP request may have completed.
+            return Create::rejectionFor(new GuzzleNetworkTimeoutException(
+                'Operation timed out after sending request bytes.',
+                $request->toPsrRequest(),
+            ));
+        });
+
+        $client = app(SafeHttpClient::class);
+        try {
+            $client->postForm('https://wp.example.test/wp-json/wp-ai-bridge/v1/oauth/token', [
+                'grant_type' => 'refresh_token',
+            ]);
+            self::fail('An uncertain token-exchange transfer must not be accepted.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+            self::assertFalse($exception->preDispatch);
         }
         Http::assertSentCount(1);
     }

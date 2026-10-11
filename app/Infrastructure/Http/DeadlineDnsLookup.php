@@ -19,6 +19,11 @@ use function React\Promise\all;
  * Uses only the host's configured DNS servers (no public fallback), collects
  * BOTH A and AAAA answers, and cancels outstanding network queries on expiry.
  * The calling outbound policy validates the complete numeric result set.
+ *
+ * React's local resolv.conf and hosts-file configuration loaders are still
+ * synchronous: the event-loop timer bounds DNS network queries, not a stalled
+ * local filesystem. Deadline rechecks prevent a late HTTPS dispatch once
+ * that setup returns; this is not a hard wall-clock bound for system-file I/O.
  */
 final readonly class DeadlineDnsLookup
 {

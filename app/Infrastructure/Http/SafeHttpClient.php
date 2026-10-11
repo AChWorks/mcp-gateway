@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Http;
 
 use App\Application\Operations\OperationalSettings;
+use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
@@ -77,7 +78,7 @@ final class SafeHttpClient
             $curlOptions = [];
             if (filter_var($target->host, FILTER_VALIDATE_IP) === false) {
                 if (! defined('CURLOPT_RESOLVE')) {
-                    throw new OutboundRequestException('runtime', 'Secure outbound DNS pinning is unavailable.');
+                    throw new OutboundRequestException('runtime', 'Secure outbound DNS pinning is unavailable.', [], true);
                 }
 
                 $resolveAddress = str_contains($target->pinnedAddress(), ':')
@@ -119,7 +120,14 @@ final class SafeHttpClient
                 $message = $exception->getMessage();
                 $reason = preg_match('/(?:SSL|TLS|certificate|cURL error 60)/i', $message) === 1 ? 'tls_failure' : 'network_failure';
 
-                throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.');
+                // The exact Guzzle cURL handler uses ConnectException
+                // (including ConnectTimeoutException) only when the TCP/TLS
+                // connection was never established. A token request could not
+                // have reached its destination. Other transport failures may
+                // occur after the request body was transmitted.
+                $preDispatch = $exception->getPrevious() instanceof GuzzleConnectException;
+
+                throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.', [], $preDispatch);
             }
 
             if ($responseBody->limitExceeded()) {
