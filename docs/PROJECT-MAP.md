@@ -38,6 +38,7 @@ The non-WordPress connector tracks are independent Direct SSH (active) and AI Se
 
 - [`mcp-gateway#106`](https://github.com/AChWorks/mcp-gateway/issues/106) — Gateway-side breaking Target foundation and connector program;
 - [`mcp-gateway#117`](https://github.com/AChWorks/mcp-gateway/issues/117) — client-neutral MCP authorization edge; ChatGPT remains the first supported profile while future clients can be added without another core auth rewrite;
+- [`mcp-gateway#97`](https://github.com/AChWorks/mcp-gateway/issues/97) — post-integration WordPress OAuth refresh durability and real installed-host/cron proof, not generic lifecycle redesign.
 - [`ai-server-agent#47`](https://github.com/ach1992/ai-server-agent/issues/47) — Agent-side optional Gateway integration, independent credential lifecycle, preserved direct modes, and Agent-authoritative safety.
 - [`mcp-gateway#123`](https://github.com/AChWorks/mcp-gateway/issues/123) — SSH Target without Agent installation; password/key and arbitrary commands under OS account authority.
 - [`mcp-gateway#122`](https://github.com/AChWorks/mcp-gateway/issues/122) — completed finite oversize-response foundation; do not reopen for generic file transfer.
