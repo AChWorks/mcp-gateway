@@ -33,6 +33,10 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
     private bool $failRefreshOnce = false;
 
+    private bool $failClientAuthentication = false;
+
+    private bool $temporarilyUnavailable400Once = false;
+
     private int $refreshTokenTtl = 7200;
 
     private bool $rejectRefresh = false;
@@ -516,6 +520,201 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         foreach ($this->outboundTransactionLevels as $level) {
             self::assertSame($baseline, $level, 'Idle refresh performed remote I/O under a database lock.');
         }
+    }
+
+    public function test_temporary_http_400_invalid_client_preserves_unconsumed_offline_grant_for_later_read(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $credential = $this->credential($target);
+        $before = app(WpAiBridgeTargetVault::class)->openCredential($target, $credential);
+        $this->failClientAuthentication = true;
+        $service = app(WpAiBridgeTargetConnectionService::class);
+
+        Sleep::fake();
+        try {
+            try {
+                $service->routingContextWithRecovery($target);
+                self::fail('Temporary pre-rotation client authentication was treated as success.');
+            } catch (WpAiBridgeTargetConnectionException $exception) {
+                self::assertSame('refresh_unavailable', $exception->reason);
+            }
+            Sleep::assertNeverSlept();
+        } finally {
+            Sleep::fake(false);
+        }
+
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame('refresh_unavailable', $target->last_error_code);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(1, DB::table('target_credentials')->count());
+        $after = app(WpAiBridgeTargetVault::class)->openCredential($target, $this->credential($target));
+        self::assertSame($before['refresh_token'], $after['refresh_token']);
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())->value('generation'));
+        $retryAt = strtotime((string) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())->value('refresh_due_at'));
+        self::assertGreaterThan(time(), $retryAt);
+        self::assertLessThanOrEqual(time() + 60, $retryAt);
+
+        try {
+            $service->routingContextWithRecovery($target);
+            self::fail('A follow-up read spun another network refresh before backoff.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_unavailable', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(0, Artisan::call('gateway:wordpress-credentials-maintain'));
+        self::assertSame(1, $this->refreshCalls);
+
+        // Dependency restored; time advances to the scheduled bounded retry.
+        $this->failClientAuthentication = false;
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())
+            ->update(['refresh_due_at' => now()->subSecond()]);
+        self::assertSame('alpha-rotated-access', $service->routingContextWithRecovery($target)['access_token']);
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())->value('generation'));
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertNull($target->last_error_code);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+    }
+
+    public function test_idle_maintenance_http_400_invalid_client_defers_without_revoking_or_recovery_replay(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $credential = $this->credential($target);
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())
+            ->update(['refresh_due_at' => now()->subSecond()]);
+        $this->failClientAuthentication = true;
+
+        Sleep::fake();
+        try {
+            self::assertSame(1, Artisan::call('gateway:wordpress-credentials-maintain'));
+            Sleep::assertNeverSlept();
+        } finally {
+            Sleep::fake(false);
+        }
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame('refresh_unavailable', $target->last_error_code);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())->value('generation'));
+        self::assertSame('alpha-access',
+            app(WpAiBridgeTargetConnectionService::class)->accessToken($target));
+        self::assertSame(0, Artisan::call('gateway:wordpress-credentials-maintain'));
+        self::assertSame(1, $this->refreshCalls);
+
+        $this->failClientAuthentication = false;
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())
+            ->update(['refresh_due_at' => now()->subSecond()]);
+        self::assertSame(0, Artisan::call('gateway:wordpress-credentials-maintain'));
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertNull($target->last_error_code);
+    }
+
+    public function test_invalid_client_on_second_attempt_cannot_clear_prior_ambiguous_rotation(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $this->failRefreshOnce = true;
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        try {
+            $service->routingContext($target);
+            self::fail('The first lost response must remain uncertain.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        DB::table('wp_ai_bridge_refresh_intents')->update([
+            'created_at' => now()->subSeconds(20),
+        ]);
+        $this->failClientAuthentication = true;
+        try {
+            $service->routingContext($target);
+            self::fail('The second request was falsely accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        self::assertSame(1, DB::table('target_credentials')->count());
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+
+        $this->failClientAuthentication = false;
+        try {
+            $service->routingContext($target);
+            self::fail('A third replay was permitted after an uncertain successor.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(2, $this->refreshCalls);
+    }
+
+    public function test_http_400_temporarily_unavailable_keeps_lost_successor_recovery_fence(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $this->temporarilyUnavailable400Once = true;
+
+        Sleep::fake();
+        Sleep::whenFakingSleep(static function (): void {
+            DB::table('wp_ai_bridge_refresh_intents')->update([
+                'created_at' => now()->subSeconds(20),
+            ]);
+        });
+        try {
+            $response = app(WpAiBridgeTargetConnectionService::class)
+                ->routingContextWithRecovery($target);
+            Sleep::assertSleptTimes(1);
+        } finally {
+            Sleep::fake(false);
+        }
+
+        self::assertSame('alpha-rotated-access', $response['access_token']);
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+    }
+
+    public function test_lost_refresh_successor_expiry_is_anchored_to_first_request(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $this->failRefreshOnce = true;
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        try {
+            $service->routingContext($target);
+            self::fail('The first response must be uncertain.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+        $issuedAt = time() - 20;
+        DB::table('wp_ai_bridge_refresh_intents')->update([
+            'created_at' => now()->subSeconds(20),
+        ]);
+        self::assertSame('alpha-rotated-access', $service->accessToken($target));
+
+        $meta = DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())->first();
+        self::assertNotNull($meta);
+        self::assertEqualsWithDelta($issuedAt + 3600,
+            strtotime((string) $meta->access_expires_at), 2);
+        self::assertEqualsWithDelta($issuedAt + 7200,
+            strtotime((string) $meta->refresh_expires_at), 2);
+        self::assertEqualsWithDelta($issuedAt + 3600,
+            strtotime((string) $meta->refresh_due_at), 2);
     }
 
     public function test_stale_health_does_not_rotate_30_day_offline_refresh_on_access_token_half_life(): void
@@ -1056,6 +1255,16 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         if ($path === '/wp-json/wp-ai-bridge/v1/oauth/token') {
             if (($request->data()['grant_type'] ?? null) === 'refresh_token') {
                 $this->refreshCalls++;
+                if ($this->failClientAuthentication) {
+                    // Real Bridge emits this before accessing any refresh
+                    // source on temporary client-metadata or JWKS HTTP 503.
+                    return Http::response(['error' => 'invalid_client'], 400);
+                }
+                if ($this->temporarilyUnavailable400Once) {
+                    $this->temporarilyUnavailable400Once = false;
+
+                    return Http::response(['error' => 'temporarily_unavailable'], 400);
+                }
                 if ($this->failRefresh) {
                     return Http::response(['error' => 'temporarily_unavailable'], 503);
                 }
