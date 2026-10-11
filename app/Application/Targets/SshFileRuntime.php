@@ -199,6 +199,7 @@ final readonly class SshFileRuntime
                 $path, $data, $overwrite, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
+                $existingMode = null;
                 try {
                     $existing = $sftp->lstat($path);
                     if (! $overwrite) {
@@ -208,6 +209,12 @@ final readonly class SshFileRuntime
                         throw new SshTargetConnectionException('unsupported_file_type');
                     }
                     $this->requireVersion($existing, $expectedSize, $expectedMtime);
+                    if (! isset($existing['mode']) || ! is_int($existing['mode'])) {
+                        throw new SshTargetConnectionException('file_unavailable');
+                    }
+                    // Replacing contents must not silently relax permissions
+                    // of an already-private remote destination.
+                    $existingMode = $existing['mode'] & 0777;
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
                 } catch (FileSystemException $exception) {
@@ -253,7 +260,7 @@ final readonly class SshFileRuntime
                         throw new SshTargetConnectionException('staging_not_private');
                     }
 
-                    $publicationMode = $zero['mode'] & 0777;
+                    $publicationMode = $existingMode ?? ($zero['mode'] & 0777);
                     $sftp->chmod($temporary, 0600);
                     $sftp->clearStatCache();
                     $privateZero = $sftp->lstat($temporary);
