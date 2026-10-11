@@ -13,7 +13,10 @@ use InvalidArgumentException;
 
 final class TargetInventory
 {
-    public function __construct(private readonly AccessControl $access) {}
+    public function __construct(
+        private readonly AccessControl $access,
+        private readonly TargetConnectorRegistry $connectors,
+    ) {}
 
     public const ADMIN_PAGE_SIZE = 50;
 
@@ -300,9 +303,7 @@ final class TargetInventory
     private function connectorType(?string $value): ?string
     {
         $value = $this->nullableTrim($value);
-        if ($value !== null && ! in_array($value, [
-            'wp_ai_bridge', 'ai_server_agent', 'ssh_direct',
-        ], true)) {
+        if ($value !== null && ! in_array($value, $this->connectors->storedTypes(), true)) {
             throw new InvalidArgumentException('connector_type is not supported.');
         }
 
