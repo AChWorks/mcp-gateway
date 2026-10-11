@@ -97,12 +97,12 @@ final readonly class UserAccessManager
             // denials merely because the form omitted newly introduced permissions.
             $this->replaceGlobalDenials($lockedUser, $role, [
                 ...$deniedPermissions,
-                // Existing Agent denials always survive regular user edits.
-                // A distinct, freshly authenticated Owner action is required
-                // to change any default-denied SSH permission.
+                // Existing Agent denials survive edits. An explicit, freshly
+                // authenticated Owner confirmation on Selected scope is the
+                // only way to change any of the three default-denied SSH tools.
                 ...array_filter($this->existingConnectorDenials($lockedUser),
                     static fn (string $permission): bool => ! $allowSshPermissionChanges
-                        || $permission !== GatewayPermission::SshCommandRun->value),
+                        || ! str_starts_with($permission, 'ssh.')),
                 ...($currentRole !== $role ? $this->defaultConnectorDenials($role) : []),
                 // Changing away from Selected always revokes dormant SSH grants;
                 // returning to Selected later requires a new explicit Owner grant.

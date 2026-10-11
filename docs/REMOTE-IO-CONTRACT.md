@@ -1,6 +1,6 @@
 # Remote Results and File Transfer Contract
 
-Status: Accepted target-state design. Bounded WP transport is integrated, and SSH command results are a proposed PR slice. SFTP/streaming and durable continuation remain unimplemented.
+Status: Accepted target-state design. Bounded WP/SSH commands and four bounded SFTP MCP operations (#146), plus internal SFTP stream primitives (#148), are integrated on main but are **not part of the last published v2.0.2 release**. Real client-neutral file handoff (#147), binary HTTP transport and durable continuation remain unimplemented/unverified; do not advertise them as working.
 Owners: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [bounded-response work #122](https://github.com/AChWorks/mcp-gateway/issues/122).
 Related: [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [Direct SSH connector](./DIRECT-SSH-CONNECTOR.md).
 
@@ -62,7 +62,7 @@ Do not conflate **transport response-size bounds** with **application pagination
 
 **Foundation (#108 / #109 / #110):** factor shared downstream MCP bounds and error propagation where truly common; keep connector-owned payload/transport and stable Target/user authorization. Do not introduce a generic large-object framework before the third real connector demonstrates a need.
 
-**Direct SSH (#123):** ship ordinary command output plus bounded SFTP stat/list/read/write and, when supported by the runtime without unbounded PHP buffering, basic streamed file transfer; explicitly signal unavailable continuation for truncated commands. No always-on PTY/job/transfer service required.
+**Direct SSH (#123):** bounded command previews merged in #145, and bounded stat/list, up-to-16-KiB binary-safe inline range reads and small writes merged in #146. Explicit atomic last-writer-wins replacement is available with optional best-effort size/mtime preflight (never CAS); internal bounded stream primitives merged in #148. **Neither makes real client-side file ingress or model-consumable file egress work.** Those authenticated client handoffs, strong source-version guarantees and interrupted transfer recovery remain unproven/pending (#147/#112). No always-on PTY/job/transfer service required.
 
 **Final acceptance (#112):** validate small-path latency, oversize/encoded/unknown-length handling, no cross-Target/credential leaks, interrupted-write unknown outcomes, representative large file and mixed-connector limits, and supported shared-PHP packaging. Add only tests for capabilities actually shipped.
 

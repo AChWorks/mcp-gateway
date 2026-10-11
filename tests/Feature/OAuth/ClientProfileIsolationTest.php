@@ -111,14 +111,14 @@ final class ClientProfileIsolationTest extends TestCase
             ->postJson('/mcp', $mcp)->assertOk();
 
         foreach ([$fixtureTools, $chatTools] as $toolResult) {
-            self::assertSame(['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute', 'ssh-command-run'],
+            self::assertSame(['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute', 'ssh-command-run', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'],
                 array_column((array) $toolResult->json('result.tools'), 'name'));
             foreach ((array) $toolResult->json('result.tools') as $tool) {
-                $isExecute = in_array($tool['name'], ['wordpress-ability-execute', 'ssh-command-run'], true);
+                $isExecute = in_array($tool['name'], ['wordpress-ability-execute', 'ssh-command-run', 'ssh-file-write'], true);
                 $isWordPress = str_starts_with($tool['name'], 'wordpress-');
                 self::assertSame(! $isExecute, $tool['annotations']['readOnlyHint'] ?? null);
                 self::assertSame($isExecute, $tool['annotations']['destructiveHint'] ?? null);
-                self::assertSame($isWordPress || $tool['name'] === 'ssh-command-run', $tool['annotations']['openWorldHint'] ?? null);
+                self::assertSame($isWordPress || str_starts_with($tool['name'], 'ssh-'), $tool['annotations']['openWorldHint'] ?? null);
             }
         }
         $this->withHeaders([...$headers, 'Mcp-Method' => 'tools/call', 'Mcp-Name' => 'targets-list',

@@ -3,8 +3,10 @@
 namespace App\Infrastructure\Mcp;
 
 use App\Application\Mcp\SshCommandMcpToolHandlers;
+use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
+use App\Application\Targets\TargetConnectorRegistry;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Mcp\Schema\ToolAnnotations;
@@ -20,9 +22,11 @@ use Symfony\Component\HttpFoundation\Response;
 final readonly class GatewayMcpEndpoint
 {
     public function __construct(
+        private TargetConnectorRegistry $connectors,
         private TargetMcpToolHandlers $handlers,
         private WordpressTargetMcpToolHandlers $wordpress,
         private SshCommandMcpToolHandlers $sshCommands,
+        private SshFileMcpToolHandlers $sshFiles,
     ) {}
 
     public function handle(Request $request): Response
@@ -69,7 +73,7 @@ final readonly class GatewayMcpEndpoint
                         ],
                         'connector_type' => [
                             'type' => 'string',
-                            'enum' => ['wp_ai_bridge', 'ssh_direct'],
+                            'enum' => $this->connectors->types(),
                         ],
                     ],
                     'required' => [],
@@ -161,6 +165,90 @@ final readonly class GatewayMcpEndpoint
                         'timeout_seconds' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 15, 'default' => 10],
                     ],
                     'required' => ['target_id', 'command'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (string $target_id, string $path): array => $this->sshFiles->stat(
+                    $this->user($request), $target_id, $path,
+                ),
+                name: 'ssh-file-stat',
+                description: 'Inspect metadata for one absolute remote SFTP path on an explicitly authorized SSH Target.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'path' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024],
+                    ],
+                    'required' => ['target_id', 'path'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (string $target_id, string $path, int $limit = 100): array => $this->sshFiles->list(
+                    $this->user($request), $target_id, $path, $limit,
+                ),
+                name: 'ssh-file-list',
+                description: 'List a bounded remote SFTP directory. Oversize listings fail; no fabricated continuation.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'path' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024],
+                        'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 100],
+                    ],
+                    'required' => ['target_id', 'path'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (
+                    string $target_id, string $path, int $offset = 0, int $length = 16384,
+                    ?int $expected_size = null, ?int $expected_mtime = null,
+                ): array => $this->sshFiles->read(
+                    $this->user($request), $target_id, $path, $offset, $length, $expected_size, $expected_mtime,
+                ),
+                name: 'ssh-file-read',
+                description: 'Read up to 16 KiB from an absolute SFTP path as base64; optional size+mtime precondition detects many source changes, not a strong snapshot.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'path' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024],
+                        'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 1099511627776, 'default' => 0],
+                        'length' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 16384, 'default' => 16384],
+                        'expected_size' => ['type' => 'integer', 'minimum' => 0],
+                        'expected_mtime' => ['type' => 'integer', 'minimum' => 0],
+                    ],
+                    'required' => ['target_id', 'path'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (
+                    string $target_id, string $path, string $content_base64, bool $overwrite = false,
+                    ?int $expected_size = null, ?int $expected_mtime = null,
+                ): array => $this->sshFiles->write(
+                    $this->user($request), $target_id, $path, $content_base64, $overwrite,
+                    $expected_size, $expected_mtime,
+                ),
+                name: 'ssh-file-write',
+                description: 'Write <=16 KiB of base64 bytes to a remote SFTP path. Create-only by default; overwrite=true atomically replaces an existing regular file without requiring size+mtime. Optional expected_size+expected_mtime are paired best-effort preflight checks, not atomic compare-and-swap. Uncertain remote mutations return outcome_unknown; never retry blindly.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'path' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024],
+                        'content_base64' => ['type' => 'string', 'maxLength' => 21848],
+                        'overwrite' => ['type' => 'boolean', 'default' => false],
+                        'expected_size' => ['type' => 'integer', 'minimum' => 0],
+                        'expected_mtime' => ['type' => 'integer', 'minimum' => 0],
+                    ],
+                    'required' => ['target_id', 'path', 'content_base64'],
                     'additionalProperties' => false,
                 ],
             )
