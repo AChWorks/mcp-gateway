@@ -1,6 +1,6 @@
 # Direct SSH Target Connector
 
-Status: Owner-accepted target design. Verified SSH login (#144), bounded command execution (#145), four SFTP stat/list/range-read/small-write MCP tools (#146), and internal bounded stream primitives (#148) are **merged into main, not published/deployed as part of v2.0.2**. Genuine client-side attachment ingest/return-file handoff (#147), key rotation, private/VPN egress and final #112 acceptance remain pending.
+Status: Owner-accepted target design. Verified SSH login (#144), bounded command execution (#145), four SFTP stat/list/range-read/small-write MCP tools (#146), and internal bounded stream primitives (#148) are **merged into main, not published in the v2.0.3 maintenance release or verified as deployed**. Genuine client-side attachment ingest/return-file handoff (#147), key rotation, private/VPN egress and final #112 acceptance remain pending.
 Parent: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106).
 See also [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [remote I/O contract](./REMOTE-IO-CONTRACT.md).
 
