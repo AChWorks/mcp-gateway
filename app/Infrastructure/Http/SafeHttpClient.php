@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Http;
 
+use App\Application\Operations\OperationalSettings;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
@@ -11,7 +12,10 @@ final class SafeHttpClient
     // Maximum decoded body accepted by a single shared-PHP request, regardless of env settings.
     public const ABSOLUTE_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
-    public function __construct(private readonly OutboundTargetPolicy $targets) {}
+    public function __construct(
+        private readonly OutboundTargetPolicy $targets,
+        private readonly OperationalSettings $settings,
+    ) {}
 
     /** @param array<string, string> $headers */
     public function get(string $url, array $headers = []): SafeHttpResponse
@@ -53,7 +57,7 @@ final class SafeHttpClient
         $target = $this->targets->validate($url);
         $connectTimeout = max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
         $requestTimeout = max($connectTimeout, (int) config('bridge.http.request_timeout_seconds', 5));
-        $requestedBytes = $responseLimitBytes ?? (int) config('bridge.http.max_response_bytes', 65536);
+        $requestedBytes = $responseLimitBytes ?? $this->settings->responseLimitBytes(false);
         $maxBytes = min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $requestedBytes));
         $responseBody = new BoundedResponseBody($maxBytes);
 

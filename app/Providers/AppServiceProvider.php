@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Application\Access\AccessControl;
+use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
@@ -28,6 +29,9 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->bind(DnsResolver::class, SystemDnsResolver::class);
         $this->app->bind(SshDialAddressPolicy::class, SshTcpAddressPolicy::class);
+        // One DB read per HTTP request/CLI maintenance invocation when used;
+        // a later request/worker sees the persisted setting after Admin save.
+        $this->app->scoped(OperationalSettings::class);
 
         // Default file-backed rate counters must not lose updates when several
         // PHP workers hit the same edge/client bucket simultaneously.

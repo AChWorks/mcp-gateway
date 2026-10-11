@@ -31,6 +31,9 @@
                 @can('security.manage')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.oauth-clients.*')]) href="{{ route('admin.oauth-clients.index') }}">{{ __('AI clients') }}</a>
                 @endcan
+                @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
+                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.operations.*')]) href="{{ route('admin.operations.index') }}">{{ __('Operations') }}</a>
+                @endif
                 @can('activity.view')
                     <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>
                 @endcan
