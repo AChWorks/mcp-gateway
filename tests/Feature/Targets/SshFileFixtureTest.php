@@ -47,12 +47,15 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame(strlen($bytes), $write['result']['bytes_written']);
         self::assertTrue($write['result']['atomic_publish']);
         self::assertSame('exclusive_hardlink', $write['result']['publish_method']);
+        self::assertSame('remote_readback_sha256', $write['result']['integrity_check']);
+        self::assertMatchesRegularExpression('/^[0-7]{4}$/', $write['result']['published_mode']);
         self::assertSame('127.0.0.1', $write['result']['connected_ip']);
 
         $stat = $tools->stat($owner, $target->target_id, $path);
         self::assertTrue($stat['ok'], json_encode($stat));
         self::assertSame('file', $stat['result']['file']['type']);
         self::assertSame(4, $stat['result']['file']['size']);
+        self::assertSame($write['result']['published_mode'], $stat['result']['file']['mode']);
         $mtime = $stat['result']['file']['mtime'];
         self::assertIsInt($mtime);
 
@@ -85,6 +88,7 @@ final class SshFileFixtureTest extends TestCase
         self::assertTrue($replaced['ok'], json_encode($replaced));
         self::assertTrue($replaced['result']['overwrote']);
         self::assertSame('posix_replace', $replaced['result']['publish_method']);
+        self::assertSame('remote_readback_sha256', $replaced['result']['integrity_check']);
         $final = $tools->read($owner, $target->target_id, $path);
         self::assertTrue($final['ok'], json_encode($final));
         self::assertSame($replacement, base64_decode($final['result']['data'], true));

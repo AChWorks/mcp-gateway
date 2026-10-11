@@ -53,7 +53,7 @@ final readonly class SshVerifiedTransport
     public function withAuthenticatedSftpSession(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        Closure $operation,
+        Closure $operation, ?int $deadlineNs = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase,
@@ -64,7 +64,7 @@ final readonly class SshVerifiedTransport
 
                 return $operation($ssh, $peerIp);
             },
-            true,
+            true, $deadlineNs,
         );
     }
 
@@ -72,7 +72,7 @@ final readonly class SshVerifiedTransport
     private function withAuthenticatedOperation(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        Closure $operation, bool $requireSftp,
+        Closure $operation, bool $requireSftp, ?int $deadlineNs = null,
     ): mixed {
         $privateKey = null;
         $rsaClientAuthentication = false;
@@ -91,11 +91,14 @@ final readonly class SshVerifiedTransport
             throw new SshTargetConnectionException('credential_invalid');
         }
 
+        $this->assertDeadline($deadlineNs);
         try {
             $approved = $this->policy->approvedDialAddresses($endpoint);
         } catch (Throwable) {
             throw new SshTargetConnectionException('egress_denied');
         }
+
+        $this->assertDeadline($deadlineNs);
 
         // One approved connection attempt. In particular, never retry a key
         // mismatch against a different DNS answer or silently rebind a Target.
@@ -106,13 +109,16 @@ final readonly class SshVerifiedTransport
         $address = 'tcp://'.(str_contains($ip, ':') ? '['.$ip.']' : $ip).':'.$endpoint->port;
         $errno = 0;
         $error = '';
-        $socket = @stream_socket_client($address, $errno, $error, 5, STREAM_CLIENT_CONNECT);
+        $socket = @stream_socket_client(
+            $address, $errno, $error, $this->boundedTimeout(5, $deadlineNs), STREAM_CLIENT_CONNECT,
+        );
         if (! is_resource($socket)) {
             throw new SshTargetConnectionException('tcp_unreachable');
         }
 
         $ssh = null;
         try {
+            $this->assertDeadline($deadlineNs);
             $peer = @stream_socket_get_name($socket, true);
             $peerHost = is_string($peer) ? parse_url('tcp://'.$peer, PHP_URL_HOST) : false;
             $peerPort = is_string($peer) ? parse_url('tcp://'.$peer, PHP_URL_PORT) : false;
@@ -124,16 +130,22 @@ final readonly class SshVerifiedTransport
 
             try {
                 $ssh = $requireSftp
-                    ? new SshSubsystemOnlySftp($socket, $endpoint->port, 8)
+                    ? new SshSubsystemOnlySftp($socket, $endpoint->port, $this->boundedTimeout(8, $deadlineNs))
                     : new SSH2($socket, $endpoint->port, 8);
-                $ssh->setTimeout(8);
+                $ssh->setTimeout($this->boundedTimeout(8, $deadlineNs));
+                if ($ssh instanceof SshSubsystemOnlySftp && $deadlineNs !== null) {
+                    $ssh->startOperationDeadline($deadlineNs);
+                }
                 $ssh->setPreferredAlgorithms(
                     $this->algorithms->preferredAlgorithms($pin, $rsaClientAuthentication),
                 );
                 $serverKey = $ssh->getServerPublicHostKey();
+            } catch (SshTargetConnectionException $exception) {
+                throw $exception;
             } catch (Throwable) {
                 throw new SshTargetConnectionException('ssh_handshake_failed');
             }
+            $this->assertDeadline($deadlineNs);
             if (! is_string($serverKey) || ! $pin->matches($serverKey)) {
                 throw new SshTargetConnectionException('host_key_mismatch');
             }
@@ -142,12 +154,22 @@ final readonly class SshVerifiedTransport
                 $authenticated = $authMethod === 'password'
                     ? $ssh->login($endpoint->username, $secret)
                     : $ssh->login($endpoint->username, $privateKey);
+            } catch (SshTargetConnectionException $exception) {
+                throw $exception;
             } catch (Throwable) {
                 throw new SshTargetConnectionException('authentication_failed');
             }
 
             if (! $authenticated) {
                 throw new SshTargetConnectionException('authentication_failed');
+            }
+
+            $this->assertDeadline($deadlineNs);
+            if ($requireSftp && $deadlineNs !== null) {
+                // phpseclib's SSH identification uses stream_select(), which
+                // may not work on filtered sockets. Attach AFTER verified login.
+                // This bounds all subsequent raw SFTP channel reads/writes.
+                SshSocketDeadline::attach($socket, $deadlineNs);
             }
 
             return $operation($ssh, $peerIp);
@@ -164,5 +186,23 @@ final readonly class SshVerifiedTransport
                 fclose($socket);
             }
         }
+    }
+
+    private function assertDeadline(?int $deadlineNs): void
+    {
+        if ($deadlineNs !== null && hrtime(true) >= $deadlineNs) {
+            throw new SshTargetConnectionException('transfer_timed_out');
+        }
+    }
+
+    private function boundedTimeout(int $maximumSeconds, ?int $deadlineNs): int
+    {
+        if ($deadlineNs === null) {
+            return $maximumSeconds;
+        }
+
+        $this->assertDeadline($deadlineNs);
+
+        return max(1, min($maximumSeconds, (int) ceil(($deadlineNs - hrtime(true)) / 1_000_000_000)));
     }
 }
