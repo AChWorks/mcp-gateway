@@ -16,7 +16,7 @@ A Target has a stable `target_id`, explicit Gateway user/client/Target access ch
 - HTTPS/DNS/redirect protections, `php artisan gateway:check` diagnostics, and PHP 8.4 + MariaDB 10.11 primary deployment compatibility.
 - Clean deployment ZIP/web installer and guarded browser-update ZIP for aaPanel and compatible hosting.
 
-**Upgrade compatibility:** installations using the Target model on v2.0.0 or v2.0.1 can update to v2.0.2 without an intentional connection or authorization reset. Earlier **Site-era v1.x → Target v2.x** upgrades are breaking: retired Site registrations, Site groups, and incompatible WordPress/ChatGPT authorizations must be reset under exact package-bound consent and an independently restorable database backup. An updater code backup is not a database backup. See [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md) and [release notes](RELEASE_NOTES.md).
+**Upgrade compatibility:** the v2.0.3 maintenance patch preserves existing Target/client credentials and authorizations for compatible Target-era v2.0.0, v2.0.1 and v2.0.2 upgrades without an intentional connection or access reset. Earlier **Site-era v1.x → Target v2.x** upgrades are breaking: retired Site registrations, Site groups, and incompatible WordPress/ChatGPT authorizations must be reset under exact package-bound consent and an independently restorable database backup. An updater code backup is not a database backup. See [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md) and [release notes](RELEASE_NOTES.md).
 
 ## Requirements
 
