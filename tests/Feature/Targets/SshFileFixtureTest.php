@@ -83,12 +83,19 @@ final class SshFileFixtureTest extends TestCase
         $changed = $tools->read($owner, $target->target_id, $path, 0, 4, 5, $mtime);
         self::assertSame('source_changed', $changed['error']['code']);
 
+        // An explicit replacement must preserve a previously private mode.
+        $chmod = app(SshCommandMcpToolHandlers::class)->run(
+            $owner, $target->target_id, 'chmod 600 '.escapeshellarg($path),
+        );
+        self::assertTrue($chmod['ok'], json_encode($chmod));
+
         $replacement = "\x00\xfe";
         $replaced = $tools->write($owner, $target->target_id, $path, base64_encode($replacement), true, 4, $mtime);
         self::assertTrue($replaced['ok'], json_encode($replaced));
         self::assertTrue($replaced['result']['overwrote']);
         self::assertSame('posix_replace', $replaced['result']['publish_method']);
         self::assertSame('remote_readback_sha256', $replaced['result']['integrity_check']);
+        self::assertSame('0600', $replaced['result']['published_mode']);
 
         // Optional stale preconditions reject a mismatch, without publishing.
         $stale = $tools->write($owner, $target->target_id, $path, base64_encode('stale'), true, 4, $mtime);
@@ -101,6 +108,7 @@ final class SshFileFixtureTest extends TestCase
         self::assertTrue($simple['ok'], json_encode($simple));
         self::assertTrue($simple['result']['overwrote']);
         self::assertSame('posix_replace', $simple['result']['publish_method']);
+        self::assertSame('0600', $simple['result']['published_mode']);
 
         $final = $tools->read($owner, $target->target_id, $path);
         self::assertTrue($final['ok'], json_encode($final));
