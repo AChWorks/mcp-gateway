@@ -34,6 +34,16 @@ The locked phpseclib 4.0.2 SFTP client has a shell exec fallback when the SFTP s
 
 Large authenticated binary-stream HTTP upload/download, strict immutable-source identity, interrupted large-transfer recovery, key rotation/re-enrollment and private/VPN destination approval are OUTSTANDING #123/#112 work. Do not call bounded base64 MCP payloads streamed transfer or claim this candidate is installed.
 
+## Internal SFTP byte-stream candidate (not a public file endpoint)
+
+[PR #148](https://github.com/AChWorks/mcp-gateway/pull/148) is stacked on the SFTP parent [PR #146](https://github.com/AChWorks/mcp-gateway/pull/146). Its internal `SshFileRuntime::downloadToStream()` and `uploadFromStream()` move binary data between already-staged local streams and authorized SFTP Targets. These are **not** public MCP tools, ChatGPT file ingress/output, HTTP upload/download endpoints or proof of real client handoff; those outcomes remain under [#147](https://github.com/AChWorks/mcp-gateway/issues/147). No release or deployment is implied.
+
+**Safety and cost:** Reuse the parent's shared SFTP frame, request-ID and response-buffer budgets (maximum 256 KiB per response frame, 2 MiB/64 frames per completed batch), authenticated identity, and monotonic socket/operation deadline. The internal stream operation supplies a validated 1–40 second budget within the 90-second admission lease, and sends source data in 64 KiB blocks instead of buffering a whole file in PHP. Only seekable local regular streams are accepted; no raw sockets, arbitrary stream wrappers or unbounded request bodies. A caller-controlled maximum byte count is enforced. Reads validate length, best-effort source metadata and optional SHA-256; callers must discard any partial sink after failure.
+
+**Writes:** The caller must provide an existing same-filesystem remote staging directory owned by its SFTP principal and restricted to 0700. Each upload checks its new zero-byte inode's ownership, applies 0600 and verifies privacy **before** writing nonempty bytes; length and SHA-256 are verified through remote readback. Create-only publishing uses an exclusive OpenSSH hardlink; explicit `overwrite=true` uses atomic POSIX replacement of an existing regular file, preserving its previous file mode. Optional paired size/mtime checks are best-effort before publication, **not atomic CAS**; concurrent authorized overwrites may be last-writer-wins. After uncertain mutations, return `outcome_unknown` and never blindly retry. Staging cleanup remains best-effort on interruption.
+
+The full transfer lifecycle, authenticated client-file ingress/egress, supported host constraints, quotas and model-readable output require separate #147/#112 acceptance. Do not treat this internal backend as an installed or released file-transfer feature.
+
 ## Product boundary
 
 `ssh_direct` is a **separate, built-in Target connector** for explicitly registered Linux/Unix SSH servers **without requiring AI Server Agent installation**. It supports username/password and username/private-key (+ optional passphrase) authentication. The user selects the remote OS account; the server's account permissions determine actual command privileges, including `sudo` and root when that account is legitimately configured for them.
