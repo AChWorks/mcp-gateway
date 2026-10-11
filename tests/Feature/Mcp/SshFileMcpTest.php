@@ -4,6 +4,8 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
 use App\Application\Mcp\SshFileMcpToolHandlers;
+use App\Application\Targets\SshFileRuntime;
+use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -97,6 +99,16 @@ final class SshFileMcpTest extends TestCase
         $activity = (string) json_encode(DB::table('activity_events')->where('operation', 'like', 'ssh-file-%')->get(), JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString('Fixture: no remote network allowed.', $activity);
         self::assertStringNotContainsString('/sample', $activity);
+
+        // Internal (non-MCP) callers must not contact SSH for a revoked user.
+        $owner->access_enabled = false;
+        $owner->save();
+        try {
+            app(SshFileRuntime::class)->stat($owner, $target, '/sample');
+            self::fail('Revoked principals must fail before remote transport.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('target_not_found', $exception->reason);
+        }
     }
 
     private function target(): Target

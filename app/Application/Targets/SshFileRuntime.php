@@ -387,14 +387,23 @@ final readonly class SshFileRuntime
         ): array {
             $this->ensureFileDeadline($deadlineNs);
             $fresh = Target::query()->whereKey($target->getKey())->first();
+            $freshUser = User::query()->whereKey($user->getKey())->first();
+            // Internal streamed callers do not pass through the public MCP
+            // dispatcher. Denied/revoked principals must be rejected BEFORE
+            // opening SSH credentials or contacting a remote Target.
+            if (! $fresh instanceof Target || $fresh->connector_type !== 'ssh_direct'
+                || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)
+                || ! $freshUser instanceof User
+                || ! $this->access->allows($freshUser, $permission, $fresh)) {
+                throw new SshTargetConnectionException('target_not_found');
+            }
+
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             $credential = TargetCredential::query()
                 ->where('target_record_id', $target->getKey())
                 ->where('connector_type', 'ssh_direct')
                 ->where('purpose', SshTargetVault::PURPOSE)->first();
-            if (! $fresh instanceof Target || $fresh->connector_type !== 'ssh_direct'
-                || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)
-                || ! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
+            if (! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
