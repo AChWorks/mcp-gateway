@@ -181,7 +181,9 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             // callback. Replace the factory so this test's failures are real.
             Http::swap(new HttpClientFactory);
             Http::preventStrayRequests();
-            Http::fake(function (Request $request) use ($failure, &$executed): PromiseInterface {
+            // Http::failedConnection() returns a deferred fake Closure,
+            // unlike Http::response() which returns a PromiseInterface.
+            Http::fake(function (Request $request) use ($failure, &$executed) {
                 $payload = $request->data();
                 $ability = $payload['params']['arguments']['ability_name'] ?? null;
                 if (($payload['method'] ?? null) === 'tools/call') {
