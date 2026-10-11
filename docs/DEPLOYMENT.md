@@ -471,3 +471,37 @@ These external references were checked while establishing this baseline. Reposit
 - aaPanel site deployment notes: https://www.aapanel.com/docs/faq/Site_Related.html
 
 V1 production-like readiness evidence was completed under Issue #8 and is preserved in the repository/GitHub history. Future releases must revalidate only deployment assumptions materially changed by that release.
+
+## Owner operational settings — source implementation pending reviewed release (#153)
+
+After the operational-settings migration and an independently accepted public
+release/update, the Owner-only /admin/operations page can edit and reset two
+finite downstream WordPress response budgets without changing the environment,
+code or PHP-FPM processes. Each write requires Owner authentication, the current
+password, CSRF protection and a version match; a DB transaction writes each
+changed non-secret key, old/new numeric values, actor ID and time to a dedicated
+audit table. Blank fields restore the exact existing env/config defaults.
+
+| Budget | Original fallback | Provisional Owner override |
+| --- | --- | --- |
+| Ordinary, OAuth and potentially mutating HTTP responses | BRIDGE_REMOTE_MAX_RESPONSE_BYTES, 64 KiB | 16–1024 KiB |
+| Authenticated confirmed readonly WordPress MCP result | BRIDGE_REMOTE_READONLY_TOOL_MAX_RESPONSE_BYTES, 256 KiB | 16–2048 KiB |
+
+These values bound the decoded downstream HTTP response including its JSON-RPC
+envelope; they are NOT full-file or client-upload maxima. The separate absolute
+8 MiB decoded-response ceiling, real Target/client authorization, no blind
+mutation replay, SSRF/host identity policy, and OAuth provider timing contracts
+remain independent security safeguards. Ranges are deliberately provisional,
+NOT measured optimal host profiles: see #153 for benchmarking, #154 for
+Bridge-vNext and actual client/WordPress/SSH effective-limit compatibility.
+
+Each new PHP request or new Artisan maintenance command reads persistent
+overrides. With no override, original environment/config behavior is unchanged,
+including existing non-KiB-aligned defaults; a pre-migration bare HTTP path
+also retains that fallback. The Admin UI requires the new migration. Do not
+represent this source-only functionality as released/installed until separately
+approved exact-version upgrade/rollback and real-host validation.
+
+Connection timeout knobs and their strict interaction with the WordPress
+one-shot refresh recovery window remain outside this initial slice until
+#97 / PR #152 passes its independent security and integration gates.

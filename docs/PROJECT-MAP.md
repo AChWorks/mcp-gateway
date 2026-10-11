@@ -43,6 +43,8 @@ The non-WordPress connector tracks are independent Direct SSH (active) and AI Se
 - [`mcp-gateway#122`](https://github.com/AChWorks/mcp-gateway/issues/122) — completed finite oversize-response foundation; do not reopen for generic file transfer.
 - [`mcp-gateway#130`](https://github.com/AChWorks/mcp-gateway/issues/130) — existing WordPress direct-versus-Gateway Ability parity; not general file ingress.
 - [`mcp-gateway#147`](https://github.com/AChWorks/mcp-gateway/issues/147) — shared, client-neutral **real bidirectional file/data transfer**, adaptive quotas and demonstrated host input/model output; does not duplicate #123 SSH backend.
+- [Gateway Issue #153](https://github.com/AChWorks/mcp-gateway/issues/153) — measured operational budgets and single Owner Admin settings module, distinct from security/provider invariants.
+- [Gateway Issue #154](https://github.com/AChWorks/mcp-gateway/issues/154) — per-layer effective payload/format/capacity and Bridge/client compatibility matrix, not a duplicate data plane.
 - [`mcp-gateway#112`](https://github.com/AChWorks/mcp-gateway/issues/112) — mixed WordPress + SSH final acceptance and release evidence; Agent does not gate current acceptance.
 
 Neither repository's Issue grants mutation authority in the other repository. Recover both contracts and current exact implementation/release evidence before cross-repository compatibility work.

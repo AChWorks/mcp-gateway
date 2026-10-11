@@ -4,6 +4,7 @@ use App\Http\Controllers\Admin\ActivityController;
 use App\Http\Controllers\Admin\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\OAuthClientAuthorizationsController;
+use App\Http\Controllers\Admin\OperationalSettingsController;
 use App\Http\Controllers\Admin\TargetConnectionController;
 use App\Http\Controllers\Admin\TargetController;
 use App\Http\Controllers\Admin\TargetGroupController;
@@ -74,6 +75,10 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::delete('/oauth-clients/authorizations/{authorization}', [OAuthClientAuthorizationsController::class, 'revoke'])
         ->name('oauth-clients.revoke');
 
+    Route::get('/operations', [OperationalSettingsController::class, 'index'])
+        ->name('operations.index');
+    Route::put('/operations', [OperationalSettingsController::class, 'update'])
+        ->name('operations.update');
     Route::get('/activity', ActivityController::class)->name('activity');
     Route::view('/connection', 'admin.connection')
         ->middleware('can:gateway.connection.view')

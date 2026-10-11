@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Connectors\WpAiBridge;
 
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Targets\Target;
@@ -20,6 +21,7 @@ final readonly class WpAiBridgeMcpClient
     public function __construct(
         private SafeHttpClient $http,
         private WpAiBridgeTargetConnectionService $targetConnections,
+        private OperationalSettings $settings,
     ) {}
 
     /** @return array<string, mixed> */
@@ -299,7 +301,7 @@ final readonly class WpAiBridgeMcpClient
                 ],
             ], $headers, $mutationRisk
                 ? null
-                : (int) config('bridge.http.readonly_tool_max_response_bytes', 262144));
+                : $this->settings->responseLimitBytes(true));
         } catch (OutboundRequestException $exception) {
             if (! $mutationRisk && $exception->reason === 'response_too_large') {
                 throw new WpAiBridgeMcpException(
