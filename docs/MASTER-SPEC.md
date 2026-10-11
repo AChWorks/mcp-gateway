@@ -352,6 +352,7 @@ The operator must be able to distinguish at least:
 - Gateway application is healthy/unhealthy;
 - a Target is configured but never connected;
 - a Target connection is usable or requires operator attention;
+- stale health evidence must remain independent from terminal credential loss: Stale means the last authenticated observation is old, **not** that authorization expired, so no automatic revocation, disconnect or re-consent follows from Stale alone. A renewable Target should remain authorized through extended idle time with demand-driven access-token renewal and bounded, infrequent provider refresh-token maintenance where actually necessary; no static non-expiring bearer credential is assumed;
 - connector credentials are expired/revoked/unavailable according to that connector's lifecycle;
 - a Target endpoint is unreachable or incompatible;
 - a Gateway-routed operation succeeded, failed, was denied, or has an unknown mutation outcome where applicable.
