@@ -472,7 +472,7 @@ These external references were checked while establishing this baseline. Reposit
 
 V1 production-like readiness evidence was completed under Issue #8 and is preserved in the repository/GitHub history. Future releases must revalidate only deployment assumptions materially changed by that release.
 
-## Owner operational settings — source implementation pending reviewed release (#153)
+## Owner operational settings — integrated source; release/installation pending (#153)
 
 After the operational-settings migration and an independently accepted public
 release/update, the Owner-only /admin/operations page can edit and reset two
@@ -502,6 +502,8 @@ also retains that fallback. The Admin UI requires the new migration. Do not
 represent this source-only functionality as released/installed until separately
 approved exact-version upgrade/rollback and real-host validation.
 
-Connection timeout knobs and their strict interaction with the WordPress
-one-shot refresh recovery window remain outside this initial slice until
-#97 / PR #152 passes its independent security and integration gates.
+Connection timeout knobs remain outside this first slice. The WordPress
+refresh/recovery fix in PR #152 is integrated in source, but an editable
+connect/request timeout pair must feed both outbound HTTP and the OAuth
+recovery settle/deadline logic coherently. Measure and validate that
+combined policy under #153; changing HTTP timeout alone would be unsafe.
