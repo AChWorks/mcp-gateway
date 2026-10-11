@@ -186,9 +186,8 @@ final readonly class SshFileRuntime
             throw new SshTargetConnectionException('invalid_input');
         }
         $this->validatePrecondition($expectedSize, $expectedMtime);
-        if (($expectedSize !== null) !== $overwrite) {
-            // Create-only is the default; overwrite always needs an explicit
-            // size/mtime comparison to discourage accidental replacement.
+        if (! $overwrite && $expectedSize !== null) {
+            // An expected existing version applies only to replacement.
             throw new SshTargetConnectionException('invalid_input');
         }
 
@@ -304,9 +303,12 @@ final readonly class SshFileRuntime
                         // Atomic exclusive link; no check-then-rename fallback.
                         $sftp->hardlink($temporary, $path);
                     } else {
-                        // Not CAS: lstat + POSIX rename is subject to a
-                        // concurrent writer race. See Issue #123 / Owner gate.
+                        // Explicit atomic replacement. Optional size+mtime
+                        // checks are best-effort, never a remote CAS lock.
                         $latest = $sftp->lstat($path);
+                        if (($latest['type'] ?? null) !== FileType::REGULAR) {
+                            throw new SshTargetConnectionException('unsupported_file_type');
+                        }
                         $this->requireVersion($latest, $expectedSize, $expectedMtime);
                         $sftp->posix_rename($temporary, $path);
                     }

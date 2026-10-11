@@ -89,10 +89,23 @@ final class SshFileFixtureTest extends TestCase
         self::assertTrue($replaced['result']['overwrote']);
         self::assertSame('posix_replace', $replaced['result']['publish_method']);
         self::assertSame('remote_readback_sha256', $replaced['result']['integrity_check']);
+
+        // Optional stale preconditions reject a mismatch, without publishing.
+        $stale = $tools->write($owner, $target->target_id, $path, base64_encode('stale'), true, 4, $mtime);
+        self::assertFalse($stale['ok']);
+        self::assertSame('source_changed', $stale['error']['code']);
+
+        // The common case needs only explicit overwrite=true.
+        $simpleReplacement = 'unconditional';
+        $simple = $tools->write($owner, $target->target_id, $path, base64_encode($simpleReplacement), true);
+        self::assertTrue($simple['ok'], json_encode($simple));
+        self::assertTrue($simple['result']['overwrote']);
+        self::assertSame('posix_replace', $simple['result']['publish_method']);
+
         $final = $tools->read($owner, $target->target_id, $path);
         self::assertTrue($final['ok'], json_encode($final));
-        self::assertSame($replacement, base64_decode($final['result']['data'], true));
-        self::assertSame(2, $final['result']['size']);
+        self::assertSame($simpleReplacement, base64_decode($final['result']['data'], true));
+        self::assertSame(strlen($simpleReplacement), $final['result']['size']);
 
         $activity = (string) json_encode(DB::table('activity_events')->where('operation', 'like', 'ssh-file-%')->get(), JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString($path, $activity);

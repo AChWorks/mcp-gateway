@@ -234,7 +234,7 @@ final readonly class GatewayMcpEndpoint
                     $expected_size, $expected_mtime,
                 ),
                 name: 'ssh-file-write',
-                description: 'Write <=16 KiB of base64 bytes to a remote SFTP path. Create-only by default; explicit size+mtime precondition and atomic replacement required for overwrite. Remote mutations have unknown-outcome semantics.',
+                description: 'Write <=16 KiB of base64 bytes to a remote SFTP path. Create-only by default; overwrite=true atomically replaces an existing regular file without requiring size+mtime. Optional expected_size+expected_mtime are paired best-effort preflight checks, not atomic compare-and-swap. Uncertain remote mutations return outcome_unknown; never retry blindly.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
