@@ -59,7 +59,7 @@ final class SshFileMcpTest extends TestCase
         ]);
         $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
         {
-            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint): array
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
             {
                 throw new RuntimeException('Fixture: no remote network allowed.');
             }

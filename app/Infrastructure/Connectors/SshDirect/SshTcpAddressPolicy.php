@@ -21,20 +21,26 @@ final class SshTcpAddressPolicy implements SshDialAddressPolicy
 {
     private const MAX_DNS_ADDRESSES = 16;
 
+    private readonly SshDeadlineDnsResolver $boundedDns;
+
     public function __construct(
         private readonly DnsResolver $dns,
         private readonly PublicIpAddressPolicy $publicIps,
-    ) {}
+        ?SshDeadlineDnsResolver $boundedDns = null,
+    ) {
+        $this->boundedDns = $boundedDns ?? new SshDeadlineDnsResolver;
+    }
 
     /** @return non-empty-list<string> Canonical, policy-approved numeric TCP peer candidates. */
-    public function approvedDialAddresses(SshRegisteredEndpoint $endpoint): array
+    public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
     {
         $literal = $endpoint->configuredIp();
-        // A canonical registered DNS hostname is displayed without its root
-        // dot, but must always resolve as an absolute FQDN. Otherwise the
-        // system resolver may append search domains and authorize a different
-        // (even publicly addressed) destination.
-        $answers = $literal === null ? $this->dns->resolve($endpoint->host.'.') : [$literal];
+        // Absolute registered FQDN; no search suffixes. SFTP uses an async
+        // DNS query sharing its whole-operation monotonic deadline. Commands
+        // retain the existing system resolver and the same public-IP policy.
+        $answers = $literal !== null ? [$literal] : ($deadlineNs === null
+            ? $this->dns->resolve($endpoint->host.'.')
+            : $this->boundedDns->resolveBeforeDeadline($endpoint->host.'.', $deadlineNs));
 
         if ($answers === [] || count($answers) > self::MAX_DNS_ADDRESSES) {
             throw new RuntimeException('SSH destination has no bounded approved DNS address set.');
