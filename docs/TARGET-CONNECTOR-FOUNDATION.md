@@ -906,6 +906,8 @@ The implementation program must prove at least:
 
 ## 18. Future connector admission rule
 
+The practical [connector integration guide](CONNECTOR-INTEGRATION-GUIDE.md) documents supported built-in adapter requirements, correct long-lived credential renewal, error classes and future-connector acceptance. In particular, Stale health never expires an authorized connection, access-token TTL must not force unnecessary idle refresh-token rotation, and a connector without renewable credentials gets no periodic OAuth maintenance.
+
 A fourth or later connector should not require another generic-domain rename. The third accepted connector is `ssh_direct`.
 
 Before adding one, document:

@@ -13,6 +13,8 @@ use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\OAuth\GatewayBridgeClientIdentity;
 use DateTimeImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -367,6 +369,67 @@ final readonly class WpAiBridgeTargetConnectionService
         return $this->exchangeRefresh($recordId, $plan);
     }
 
+    /**
+     * Operational WP OAuth path: one exact-bound recovery after an ambiguous
+     * lost refresh response, with a fresh client assertion and no third replay.
+     * This rare path may wait briefly; successful requests never sleep.
+     *
+     * @return array{resource_url:string,access_token:string}
+     */
+    public function routingContextWithRecovery(Target $target, bool $renewIfDue = false): array
+    {
+        try {
+            return $this->routingContext($target, $renewIfDue);
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            if ($exception->reason !== 'refresh_ambiguous') {
+                throw $exception;
+            }
+        }
+
+        return $this->recoverAmbiguousRefresh($target);
+    }
+
+    /**
+     * An exact old-token retry is permitted only within the Bridge's 60s
+     * single-use recovery contract. The existing request-local intent,
+     * generation and target/revocation locks remain authoritative.
+     *
+     * @return array{resource_url:string,access_token:string}
+     */
+    public function recoverAmbiguousRefresh(Target $target): array
+    {
+        $recordId = (string) $target->getKey();
+        $intent = DB::table('wp_ai_bridge_refresh_intents')
+            ->where('target_record_id', $recordId)->first(['created_at', 'attempts']);
+        $createdAt = $intent === null ? false : strtotime((string) $intent->created_at);
+        $age = $createdAt === false ? 45 : time() - $createdAt;
+        $minimumAge = max(12, (int) config('bridge.http.request_timeout_seconds', 5) + 5);
+        if ($intent === null || (int) $intent->attempts !== 1
+            || $createdAt === false || $age < 0 || $age >= 45 || $minimumAge >= 45) {
+            throw new WpAiBridgeTargetConnectionException('refresh_pending',
+                'The uncertain WordPress refresh cannot be safely replayed.');
+        }
+
+        if ($age < $minimumAge) {
+            Sleep::sleep($minimumAge - $age);
+        }
+
+        // Time may jump between reading the intent and completing a wait.
+        // Reread after waiting; never let the command's sleep reopen a
+        // spent recovery window or a previously used recovery attempt.
+        $intent = DB::table('wp_ai_bridge_refresh_intents')
+            ->where('target_record_id', $recordId)->first(['created_at', 'attempts']);
+        $createdAt = $intent === null ? false : strtotime((string) $intent->created_at);
+        $age = $createdAt === false ? 45 : time() - $createdAt;
+        if ($intent === null || (int) $intent->attempts !== 1
+            || $createdAt === false || $age < $minimumAge || $age >= 45) {
+            throw new WpAiBridgeTargetConnectionException('refresh_pending',
+                'The WordPress refresh recovery window has expired or changed.');
+        }
+
+        return $this->routingContext($target);
+    }
+
     public function accessToken(Target $target): string
     {
         return $this->routingContext($target)['access_token'];
@@ -390,6 +453,12 @@ final readonly class WpAiBridgeTargetConnectionService
                 'client_assertion' => $this->identity->assertion($plan['token_url']),
             ]);
         } catch (OutboundRequestException $exception) {
+            // Retain only the safe failure classification, never remote
+            // response bodies, OAuth requests, tokens or client assertions.
+            Log::warning('WordPress OAuth refresh transport outcome ambiguous.', [
+                'target_record_id' => $recordId,
+                'cause_code' => $exception->reason,
+            ]);
             $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
             throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
                 'The WordPress refresh outcome is unknown; do not retry an uncontrolled token rotation.');
@@ -401,6 +470,11 @@ final readonly class WpAiBridgeTargetConnectionService
             $terminal = $response->status < 500
                 && ! in_array($response->status, [408, 429], true);
             $reason = $terminal ? 'refresh_rejected' : 'refresh_ambiguous';
+            Log::warning('WordPress OAuth refresh request declined.', [
+                'target_record_id' => $recordId,
+                'http_status' => $response->status,
+                'cause_code' => $reason,
+            ]);
             $this->recordRefreshFailure($recordId, $plan, $reason, $terminal);
             throw new WpAiBridgeTargetConnectionException($reason,
                 'WordPress did not confirm a usable refreshed credential.');
@@ -418,6 +492,10 @@ final readonly class WpAiBridgeTargetConnectionService
                     'WordPress returned an incorrectly scoped or unrotated credential.');
             }
         } catch (OutboundRequestException|WpAiBridgeTargetConnectionException $exception) {
+            Log::warning('WordPress OAuth refresh response failed validation.', [
+                'target_record_id' => $recordId,
+                'cause_code' => $exception->reason,
+            ]);
             $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
             throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
                 'WordPress returned an unusable response to a possibly completed token rotation.');
@@ -854,15 +932,21 @@ final readonly class WpAiBridgeTargetConnectionService
         }
 
         $issuedAt = time();
+        // Only a refresh token's own finite lifetime determines when an
+        // *idle* connected Target needs maintenance. Access tokens are renewed
+        // on demand when used; using their 1h TTL here rotated a 30-day
+        // offline grant every 30 minutes and amplified transient failures.
+        // Older providers without the additive hint retain the conservative
+        // access-half-life fallback instead of assuming endless offline use.
         $halfAccessTtl = max(1, intdiv((int) $expiresIn, 2));
-        $halfRefreshTtl = $refreshTtl === null ? $halfAccessTtl : max(1, intdiv($refreshTtl, 2));
+        $idleRefreshDelay = $refreshTtl === null ? $halfAccessTtl : max(1, intdiv($refreshTtl, 2));
 
         return [
             'access_token' => $accessToken,
             'refresh_token' => $refreshToken,
             'expires_at' => new DateTimeImmutable('@'.($issuedAt + (int) $expiresIn)),
             'refresh_expires_at' => $refreshTtl === null ? null : new DateTimeImmutable('@'.($issuedAt + $refreshTtl)),
-            'refresh_due_at' => new DateTimeImmutable('@'.($issuedAt + min($halfAccessTtl, $halfRefreshTtl))),
+            'refresh_due_at' => new DateTimeImmutable('@'.($issuedAt + $idleRefreshDelay)),
             'scopes' => $scopes,
         ];
     }
