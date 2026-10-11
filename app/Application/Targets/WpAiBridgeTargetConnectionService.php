@@ -13,6 +13,7 @@ use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Infrastructure\OAuth\GatewayBridgeClientIdentity;
 use DateTimeImmutable;
+use Exception;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
@@ -465,10 +466,12 @@ final readonly class WpAiBridgeTargetConnectionService
             // Local assertion generation happens AFTER the exact refresh
             // intent is recorded, but BEFORE any token exchange. Scope the
             // exception conversion to this call: never treat an arbitrary
-            // RuntimeException from network I/O as proof of no dispatch.
+            // exception from network I/O as proof of no dispatch. JWT signing
+            // can throw DomainException, not just RuntimeException; both are
+            // safe here because no outbound request has been constructed.
             try {
                 $assertion = $this->identity->assertion($plan['token_url']);
-            } catch (RuntimeException) {
+            } catch (Exception) {
                 throw new OutboundRequestException('client_assertion_unavailable',
                     'WordPress OAuth client assertion could not be prepared.', [], true);
             }
