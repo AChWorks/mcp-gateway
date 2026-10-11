@@ -15,6 +15,7 @@ use App\Models\User;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Factory as HttpClientFactory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -176,6 +177,10 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         foreach (['server_failure', 'network_failure', 'downstream_auth'] as $failure) {
             $executed = [];
             $this->downstream = [];
+            // The setUp fake is catch-all; using fake() again only appends a
+            // callback. Replace the factory so this test's failures are real.
+            Http::swap(new HttpClientFactory);
+            Http::preventStrayRequests();
             Http::fake(function (Request $request) use ($failure, &$executed): PromiseInterface {
                 $payload = $request->data();
                 $ability = $payload['params']['arguments']['ability_name'] ?? null;
@@ -208,9 +213,16 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
 
     public function test_successful_catalog_with_missing_effect_annotations_preserves_explicit_unclassified_grant(): void
     {
-        $owner = $this->user('owner');
-        $this->pair('alpha');
+        $administrator = $this->user('administrator');
+        $target = $this->pair('alpha');
+        DB::table('user_target_access')->insert([
+            'user_id' => $administrator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
         $executed = [];
+        Http::swap(new HttpClientFactory);
+        Http::preventStrayRequests();
         Http::fake(function (Request $request) use (&$executed): PromiseInterface {
             $payload = $request->data();
             $ability = $payload['params']['arguments']['ability_name'] ?? null;
@@ -238,15 +250,15 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             return $this->bridgeResponse($request);
         });
         $handler = app(WordpressTargetMcpToolHandlers::class);
-        $success = $handler->execute($owner, 'alpha', 'plugin/new-ability', []);
+        $success = $handler->execute($administrator, 'alpha', 'plugin/new-ability', []);
         self::assertTrue($success['ok']);
         self::assertSame(['plugin/new-ability'], $executed);
 
         DB::table('user_permission_denials')->insert([
-            'user_id' => $owner->getKey(),
+            'user_id' => $administrator->getKey(),
             'permission' => GatewayPermission::WordpressAbilitiesExecuteUnclassified->value,
         ]);
-        $blocked = $handler->execute($owner, 'alpha', 'plugin/new-ability', []);
+        $blocked = $handler->execute($administrator, 'alpha', 'plugin/new-ability', []);
         self::assertFalse($blocked['ok']);
         self::assertSame('forbidden', $blocked['error']['code']);
         self::assertSame(['plugin/new-ability'], $executed);
