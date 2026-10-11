@@ -13,12 +13,18 @@ use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\OAuth\GatewayBridgeClientIdentity;
 use DateTimeImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use RuntimeException;
 
 final readonly class WpAiBridgeTargetConnectionService
 {
     private const PURPOSE = 'wordpress_oauth';
+
+    // A confirmed pre-rotation Bridge client-auth failure can be retried on a
+    // later request/cron tick; never spin or use the one-shot response recovery.
+    private const CLIENT_AUTH_RETRY_BACKOFF_SECONDS = 60;
 
     public function __construct(
         private WpAiBridgeDiscovery $discovery,
@@ -308,6 +314,19 @@ final readonly class WpAiBridgeTargetConnectionService
                 return ['expired' => true];
             }
 
+            // When the Bridge definitively declined client authentication
+            // before consuming a refresh token, delay only the next operation.
+            if ($intent === null && ! $accessStillValid
+                && $dueAt !== null && $dueAt > time()
+                && (string) $locked->last_error_code === 'refresh_unavailable') {
+                throw new WpAiBridgeTargetConnectionException('refresh_unavailable',
+                    'WordPress client authentication is temporarily unavailable; retry after the bounded backoff.');
+            }
+
+            $isRecovery = $intent !== null;
+            $refreshStartedAt = $intent === null
+                ? time()
+                : (new DateTimeImmutable((string) $intent->created_at))->getTimestamp();
             if ($intent === null) {
                 $intentId = (string) Str::ulid();
                 DB::table('wp_ai_bridge_refresh_intents')->insert([
@@ -353,6 +372,8 @@ final readonly class WpAiBridgeTargetConnectionService
                 'scopes' => $secret['scopes'],
                 'token_url' => (string) $config->oauth_token_url,
                 'database_session_id' => $this->databaseSessionId(),
+                'is_recovery' => $isRecovery,
+                'refresh_started_at' => $refreshStartedAt,
             ];
         });
 
@@ -367,13 +388,74 @@ final readonly class WpAiBridgeTargetConnectionService
         return $this->exchangeRefresh($recordId, $plan);
     }
 
+    /**
+     * Operational WP OAuth path: one exact-bound recovery after an ambiguous
+     * lost refresh response, with a fresh client assertion and no third replay.
+     * This rare path may wait briefly; successful requests never sleep.
+     *
+     * @return array{resource_url:string,access_token:string}
+     */
+    public function routingContextWithRecovery(Target $target, bool $renewIfDue = false): array
+    {
+        try {
+            return $this->routingContext($target, $renewIfDue);
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            if ($exception->reason !== 'refresh_ambiguous') {
+                throw $exception;
+            }
+        }
+
+        return $this->recoverAmbiguousRefresh($target);
+    }
+
+    /**
+     * An exact old-token retry is permitted only within the Bridge's 60s
+     * single-use recovery contract. The existing request-local intent,
+     * generation and target/revocation locks remain authoritative.
+     *
+     * @return array{resource_url:string,access_token:string}
+     */
+    public function recoverAmbiguousRefresh(Target $target): array
+    {
+        $recordId = (string) $target->getKey();
+        $intent = DB::table('wp_ai_bridge_refresh_intents')
+            ->where('target_record_id', $recordId)->first(['created_at', 'attempts']);
+        $createdAt = $intent === null ? false : strtotime((string) $intent->created_at);
+        $age = $createdAt === false ? 45 : time() - $createdAt;
+        $minimumAge = max(12, (int) config('bridge.http.request_timeout_seconds', 5) + 5);
+        if ($intent === null || (int) $intent->attempts !== 1
+            || $createdAt === false || $age < 0 || $age >= 45 || $minimumAge >= 45) {
+            throw new WpAiBridgeTargetConnectionException('refresh_pending',
+                'The uncertain WordPress refresh cannot be safely replayed.');
+        }
+
+        if ($age < $minimumAge) {
+            Sleep::sleep($minimumAge - $age);
+        }
+
+        // Time may jump between reading the intent and completing a wait.
+        // Reread after waiting; never let the command's sleep reopen a
+        // spent recovery window or a previously used recovery attempt.
+        $intent = DB::table('wp_ai_bridge_refresh_intents')
+            ->where('target_record_id', $recordId)->first(['created_at', 'attempts']);
+        $createdAt = $intent === null ? false : strtotime((string) $intent->created_at);
+        $age = $createdAt === false ? 45 : time() - $createdAt;
+        if ($intent === null || (int) $intent->attempts !== 1
+            || $createdAt === false || $age < $minimumAge || $age >= 45) {
+            throw new WpAiBridgeTargetConnectionException('refresh_pending',
+                'The WordPress refresh recovery window has expired or changed.');
+        }
+
+        return $this->routingContext($target);
+    }
+
     public function accessToken(Target $target): string
     {
         return $this->routingContext($target)['access_token'];
     }
 
     /**
-     * @param  array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int}  $plan
+     * @param  array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int}  $plan
      * @return array{resource_url:string,access_token:string}
      */
     private function exchangeRefresh(string $recordId, array $plan): array
@@ -390,24 +472,64 @@ final readonly class WpAiBridgeTargetConnectionService
                 'client_assertion' => $this->identity->assertion($plan['token_url']),
             ]);
         } catch (OutboundRequestException $exception) {
+            // Retain only the safe failure classification, never remote
+            // response bodies, OAuth requests, tokens or client assertions.
+            Log::warning('WordPress OAuth refresh transport outcome ambiguous.', [
+                'target_record_id' => $recordId,
+                'cause_code' => $exception->reason,
+            ]);
             $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
             throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
                 'The WordPress refresh outcome is unknown; do not retry an uncontrolled token rotation.');
         }
 
         if ($response->status !== 200) {
-            // Only a transient/ambiguous response may use WP's one-shot
-            // recovery. A definitive 4xx cannot be blindly replayed.
-            $terminal = $response->status < 500
-                && ! in_array($response->status, [408, 429], true);
+            // Bridge emits HTTP 400 OAuth errors even for temporary dependency
+            // failures before any refresh token was consumed. Only an exact
+            // bounded provider error code can establish a definite rejection.
+            $oauthError = null;
+            if ($response->status === 400) {
+                try {
+                    $body = $response->json();
+                    $oauthError = is_string($body['error'] ?? null) ? $body['error'] : null;
+                } catch (OutboundRequestException) {
+                    // Malformed errors prove neither pre-consumption nor a
+                    // rejected grant; keep the uncertain-outcome fence.
+                }
+            }
+            if ($oauthError === 'invalid_client' && ! $plan['is_recovery']) {
+                // The pinned WP Bridge returns invalid_client before rotating.
+                // A second attempt's invalid_client does NOT prove its first
+                // ambiguous predecessor was unconsumed: never clear that intent.
+                $this->deferUnconsumedRefresh($recordId, $plan);
+                Log::warning('WordPress OAuth refresh client authentication unavailable.', [
+                    'target_record_id' => $recordId,
+                    'http_status' => $response->status,
+                    'cause_code' => 'refresh_unavailable',
+                ]);
+                throw new WpAiBridgeTargetConnectionException('refresh_unavailable',
+                    'WordPress client authentication failed before consuming the offline grant.');
+            }
+            // temporarily_unavailable can also occur after a staged/committed
+            // successor; retain the strict bounded one-shot recovery policy.
+            $terminal = $response->status === 400
+                && in_array($oauthError, ['invalid_grant', 'invalid_scope', 'invalid_target'], true);
             $reason = $terminal ? 'refresh_rejected' : 'refresh_ambiguous';
+            Log::warning('WordPress OAuth refresh request declined.', [
+                'target_record_id' => $recordId,
+                'http_status' => $response->status,
+                'cause_code' => $reason,
+            ]);
             $this->recordRefreshFailure($recordId, $plan, $reason, $terminal);
             throw new WpAiBridgeTargetConnectionException($reason,
                 'WordPress did not confirm a usable refreshed credential.');
         }
 
         try {
-            $token = $this->parseToken($response->json());
+            // A recovered response repeats the ORIGINAL successor lifetimes.
+            // Anchoring to the first attempt conservatively avoids extending
+            // expiration when the 60-second recovery response is delayed.
+            $token = $this->parseToken($response->json(), $plan['refresh_started_at']);
             $oldScopes = $plan['scopes'];
             $newScopes = $token['scopes'];
             sort($oldScopes);
@@ -418,6 +540,10 @@ final readonly class WpAiBridgeTargetConnectionService
                     'WordPress returned an incorrectly scoped or unrotated credential.');
             }
         } catch (OutboundRequestException|WpAiBridgeTargetConnectionException $exception) {
+            Log::warning('WordPress OAuth refresh response failed validation.', [
+                'target_record_id' => $recordId,
+                'cause_code' => $exception->reason,
+            ]);
             $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
             throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
                 'WordPress returned an unusable response to a possibly completed token rotation.');
@@ -489,7 +615,75 @@ final readonly class WpAiBridgeTargetConnectionService
         });
     }
 
-    /** @param array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int} $plan */
+    /**
+     * HTTP 400 invalid_client from the pinned WordPress Bridge is returned
+     * BEFORE any refresh exchange, including temporary JWKS/metadata outages.
+     * Recheck every live binding before clearing only this unconsumed intent.
+     *
+     * @param  array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int}  $plan
+     */
+    private function deferUnconsumedRefresh(string $recordId, array $plan): void
+    {
+        $this->assertDatabaseSessionId($plan['database_session_id']);
+        $this->withLockedTarget($recordId, function (Target $locked) use ($plan): void {
+            $intent = DB::table('wp_ai_bridge_refresh_intents')
+                ->where('target_record_id', $locked->getKey())->first();
+            $credential = $this->credential($locked);
+            $metadata = $credential instanceof TargetCredential
+                ? DB::table('wp_ai_bridge_credential_metadata')
+                    ->where('credential_id', $credential->getKey())->first()
+                : null;
+            $config = $this->configuration((string) $locked->getKey());
+            if ($plan['is_recovery'] || $intent === null
+                || (string) $intent->id !== $plan['intent_id']
+                || (string) $intent->credential_id !== $plan['credential_id']
+                || (int) $intent->generation !== $plan['generation']
+                || (int) $intent->attempts !== 1
+                || $credential?->getKey() !== $plan['credential_id']
+                || $metadata === null || (int) $metadata->generation !== $plan['generation']
+                || $this->hasRevocationIntent($locked)
+                || $locked->getAttribute('connection_state') !== TargetConnectionState::Connected
+                || ! hash_equals((string) $config->mcp_resource_url, $plan['resource_url'])
+                || ! hash_equals((string) $config->oauth_token_url, $plan['token_url'])
+                || ! hash_equals($this->identity->clientId(), $plan['client_id'])) {
+                throw new WpAiBridgeTargetConnectionException('refresh_conflict',
+                    'WordPress Target or credential changed during refresh deferral.');
+            }
+            try {
+                $secret = $this->vault->openCredential($locked, $credential);
+            } catch (RuntimeException) {
+                throw new WpAiBridgeTargetConnectionException('credential_unavailable',
+                    'WordPress credential binding was lost during refresh.');
+            }
+            if (! hash_equals($secret['refresh_token'], $plan['refresh_token'])
+                || ! hash_equals($secret['client_id'], $plan['client_id'])
+                || ! hash_equals($secret['resource_url'], $plan['resource_url'])) {
+                throw new WpAiBridgeTargetConnectionException('refresh_conflict',
+                    'WordPress offline grant changed during refresh deferral.');
+            }
+
+            // The refresh source was not consumed; pace only later requests
+            // using the existing indexed due timestamp. Prefer a last safe
+            // attempt before the known absolute refresh expiration.
+            $delay = self::CLIENT_AUTH_RETRY_BACKOFF_SECONDS;
+            if ($metadata->refresh_expires_at !== null) {
+                $remaining = strtotime((string) $metadata->refresh_expires_at) - time();
+                $delay = min($delay, max(1, $remaining - 5));
+            }
+            DB::table('wp_ai_bridge_credential_metadata')
+                ->where('credential_id', $credential->getKey())
+                ->update(['refresh_due_at' => now()->addSeconds($delay)]);
+            DB::table('wp_ai_bridge_refresh_intents')->where('id', $intent->id)->delete();
+            $locked->forceFill([
+                'connection_state' => TargetConnectionState::Connected,
+                'last_error_code' => 'refresh_unavailable',
+                'last_failure_at' => now(),
+                'last_failure_code' => 'refresh_unavailable',
+            ])->save();
+        });
+    }
+
+    /** @param array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int} $plan */
     private function recordRefreshFailure(string $recordId, array $plan, string $reason, bool $terminal = false): void
     {
         $this->withLockedTarget($recordId, function (Target $locked) use ($plan, $reason, $terminal): void {
@@ -826,7 +1020,7 @@ final readonly class WpAiBridgeTargetConnectionService
     /** @param array<string,mixed> $document
      * @return array{access_token:string,refresh_token:string,expires_at:DateTimeImmutable,refresh_expires_at:?DateTimeImmutable,refresh_due_at:DateTimeImmutable,scopes:list<string>}
      */
-    private function parseToken(array $document): array
+    private function parseToken(array $document, ?int $issuedAt = null): array
     {
         $accessToken = $document['access_token'] ?? null;
         $refreshToken = $document['refresh_token'] ?? null;
@@ -853,16 +1047,22 @@ final readonly class WpAiBridgeTargetConnectionService
             throw new WpAiBridgeTargetConnectionException('invalid_token_response', 'WordPress OAuth did not grant the required scopes.');
         }
 
-        $issuedAt = time();
+        $issuedAt ??= time();
+        // Only a refresh token's own finite lifetime determines when an
+        // *idle* connected Target needs maintenance. Access tokens are renewed
+        // on demand when used; using their 1h TTL here rotated a 30-day
+        // offline grant every 30 minutes and amplified transient failures.
+        // Older providers without the additive hint retain the conservative
+        // access-half-life fallback instead of assuming endless offline use.
         $halfAccessTtl = max(1, intdiv((int) $expiresIn, 2));
-        $halfRefreshTtl = $refreshTtl === null ? $halfAccessTtl : max(1, intdiv($refreshTtl, 2));
+        $idleRefreshDelay = $refreshTtl === null ? $halfAccessTtl : max(1, intdiv($refreshTtl, 2));
 
         return [
             'access_token' => $accessToken,
             'refresh_token' => $refreshToken,
             'expires_at' => new DateTimeImmutable('@'.($issuedAt + (int) $expiresIn)),
             'refresh_expires_at' => $refreshTtl === null ? null : new DateTimeImmutable('@'.($issuedAt + $refreshTtl)),
-            'refresh_due_at' => new DateTimeImmutable('@'.($issuedAt + min($halfAccessTtl, $halfRefreshTtl))),
+            'refresh_due_at' => new DateTimeImmutable('@'.($issuedAt + $idleRefreshDelay)),
             'scopes' => $scopes,
         ];
     }

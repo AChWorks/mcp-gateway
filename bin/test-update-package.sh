@@ -411,6 +411,30 @@ fi
 grep -F "target version must be newer" "$tmp/downgrade.out" >/dev/null || { cat "$tmp/downgrade.out" >&2; echo "Downgrade rejection was not actionable." >&2; exit 1; }
 printf '%s\n' "$old_version" > "$target/VERSION"
 
+# A directory with no owner-write permission must block browser staging
+# before code mutation and explain the PHP-worker ownership fix. Running this
+# as root cannot simulate the actual non-root PHP worker permissions.
+if [[ "$(id -u)" -ne 0 ]]; then
+  public_staging_mode="$(stat -c '%a' "$target/public/update")"
+  chmod 0555 "$target/public/update"
+  if inspect_package "$target" "$target/update" >"$tmp/public-staging-permission.out" 2>&1; then
+    echo "A non-writable temporary public update directory unexpectedly passed preflight." >&2
+    exit 1
+  fi
+  grep -F 'Temporary public/update/ is not writable by the PHP worker' "$tmp/public-staging-permission.out" >/dev/null || {
+    cat "$tmp/public-staging-permission.out" >&2
+    echo "Temporary public update permission error was not explained." >&2
+    exit 1
+  }
+  grep -F 'Do not use 0777 or change public/.user.ini' "$tmp/public-staging-permission.out" >/dev/null || {
+    cat "$tmp/public-staging-permission.out" >&2
+    echo "Temporary staging permission error lacked scoped safety guidance." >&2
+    exit 1
+  }
+  chmod "$public_staging_mode" "$target/public/update"
+  inspect_package "$target" "$target/update"
+fi
+
 # Tampering and symlinked package content must fail before target mutation.
 cp -a "$target/update" "$tmp/tampered-update"
 printf 'tampered\n' >> "$tmp/tampered-update/payload/VERSION"
@@ -593,12 +617,17 @@ php -r '
 grep -F 'id="continue-update"' "$tmp/stage.html" >/dev/null || { echo "Missing final-step form." >&2; exit 1; }
 grep -F 'fetch(form.action' "$tmp/stage.html" >/dev/null || { echo "Automatic final-step handoff is absent." >&2; exit 1; }
 grep -F 'id="manual-continue"' "$tmp/stage.html" >/dev/null || { echo "Script-disabled continuation fallback is absent." >&2; exit 1; }
+grep -F 'If the Continue update button is still visible after this page loads' "$tmp/stage.html" >/dev/null || { echo "Finalizing page lacks actionable manual fallback instructions." >&2; exit 1; }
+grep -F 'Ready to begin database and health checks' "$tmp/stage.html" >/dev/null || { echo "Finalizing page misleadingly claims checks have started before automatic continuation." >&2; exit 1; }
+grep -F 'Final database and health checks have been requested' "$tmp/stage.html" >/dev/null || { echo "Automatic continuation lacks a truthful submitted state." >&2; exit 1; }
 
 # Reload after stage must resume safely without asking Laravel to authenticate
 # an already maintenance-bound browser session.
 resume_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/resume.html" -w '%{http_code}' "$base_url/update/")"
 [[ "$resume_code" == "200" ]] || { echo "Staged update cannot resume (HTTP $resume_code)." >&2; exit 1; }
 grep -F 'Resume MCP Gateway Update' "$tmp/resume.html" >/dev/null || { echo "Safe resume form missing." >&2; exit 1; }
+grep -F 'If the Continue update button is still visible after this page loads' "$tmp/resume.html" >/dev/null || { echo "Resume page lacks actionable manual fallback instructions." >&2; exit 1; }
+grep -F 'Ready to begin the final database and health checks' "$tmp/resume.html" >/dev/null || { echo "Resume page misleadingly claims checks have started before continuation." >&2; exit 1; }
 
 # An active finish request must not permit a second POST to enter migrations.
 lockfile="$target/storage/app/private/update-execution.lock"

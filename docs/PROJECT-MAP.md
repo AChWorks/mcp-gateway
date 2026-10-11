@@ -15,6 +15,7 @@ Use the source that owns the kind of truth you need:
 - [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported V1 aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
 - [`../achworks.yaml`](../achworks.yaml) — stable machine-readable AChWorks component identity, capabilities, interfaces, and source pointers; it must not mirror live work/runtime state.
 - [Koinon (`AChWorks/koinon`)](https://github.com/AChWorks/koinon) — ecosystem-level governance, discovery, and generic cross-project contracts; it is not an MCP Gateway runtime dependency.
+- [Connector integration and durability guide](./CONNECTOR-INTEGRATION-GUIDE.md) — implementer steps for future connectors, identity, permissions, durable idle authorization, Stale health, finite credential renewal and safe recovery.
 - [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
 - [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — active connector-neutral Target + client-neutral MCP edge + AI Server Agent + Direct SSH program and dependency graph.
 - [Program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.

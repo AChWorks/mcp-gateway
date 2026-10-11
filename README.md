@@ -370,6 +370,7 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 - [Release notes](RELEASE_NOTES.md) — shipped changes and version-specific breaking-upgrade warnings.
 - [Target transition and recovery runbook](docs/TARGET-TRANSITION-RUNBOOK.md) — migration consent, data preservation and partial-DDL recovery.
 - [Client profile runbook](docs/CLIENT-PROFILE-RUNBOOK.md) — app identity, authorization isolation, grant revocation and recovery.
+- [Connector integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md) — implementing connectors, durable idle authorization, renewal, stale health and error recovery.
 - [Master spec](docs/MASTER-SPEC.md) and [architecture](docs/ARCHITECTURE.md) — target contracts, including clearly identified future/not-yet-shipped connectors.
 - [Deployment](docs/DEPLOYMENT.md), [development](docs/DEVELOPMENT.md) and [project map](docs/PROJECT-MAP.md) — operations and maintainer navigation.
 

@@ -119,20 +119,21 @@ final readonly class WpAiBridgeMcpClient
         string $correlationId,
         ?array $sessionHeaders = null,
     ): AbilityExecutionClass {
-        try {
-            $catalog = $sessionHeaders === null
-                ? $this->callAbilityOnRouting(
-                    $routing,
-                    self::CATALOG_ABILITY,
-                    ['action' => 'get', 'name' => $ability],
-                    false,
-                    $correlationId,
-                )
-                : $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY, ['action' => 'get', 'name' => $ability], false);
-        } catch (WpAiBridgeMcpException) {
-            return AbilityExecutionClass::Unclassified;
-        }
+        $catalog = $sessionHeaders === null
+            ? $this->callAbilityOnRouting(
+                $routing,
+                self::CATALOG_ABILITY,
+                ['action' => 'get', 'name' => $ability],
+                false,
+                $correlationId,
+            )
+            : $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY, ['action' => 'get', 'name' => $ability], false);
 
+        // A failed catalog lookup is NOT an unclassified Ability. Preserve
+        // the downstream error (network, auth, protocol, etc.) and do not
+        // dispatch another tool call under the optional Unclassified grant.
+        // Reserve Unclassified for successfully returned, incomplete effect
+        // metadata; unknown names remain subject to the actual Bridge policy.
         if (! is_array($catalog)) {
             return AbilityExecutionClass::Unclassified;
         }
@@ -235,7 +236,7 @@ final readonly class WpAiBridgeMcpClient
             );
         }
 
-        return $this->targetConnections->routingContext($target);
+        return $this->targetConnections->routingContextWithRecovery($target);
     }
 
     /** @param array<string, string> $headers */

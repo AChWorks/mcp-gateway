@@ -92,6 +92,9 @@ function updaterAutoFinishScript(): string
     const manual = document.getElementById('manual-continue');
     if (!form || !window.fetch) return;
     if (manual) manual.hidden = true;
+    const progress = document.getElementById('progress-message');
+    if (progress) progress.textContent =
+        'Final database and health checks have been requested. Waiting for the server response; do not refresh or start another update.';
     fetch(form.action, {method: 'POST', body: new FormData(form),
         credentials: 'same-origin', cache: 'no-store', redirect: 'error'})
         .then(async response => {
@@ -141,6 +144,11 @@ function updaterPollScript(): string
     setTimeout(check, 8000);
 })();
 JS;
+}
+
+function updaterManualFinishGuidance(): string
+{
+    return '<p class="muted">If the Continue update button is still visible after this page loads, automatic continuation has not started in this browser. Select Continue update <strong>once</strong>. If the button disappears, wait for the server result. Do not refresh, re-extract the package, or start another update.</p>';
 }
 
 function updaterNoScriptBusy(): string
@@ -294,9 +302,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 updaterSteps('postflight')
                 .'<p>Application files are staged. Database migrations and final health checks have <strong>not</strong> started. This browser can safely continue this exact staged update.</p>'
                 .'<form id="continue-update" method="post" action="/update/"><input type="hidden" name="action" value="finish"><input type="hidden" name="continuation" value="'.updaterEscape($status['continuation']).'">'
-                .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Continuing database and health checks. Keep this page open; no manual refresh is needed.</p></div>'
+                .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Ready to begin the final database and health checks. This browser will try to continue automatically.</p></div>'
                 .'<div class="actions"><button id="manual-continue" type="submit">Continue update</button></div></form>'
-                .'<p class="muted">Without JavaScript, select Continue update once. Do not run a second update package.</p>'
+                .updaterManualFinishGuidance()
                 .'<p id="recovery-link" class="notice" hidden>Connection uncertain. <a href="/update/">Check update status in this browser</a> or <a href="/admin">verify the administrator panel</a>. Do not start again blindly.</p>',
                 200, updaterAutoFinishScript());
         }
@@ -410,9 +418,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
             updaterSteps('postflight')
             .'<p>Backup and managed-file replacement completed. Database/cache migrations and health checks are the next server-side step.</p>'
             .'<form id="continue-update" method="post" action="/update/"><input type="hidden" name="action" value="finish"><input type="hidden" name="continuation" value="'.updaterEscape($result['continuation']).'">'
-            .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Completing database and health checks. This page will show the result when the server responds; do not refresh or start a second update.</p></div>'
+            .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Ready to begin database and health checks. This browser will try to continue automatically.</p></div>'
             .'<div class="actions"><button id="manual-continue" type="submit">Continue update</button></div></form>'
-            .'<p class="muted">Without JavaScript, select Continue update once to perform the final step.</p>'
+            .updaterManualFinishGuidance()
             .'<p id="recovery-link" class="notice" hidden>Completion cannot be confirmed. <a href="/update/">Check this update in the same browser</a> or <a href="/admin">verify the administrator panel</a>. Do not retry an uncertain migration.</p>',
             200, updaterAutoFinishScript());
     } catch (UpdateBusyException) {
