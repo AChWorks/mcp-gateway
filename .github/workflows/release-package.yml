@@ -96,6 +96,13 @@ jobs:
             echo "needed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # This isolated maintenance branch is allowed to publish only the
+          # explicitly reviewed patch identity. Existing v2.0.2 releases were
+          # handled above and need no new package.
+          if [[ "$GITHUB_REF_NAME" == "maintenance/v2.0.3-stability" && "$TAG" != "v2.0.3" ]]; then
+            echo "Maintenance branch may only publish v2.0.3; refusing $TAG." >&2
+            exit 1
+          fi
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists without a matching release; refusing to move or replace it." >&2
             exit 1
