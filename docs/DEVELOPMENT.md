@@ -68,9 +68,9 @@ php artisan gateway:admin:create --name="Gateway Admin" --email="admin@example.t
 
 The password is always requested interactively through a hidden prompt and is never accepted as a command-line option. It must contain at least 12 characters with mixed case, a number, and a symbol. The command normalizes the email address and relies on the `User` model's framework hashing cast; there is no committed/default administrator password, public registration route, or password-reset flow in V1.
 
-The first local account created by the installer or `gateway:admin:create` is an enabled `owner` with all-site recovery authority. Later CLI-created accounts are enabled `administrator` users with all-site scope; use the Admin access-control UI for least-privilege Operator/Viewer accounts and site-specific restrictions.
+The first local account created by the installer or `gateway:admin:create` is an enabled `owner` with all-Target recovery authority. Later CLI-created accounts are enabled `administrator` users with all-Target scope; use Admin access controls for least-privilege Operator/Viewer accounts and Target-specific restrictions.
 
-Once the application is running, administrator sign-in is available at `/admin/login`. Owner-only user/access management is under `/admin/users`. Roles are permission ceilings; global permission checkboxes and per-site rules only narrow authority. Site access is edited through a bounded, paginated fleet view, so access administration does not load the entire site fleet into one request. Per-site rules support inherit/allow/deny scope plus capability denials, including read-only or write-only-style exceptions beneath the role ceiling.
+Once the application is running, administrator sign-in is available at `/admin/login`. Owner-only user/access management is under `/admin/users`. Roles are permission ceilings; global permission checkboxes and per-Target rules only narrow authority. Target access is edited through a bounded, paginated fleet view, so access administration does not load the full Target fleet into one request. Per-Target rules support inherit/allow/deny scope plus capability denials, including read/write distinctions beneath the role ceiling.
 
 Access-control mutations require the acting Owner's current password, preserve at least one enabled recoverable Owner, and record required bounded Activity evidence transactionally. Disabling a user blocks new login, invalidates existing Admin/OAuth-consent sessions on their next request, and makes existing MCP bearer tokens unusable because current user state is rechecked. The admin routes continue to use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
@@ -85,7 +85,7 @@ Use these shared conventions:
 - text/select controls belong in `.field`; selects use the shared custom appearance and must not rely on the browser-default arrow/chrome;
 - boolean choices use the shared `.checkbox-option` treatment so the full label is the click target and checked/focus/disabled states remain consistent;
 - permission-denial lists use `admin.partials.permission-option`. Human title, scope, and behavioral help come from `GatewayPermission`; do not duplicate permission explanations in individual Blade views;
-- permission help must explain whether the permission is Gateway-wide or site-scoped and, for site-scoped permissions, that the effective site scope comes from the user's scope mode, direct site rules, and assigned groups. Permission descriptions must not imply creator ownership unless the authorization model actually enforces it;
+- permission help must explain whether the permission is Gateway-wide or Target-scoped and, for Target-scoped permissions, that the effective Target scope comes from the user's scope mode, direct Target rules, and assigned Target groups. Permission descriptions must not imply creator ownership unless the authorization model actually enforces it;
 - filters use `.filter-grid` + `.filter-actions`; tabular fleet/access views use `.table-wrap`, shared badges, and `.table-footer` for explanatory text plus actions;
 - keyboard focus must remain visible, label/control hit targets must remain usable at narrow widths, and light/dark plus reduced-motion behavior must be preserved;
 - the admin stylesheet URL is versioned from `VERSION`, so an application update cannot intentionally serve new Blade markup with a stale cached pre-update stylesheet.
@@ -100,19 +100,19 @@ During implementation:
 
 - run the narrowest tests or static checks that can detect regressions in the surface being changed;
 - do not rerun an already-green broad suite after every small edit when that edit cannot invalidate its evidence;
-- keep the pull request closed until the implementation is functionally complete and self-review is clean, unless PR-based evidence is specifically needed earlier;
+- keep actively changing work on an isolated branch; open a PR when it can benefit from review or PR-based CI, then request final independent review only after the meaningful candidate has stabilized;
 - avoid independent review while the implementation is still moving materially.
 
 Useful targeted commands include:
 
 ```bash
 # One test file or one test method while iterating.
-composer test -- tests/Feature/Admin/AdminSiteManagementTest.php
+composer test -- tests/Feature/Admin/TargetManagementAdminTest.php
 composer test -- --filter=test_specific_behavior
 
 # Changed PHP files only when a whole-project pass adds no signal yet.
-vendor/bin/pint --test app/Http/Controllers/Admin/SiteController.php tests/Feature/Admin/AdminSiteManagementTest.php
-vendor/bin/phpstan analyse app/Http/Controllers/Admin/SiteController.php --memory-limit=1G
+vendor/bin/pint --test app/Http/Controllers/Admin/TargetController.php tests/Feature/Admin/TargetManagementAdminTest.php
+vendor/bin/phpstan analyse app/Http/Controllers/Admin/TargetController.php --memory-limit=1G
 ```
 
 Use the normal broader commands at candidate freeze when their evidence is required. Do not add custom wrappers merely to hide standard Laravel/PHPUnit/Pint/PHPStan syntax.
@@ -139,6 +139,18 @@ After integration:
 - repository-triggered `main` CI may still run as a safety net, but do not rerun successful jobs or repeatedly inspect full logs unless a failure, drift, or new evidence requires it.
 
 If a validation layer fails, diagnose the smallest root cause and run the discriminating check first. Do not bounce between full CI and broad review while implementation is still incomplete.
+
+## Fast, capability-driven changes without hiding regressions
+
+When extending a supported Target/client, first distinguish **new Target inventory**, **new operation in a reviewed capability family**, **new connector transport**, **new security/permission class** and **new client OAuth identity**:
+
+- A new registered Target or WordPress Ability (including an unfamiliar name) should need **no** Gateway public-tool/schema code or deployment change. Use a controlled changed downstream catalog and prove the existing family discovery/execute path works **when the user has the existing configured execution permission and WordPress permits it**. An unfamiliar or unclassified Ability is not a categorical denial: the latter uses the existing explicitly grantable `unclassified` permission. Separately prove a deliberately denied user remains denied.
+- For a future MCP-speaking connector, discover real authenticated Target operation names/schemas and reuse protocol adapters; do not duplicate transport, permission/transfer logic or create one Gateway tool for each downstream version. Novel names and missing effect annotations should use the existing configured broad/unclassified permission when applicable, not an invented per-name ban. Still reject actual unauthorized privilege, identity or invalid protocol/schema requests.
+- Test changed-operation-name/schema fixtures separately from a **new MCP protocol extension**: the first must not force Gateway code changes under the supported family; the second works when the required protocol method is actually implemented and both peers negotiate it. Exercise stale schemas, actual user/Target denials, wrong client/Target, feature-not-supported fallback and realistic hot-path calls. Cache metadata cannot grant permission; subscriptions are protocol-version-dependent and never guarantee external App refresh.
+- Establish a representative performance baseline **before** adding abstractions, increasing or lowering payload ceilings or requiring extra services. Compare actual small payloads under a higher permitted cap, medium files, concurrent operations, round trips/SSH sessions, p50/p95 latency, PHP peak memory, CPU and transient disk. A tiny fixed cap is not a performance optimization by itself.
+- Keep related fixes in one coherent slice; run targeted checks during editing, exact affected broad/security/contract checks only for a stable candidate, and preserve still-valid evidence. A documentation-only change does not justify manually rerunning SFTP/WordPress integration suites unless the changed material actually affects executable acceptance.
+
+For the current architectural rules see [MASTER-SPEC.md](./MASTER-SPEC.md) §4.9, [ARCHITECTURE.md](./ARCHITECTURE.md) §4 and [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md).
 
 ## Deterministic validation
 
@@ -274,16 +286,16 @@ The stable public protocol paths are:
 
 The required OAuth resource scope is `mcp`. For the fixed ChatGPT client, an approved `mcp` authorization is refreshable even when ChatGPT omits `offline_access`, because the client must be able to renew the bounded access token without a manual reconnect. `offline_access` remains accepted and advertised for compatibility. Refresh rotation, replay protection, expiry, exact client/resource/user binding, and authorization-wide revocation remain mandatory. If a refresh credential authorized for `mcp offline_access` is explicitly narrowed to an `mcp` access token, the Gateway does not issue a successor refresh token: RFC 6749 permits the narrower access token, while any replacement refresh token would have to retain the predecessor refresh token's identical scope.
 
-The V1 MCP tool registry is stable even before site routing is implemented:
+The **Target-era** Gateway MCP tool-family baseline is:
 
 ```text
-sites-list
-site-context
-site-abilities-read
-site-ability-execute
+targets-list
+target-context
+wordpress-abilities-read
+wordpress-ability-execute
 ```
 
-The site-routing workstream replaces the application handlers behind those names; it does not add one MCP tool or endpoint per WordPress site.
+SSH command and file tools are present only when their exact integration/release status allows. Do not restore retired `sites-*` aliases or register one public tool per Target or downstream WordPress Ability. A compatible new WordPress Ability is discovered using the existing Target-scoped metadata/execute tools rather than by changing the Gateway tool catalog.
 
 To verify the currently configured public ChatGPT CIMD/JWKS contract without printing key material:
 

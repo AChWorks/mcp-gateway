@@ -1,8 +1,8 @@
 # Target Foundation Transition — implementation and recovery runbook
 
-Status: **v2.0.0 Target transition and recovery runbook**. This breaking release replaces Site with Target. Exact-candidate CI and an independent HIGH_ASSURANCE code review passed before release authorization. **Limited live WordPress ↔ Gateway ↔ ChatGPT E2E has now passed read and reversible-write probes** (2026-10-10); wider operational, authorization, upgrade and revocation acceptance remains OPEN. Publishing a GitHub Release never updates a server or approves a destructive database migration. Before any upgrade, read the reset/data-retention warnings and verify a consistent, independently restorable database backup. Dated sections below describe historical pre-release test checkpoints; historical "candidate", "unmerged" or old CI statements do not supersede current GitHub PR/Release evidence.
+Status: **v2.0.0 Target transition and recovery runbook**. This breaking release replaces Site with Target. Exact-candidate CI and an independent HIGH_ASSURANCE code review passed before release authorization. **Limited live WordPress ↔ Gateway ↔ ChatGPT E2E has now passed read and reversible-write probes** (2026-10-10); wider operational, authorization, upgrade and revocation acceptance remains OPEN. Publishing a GitHub Release never updates a server or approves a destructive database migration. Before any upgrade, read the reset/data-retention warnings and verify a consistent, independently restorable database backup. Dated sections below describe **historical v1→v2 implementation and migration test checkpoints**. In particular sections labeled `Current next-release`, `candidate VERSION 2.0.0`, `UNPUBLISHED`, `unmerged`, `remaining #107` or `no main merge` are **preserved historical evidence, not current development instructions**; actual current published version is v2.0.2 and authoritative source/PR/CI/Release evidence prevails. The v1→v2 destructive-reset/backup/recovery requirements remain applicable to operators genuinely upgrading an old Site-era installation; never rerun migration merely because these historical instructions remain in the runbook.
 
-Owning contract: [Issue #107](https://github.com/AChWorks/mcp-gateway/issues/107), [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [Target Admin/MCP #110](https://github.com/AChWorks/mcp-gateway/issues/110), [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md). The Direct SSH architecture is integrated through merged [PR #124](https://github.com/AChWorks/mcp-gateway/pull/124); Direct SSH runtime execution is not yet implemented.
+Owning contract: [Issue #107](https://github.com/AChWorks/mcp-gateway/issues/107), [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [Target Admin/MCP #110](https://github.com/AChWorks/mcp-gateway/issues/110), [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md). The Direct SSH design was integrated through [PR #124](https://github.com/AChWorks/mcp-gateway/pull/124); SSH login and noninteractive commands through #144/#145, then bounded SFTP tools and internal stream primitives through merged #146/#148. **None of these newly integrated SSH features is proof of published deployment or complete client file handoff**; consult Releases and #147/#112 for current acceptance.
 
 ## Live operational checkpoint — 2026-10-10
 
@@ -42,7 +42,7 @@ The earlier full SQLite suite passed **256 tests / 2,335 assertions, five delibe
 
 These packages are **UNPUBLISHED and NOT an authorized customer update**. Owner approval is required before any merge, release, deployment or destructive operation against an existing installation.
 
-## Current next-release contract — owner 2026-10-10
+## Historical next-release contract (fulfilled by Target-era release) — owner 2026-10-10
 
 **Required in ONE installable browser-update package before owner testing:** a fully operational generic Target domain, the usable Target Admin inventory/create/detail/WordPress connect/reconnect/test/disconnect UI, Target-encrypted WordPress OAuth credential/refresh/revocation lifecycle, and complete Target-scoped authorized MCP `targets-list`, `target-context`, WordPress Ability read/execute. Preserve the working client-neutral Gateway OAuth edge for ChatGPT, but require fresh WordPress/ChatGPT authorization after any incompatible connection reset. Only present shipped capabilities; do not advertise placeholder Agent or SSH connectors. **Do not release a Site-era-only package first.** [PR #129](https://github.com/AChWorks/mcp-gateway/pull/129), the previous v1.3.0 Site-only candidate, is **closed unmerged and superseded**, despite its successful candidate CI.
 
@@ -135,7 +135,7 @@ Do **not** configure these in a running production Gateway now. They are only va
 
 If confirmation is missing or the old schema/denials/roles do not match the supported transition, the migration fails **before destructive DDL**. Once DDL begins, failures may leave an **unknown partial schema**; do not retry blindly, do not run `migrate:rollback`, do not reinstall over the existing database. Stop the updater and recover through the operator's independently verified database backup. Migration `down()` deliberately refuses to suggest a reversible restoration.
 
-## First implementation slice and evidence
+## Historical first implementation slice and evidence
 
 The separate unmerged branch contains the schema reset, generic Target/group/credential domain, WP registration, Target Admin and partial WP OAuth lifecycle. It still lacks Target-safe refresh and all WordPress MCP Ability runtime wiring; remaining legacy Site routes must not reach removed tables.
 
@@ -157,7 +157,7 @@ Validation: an isolated Unix-socket MariaDB 11.8 focused suite passed **22 tests
 
 **Next non-optional integration boundary (updated from this historical checkpoint):** the new Target WP OAuth begin/callback/revocation and client-neutral OAuth merge are now on WIP; finish refresh and Target-scoped WP Ability read/execute, then reconcile old Site-era check/Admin/MCP runtime and prove the destructive upgrade safely. Do not redo completed #117 merge reconciliation.
 
-## Remaining #107 work before the candidate can be reviewed or merged
+## Historical remaining #107 work before the now-completed original candidate integration
 
 The existing Site-era runtime must be changed **atomically within the integration candidate**, so that no Admin/MCP endpoint or Laravel service continues accessing dropped Site tables:
 

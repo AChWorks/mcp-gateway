@@ -184,7 +184,7 @@ Connector onboarding that accepts a secret through the Admin UI treats that fiel
 
 Supported connectors are built-in, explicitly registered implementations.
 
-Initial connector set after Issue #106:
+Accepted built-in connector vocabulary (not a claim of simultaneous installed availability): WordPress is shipped; Direct SSH commands (#145), bounded SFTP file operations (#146) and internal stream primitives (#148) are **source-integrated but not yet released**; client-neutral file transfer/handoff #147 and final mixed acceptance #112 remain open. AI Server Agent #111 remains Owner-paused:
 
 ```text
 wp_ai_bridge
@@ -204,7 +204,7 @@ This is **not**:
 
 Unsupported connector types fail closed.
 
-Each registered connector should expose only the smallest static descriptor needed by shared code, such as stable connector type, operator-facing label, supported lifecycle capabilities, and connector-owned permission/tool families. This descriptor is metadata for built-in code; it is not an executable plugin manifest.
+Each registered connector should expose the smallest **static implementation descriptor** the shared lifecycle and Admin actually need: stable connector type, label, supported lifecycle capabilities, and reviewed capability/permission families. This is not a per-downstream-tool manifest or executable plugin loader. The **runtime Target-owned operation/schema catalog** is separate and may evolve safely without expanding the static registry.
 
 Shared code must not scatter `if connector_type == ...` decisions across controllers, authorization, Admin views and MCP handlers. Selection happens at the connector boundary, while business rules that truly span connectors stay in the application layer.
 
@@ -307,7 +307,7 @@ ssh-file-write
 
 No compatibility alias for the old `sites-*` names is required unless a new external compatibility requirement is accepted before implementation.
 
-Every connector-specific tool requires explicit `target_id`. Do not expose a public `call-any-tool(target_id, name, arguments)` escape hatch: it would discard stable schemas, annotations, authorization mapping and reviewable product semantics.
+Every Target-specific operation requires explicit `target_id`. Do not use a *raw unauthenticated/unscoped* `call-any-tool` escape hatch to bypass actual user/client/Target permissions, downstream authentication, schema/transport integrity or destination restrictions. A **properly authenticated Target-scoped generic operation family** with dynamic discovery and bounded arguments is compatible with this foundation: the operator may use real newly discovered capabilities without a Gateway code update or a hard-coded per-name allowlist. No one tool per Target or per remote operation.
 
 Every public tool must carry behaviorally correct MCP annotations. Read-only/destructive/idempotent/open-world hints describe **tool behavior**, not authorization level. In particular, a connector operation can be read-only yet still security-sensitive (for example reading a host file), so annotations must never substitute for Gateway permission checks.
 
@@ -341,11 +341,17 @@ Do not force other connectors into WP Ability vocabulary.
 
 The Gateway surfaces the supported Agent capability set through the `agent-*` names above without registering copies for every Agent Target.
 
-The connector preserves downstream Agent semantics rather than reimplementing host execution. Extra tools that appear on a newer Agent are **not** automatically proxied; support is added deliberately through the Gateway connector contract.
+The future Agent connector preserves downstream behavior and authorization rather than reimplementing host execution. Newly advertised operations, **including previously unknown names**, should be discoverable and usable by principals with the actual delegated Target/operation authority through stable Gateway family contracts, without per-version manual handlers or tool-registration edits. Unknown/changed effect annotations alone do not ban an operation: use existing configured broad/unclassified execution authority where applicable and let the Agent enforce its own protected-resource/root/approval policy. Reject real identity, privilege, authorization, schema or protocol bypasses; a *genuinely new privilege boundary or unsupported wire capability* still needs implementation/review, not a fake policy ban. Agent #111 stays paused; this is future intent, not shipped behavior.
 
 ### Direct SSH family
 
 `ssh-command-run` deliberately supports unrestricted remote OS account commands (including OS-permitted `sudo`/root); it is mutation-capable and cannot be constrained by shell-string allowlists. `ssh.file.read`/`ssh.file.write` apply to SFTP tool exposure, **not** a sandbox around users with `ssh.command.run`. Common Target authorization, exact host identity, outbound TCP policy and result bounds still apply. See `DIRECT-SSH-CONNECTOR.md` and `REMOTE-IO-CONTRACT.md`.
+
+### Target catalog evolution and minimal-upgrade rule
+
+The Gateway maintains **separate MCP protocol support, public Gateway tool families and authenticated Target-owned operation catalogs**. A generic registered MCP-speaking Target with standard `tools/list`/`tools/call` can expose newly added tool names (including new business categories) through one authenticated Target-scoped discover/execute interface **when the caller already has deliberately granted broad execution authority**. A narrow read-only/no-root grant does not silently expand when the Target adds an operation; missing business-category mapping is not an excuse for a hard-coded name blacklist or mandatory Gateway code change.  A Target may add operations (including names unknown to Gateway) within a compatible existing invocation/permission contract without a Gateway release; WordPress Ability discovery demonstrates this. A new MCP protocol feature/extension is an independent negotiated capability and is not an operation in the WordPress catalog. Missing effect metadata maps to the applicable *existing* execution class/permission (including explicit WordPress `unclassified` grants), **not an invented automatic name blacklist**. Enforce actual user/client/Target/credential and downstream permission, genuine schema/protocol validity and resource controls; distinguish `forbidden` from unsupported adapters/extensions. Built-in connector code selection remains explicit and not dynamically loaded from untrusted input. Canonical decision: [MASTER-SPEC.md](./MASTER-SPEC.md) §4.9 and [ARCHITECTURE.md](./ARCHITECTURE.md) §4.
+
+Negotiated core methods/extensions, cached catalog snapshots, schema change detection and optional version-appropriate MCP subscriptions belong to reusable transport adapters. The runtime must not network-fan-out on public `tools/list` or inventory, and must not depend on a host automatically refreshing tools. Protocol extensions are enabled only when implemented and negotiated, not silently synthesized from a changed backend tool name. A new supported client authentication profile still requires reviewed identity/configuration; a new ordinary downstream Ability within an existing family does not. Future connector admission should prefer extending the Target-side adapter/declared family to duplicating core auth, routing, transfer or tool plumbing.
 
 ## 9. AI Server Agent safety boundary
 
