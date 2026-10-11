@@ -54,9 +54,21 @@ final class SafeHttpClient
      */
     private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null): SafeHttpResponse
     {
-        $target = $this->targets->validate($url);
         $connectTimeout = max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
         $requestTimeout = max($connectTimeout, (int) config('bridge.http.request_timeout_seconds', 5));
+        $startedNs = hrtime(true);
+        if ($requestTimeout > intdiv(PHP_INT_MAX - $startedNs, 1_000_000_000)) {
+            throw new OutboundRequestException('runtime', 'Outbound request timeout configuration is invalid.', [], true);
+        }
+        $deadlineNs = $startedNs + $requestTimeout * 1_000_000_000;
+
+        // DNS and HTTPS share one request lifetime; inspect all A+AAAA records
+        // before selecting the numeric, TLS-validated destination.
+        $target = $this->targets->validate($url, 2048, $deadlineNs);
+        $remainingSeconds = ($deadlineNs - hrtime(true)) / 1_000_000_000;
+        if ($remainingSeconds <= 0) {
+            throw new OutboundRequestException('network_failure', 'Outbound request deadline expired before dispatch.', [], true);
+        }
         $requestedBytes = $responseLimitBytes ?? $this->settings->responseLimitBytes(false);
         $maxBytes = min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $requestedBytes));
         $responseBody = new BoundedResponseBody($maxBytes);
@@ -82,8 +94,8 @@ final class SafeHttpClient
                 'sink' => $responseBody->stream(),
                 ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),
             ])
-                ->connectTimeout($connectTimeout)
-                ->timeout($requestTimeout)
+                ->connectTimeout(min($connectTimeout, $remainingSeconds))
+                ->timeout($remainingSeconds)
                 ->acceptJson()
                 ->withHeaders($headers);
 

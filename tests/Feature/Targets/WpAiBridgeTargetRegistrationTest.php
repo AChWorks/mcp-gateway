@@ -27,7 +27,7 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
 
         $this->app->instance(DnsResolver::class, new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 return str_ends_with($host, '.example.test') ? ['1.1.1.1'] : [];
             }

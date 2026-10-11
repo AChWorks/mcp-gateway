@@ -10,6 +10,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\DnsResolver;
+use App\Infrastructure\Http\OutboundRequestException;
 use App\Models\User;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -64,7 +65,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
         $this->app->instance(DnsResolver::class, new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 return str_ends_with($host, '.example.test') ? ['1.1.1.1'] : [];
             }
@@ -386,6 +387,120 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         foreach ($this->outboundTransactionLevels as $level) {
             self::assertSame($baseline, $level, 'Refresh performed remote I/O inside a database transaction.');
         }
+    }
+
+    public function test_first_refresh_dns_pre_dispatch_failure_preserves_offline_credential_and_retries_later(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $before = app(WpAiBridgeTargetVault::class)
+            ->openCredential($target, $this->credential($target));
+        $dns = new class implements DnsResolver
+        {
+            public bool $fail = true;
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                if ($this->fail) {
+                    throw new OutboundRequestException('network_failure', 'Synthetic pre-dispatch DNS timeout.', [], true);
+                }
+
+                return ['1.1.1.1'];
+            }
+        };
+        $this->app->instance(DnsResolver::class, $dns);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+
+        try {
+            $service->routingContextWithRecovery($target);
+            self::fail('Unsent refresh exchange must be deferred rather than retried immediately.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_unavailable', $exception->reason);
+        }
+
+        self::assertSame(0, $this->refreshCalls, 'Pre-dispatch DNS failure must not reach the token endpoint.');
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame('refresh_unavailable', $target->last_error_code);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(1, DB::table('target_credentials')->count());
+        self::assertSame($before['refresh_token'], app(WpAiBridgeTargetVault::class)
+            ->openCredential($target, $this->credential($target))['refresh_token']);
+
+        try {
+            $service->routingContextWithRecovery($target);
+            self::fail('Backoff is required instead of spinning on another failed lookup.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_unavailable', $exception->reason);
+        }
+        self::assertSame(0, $this->refreshCalls);
+
+        // Restore the disposable DNS fixture after the server-side bounded backoff.
+        $dns->fail = false;
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())
+            ->update(['refresh_due_at' => now()->subSecond()]);
+
+        self::assertSame('alpha-rotated-access', $service->accessToken($target));
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+    }
+
+    public function test_pre_dispatch_failure_during_single_use_recovery_preserves_uncertain_first_rotation(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $dns = new class implements DnsResolver
+        {
+            public bool $fail = false;
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                if ($this->fail) {
+                    throw new OutboundRequestException('network_failure', 'Synthetic recovery DNS failure.', [], true);
+                }
+
+                return ['1.1.1.1'];
+            }
+        };
+        $this->app->instance(DnsResolver::class, $dns);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->failRefreshOnce = true;
+
+        try {
+            $service->accessToken($target);
+            self::fail('Original remote rotation must remain uncertain.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
+        DB::table('wp_ai_bridge_refresh_intents')
+            ->update(['created_at' => now()->subSeconds(20)]);
+
+        $dns->fail = true;
+        try {
+            $service->routingContext($target);
+            self::fail('Recovery DNS failure cannot undo prior uncertain rotation.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame('refresh_ambiguous', $target->last_error_code);
+        self::assertSame(1, DB::table('target_credentials')->count());
+
+        $dns->fail = false;
+        try {
+            $service->accessToken($target);
+            self::fail('Unknown successor cannot permit a third blind refresh.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
     }
 
     public function test_lost_refresh_response_fences_disconnect_and_supports_only_one_bounded_recovery(): void

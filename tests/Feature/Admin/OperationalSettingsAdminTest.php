@@ -23,7 +23,7 @@ final class OperationalSettingsAdminTest extends TestCase
         parent::setUp();
         $this->app->instance(DnsResolver::class, new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 return ['1.1.1.1'];
             }

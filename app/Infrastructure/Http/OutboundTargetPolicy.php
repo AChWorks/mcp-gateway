@@ -18,11 +18,11 @@ final class OutboundTargetPolicy
         return $canonical;
     }
 
-    public function validate(string $url, int $maxLength = 2048): ValidatedOutboundUrl
+    public function validate(string $url, int $maxLength = 2048, ?int $deadlineNs = null): ValidatedOutboundUrl
     {
         $parts = $this->parseHttpsUrl($url, $maxLength);
         $canonical = $this->buildUrl($parts, false);
-        $addresses = $this->resolvePublicAddresses($parts['host']);
+        $addresses = $this->resolvePublicAddresses($parts['host'], $deadlineNs);
 
         return new ValidatedOutboundUrl(
             $canonical,
@@ -145,9 +145,9 @@ final class OutboundTargetPolicy
     }
 
     /** @return list<string> */
-    private function resolvePublicAddresses(string $host): array
+    private function resolvePublicAddresses(string $host, ?int $deadlineNs = null): array
     {
-        $addresses = $this->dns->resolve($host);
+        $addresses = $this->dns->resolve($host, $deadlineNs);
         if ($addresses === []) {
             throw new UnsafeOutboundTarget('Outbound target host did not resolve to an address.');
         }

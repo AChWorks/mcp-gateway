@@ -472,6 +472,21 @@ final readonly class WpAiBridgeTargetConnectionService
                 'client_assertion' => $this->identity->assertion($plan['token_url']),
             ]);
         } catch (OutboundRequestException $exception) {
+            // DNS/pre-dispatch failures provably cannot rotate the remote
+            // token on a FIRST attempt. Preserve the offline grant and defer,
+            // just like a confirmed pre-rotation invalid_client response.
+            // On recovery, a prior uncertain attempt may already have
+            // rotated it: never clear that recovery intent.
+            if ($exception->preDispatch && ! $plan['is_recovery']) {
+                $this->deferUnconsumedRefresh($recordId, $plan);
+                Log::warning('WordPress OAuth refresh failed before dispatch.', [
+                    'target_record_id' => $recordId,
+                    'cause_code' => $exception->reason,
+                ]);
+                throw new WpAiBridgeTargetConnectionException('refresh_unavailable',
+                    'WordPress refresh request was not dispatched; retry after bounded backoff.');
+            }
+
             // Retain only the safe failure classification, never remote
             // response bodies, OAuth requests, tokens or client assertions.
             Log::warning('WordPress OAuth refresh transport outcome ambiguous.', [
