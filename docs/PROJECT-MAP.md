@@ -7,16 +7,16 @@ This file is the maintainer/agent navigation entry point for recovering and cont
 Use the source that owns the kind of truth you need:
 
 - [`MASTER-SPEC.md`](./MASTER-SPEC.md) — canonical project purpose, durable requirements, constraints, non-goals, security boundaries, and V1 completion criteria.
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — current integrated technical architecture, component boundaries, protocol flows, persistence, deployment shape, and testing direction.
-- [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md) — accepted breaking Target/connector target-state design for Program #106; authoritative for that transition until integrated into current architecture.
-- [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md) — bounded responses, command outputs and file-transfer design (#122).
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — current Target-era structure, capability discovery/evolution, shared controls and connector boundaries. Obsolete V1 Site-era diagrams remain in Git history only.
+- [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md) — detailed accepted Target/connector capability, identity, credential, security and future extension contract; historical transition sequencing must not override current source/PR/Issue truth.
+- [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md) — proportionate resource budgets, bounded responses, file transfer and failure semantics (#122/#123/#147).
 - [`DIRECT-SSH-CONNECTOR.md`](./DIRECT-SSH-CONNECTOR.md) — owner-accepted direct SSH password/key, OS-account commands and SFTP design (#123).
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
-- [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported V1 aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
+- [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
 - [`../achworks.yaml`](../achworks.yaml) — stable machine-readable AChWorks component identity, capabilities, interfaces, and source pointers; it must not mirror live work/runtime state.
 - [Koinon (`AChWorks/koinon`)](https://github.com/AChWorks/koinon) — ecosystem-level governance, discovery, and generic cross-project contracts; it is not an MCP Gateway runtime dependency.
 - [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
-- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — active connector-neutral Target + client-neutral MCP edge + AI Server Agent + Direct SSH program and dependency graph.
+- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — overarching Target/client-neutral program; Agent #111 is owner-paused. Read current #123/#112/#147 before assuming integrated features are shipped.
 - [Program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.
 - Pull requests and commits — implementation identity, review history, and integrated changes.
 - GitHub Actions / CI — validation evidence tied to exact commits.
@@ -33,13 +33,16 @@ The initial WordPress connector compatibility work was established through:
 
 These closed Issues are historical contract provenance, not active task owners. If the Bridge/Gateway connector contract changes materially, recover the current code/release evidence in both repositories and create/update the natural current Issue rather than treating closed Issue #4 as live state.
 
-The accepted non-WordPress connectors are AI Server Agent (MCP-over-HTTPS) and independent Direct SSH:
+The non-WordPress connector tracks are independent Direct SSH (active) and AI Server Agent (owner-paused):
 
 - [`mcp-gateway#106`](https://github.com/AChWorks/mcp-gateway/issues/106) — Gateway-side breaking Target foundation and connector program;
 - [`mcp-gateway#117`](https://github.com/AChWorks/mcp-gateway/issues/117) — client-neutral MCP authorization edge; ChatGPT remains the first supported profile while future clients can be added without another core auth rewrite;
 - [`ai-server-agent#47`](https://github.com/ach1992/ai-server-agent/issues/47) — Agent-side optional Gateway integration, independent credential lifecycle, preserved direct modes, and Agent-authoritative safety.
 - [`mcp-gateway#123`](https://github.com/AChWorks/mcp-gateway/issues/123) — SSH Target without Agent installation; password/key and arbitrary commands under OS account authority.
-- [`mcp-gateway#122`](https://github.com/AChWorks/mcp-gateway/issues/122) — finite oversize-response handling and reusable data contract; coordinates with WP AI Bridge #100.
+- [`mcp-gateway#122`](https://github.com/AChWorks/mcp-gateway/issues/122) — completed finite oversize-response foundation; do not reopen for generic file transfer.
+- [`mcp-gateway#130`](https://github.com/AChWorks/mcp-gateway/issues/130) — existing WordPress direct-versus-Gateway Ability parity; not general file ingress.
+- [`mcp-gateway#147`](https://github.com/AChWorks/mcp-gateway/issues/147) — shared, client-neutral **real bidirectional file/data transfer**, adaptive quotas and demonstrated host input/model output; does not duplicate #123 SSH backend.
+- [`mcp-gateway#112`](https://github.com/AChWorks/mcp-gateway/issues/112) — mixed WordPress + SSH final acceptance and release evidence; Agent does not gate current acceptance.
 
 Neither repository's Issue grants mutation authority in the other repository. Recover both contracts and current exact implementation/release evidence before cross-repository compatibility work.
 
@@ -49,8 +52,8 @@ A replacement Master or developer should recover in this order:
 
 1. Read `docs/MASTER-SPEC.md` only as needed to establish or verify project-level intent, durable constraints, and completion/growth rules.
 2. Read `docs/ARCHITECTURE.md` for the current integrated implementation boundaries.
-3. If Program #106 is still active, read `docs/TARGET-CONNECTOR-FOUNDATION.md`, `docs/DIRECT-SSH-CONNECTOR.md` and `docs/REMOTE-IO-CONTRACT.md` for the accepted target-state and data/SSH contracts.
-4. Inspect the repository's current open GitHub Issues to identify active work, dependencies, and acceptance criteria; use closed Program Issue #1 only when historical V1 context is specifically needed.
+3. Use `docs/TARGET-CONNECTOR-FOUNDATION.md` and the appropriate `docs/DIRECT-SSH-CONNECTOR.md` / `docs/REMOTE-IO-CONTRACT.md` sections only for the current connector/transfer work. The canonical capability-evolution policy is in Master Spec §4.9 and Architecture §4; historical sequencing in long Issue bodies is not today's source state.
+4. Inspect current open GitHub Issues for active work, dependencies and acceptance; first read each issue's latest controlling status and current code/PR/release evidence. Older dated `NEXT`/`BLOCKED` notes are historical unless explicitly still current. Use closed Program #1 only for V1 provenance.
 5. Read only the relevant current Issue/Task Contract and its direct dependencies, including AI Server Agent #47 when working on that connector and #117 when working on client-facing MCP/OAuth identity.
 6. Inspect the corresponding branch/PR/commit and exact CI evidence before changing or integrating implementation.
 7. Use `docs/DEPLOYMENT.md` plus the applicable GitHub Release and deployment evidence when installation, upgrade, or delivery becomes relevant.

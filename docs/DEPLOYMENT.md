@@ -232,7 +232,7 @@ php artisan activity:prune
 
 Pruning serializes only competing prune runs and deletes expired/overflow records in fixed-size batches; ordinary Activity writers do not acquire the retention lock. The command reports only expired/overflow deletion counts and the remaining row count. It does not dump Activity records or credentials.
 
-### WordPress Target credential idle maintenance (next Target major)
+### WordPress Target credential idle maintenance (Target-era v2 releases)
 
 The same Laravel scheduler also runs the bounded gateway:wordpress-credentials-maintain command once per minute with overlap protection. For each connected WordPress Target with due encrypted credentials, the Gateway renews the rotating refresh-token generation at the earlier half-life of the access token or WordPress's refresh_token_expires_in hint. The encrypted token is never written to logs, queue payloads or scheduled-task arguments; each renewal is fenced by the existing database-backed Target refresh intent and does not perform remote I/O inside a transaction. WordPress may revoke a grant or expire a token sooner than the lifetime hint.
 
@@ -271,7 +271,7 @@ php artisan gateway:admin:create
 
 The administrator password is accepted only through hidden interactive prompts. Do not add it to a shell command, deployment script, environment variable, or process argument.
 
-The first account created by the installer or CLI bootstrap is the recoverable `owner` with all-site authority. Later CLI-created accounts are `administrator` users. On an existing installation receiving the access-control migration, all already-present local users are preserved as enabled `administrator` / all-site principals and the oldest existing account becomes `owner`; newly created users retain the least-privilege defaults unless an administrator explicitly assigns broader access. After bootstrap, use the authenticated `/admin/users` access-control UI to create least-privilege Operators/Viewers, choose all-sites vs selected-sites scope, and apply direct per-site capability restrictions. The system prevents disabling or demoting the last enabled Owner. Security-sensitive access changes require the acting Owner's current password and are transactionally audited. Disabling a user also invalidates their browser access on the next request and prevents existing MCP access tokens from being used.
+The first account created by the installer or CLI bootstrap is the recoverable `owner` with all-Target authority. Later CLI-created accounts are `administrator` users. On an existing installation receiving the access-control migration, all already-present local users are preserved as enabled `administrator` / all-Target principals and the oldest existing account becomes `owner`; newly created users retain the least-privilege defaults unless an administrator explicitly assigns broader access. After bootstrap, use the authenticated `/admin/users` access-control UI to create least-privilege Operators/Viewers, choose All-Target vs Selected-Target scope, and apply direct per-Target and Target-group capability denials, with Target group membership and direct Target reachability. The system prevents disabling or demoting the last enabled Owner. Security-sensitive access changes require the acting Owner's current password and are transactionally audited. Disabling a user also invalidates their browser access on the next request and prevents existing MCP access tokens from being used.
 
 ## 8. Run the repository-owned environment gate
 

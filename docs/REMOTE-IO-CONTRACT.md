@@ -1,6 +1,6 @@
 # Remote Results and File Transfer Contract
 
-Status: Accepted target-state design; bounded WP and SSH command previews are integrated in main source, not newly released. Four small, bounded SFTP MCP operations are a new candidate; larger authenticated binary HTTP streaming and durable continuation are pending.
+Status: Accepted target-state design. Bounded WP/SSH commands and four bounded SFTP MCP operations (#146), plus internal SFTP stream primitives (#148), are integrated on main but are **not part of the last published v2.0.2 release**. Real client-neutral file handoff (#147), binary HTTP transport and durable continuation remain unimplemented/unverified; do not advertise them as working.
 Owners: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [bounded-response work #122](https://github.com/AChWorks/mcp-gateway/issues/122).
 Related: [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [Direct SSH connector](./DIRECT-SSH-CONNECTOR.md).
 
@@ -62,8 +62,16 @@ Do not conflate **transport response-size bounds** with **application pagination
 
 **Foundation (#108 / #109 / #110):** factor shared downstream MCP bounds and error propagation where truly common; keep connector-owned payload/transport and stable Target/user authorization. Do not introduce a generic large-object framework before the third real connector demonstrates a need.
 
-**Direct SSH (#123):** bounded command previews are merged in #145. The SFTP candidate handles small inline stat/list, up-to-16-KiB binary-safe base64 ranges and create-only or explicit atomic last-writer-wins replacement (optional paired size/mtime are best-effort preflight checks, never CAS). This is NOT streamed binary HTTP transfer. Large authenticated upload/download, strong source-version guarantees and partial-transfer recovery remain pending. No always-on PTY/job/transfer service required.
+**Direct SSH (#123):** bounded command previews merged in #145, and bounded stat/list, up-to-16-KiB binary-safe inline range reads and small writes merged in #146. Explicit atomic last-writer-wins replacement is available with optional best-effort size/mtime preflight (never CAS); internal bounded stream primitives merged in #148. **Neither makes real client-side file ingress or model-consumable file egress work.** Those authenticated client handoffs, strong source-version guarantees and interrupted transfer recovery remain unproven/pending (#147/#112). No always-on PTY/job/transfer service required.
 
 **Final acceptance (#112):** validate small-path latency, oversize/encoded/unknown-length handling, no cross-Target/credential leaks, interrupted-write unknown outcomes, representative large file and mixed-connector limits, and supported shared-PHP packaging. Add only tests for capabilities actually shipped.
 
 **Future, demand-driven:** resumable transfer with durable ID/offset/checksum, spooled command output, durable SSH jobs, PTY/interactive stdin, richer MCP Tasks integration, object-storage offload. They are architectural extension points, **not release blockers** and must not be advertised until implemented and tested.
+
+## Proportional work and independent ceilings
+
+A **maximum permitted size does not imply a preallocated buffer**. For a request of 10 KiB under a validated 256 KiB maximum, process only the actual 10 KiB plus necessary framing, encoding, authentication and transport overhead. Avoid unnecessary staging, copying or SSH reconnects for small data. Stream unknown-length content with bounded reusable buffers and enforce an independently bounded total size as bytes arrive. A hard payload quota is a safety guard, **not** the mechanism by which the product becomes performant.
+
+Keep **per-inline-call**, **per-stream buffer/window**, **whole-transfer bytes**, **deadline/worker occupancy**, **concurrency** and **temporary disk** distinct. An inline SFTP 16 KiB guard is not an end-user file-transfer ceiling. Use actual client/Target capabilities and measured round trips, connection count, p50/p95 latency, peak memory/CPU, temp disk and error behavior to select appropriate inline ceilings, chunk/window sizes and streaming versus private authenticated handoff. Comparison workloads should cover small files under a much higher permitted maximum and representative medium/larger binary content. Do not demand a new queue/object store/daemon to solve a small-file efficiency problem.
+
+The *same* Gateway transfer authorization/integrity/quotas/outcome policy must serve verified clients and supported WP/SSH Target adapters without one data-transfer engine per extension, tool or application. Public file-return links and opaque references do not prove the model can consume file bytes; verify client ingress and actual model-readable versus user-downloadable egress independently. For security/execution gates and acceptance use #147 and #112.
