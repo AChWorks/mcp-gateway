@@ -15,7 +15,7 @@ final class SshTcpAddressPolicyTest extends TestCase
     {
         $resolver = new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 throw new RuntimeException('Numeric registered endpoints must not be re-resolved.');
             }
@@ -48,7 +48,7 @@ final class SshTcpAddressPolicyTest extends TestCase
             /** @var list<string> */
             public array $queries = [];
 
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 $this->queries[] = $host;
 
@@ -114,7 +114,7 @@ final class SshTcpAddressPolicyTest extends TestCase
             /** @param array<string, list<string>> $answers */
             public function __construct(private readonly array $answers) {}
 
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 return $this->answers[$host] ?? [];
             }

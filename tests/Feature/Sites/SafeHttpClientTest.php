@@ -5,6 +5,7 @@ namespace Tests\Feature\Sites;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
+use GuzzleHttp\Exception\NetworkTimeoutException as GuzzleNetworkTimeoutException;
 use GuzzleHttp\Exception\ResponseException as GuzzleResponseException;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Psr7\Response as Psr7Response;
@@ -13,6 +14,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Assert;
 use Psr\Http\Message\RequestInterface;
 use Tests\TestCase;
 
@@ -24,7 +26,7 @@ final class SafeHttpClientTest extends TestCase
 
         $this->app->instance(DnsResolver::class, new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 return ['1.1.1.1'];
             }
@@ -62,6 +64,7 @@ final class SafeHttpClientTest extends TestCase
             self::fail('TLS failure was accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('tls_failure', $exception->reason);
+            self::assertTrue($exception->preDispatch, 'TLS setup failure could not transmit HTTP.');
         }
         Http::assertSentCount(1);
     }
@@ -77,6 +80,31 @@ final class SafeHttpClientTest extends TestCase
             self::fail('Network failure was accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('network_failure', $exception->reason);
+            self::assertTrue($exception->preDispatch, 'TCP refusal could not transmit HTTP.');
+        }
+        Http::assertSentCount(1);
+    }
+
+    public function test_post_send_network_timeout_remains_ambiguous_even_when_no_response_arrives(): void
+    {
+        Http::fake(static function (Request $request) {
+            // Guzzle distinguishes an uncertain network transfer from
+            // ConnectException: a previous HTTP request may have completed.
+            return Create::rejectionFor(new GuzzleNetworkTimeoutException(
+                'Operation timed out after sending request bytes.',
+                $request->toPsrRequest(),
+            ));
+        });
+
+        $client = app(SafeHttpClient::class);
+        try {
+            $client->postForm('https://wp.example.test/wp-json/wp-ai-bridge/v1/oauth/token', [
+                'grant_type' => 'refresh_token',
+            ]);
+            self::fail('An uncertain token-exchange transfer must not be accepted.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+            self::assertFalse($exception->preDispatch);
         }
         Http::assertSentCount(1);
     }
@@ -213,6 +241,64 @@ final class SafeHttpClientTest extends TestCase
         self::assertIsCallable($progress);
         self::assertFalse($progress(0, 1024, 0, 0));
         self::assertTrue($progress(0, 1025, 0, 0));
+    }
+
+    public function test_outbound_https_transport_uses_remaining_request_budget_after_dns(): void
+    {
+        config()->set('bridge.http.connect_timeout_seconds', 2);
+        config()->set('bridge.http.request_timeout_seconds', 2);
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                Assert::assertNotNull($deadlineNs);
+                usleep(120_000);
+
+                return ['1.1.1.1'];
+            }
+        });
+
+        $factory = new CapturingHttpFactory;
+        Http::swap($factory);
+        $factory->preventStrayRequests();
+        $factory->fake(fn (Request $request) => Factory::response(['ok' => true], 200));
+
+        $client = app(SafeHttpClient::class);
+        self::assertSame(200, $client->get('https://wp.example.test/mcp')->status);
+
+        $remaining = $factory->lastOptions[RequestOptions::TIMEOUT] ?? null;
+        $connect = $factory->lastOptions[RequestOptions::CONNECT_TIMEOUT] ?? null;
+        self::assertIsFloat($remaining);
+        self::assertGreaterThan(1, $remaining);
+        self::assertLessThan(1.95, $remaining);
+        self::assertLessThanOrEqual($remaining, $connect);
+        self::assertSame(['wp.example.test:443:1.1.1.1'], $factory->lastOptions['curl'][CURLOPT_RESOLVE]);
+    }
+
+    public function test_expired_dns_budget_does_not_dispatch_a_remote_http_request(): void
+    {
+        config()->set('bridge.http.connect_timeout_seconds', 1);
+        config()->set('bridge.http.request_timeout_seconds', 1);
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                usleep(1_070_000);
+
+                return ['1.1.1.1'];
+            }
+        });
+
+        Http::fake(fn (Request $request) => self::fail('No HTTP dispatch is permitted after DNS deadline.'));
+        $client = app(SafeHttpClient::class);
+        try {
+            $client->postJson('https://wp.example.test/mcp', ['mutation' => true]);
+            self::fail('Expired DNS budget was ignored.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+            self::assertTrue($exception->preDispatch);
+        }
+        Http::assertNothingSent();
     }
 
     private function restoreEnvironmentVariable(string $name, string|false $value): void

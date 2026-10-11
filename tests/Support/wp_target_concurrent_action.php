@@ -29,7 +29,7 @@ config()->set('bridge.client.jwks_uri', 'https://gateway.example.test/oauth/jwks
 // own DB connection, fake HTTP transport, and independent process lifetime.
 $app->instance(DnsResolver::class, new class implements DnsResolver
 {
-    public function resolve(string $host): array
+    public function resolve(string $host, ?int $deadlineNs = null): array
     {
         return $host === 'race.example.test' ? ['1.1.1.1'] : [];
     }

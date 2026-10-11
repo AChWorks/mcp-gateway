@@ -98,7 +98,7 @@ final class OutboundTargetPolicyTest extends TestCase
             /** @param array<string, list<string>> $answers */
             public function __construct(private readonly array $answers) {}
 
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 return $this->answers[$host] ?? [];
             }

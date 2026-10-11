@@ -58,7 +58,7 @@ final class SshDeadlineDnsResolverTest extends TestCase
 
         $fallbackDns = new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 throw new RuntimeException('Never invoke blocking dns_get_record for bounded SFTP.');
             }
@@ -118,7 +118,7 @@ final class SshDeadlineDnsResolverTest extends TestCase
         };
         $policy = new SshTcpAddressPolicy(new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 throw new RuntimeException('Unbounded resolver must not execute.');
             }
@@ -154,7 +154,7 @@ final class SshDeadlineDnsResolverTest extends TestCase
         };
         $policy = new SshTcpAddressPolicy(new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 throw new RuntimeException('Unbounded resolver is forbidden.');
             }
@@ -184,7 +184,7 @@ final class SshDeadlineDnsResolverTest extends TestCase
         };
         $policy = new SshTcpAddressPolicy(new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 throw new RuntimeException('Do not invoke native DNS.');
             }
@@ -205,7 +205,7 @@ final class SshDeadlineDnsResolverTest extends TestCase
     {
         $fallback = new class implements DnsResolver
         {
-            public function resolve(string $host): array
+            public function resolve(string $host, ?int $deadlineNs = null): array
             {
                 throw new RuntimeException('Literal IP must not invoke DNS.');
             }

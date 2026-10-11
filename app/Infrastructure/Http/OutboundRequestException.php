@@ -15,6 +15,11 @@ final class OutboundRequestException extends RuntimeException
         public readonly string $reason,
         string $message,
         public readonly array $details = [],
+        // True only when no HTTP application request/payload could have
+        // reached the destination (including failed TCP/TLS setup).
+        // Unknown send/receive failures must remain false because an OAuth
+        // rotating credential may already have been consumed remotely.
+        public readonly bool $preDispatch = false,
     ) {
         parent::__construct($message);
     }

@@ -5,5 +5,5 @@ namespace App\Infrastructure\Http;
 interface DnsResolver
 {
     /** @return list<string> */
-    public function resolve(string $host): array;
+    public function resolve(string $host, ?int $deadlineNs = null): array;
 }

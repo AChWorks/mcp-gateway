@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Http;
 
 use App\Application\Operations\OperationalSettings;
+use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
@@ -54,9 +55,21 @@ final class SafeHttpClient
      */
     private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null): SafeHttpResponse
     {
-        $target = $this->targets->validate($url);
         $connectTimeout = max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
         $requestTimeout = max($connectTimeout, (int) config('bridge.http.request_timeout_seconds', 5));
+        $startedNs = hrtime(true);
+        if ($requestTimeout > intdiv(PHP_INT_MAX - $startedNs, 1_000_000_000)) {
+            throw new OutboundRequestException('runtime', 'Outbound request timeout configuration is invalid.', [], true);
+        }
+        $deadlineNs = $startedNs + $requestTimeout * 1_000_000_000;
+
+        // DNS and HTTPS share one request lifetime; inspect all A+AAAA records
+        // before selecting the numeric, TLS-validated destination.
+        $target = $this->targets->validate($url, 2048, $deadlineNs);
+        $remainingSeconds = ($deadlineNs - hrtime(true)) / 1_000_000_000;
+        if ($remainingSeconds <= 0) {
+            throw new OutboundRequestException('network_failure', 'Outbound request deadline expired before dispatch.', [], true);
+        }
         $requestedBytes = $responseLimitBytes ?? $this->settings->responseLimitBytes(false);
         $maxBytes = min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $requestedBytes));
         $responseBody = new BoundedResponseBody($maxBytes);
@@ -65,7 +78,7 @@ final class SafeHttpClient
             $curlOptions = [];
             if (filter_var($target->host, FILTER_VALIDATE_IP) === false) {
                 if (! defined('CURLOPT_RESOLVE')) {
-                    throw new OutboundRequestException('runtime', 'Secure outbound DNS pinning is unavailable.');
+                    throw new OutboundRequestException('runtime', 'Secure outbound DNS pinning is unavailable.', [], true);
                 }
 
                 $resolveAddress = str_contains($target->pinnedAddress(), ':')
@@ -82,8 +95,8 @@ final class SafeHttpClient
                 'sink' => $responseBody->stream(),
                 ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),
             ])
-                ->connectTimeout($connectTimeout)
-                ->timeout($requestTimeout)
+                ->connectTimeout(min($connectTimeout, $remainingSeconds))
+                ->timeout($remainingSeconds)
                 ->acceptJson()
                 ->withHeaders($headers);
 
@@ -107,7 +120,14 @@ final class SafeHttpClient
                 $message = $exception->getMessage();
                 $reason = preg_match('/(?:SSL|TLS|certificate|cURL error 60)/i', $message) === 1 ? 'tls_failure' : 'network_failure';
 
-                throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.');
+                // The exact Guzzle cURL handler uses ConnectException
+                // (including ConnectTimeoutException) only when the TCP/TLS
+                // connection was never established. A token request could not
+                // have reached its destination. Other transport failures may
+                // occur after the request body was transmitted.
+                $preDispatch = $exception->getPrevious() instanceof GuzzleConnectException;
+
+                throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.', [], $preDispatch);
             }
 
             if ($responseBody->limitExceeded()) {
