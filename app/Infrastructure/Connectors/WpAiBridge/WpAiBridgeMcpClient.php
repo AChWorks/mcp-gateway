@@ -238,7 +238,7 @@ final readonly class WpAiBridgeMcpClient
             );
         }
 
-        return $this->targetConnections->routingContext($target);
+        return $this->targetConnections->routingContextWithRecovery($target);
     }
 
     /** @param array<string, string> $headers */
