@@ -49,12 +49,15 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame(strlen($bytes), $write['result']['bytes_written']);
         self::assertTrue($write['result']['atomic_publish']);
         self::assertSame('exclusive_hardlink', $write['result']['publish_method']);
+        self::assertSame('remote_readback_sha256', $write['result']['integrity_check']);
+        self::assertMatchesRegularExpression('/^[0-7]{4}$/', $write['result']['published_mode']);
         self::assertSame('127.0.0.1', $write['result']['connected_ip']);
 
         $stat = $tools->stat($owner, $target->target_id, $path);
         self::assertTrue($stat['ok'], json_encode($stat));
         self::assertSame('file', $stat['result']['file']['type']);
         self::assertSame(4, $stat['result']['file']['size']);
+        self::assertSame($write['result']['published_mode'], $stat['result']['file']['mode']);
         $mtime = $stat['result']['file']['mtime'];
         self::assertIsInt($mtime);
 
@@ -87,10 +90,24 @@ final class SshFileFixtureTest extends TestCase
         self::assertTrue($replaced['ok'], json_encode($replaced));
         self::assertTrue($replaced['result']['overwrote']);
         self::assertSame('posix_replace', $replaced['result']['publish_method']);
+        self::assertSame('remote_readback_sha256', $replaced['result']['integrity_check']);
+
+        // Optional stale preconditions reject a mismatch, without publishing.
+        $stale = $tools->write($owner, $target->target_id, $path, base64_encode('stale'), true, 4, $mtime);
+        self::assertFalse($stale['ok']);
+        self::assertSame('source_changed', $stale['error']['code']);
+
+        // The common case needs only explicit overwrite=true.
+        $simpleReplacement = 'unconditional';
+        $simple = $tools->write($owner, $target->target_id, $path, base64_encode($simpleReplacement), true);
+        self::assertTrue($simple['ok'], json_encode($simple));
+        self::assertTrue($simple['result']['overwrote']);
+        self::assertSame('posix_replace', $simple['result']['publish_method']);
+
         $final = $tools->read($owner, $target->target_id, $path);
         self::assertTrue($final['ok'], json_encode($final));
-        self::assertSame($replacement, base64_decode($final['result']['data'], true));
-        self::assertSame(2, $final['result']['size']);
+        self::assertSame($simpleReplacement, base64_decode($final['result']['data'], true));
+        self::assertSame(strlen($simpleReplacement), $final['result']['size']);
 
         $activity = (string) json_encode(DB::table('activity_events')->where('operation', 'like', 'ssh-file-%')->get(), JSON_THROW_ON_ERROR);
         self::assertStringNotContainsString($path, $activity);
@@ -174,32 +191,44 @@ final class SshFileFixtureTest extends TestCase
         $mtime = $stat['result']['file']['mtime'];
 
         $replacement = random_bytes(200000);
+        $replacementHash = hash('sha256', $replacement);
         $source2 = fopen('php://temp', 'w+b');
         self::assertIsResource($source2);
         fwrite($source2, $replacement);
         rewind($source2);
+
+        // The optional condition only checks a known stale version.
         try {
             $runtime->uploadFromStream(
-                $owner, $target, $path, $source2, strlen($replacement), hash('sha256', $replacement),
-                250000, 30, $this->env('SSH_FIXTURE_PRIVATE_STAGING'), true, strlen($bytes), $mtime,
+                $owner, $target, $path, $source2, strlen($replacement), $replacementHash,
+                250000, 30, $this->env('SSH_FIXTURE_PRIVATE_STAGING'), true, strlen($bytes) + 1, $mtime,
             );
-            self::fail('Generic streamed overwrite has no atomic CAS and must fail closed.');
+            self::fail('A stale optional size/mtime precondition should reject.');
         } catch (SshTargetConnectionException $e) {
-            self::assertSame('overwrite_unsupported', $e->reason);
+            self::assertSame('source_changed', $e->reason);
         }
-        fclose($source2);
+        rewind($source2);
 
-        // The existing remote destination is unchanged, including metadata.
+        // Explicit overwrite works without requiring any version fields.
+        $replaced = $runtime->uploadFromStream(
+            $owner, $target, $path, $source2, strlen($replacement), $replacementHash,
+            250000, 30, $this->env('SSH_FIXTURE_PRIVATE_STAGING'), true,
+        );
+        fclose($source2);
+        self::assertSame('completed', $replaced['status']);
+        self::assertTrue($replaced['overwrote']);
+        self::assertSame('posix_replace', $replaced['publish_method']);
+        self::assertSame('0600', $replaced['published_mode']);
+
         $sink2 = fopen('php://temp', 'w+b');
         self::assertIsResource($sink2);
-        $read2 = $runtime->downloadToStream($owner, $target, $path, $sink2, 300000, 30, $hash);
-        self::assertSame($hash, $read2['sha256']);
+        $read2 = $runtime->downloadToStream($owner, $target, $path, $sink2, 300000, 30, $replacementHash);
+        self::assertSame($replacementHash, $read2['sha256']);
         rewind($sink2);
-        self::assertSame($bytes, stream_get_contents($sink2));
+        self::assertSame($replacement, stream_get_contents($sink2));
         fclose($sink2);
         $after = app(SshFileMcpToolHandlers::class)->stat($owner, $target->target_id, $path);
         self::assertSame('0600', $after['result']['file']['mode']);
-        self::assertSame($mtime, $after['result']['file']['mtime']);
     }
 
     public function test_streamed_transfer_rejects_wrong_digest_and_size_without_publishing(): void
@@ -281,10 +310,23 @@ final class SshFileFixtureTest extends TestCase
         } catch (SshTargetConnectionException $e) {
             self::assertSame('file_exists', $e->reason);
         }
-        fclose($source);
         $read = app(SshFileMcpToolHandlers::class)->read($owner, $target->target_id, $path);
         self::assertTrue($read['ok']);
         self::assertSame('version-B', base64_decode($read['result']['data'], true));
+
+        // Explicit streamed replacement retains the previous published mode.
+        rewind($source);
+        $replaced = app(SshFileRuntime::class)->uploadFromStream(
+            $owner, $target, $path, $source, 9,
+            hash('sha256', 'version-A'), 4096, 30, $this->env('SSH_FIXTURE_PRIVATE_STAGING'), true,
+        );
+        fclose($source);
+        self::assertSame('completed', $replaced['status']);
+        self::assertSame('posix_replace', $replaced['publish_method']);
+        self::assertSame($existing['result']['published_mode'], $replaced['published_mode']);
+        $after = app(SshFileMcpToolHandlers::class)->read($owner, $target->target_id, $path);
+        self::assertTrue($after['ok']);
+        self::assertSame('version-A', base64_decode($after['result']['data'], true));
     }
 
     public function test_streamed_internal_adapter_rejects_network_socket_sources_and_sinks(): void

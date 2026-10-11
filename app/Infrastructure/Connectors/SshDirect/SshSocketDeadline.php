@@ -6,12 +6,12 @@ use App\Application\Targets\SshTargetConnectionException;
 use php_user_filter;
 
 /**
- * Socket-level monotonic budget for the INTRA-REQUEST streamed SFTP path.
+ * Socket-level monotonic budget for the admitted SFTP operation.
  *
  * SFTP and SSH2 packet parsers are dependency-private. This transparent
  * stream filter makes the same deadline observable on every raw SSH read
  * and write, including SFTP response drains and unsolicited replies after verified login.
- * Ordinary non-streaming SSH and SFTP calls do not install this filter.
+ * Non-SFTP SSH command sessions do not install this filter.
  */
 final class SshSocketDeadline extends php_user_filter
 {

@@ -71,7 +71,9 @@ final class SshFileMcpTest extends TestCase
         self::assertSame('invalid_input', $files->read($owner, $id, '/', 0, 16385)['error']['code']);
         self::assertSame('invalid_input', $files->read($owner, $id, '/', 0, 1, 10)['error']['code']);
         self::assertSame('invalid_input', $files->write($owner, $id, '/sample', '!!!!')['error']['code']);
-        self::assertSame('invalid_input', $files->write($owner, $id, '/sample', 'AA==', true)['error']['code']);
+        self::assertSame('invalid_input', $files->write($owner, $id, '/sample', 'AA==', true, 1)['error']['code']);
+        self::assertSame('invalid_input', $files->write($owner, $id, '/sample', 'AA==', false, 1, 1)['error']['code']);
+        self::assertSame('egress_denied', $files->write($owner, $id, '/sample', 'AA==', true)['error']['code']);
         self::assertSame('invalid_input', $files->write($owner, $id, '/sample', base64_encode(str_repeat('z', 16385)))['error']['code']);
         self::assertSame('egress_denied', $files->stat($owner, $id, '/')['error']['code']);
 

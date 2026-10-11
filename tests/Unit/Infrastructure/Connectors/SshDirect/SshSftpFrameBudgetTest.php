@@ -4,102 +4,167 @@ namespace Tests\Unit\Infrastructure\Connectors\SshDirect;
 
 use App\Application\Targets\SshTargetConnectionException;
 use App\Infrastructure\Connectors\SshDirect\SshSubsystemOnlySftp;
-use phpseclib4\Net\SFTP;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
 final class SshSftpFrameBudgetTest extends TestCase
 {
-    public function test_split_frame_headers_and_multi_frame_fragments_preserve_state(): void
+    private function probe(): array
     {
         $reflection = new ReflectionClass(SshSubsystemOnlySftp::class);
         $connection = $reflection->newInstanceWithoutConstructor();
-        $reflection->getProperty('readBatchResponseBytes')->setValue($connection, 0);
-        $reflection->getProperty('readBatchIssuedIds')->setValue($connection, [0 => true, 1 => true, 2 => true]);
+        $reflection->getProperty('versionSeen')->setValue($connection, true);
 
-        $parse = $reflection->getMethod('verifySftpFrames');
-        $first = pack('NCN', 5, 103, 1);
-        $second = pack('NCN', 5, 103, 0);
-        $third = pack('NCN', 5, 103, 2);
-        $parse->invoke($connection, substr($first, 0, 2));
-        $parse->invoke($connection, substr($first, 2).$second.substr($third, 0, 6));
-        $parse->invoke($connection, substr($third, 6));
-
-        self::assertSame('', $reflection->getProperty('incomingLengthBytes')->getValue($connection));
-        self::assertSame(0, $reflection->getProperty('incomingFrameRemaining')->getValue($connection));
-        self::assertSame(3, $reflection->getProperty('readBatchResponses')->getValue($connection));
-        self::assertSame(27, $reflection->getProperty('readBatchResponseBytes')->getValue($connection));
-        self::assertCount(3, $reflection->getProperty('readBatchRepliedIds')->getValue($connection));
+        return [$connection, $reflection];
     }
 
-    public function test_unissued_or_duplicate_read_ids_fail_before_private_request_buffer(): void
+    private function request(object $connection, ReflectionClass $reflection, int $id, int $type = 5): void
     {
-        $reflection = new ReflectionClass(SshSubsystemOnlySftp::class);
-        $connection = $reflection->newInstanceWithoutConstructor();
-        $reflection->getProperty('readBatchResponseBytes')->setValue($connection, 0);
-        $reflection->getProperty('readBatchIssuedIds')->setValue($connection, [0 => true, 1 => true]);
-        $parse = $reflection->getMethod('verifySftpFrames');
+        $reflection->getMethod('trackSftpRequest')->invoke($connection, pack('NCN', 5, $type, $id));
+    }
 
+    private function response(object $connection, ReflectionClass $reflection, int $id, int $type = 103): void
+    {
+        $reflection->getMethod('verifySftpFrames')->invoke($connection, pack('NCN', 5, $type, $id));
+    }
+
+    public function test_fragmented_and_out_of_order_valid_replies_are_accepted(): void
+    {
+        [$connection, $reflection] = $this->probe();
+        foreach ([0, 1, 2] as $id) {
+            $this->request($connection, $reflection, $id);
+        }
+        $stream = pack('NCN', 5, 103, 2).pack('NCN', 5, 103, 0).pack('NCN', 5, 103, 1);
+        $parse = $reflection->getMethod('verifySftpFrames');
+        $parse->invoke($connection, substr($stream, 0, 2));
+        $parse->invoke($connection, substr($stream, 2, 11));
+        $parse->invoke($connection, substr($stream, 13));
+
+        self::assertSame([], $reflection->getProperty('pendingRequestIds')->getValue($connection));
+        self::assertSame(3, $reflection->getProperty('batchFrames')->getValue($connection));
+        self::assertSame(27, $reflection->getProperty('batchBytes')->getValue($connection));
+
+        // More chunks are allowed: budget resets only after all issued replies.
+        $this->request($connection, $reflection, 0);
+        $this->response($connection, $reflection, 0);
+        self::assertSame(1, $reflection->getProperty('batchFrames')->getValue($connection));
+    }
+
+    public function test_unknown_and_duplicate_ids_fail_before_dependency_buffering(): void
+    {
+        [$connection, $reflection] = $this->probe();
+        $this->request($connection, $reflection, 0);
         try {
-            $parse->invoke($connection, pack('NCN', 5, 103, 0x60000001));
-            self::fail('Unissued request ID must be rejected before buffering.');
+            $this->response($connection, $reflection, 0x60000001);
+            self::fail('Wrong ID accepted');
         } catch (SshTargetConnectionException $e) {
             self::assertSame('sftp_response_budget_exceeded', $e->reason);
         }
 
-        $connection2 = $reflection->newInstanceWithoutConstructor();
-        $reflection->getProperty('readBatchResponseBytes')->setValue($connection2, 0);
-        $reflection->getProperty('readBatchIssuedIds')->setValue($connection2, [0 => true]);
-        $parse->invoke($connection2, pack('NCN', 5, 103, 0));
+        [$connection, $reflection] = $this->probe();
+        $this->request($connection, $reflection, 0);
+        $this->response($connection, $reflection, 0);
         try {
-            $parse->invoke($connection2, pack('NCN', 5, 103, 0));
-            self::fail('Duplicated response ID must not survive another read batch.');
-        } catch (SshTargetConnectionException $e) {
-            self::assertSame('sftp_response_budget_exceeded', $e->reason);
-        }
-    }
-
-    public function test_next_read_batch_cannot_reset_tracking_of_unanswered_previous_ids(): void
-    {
-        $reflection = new ReflectionClass(SshSubsystemOnlySftp::class);
-        $connection = $reflection->newInstanceWithoutConstructor();
-        $reflection->getProperty('readBatchResponseBytes')->setValue($connection, 1024);
-        $reflection->getProperty('readBatchIssuedIds')->setValue($connection, [0 => true, 1 => true]);
-        $reflection->getProperty('readBatchRepliedIds')->setValue($connection, [0 => true]);
-
-        $channel = (new ReflectionClass(SFTP::class))->getConstant('CHANNEL');
-        self::assertIsInt($channel);
-        try {
-            $reflection->getMethod('send_channel_packet')->invoke(
-                $connection, $channel, pack('NCN', 5, 5, 0),
-            );
-            self::fail('New READ id=0 must not erase pending predecessor budget.');
+            $this->response($connection, $reflection, 0);
+            self::fail('Duplicate reply accepted');
         } catch (SshTargetConnectionException $e) {
             self::assertSame('sftp_response_budget_exceeded', $e->reason);
         }
     }
 
-    public function test_many_legal_length_issued_responses_still_hit_aggregate_byte_limit(): void
+    public function test_all_public_operation_ids_and_types_are_protected(): void
     {
-        $reflection = new ReflectionClass(SshSubsystemOnlySftp::class);
-        $connection = $reflection->newInstanceWithoutConstructor();
-        $reflection->getProperty('readBatchResponseBytes')->setValue($connection, 0);
-        $reflection->getProperty('readBatchIssuedIds')->setValue(
-            $connection, array_fill_keys(range(0, 31), true),
-        );
-        $parse = $reflection->getMethod('verifySftpFrames');
+        // LSTAT / READDIR / WRITE / SETSTAT do not receive special exemptions.
+        foreach ([7, 4, 6, 9] as $requestType) {
+            [$connection, $reflection] = $this->probe();
+            $this->request($connection, $reflection, 1, $requestType);
+            $this->response($connection, $reflection, 1, 101); // STATUS
 
-        try {
-            for ($i = 0; $i < 32; $i++) {
-                // Every frame is below 256KiB and carries a legitimately
-                // issued unique ID, but a hostile server over-delivers data.
-                $frame = pack('NCN', 125000, 103, $i).str_repeat('L', 124995);
-                $parse->invoke($connection, $frame);
+            try {
+                $this->response($connection, $reflection, 888, 101);
+                self::fail('Unsolicited reply accepted for request type '.$requestType);
+            } catch (SshTargetConnectionException $e) {
+                self::assertSame('sftp_response_budget_exceeded', $e->reason);
             }
-            self::fail('Aggregate buffered replies must not consume unbounded PHP memory.');
+        }
+    }
+
+    public function test_finite_aggregate_bytes_even_for_individually_valid_frames(): void
+    {
+        [$connection, $reflection] = $this->probe();
+        foreach (range(0, 31) as $id) {
+            $this->request($connection, $reflection, $id);
+        }
+        $parse = $reflection->getMethod('verifySftpFrames');
+        try {
+            for ($id = 0; $id < 32; $id++) {
+                $parse->invoke($connection, pack('NCN', 125000, 103, $id).str_repeat('x', 124995));
+            }
+            self::fail('Aggregate bytes not bounded');
         } catch (SshTargetConnectionException $e) {
             self::assertSame('sftp_response_budget_exceeded', $e->reason);
-            self::assertLessThan(19, $reflection->getProperty('readBatchResponses')->getValue($connection));
+            self::assertLessThan(19, $reflection->getProperty('batchFrames')->getValue($connection));
+        }
+    }
+
+    public function test_single_frame_size_and_inflight_request_count_are_bounded(): void
+    {
+        [$connection, $reflection] = $this->probe();
+        $this->request($connection, $reflection, 1);
+        try {
+            $reflection->getMethod('verifySftpFrames')->invoke($connection, pack('N', 256 * 1024 + 1));
+            self::fail('Oversize frame accepted');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('sftp_frame_too_large', $e->reason);
+        }
+
+        [$connection, $reflection] = $this->probe();
+        foreach (range(0, 63) as $id) {
+            $this->request($connection, $reflection, $id);
+        }
+        try {
+            $this->request($connection, $reflection, 64);
+            self::fail('Unbounded pending replies accepted');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('sftp_response_budget_exceeded', $e->reason);
+        }
+    }
+
+    public function test_init_version_only_precedes_regular_request_ids(): void
+    {
+        $reflection = new ReflectionClass(SshSubsystemOnlySftp::class);
+        $connection = $reflection->newInstanceWithoutConstructor();
+        $reflection->getMethod('trackSftpRequest')->invoke($connection, pack('NC', 1, 1));
+        $reflection->getMethod('verifySftpFrames')->invoke($connection, pack('NCN', 5, 2, 3));
+        self::assertTrue($reflection->getProperty('versionSeen')->getValue($connection));
+
+        $this->request($connection, $reflection, 1, 17);
+        $this->response($connection, $reflection, 1, 105);
+        self::assertSame([], $reflection->getProperty('pendingRequestIds')->getValue($connection));
+    }
+
+    public function test_deadline_armed_during_authentication_is_not_reset_by_subsequent_sftp_calls(): void
+    {
+        [$connection, $reflection] = $this->probe();
+        $deadline = hrtime(true) + 10_000_000_000;
+        $connection->startOperationDeadline($deadline);
+
+        self::assertSame('accepted', $connection->withTransferDeadline($deadline, static fn (): string => 'accepted'));
+        self::assertSame($deadline, $reflection->getProperty('transferDeadlineNs')->getValue($connection));
+
+        try {
+            $connection->withTransferDeadline($deadline + 1, static fn (): string => 'incorrect');
+            self::fail('A nested SFTP operation must not extend the original deadline.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('transfer_timed_out', $e->reason);
+        }
+
+        $reflection->getProperty('transferDeadlineNs')->setValue($connection, hrtime(true) - 1);
+        try {
+            $reflection->getMethod('enforceTransferDeadline')->invoke($connection);
+            self::fail('Expired operation allowed');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('transfer_timed_out', $e->reason);
         }
     }
 }

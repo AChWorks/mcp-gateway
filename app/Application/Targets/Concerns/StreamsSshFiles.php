@@ -113,9 +113,8 @@ trait StreamsSshFiles
      * first creates it using ambient permissions, then chmods it, which
      * permits a confidentiality window.
      *
-     * Generic streamed overwrite is deliberately NOT offered. SFTP
-     * lstat+posix_rename is atomic replacement, NOT atomic conditional
-     * replacement / compare-and-swap.
+     * Overwrite is an explicit last-writer-wins atomic replacement, not
+     * compare-and-swap. Optional size/mtime checks are only best effort.
      *
      * @param  resource  $source
      * @return array<string, mixed>
@@ -133,10 +132,8 @@ trait StreamsSshFiles
         $deadline = hrtime(true) + $maxSeconds * 1_000_000_000;
         $this->validateSha256($expectedSha256);
         $this->validatePrecondition($expectedSize, $expectedMtime);
-        if ($overwrite || $expectedSize !== null || $expectedMtime !== null) {
-            // A concurrent writer can win between lstat and POSIX rename.
-            // Fail before any remote mutation until a true CAS is available.
-            throw new SshTargetConnectionException('overwrite_unsupported');
+        if (! $overwrite && $expectedSize !== null) {
+            throw new SshTargetConnectionException('invalid_input');
         }
         if ($path === '/' || str_ends_with($path, '/') || $expectedBytes < 0
             || $expectedBytes > $maxBytes || $privateStagingDir === '/'
@@ -147,6 +144,7 @@ trait StreamsSshFiles
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
                 $path, $source, $expectedBytes, $expectedSha256, $deadline, $privateStagingDir,
+                $overwrite, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
                 try {
@@ -170,16 +168,29 @@ trait StreamsSshFiles
                 }
 
                 try {
-                    // No overwrite, even when caller sends a different source
-                    // or a competing operation creates this pathname.
-                    $sftp->lstat($path);
-                    throw new SshTargetConnectionException('file_exists');
+                    $existing = $sftp->lstat($path);
+                    if (! $overwrite) {
+                        throw new SshTargetConnectionException('file_exists');
+                    }
+                    if (($existing['type'] ?? null) !== FileType::REGULAR) {
+                        throw new SshTargetConnectionException('unsupported_file_type');
+                    }
+                    $this->requireVersion($existing, $expectedSize, $expectedMtime);
+                    // Preserve permissions on the file being replaced.
+                    if (! isset($existing['mode']) || ! is_int($existing['mode'])) {
+                        throw new SshTargetConnectionException('file_unavailable');
+                    }
+                    $publishedMode = $existing['mode'] & 0777;
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
                 } catch (FileSystemException $exception) {
+                    if ($overwrite) {
+                        throw new SshTargetConnectionException('source_changed');
+                    }
                     if (! in_array($exception->getCode(), [2, 10], true)) {
                         throw new SshTargetConnectionException('file_unavailable');
                     }
+                    $publishedMode = 0600;
                 } catch (Throwable) {
                     throw new SshTargetConnectionException('file_unavailable');
                 }
@@ -272,32 +283,53 @@ trait StreamsSshFiles
                         throw new SshTargetConnectionException('write_unverified');
                     }
 
-                    // Verify the source inode is still private just before
-                    // the exclusive hardlink makes it visible at destination.
+                    // Data is fully verified. Restore the intended final
+                    // permissions only while still inside the 0700 directory.
+                    // Create-only stays 0600; replacing a file preserves its
+                    // prior permissions instead of unexpectedly revoking access.
                     $this->ensureStreamDeadline($deadline);
+                    if ($publishedMode !== 0600) {
+                        $sftp->chmod($temporary, $publishedMode);
+                    }
                     $sftp->clearStatCache();
+                    $stageNow = $sftp->lstat($privateStagingDir);
                     $restricted = $sftp->lstat($temporary);
-                    if (($restricted['type'] ?? null) !== FileType::REGULAR
+                    if (($stageNow['type'] ?? null) !== FileType::DIRECTORY
+                        || (($stageNow['mode'] ?? 0) & 0777) !== 0700
+                        || ! $this->sameSftpOwner($directory, $stageNow, $sftp->getNegotiatedVersion())
+                        || ($restricted['type'] ?? null) !== FileType::REGULAR
+                        || ($restricted['size'] ?? null) !== $expectedBytes
                         || ! isset($restricted['mode'])
-                        || ($restricted['mode'] & 0777) !== 0600
+                        || ($restricted['mode'] & 0777) !== $publishedMode
                         || ! $this->sameSftpOwner($directory, $restricted, $sftp->getNegotiatedVersion())) {
                         throw new SshTargetConnectionException('staging_not_private');
                     }
 
-                    // The server hardlink extension is the actual no-clobber
-                    // atomic primitive. It fails for an existing destination
-                    // or unsupported cross-filesystem link; no rename fallback.
                     $this->ensureStreamDeadline($deadline);
-                    $sftp->hardlink($temporary, $path);
-                    $sftp->delete($temporary, false);
+                    if (! $overwrite) {
+                        // Exclusive hardlink prevents clobbering an existing file.
+                        $sftp->hardlink($temporary, $path);
+                    } else {
+                        // Optional version checks are best-effort only. This
+                        // atomic POSIX replacement is NOT compare-and-swap.
+                        $latest = $sftp->lstat($path);
+                        if (($latest['type'] ?? null) !== FileType::REGULAR) {
+                            throw new SshTargetConnectionException('unsupported_file_type');
+                        }
+                        $this->requireVersion($latest, $expectedSize, $expectedMtime);
+                        $sftp->posix_rename($temporary, $path);
+                    }
 
                     $sftp->clearStatCache();
                     $published = $sftp->lstat($path);
                     if (($published['type'] ?? null) !== FileType::REGULAR
                         || ($published['size'] ?? null) !== $expectedBytes
                         || ! isset($published['mode'])
-                        || ($published['mode'] & 0777) !== 0600) {
+                        || ($published['mode'] & 0777) !== $publishedMode) {
                         throw new SshTargetConnectionException('write_unverified');
+                    }
+                    if (! $overwrite) {
+                        $sftp->delete($temporary, false);
                     }
                 } catch (Throwable) {
                     $cleanup = false;
@@ -325,34 +357,11 @@ trait StreamsSshFiles
                     'sha256' => $expectedSha256,
                     'integrity_check' => 'remote_readback_sha256',
                     'atomic_publish' => true,
-                    'publish_method' => 'exclusive_hardlink',
-                    'overwrote' => false,
-                    'published_mode' => '0600',
+                    'publish_method' => $overwrite ? 'posix_replace' : 'exclusive_hardlink',
+                    'overwrote' => $overwrite,
+                    'published_mode' => sprintf('%04o', $publishedMode),
                 ];
             }, $deadline);
-    }
-
-    /**
-     * Compare the owner of an inode just created by the authenticated
-     * SFTP principal with the pre-existing private directory's owner.
-     * V3 returns numeric uid; V4+ returns an owner-name string. Missing
-     * owner metadata fails closed instead of assuming 0700 is private.
-     *
-     * @param  array<string,mixed>  $directory
-     * @param  array<string,mixed>  $candidate
-     */
-    private function sameSftpOwner(array $directory, array $candidate, int $version): bool
-    {
-        if ($version <= 3) {
-            return isset($directory['uid'], $candidate['uid'])
-                && is_int($directory['uid']) && is_int($candidate['uid'])
-                && $directory['uid'] === $candidate['uid'];
-        }
-
-        return isset($directory['owner'], $candidate['owner'])
-            && is_string($directory['owner']) && is_string($candidate['owner'])
-            && $directory['owner'] !== ''
-            && hash_equals($directory['owner'], $candidate['owner']);
     }
 
     private function validateTransferLimit(int $maxBytes): void
