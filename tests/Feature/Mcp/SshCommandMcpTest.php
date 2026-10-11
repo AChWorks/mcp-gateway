@@ -57,7 +57,7 @@ final class SshCommandMcpTest extends TestCase
         // without contacting a live server or exposing transport details.
         $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
         {
-            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint): array
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
             {
                 throw new RuntimeException('fixture transport must stay offline');
             }

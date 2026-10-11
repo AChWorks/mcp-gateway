@@ -93,8 +93,14 @@ final readonly class SshVerifiedTransport
 
         $this->assertDeadline($deadlineNs);
         try {
-            $approved = $this->policy->approvedDialAddresses($endpoint);
+            $approved = $this->policy->approvedDialAddresses($endpoint, $deadlineNs);
+        } catch (SshTargetConnectionException $exception) {
+            // A DNS deadline must retain its typed timeout, not turn into a
+            // misleading network policy denial.
+            throw $exception;
         } catch (Throwable) {
+            $this->assertDeadline($deadlineNs);
+
             throw new SshTargetConnectionException('egress_denied');
         }
 

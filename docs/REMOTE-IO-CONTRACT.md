@@ -62,7 +62,7 @@ Do not conflate **transport response-size bounds** with **application pagination
 
 **Foundation (#108 / #109 / #110):** factor shared downstream MCP bounds and error propagation where truly common; keep connector-owned payload/transport and stable Target/user authorization. Do not introduce a generic large-object framework before the third real connector demonstrates a need.
 
-**Direct SSH (#123):** bounded command previews are merged in #145. The new SFTP candidate handles small inline stat/list, up-to-16-KiB binary-safe base64 ranges and create-only/conditional replace. This is NOT streamed binary HTTP transfer. Large authenticated upload/download, strong source-version guarantees and partial-transfer recovery remain pending. No always-on PTY/job/transfer service required.
+**Direct SSH (#123):** bounded command previews are merged in #145. The SFTP candidate handles small inline stat/list, up-to-16-KiB binary-safe base64 ranges and create-only or explicit atomic last-writer-wins replacement (optional paired size/mtime are best-effort preflight checks, never CAS). This is NOT streamed binary HTTP transfer. Large authenticated upload/download, strong source-version guarantees and partial-transfer recovery remain pending. No always-on PTY/job/transfer service required.
 
 **Final acceptance (#112):** validate small-path latency, oversize/encoded/unknown-length handling, no cross-Target/credential leaks, interrupted-write unknown outcomes, representative large file and mixed-connector limits, and supported shared-PHP packaging. Add only tests for capabilities actually shipped.
 

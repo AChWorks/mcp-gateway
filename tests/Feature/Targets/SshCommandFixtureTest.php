@@ -25,7 +25,7 @@ final class SshCommandFixtureTest extends TestCase
         }
         $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
         {
-            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint): array
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
             {
                 return ['127.0.0.1'];
             }
