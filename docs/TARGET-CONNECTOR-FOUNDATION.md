@@ -184,7 +184,7 @@ Connector onboarding that accepts a secret through the Admin UI treats that fiel
 
 Supported connectors are built-in, explicitly registered implementations.
 
-Accepted built-in connector vocabulary (not a claim of simultaneous runtime availability; Agent #111 is owner-paused, SSH file work remains gated):
+Accepted built-in connector vocabulary (not a claim of simultaneous installed availability): WordPress is shipped; Direct SSH commands (#145), bounded SFTP file operations (#146) and internal stream primitives (#148) are **source-integrated but not yet released**; client-neutral file transfer/handoff #147 and final mixed acceptance #112 remain open. AI Server Agent #111 remains Owner-paused:
 
 ```text
 wp_ai_bridge
