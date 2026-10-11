@@ -1,7 +1,8 @@
 # Remote Results and File Transfer Contract
 
-Status: Accepted target-state design. Bounded WP/SSH commands and four bounded SFTP MCP operations (#146), plus internal SFTP stream primitives (#148), are integrated on main but are **not part of the last published v2.0.2 release**. Real client-neutral file handoff (#147), binary HTTP transport and durable continuation remain unimplemented/unverified; do not advertise them as working.
-Owners: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [bounded-response work #122](https://github.com/AChWorks/mcp-gateway/issues/122).
+Status: Accepted Target/data transport contract. Bounded SSH/SFTP MCP operations (#146) and internal SFTP streams (#148) are integrated into **source**, not evidence of a particular [published release](https://github.com/AChWorks/mcp-gateway/releases) or installed Gateway. Authenticated client-neutral file handoff (#147), binary delivery into/out of the real MCP host and durable continuation remain unimplemented/unverified; do not advertise them as working.
+Current work owners: [client-neutral transfer #147](https://github.com/AChWorks/mcp-gateway/issues/147), [cross-layer effective capacity and Bridge compatibility #154](https://github.com/AChWorks/mcp-gateway/issues/154), [Owner Admin operational tuning #153](https://github.com/AChWorks/mcp-gateway/issues/153), [mixed acceptance/release #112](https://github.com/AChWorks/mcp-gateway/issues/112).
+Provenance: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [completed bounded-response #122](https://github.com/AChWorks/mcp-gateway/issues/122), [SSH backend #123](https://github.com/AChWorks/mcp-gateway/issues/123).
 Related: [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [Direct SSH connector](./DIRECT-SSH-CONNECTOR.md).
 
 ## Purpose and scope
@@ -58,7 +59,7 @@ Do not conflate **transport response-size bounds** with **application pagination
 
 ## Delivery sequence and ownership
 
-**Now (#122):** reproduce existing WP oversize case, preserve finite decoded-byte limit, add typed safe failure + effective-limit diagnostics/configuration and tests; document connector/tool limit choice and interface with WP #100. Establish the semantics in this document without pretending all future mechanisms ship now.
+**Completed bounded-response foundation (#122):** finite decoded response protection, typed oversize failure, effective-limit diagnostics and focused tests are integrated. This is NOT a public file data plane or proof that increasing one Bridge message budget allows a larger end-to-end MCP response. Further current source/installed capacity compatibility belongs #154, and actual client-to-Target/Target-to-client file handoff belongs #147.
 
 **Foundation (#108 / #109 / #110):** factor shared downstream MCP bounds and error propagation where truly common; keep connector-owned payload/transport and stable Target/user authorization. Do not introduce a generic large-object framework before the third real connector demonstrates a need.
 
@@ -67,6 +68,24 @@ Do not conflate **transport response-size bounds** with **application pagination
 **Final acceptance (#112):** validate small-path latency, oversize/encoded/unknown-length handling, no cross-Target/credential leaks, interrupted-write unknown outcomes, representative large file and mixed-connector limits, and supported shared-PHP packaging. Add only tests for capabilities actually shipped.
 
 **Future, demand-driven:** resumable transfer with durable ID/offset/checksum, spooled command output, durable SSH jobs, PTY/interactive stdin, richer MCP Tasks integration, object-storage offload. They are architectural extension points, **not release blockers** and must not be advertised until implemented and tested.
+
+## Effective limits belong to the whole path
+
+**The current inventory, measured values and provider versions live in [#154](https://github.com/AChWorks/mcp-gateway/issues/154), not in copied release/head snapshots in this design contract.** A per-call message limit, an internal stream block size, a WordPress per-document quota, a MIME restriction, a PHP host upload cap, a Gateway decoded HTTP body guard and the total bytes of a completed file are **different units, enforcing different invariants**. The effective behavior depends on the authenticated caller, operation classification, Target, installed provider revision and actual receiving MCP host; it cannot be inferred by reading the largest number in a component.
+
+Illustrative **source-only compatibility checkpoint**: Gateway main at 481bb8e215c651a2a1e290de3e15064848043ecd and [WP Bridge DRAFT #145 HEAD 061e162](https://github.com/AChWorks/wp-ai-bridge/tree/061e162d65c130b4f5892b86035b294e5f3f84f1), inspected 2026-10-11. This is an example, **not** a published or installed capability claim; verify live revisions before use:
+
+| Boundary | Source default / status | How to interpret |
+| --- | --- | --- |
+| Gateway ordinary/possibly mutating downstream HTTP response | **64 KiB decoded JSON-RPC HTTP body**; bounded via Gateway configuration | Not a universal text/file size; an unknown mutation whose response exceeded the budget cannot be blindly repeated |
+| Gateway confirmed read-only downstream HTTP response | **256 KiB decoded HTTP body**; separate configuration, subject to **8 MiB absolute decoded-body guard** | Does not grant read-only classification to unknown/untrusted operations or bypass client-side MCP reply framing |
+| [WP AI Bridge **DRAFT** PR #145](https://github.com/AChWorks/wp-ai-bridge/pull/145) | Proposed **128 KiB encoded JSON response** and **128 KiB UTF-8 read-window** defaults; WordPress Admin finite settings, **not merged/released here** | An output valid under its draft Bridge limit can still be **too large for Gateway's 64 KiB ordinary route** once encoded. A 128 KiB window is not a maximum WordPress document length or a complete inbound text writer |
+| Source-integrated SSH/SFTP | **16 KiB decoded inline range read / whole write**; **64 KiB internal stream blocks** | The public ssh-file-write operation does **not** assemble a larger file from repeated chunks; internal blocks are not yet a client-facing ingress/egress protocol. A ZIP/PDF/video is not thereby capped at 16 KiB in the *future* real streamed data plane |
+| Real ChatGPT/other client ↔ Gateway ↔ Target file transit | **End-to-end capability and aggregate maximum unverified** until [#147](https://github.com/AChWorks/mcp-gateway/issues/147) acceptance | A server path, MCP resource URL, link, Base64 window or user download is not automatically bytes the model can actually consume |
+
+For any size-sensitive operation, record **source bytes, Base64 bytes, serialized Bridge JSON, downstream HTTP decoded bytes, final Gateway MCP response bytes, real client/host attachment mode, effective configured/immutable limits, origin/version and the limiting layer**. Test small text, UTF-8 expansion, binary ZIP/media, at-boundary oversize, concurrent requests, interrupted reads/writes and exact byte/hash identity. Use representative latency and peak memory/disk evidence to choose non-security default budgets (#153); higher permitted maxima do not imply higher resource usage for small requests. A Bridge-side admin setting is not a Gateway setting, and no Gateway setting may disable credential/Target/client authorization, network pinning, one-shot refresh safety or memory/transport hard guards.
+
+**Ownership / follow-through:** #154 owns the evidence-backed *versioned* numeric/capability matrix and honest compatibility runbook; #153 owns one validated Owner Admin configuration subsystem; #147 owns the **shared** authenticated byte transfer mechanism across actual supported client and Target adapters. Do not create per-file-extension/per-client duplicate security pipelines or turn passive ZIP receipt into WordPress extension installation. Release/installation claims require actual artifact/host checks, not design prose.
 
 ## Proportional work and independent ceilings
 
