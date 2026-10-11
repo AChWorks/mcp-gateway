@@ -538,8 +538,16 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(0, Artisan::call('gateway:wordpress-credentials-maintain'));
         self::assertSame(0, $this->refreshCalls);
         self::assertSame(1, DB::table('target_credentials')->count());
-        self::assertSame('alpha-access',
-            app(WpAiBridgeTargetConnectionService::class)->accessToken($target));
+
+        // The expired 1h access bearer must be transparently replaced on the
+        // next read, without interpreting three weeks of Stale as revocation.
+        $this->expire($target);
+        self::assertSame('alpha-rotated-access',
+            app(WpAiBridgeTargetConnectionService::class)
+                ->routingContextWithRecovery($target)['access_token']);
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
     }
 
     public function test_on_demand_access_refresh_recovers_single_transient_503_without_reauthorization(): void
