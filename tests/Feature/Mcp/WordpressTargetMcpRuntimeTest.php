@@ -167,6 +167,91 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertStringNotContainsString('alpha-access', json_encode($blocked, JSON_THROW_ON_ERROR));
     }
 
+    public function test_failed_ability_catalog_does_not_fall_back_to_unclassified_execution(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $handler = app(WordpressTargetMcpToolHandlers::class);
+
+        foreach (['server_failure', 'network_failure', 'downstream_auth'] as $failure) {
+            $executed = [];
+            $this->downstream = [];
+            Http::fake(function (Request $request) use ($failure, &$executed): PromiseInterface {
+                $payload = $request->data();
+                $ability = $payload['params']['arguments']['ability_name'] ?? null;
+                if (($payload['method'] ?? null) === 'tools/call') {
+                    $executed[] = $ability;
+                }
+                if ($ability === 'wp-ai-bridge/abilities-read') {
+                    return match ($failure) {
+                        'server_failure' => Http::response(['error' => 'unavailable'], 503),
+                        'network_failure' => Http::failedConnection(),
+                        'downstream_auth' => Http::response(['error' => 'unauthorized'], 401),
+                    };
+                }
+
+                return $this->bridgeResponse($request);
+            });
+
+            $result = $handler->execute($owner, 'alpha', 'demo/read', []);
+            self::assertFalse($result['ok'], 'Failure case: '.$failure);
+            self::assertSame(match ($failure) {
+                'server_failure' => 'protocol_error',
+                'network_failure' => 'network_failure',
+                'downstream_auth' => 'downstream_auth',
+            }, $result['error']['code']);
+            self::assertSame(['wp-ai-bridge/abilities-read'], $executed,
+                'Catalog errors must not use the unclassified execution permission as an escape hatch.');
+            self::assertStringNotContainsString('alpha-access', json_encode($result, JSON_THROW_ON_ERROR));
+        }
+    }
+
+    public function test_successful_catalog_with_missing_effect_annotations_preserves_explicit_unclassified_grant(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $executed = [];
+        Http::fake(function (Request $request) use (&$executed): PromiseInterface {
+            $payload = $request->data();
+            $ability = $payload['params']['arguments']['ability_name'] ?? null;
+            if ($ability === 'wp-ai-bridge/abilities-read') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'isError' => false,
+                        'structuredContent' => [
+                            'success' => true,
+                            'data' => ['items' => [[
+                                'name' => 'plugin/new-ability',
+                                'mcp_type' => 'tool',
+                                'bridge_delegation' => 'ability_specific',
+                            ]]],
+                        ],
+                    ],
+                ], 200);
+            }
+            if ($ability !== null) {
+                $executed[] = $ability;
+            }
+
+            return $this->bridgeResponse($request);
+        });
+        $handler = app(WordpressTargetMcpToolHandlers::class);
+        $success = $handler->execute($owner, 'alpha', 'plugin/new-ability', []);
+        self::assertTrue($success['ok']);
+        self::assertSame(['plugin/new-ability'], $executed);
+
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $owner->getKey(),
+            'permission' => GatewayPermission::WordpressAbilitiesExecuteUnclassified->value,
+        ]);
+        $blocked = $handler->execute($owner, 'alpha', 'plugin/new-ability', []);
+        self::assertFalse($blocked['ok']);
+        self::assertSame('forbidden', $blocked['error']['code']);
+        self::assertSame(['plugin/new-ability'], $executed);
+    }
+
     public function test_public_gateway_tool_manifest_contains_wp_and_ssh_without_unsupported_connectors(): void
     {
         $owner = $this->user('owner');
