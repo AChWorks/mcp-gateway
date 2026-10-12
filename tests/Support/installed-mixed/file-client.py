@@ -22,6 +22,7 @@ host = "11.22.33.45"
 target = state["ssh_target"]
 token = state["owner_token"]
 endpoint = f"/mcp/file-transfer/ssh/{target}"
+session_id = None
 context = ssl.create_default_context(cafile=str(root / "secrets/tls.crt"))
 assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
 
@@ -31,18 +32,25 @@ def connect():
 
 
 def mcp(method, params=None):
+    global session_id
     body = json.dumps({"jsonrpc": "2.0", "id": 10, "method": method,
                        **({"params": params} if params is not None else {})},
                       separators=(",", ":")).encode()
     conn = connect()
     try:
-        conn.request("POST", "/mcp", body=body, headers={
+        headers = {
             "Authorization": "Bearer " + token,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             "MCP-Protocol-Version": "2025-11-25",
-        })
+        }
+        if session_id:
+            headers["Mcp-Session-Id"] = session_id
+        conn.request("POST", "/mcp", body=body, headers=headers)
         response = conn.getresponse()
+        if method == "initialize":
+            session_id = response.getheader("Mcp-Session-Id")
+            assert session_id, "MCP SDK required a persisted session identifier"
         raw = response.read(1048576)
         assert response.status == 200, (method, response.status, raw[:200])
         content_type = response.getheader("Content-Type", "")
@@ -66,6 +74,13 @@ def require(test, message):
         raise AssertionError(message)
 
 
+initialized = mcp("initialize", {
+    "protocolVersion": "2025-11-25",
+    "capabilities": {},
+    "clientInfo": {"name": "independent-python-standard-http", "version": "1.0"},
+})
+require_protocol = initialized.get("protocolVersion")
+assert require_protocol, "MCP initialize did not negotiate a protocol"
 tools = mcp("tools/list")
 names = [tool["name"] for tool in tools["tools"]]
 require("ssh-file-stat" in names and "ssh-command-run" in names,
