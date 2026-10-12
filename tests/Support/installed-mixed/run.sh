@@ -116,7 +116,7 @@ fi
 # Root orchestration: every network-facing component is launched only by "inside"
 # within an independent temporary network namespace.
 # Fail closed rather than reporting HEAD/tree for an uncommitted runtime.
-if [[ -n "$(git -c safe.directory="$SOURCE" -C "$SOURCE" status --porcelain --untracked-files=all)" ]]; then
+if [[ -n "$(GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$SOURCE" -C "$SOURCE" status --porcelain --untracked-files=all)" ]]; then
   echo "Acceptance requires a clean committed candidate (source identity must be exact)." >&2
   exit 2
 fi
