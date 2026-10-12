@@ -5,8 +5,26 @@ SOURCE="$(cd "$(dirname "$0")/../../.." && pwd)"
 EVIDENCE_BASE="${MIXED_EVIDENCE_DIR:-/srv/ai-workspace/mcp-gateway-acceptance-20261012}"
 WP_ARCHIVE="${MIXED_WORDPRESS_ARCHIVE:-/srv/ai-workspace/wpai-r004-agent-runtime/downloads/wordpress-6.9.tar.gz}"
 WP_CLI="${MIXED_WP_CLI_PHAR:-/srv/ai-workspace/wpai-r004-agent-runtime/downloads/wp-cli.phar}"
-WP_BRIDGE_PLUGIN="${MIXED_WP_BRIDGE_PLUGIN_DIR:-/srv/ai-workspace/wpai-r004-agent-runtime/site/wp-content/plugins/wp-ai-bridge}"
-WP_ADAPTER_PLUGIN="${MIXED_MCP_ADAPTER_PLUGIN_DIR:-/srv/ai-workspace/wpai-r004-agent-runtime/site/wp-content/plugins/mcp-adapter}"
+WP_BRIDGE_ARCHIVE="${MIXED_WP_BRIDGE_ARCHIVE:-/srv/ai-workspace/mcp-gateway-acceptance-20261012/inputs/wp-ai-bridge-0.5.1.zip}"
+WP_ADAPTER_ARCHIVE="${MIXED_MCP_ADAPTER_ARCHIVE:-/srv/ai-workspace/wpai-r004-agent-runtime/downloads/mcp-adapter-0.7.0.zip}"
+PINS="$SOURCE/tests/Support/installed-mixed/fixture-pins.sha256"
+
+# Pinned artifacts are explicitly sourced from upstream release distributions,
+# not mutable directories of an already installed WordPress site.
+verify_input() {
+  local label="$1" path="$2" expected actual
+  [[ -f "$path" && -r "$path" && ! -L "$path" ]] || {
+    echo "Pinned fixture input is missing, unreadable or a symlink: $label" >&2; return 2;
+  }
+  expected="$(awk -v label="$label" '$2 == label {print $1}' "$PINS")"
+  [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || {
+    echo "Fixture pin manifest has an absent/duplicate/invalid digest: $label" >&2; return 2;
+  }
+  actual="$(sha256sum -- "$path" | cut -d' ' -f1)"
+  [[ "$expected" == "$actual" ]] || {
+    echo "Fixture digest mismatch (fail closed): $label" >&2; return 2;
+  }
+}
 
 if [[ "$(id -u)" -ne 0 ]]; then echo "Disposable runner requires root for unshare/sshd." >&2; exit 2; fi
 if [[ "${1:-}" == inside ]]; then
@@ -102,12 +120,11 @@ if [[ -n "$(git -c safe.directory="$SOURCE" -C "$SOURCE" status --porcelain --un
   echo "Acceptance requires a clean committed candidate (source identity must be exact)." >&2
   exit 2
 fi
-for file in "$WP_ARCHIVE" "$WP_CLI"; do
-  [[ -r "$file" && -f "$file" ]] || { echo "Required fixture file unavailable: $file" >&2; exit 2; }
-done
-for dir in "$WP_BRIDGE_PLUGIN" "$WP_ADAPTER_PLUGIN"; do
-  [[ -d "$dir" && -r "$dir" ]] || { echo "Required plugin directory unavailable: $dir" >&2; exit 2; }
-done
+# Validate every input before allocating test users, databases or listeners.
+verify_input wordpress-6.9.tar.gz "$WP_ARCHIVE"
+verify_input wp-cli-2.12.0.phar "$WP_CLI"
+verify_input wp-ai-bridge-0.5.1.zip "$WP_BRIDGE_ARCHIVE"
+verify_input mcp-adapter-0.7.0.zip "$WP_ADAPTER_ARCHIVE"
 mkdir -p "$EVIDENCE_BASE"
 ROOT="$(mktemp -d /srv/ai-workspace/mcp-gateway-installed-112-XXXXXX)"
 EVIDENCE="$(mktemp -d "$EVIDENCE_BASE/real-installed-mixed-112-XXXXXX")"
@@ -120,7 +137,7 @@ cleanup() {
   trap - EXIT
   if [[ "$status" -ne 0 ]]; then
     echo "Disposable setup failed at last reported stage; pre-OAuth log excerpts:" >&2
-    for name in wp-config wp-install wp-site-url wp-plugins wp-rewrite gateway-migrations gateway-oauth-keygen gateway-bridge-keygen; do
+    for name in composer-install composer-platform wp-config wp-install wp-site-url wp-plugins wp-rewrite gateway-migrations gateway-oauth-keygen gateway-bridge-keygen; do
       if [[ -f "$ROOT/logs/$name.log" ]]; then
         printf '%s: ' "$name" >&2
         if [[ "$name" == gateway-migrations ]]; then
@@ -156,19 +173,53 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$ROOT"/{wp,gateway,secrets,db,client,logs}
 chmod 700 "$ROOT" "$ROOT/secrets"
-# Preserve the source worktree. No git metadata, databases, .env or previous logs
-# are copied from pre-existing fixtures.
-tar -C "$SOURCE" --exclude='./.git' --exclude='./vendor' \
-    --exclude='./storage/logs' -cf - . | tar -C "$ROOT/gateway" -xf -
-cp -a "$SOURCE/vendor" "$ROOT/gateway/vendor"
-tar -xzf "$WP_ARCHIVE" \
-    -C "$ROOT/wp" --strip-components=1
-cp -a "$WP_BRIDGE_PLUGIN" "$ROOT/wp/wp-content/plugins/wp-ai-bridge"
-cp -a "$WP_ADAPTER_PLUGIN" "$ROOT/wp/wp-content/plugins/mcp-adapter"
+# Export only version-controlled bytes from the exact commit. Git-ignored
+# sessions, .env, compiled views, private keys and untracked test data can
+# never enter this staging root, even when git status reports a clean checkout.
+git -c safe.directory="$SOURCE" -C "$SOURCE" archive --format=tar HEAD | tar -C "$ROOT/gateway" -xf -
+for state_dir in "$ROOT/gateway/storage" "$ROOT/gateway/bootstrap/cache"; do
+  if find "$state_dir" -type f ! -name '.gitignore' -print -quit | grep -q .; then
+    echo 'Tracked application runtime state is not permitted in a fresh installation.' >&2
+    exit 1
+  fi
+done
+printf 'source_export=git_archive_exact_head\nignored_checkout_state_imported=no\n' \
+  >"$EVIDENCE/source-export.txt"
+
+# Install dependencies independently from the committed Composer lockfile:
+# never copy the checkout's ignored vendor directory or generated autoload.
+# Keep the private fixture root accessible only to its dedicated worker.
+chown aiworker:aiworker "$ROOT"
+chown -R aiworker:aiworker "$ROOT/gateway"
+runuser -u aiworker -- sh -c 'cd "$1" && composer install --no-dev --no-interaction --prefer-dist --no-progress --optimize-autoloader' \
+  sh "$ROOT/gateway" >"$ROOT/logs/composer-install.log" 2>&1
+runuser -u aiworker -- sh -c 'cd "$1" && composer check-platform-reqs --no-dev' sh "$ROOT/gateway" \
+  >"$ROOT/logs/composer-platform.log" 2>&1
+# Composer may create bootstrap manifests; freshly generate them on installed
+# first boot, not from prior builds. Every writable runtime path starts empty.
+rm -rf -- "$ROOT/gateway/storage" "$ROOT/gateway/bootstrap/cache"
+mkdir -p "$ROOT/gateway/bootstrap/cache" \
+  "$ROOT/gateway/storage/app/private" "$ROOT/gateway/storage/app/public" \
+  "$ROOT/gateway/storage/framework/cache/data" \
+  "$ROOT/gateway/storage/framework/mcp-sessions" \
+  "$ROOT/gateway/storage/framework/sessions" \
+  "$ROOT/gateway/storage/framework/testing" \
+  "$ROOT/gateway/storage/framework/views" "$ROOT/gateway/storage/logs"
+chown -R aiworker:aiworker "$ROOT/gateway/storage" "$ROOT/gateway/bootstrap/cache"
+if find "$ROOT/gateway/storage" "$ROOT/gateway/bootstrap/cache" -type f -print -quit | grep -q .; then
+  echo 'Fresh installed Gateway unexpectedly contains runtime state.' >&2
+  exit 1
+fi
+printf 'fresh_storage_files=0\nfresh_bootstrap_cache_files=0\ndependencies=installed_from_tracked_composer_lock\n' \
+  >>"$EVIDENCE/source-export.txt"
+
+tar -xzf "$WP_ARCHIVE" -C "$ROOT/wp" --strip-components=1
+unzip -q "$WP_BRIDGE_ARCHIVE" -d "$ROOT/wp/wp-content/plugins"
+unzip -q "$WP_ADAPTER_ARCHIVE" -d "$ROOT/wp/wp-content/plugins"
 cp "$WP_CLI" "$ROOT/wp-cli.phar"
-cp "$SOURCE/tests/Support/installed-mixed/client.php" "$ROOT/client/"
-cp "$SOURCE/tests/Support/installed-mixed/dynamic-ability.php" "$ROOT/client/"
-cp "$SOURCE/tests/Support/installed-mixed/FixtureClientProfiles.php" "$ROOT/gateway/app/Providers/"
+cp "$ROOT/gateway/tests/Support/installed-mixed/client.php" "$ROOT/client/"
+cp "$ROOT/gateway/tests/Support/installed-mixed/dynamic-ability.php" "$ROOT/client/"
+cp "$ROOT/gateway/tests/Support/installed-mixed/FixtureClientProfiles.php" "$ROOT/gateway/app/Providers/"
 cat > "$ROOT/gateway/bootstrap/providers.php" <<'EOF_PROVIDERS'
 <?php
 return [
@@ -337,11 +388,21 @@ echo "PASS installed fresh WordPress 6.9, WP AI Bridge, MCP Adapter, private Mar
     printf '%s_version=%s\n' "$plugin" \
       "$(runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" plugin get "$plugin" --field=version)"
   done
+  # Identical SHA-256 preflight on source inputs and retained identity evidence.
+  for spec in \
+    "wordpress_archive:$WP_ARCHIVE" "wp_cli_phar:$WP_CLI" \
+    "wp_bridge_release_zip:$WP_BRIDGE_ARCHIVE" \
+    "mcp_adapter_release_zip:$WP_ADAPTER_ARCHIVE"; do
+    printf '%s_sha256=%s\n' "${spec%%:*}" "$(sha256sum -- "${spec#*:}" | cut -d' ' -f1)"
+  done
+  printf 'source_export=git_archive_exact_head\n'
+  printf 'runtime_state_imported=no\n'
+  printf 'vendor_identity=committed_composer_lock_fresh_install\n'
   printf 'php_version=%s\n' "$(php -r 'echo PHP_VERSION;')"
   printf 'mariadb_version=%s\n' "$(mariadbd --version | head -1)"
   printf 'installed_identity=source-copy-plus-ephemeral-client-provider-only\n'
   printf 'public_release=v2.0.3-not-deployed\n'
 } >"$EVIDENCE/identity.txt"
 export MIXED_EVIDENCE="$EVIDENCE"
-unshare -nm -- "$SOURCE/tests/Support/installed-mixed/run.sh" inside "$ROOT"
+unshare -nm -- "$ROOT/gateway/tests/Support/installed-mixed/run.sh" inside "$ROOT"
 echo "PASS all live installed Gateway, WordPress and SSH acceptance stages."

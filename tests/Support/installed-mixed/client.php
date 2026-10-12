@@ -83,7 +83,8 @@ try {
     $denied = $call($client, 'wordpress-ability-execute', [
         'target_id' => $state['wp_target'], 'ability' => 'gateway-mixed-test/denied-read',
         'input' => (object) []], 'wp_denied');
-    $check(! ($denied['ok'] ?? false), 'Denied real WordPress provider was allowed.');
+    $check(! ($denied['ok'] ?? false) && ($denied['error']['code'] ?? null) === 'downstream_rejected',
+        'WordPress provider denial must be classified as downstream_rejected, not transport failure.');
     $ssh = $call($client, 'ssh-command-run', [
         'target_id' => $state['ssh_target'], 'command' => "printf 'installed-ssh-ok'"], 'ssh_command');
     $check(($ssh['result']['stdout'] ?? null) === 'installed-ssh-ok', 'Host-key verified SSH failed.');
@@ -108,10 +109,12 @@ try {
     }
     $deniedPath = $call($client, 'ssh-file-read', [
         'target_id' => $state['ssh_target'], 'path' => '/root/mixed-not-authorized'], 'ssh_path_denied');
-    $check(! ($deniedPath['ok'] ?? false), 'Restricted SSH path unexpectedly readable.');
+    $check(! ($deniedPath['ok'] ?? false) && ($deniedPath['error']['code'] ?? null) === 'file_unavailable',
+        'Denied SSH filesystem path must be classified as file_unavailable.');
     $cross = $call($client, 'ssh-file-read', [
         'target_id' => $state['wp_target'], 'path' => '/tmp/wrong-connector'], 'cross_target_denied');
-    $check(! ($cross['ok'] ?? false), 'Cross-connector access not rejected.');
+    $check(! ($cross['ok'] ?? false) && ($cross['error']['code'] ?? null) === 'target_not_found',
+        'Cross-connector lookup must fail as target_not_found before network access.');
     $operator = Client::builder()->setClientInfo('mixed-scoped-operator', '1')
         ->setInitTimeout(8)->setRequestTimeout(30)->setMaxRetries(0)->build();
     try {
@@ -122,7 +125,8 @@ try {
             'Operator visibility escaped permitted WordPress Target.');
         $hidden = $call($operator, 'ssh-command-run', [
             'target_id' => $state['ssh_target'], 'command' => 'printf should-not-run'], 'operator_denied_ssh');
-        $check(! ($hidden['ok'] ?? false), 'Default-deny operator accessed SSH.');
+        $check(! ($hidden['ok'] ?? false) && ($hidden['error']['code'] ?? null) === 'target_not_found',
+            'Default-deny operator must receive target_not_found for hidden SSH.');
         $wp = $call($operator, 'wordpress-abilities-read', [
             'target_id' => $state['wp_target'], 'ability' => $existing], 'operator_wp');
         $check($wp['ok'] ?? false, 'Authorized operator could not use WordPress.');
