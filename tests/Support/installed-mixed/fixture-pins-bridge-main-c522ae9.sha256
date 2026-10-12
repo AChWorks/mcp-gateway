@@ -1,0 +1,12 @@
+# Exact Bridge merged-main source fixture; the other inputs remain official releases.
+# WordPress 6.9 tarball: SHA-1 256dda5bb6a43aecd806b7a62528f442c06e6c25
+# verified against https://wordpress.org/wordpress-6.9.tar.gz.sha1;
+# SHA-256 below computed from that verified archive.
+# WP-CLI 2.12.0: GitHub wp-cli/wp-cli release v2.12.0 asset digest.
+# Bridge main c522ae99bd11926eb74c007d187354013202fc4c: git archive and
+# source builder-equivalent zip layout; sha256 pinned, NOT an official release.
+# MCP Adapter 0.7.0: GitHub WordPress/mcp-adapter release v0.7.0 asset digest.
+5b36390233e32fef68cb5f66435bb32bdd50e0b3dfa5750aceb2de3c5993d720  wordpress-6.9.tar.gz
+ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c  wp-cli-2.12.0.phar
+6eeafef861fe099af82c646bcd1eaf50b05863fc6565682b044c49c3e9cdeeaa  wp-ai-bridge-main-c522ae9.zip
+9168c18dbd018428ff14ee28e7018aa0399d4b8819b7c98b406f6610731c3a79  mcp-adapter-0.7.0.zip

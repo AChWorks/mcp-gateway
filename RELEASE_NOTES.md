@@ -1,3 +1,51 @@
+# MCP Gateway v2.1.0
+
+**Candidate release notes — unpublished until separately authorized.** This is the first proposed combined WordPress + Direct SSH release after the corrective maintenance v2.0.3. These notes describe candidate functionality; merging source or passing CI does not mean a public release, installed host or production has been changed.
+
+## Changes since v2.0.3
+
+- **Existing WordPress behavior retained:** dynamic native WordPress Abilities, fail-closed classifications, Target-bound OAuth permissions and long-idle offline-credential recovery. These include the v2.0.3 maintenance fixes plus unreleased HTTP deadline/DNS safety refinements.
+- **Direct SSH Targets:** host-key pinning, bounded command execution, SFTP stat/list/range/write, and reusable bounded internal private streams. No implicit permission grants, private-network exception or unrestricted credential bypass.
+- **Optional complete SSH binary upload/download:** authenticated per-Target file-transfer discovery, fixed-size/timeout/concurrency budgets, integrity-checked and guarded atomic publication, separate client-side whole-response digest verification. Feature remains **OFF by default** and must be deliberately enabled on an approved host. The 16 KiB inline call budget and 64 MiB/40-second optional SSH upper bound are not global client/WordPress/Agent file or job limits.
+- **Owner operational controls:** one typed registry for bounded WordPress responses, HTTP connect/request deadlines and optional SSH transfer budgets; retains immutable authorization and network safety rules.
+- **Operational readiness:** candidate acceptance covers the actual published v2.0.3 ZIP as an upgrade baseline, package verification, isolated installed WordPress + SSH acceptance, and a release workflow that requires explicit manual publication against an immutable reviewed main SHA.
+
+## Safe upgrade and release gate
+
+Use the **matching update ZIP**, not the fresh-install ZIP, over an existing v2.0.3 Target-era installation. Verify its matching SHA-256 first, preserve a consistent independently restorable database backup plus protected .env/APP_KEY/OAuth and Bridge signing keys, then run the authenticated browser updater and verify Target/client/grant persistence. Never replay an ambiguous migration; preserve rollback or roll-forward evidence. Additional migrations require restoration rehearsals, not assumed DDL reversibility. Earlier v1.x Site-era baselines retain their explicit consent/reset requirements.
+
+Publication is **manual only** after explicit Owner approval of the exact integrated commit and version; a PR merge or VERSION edit does not itself publish. Existing published v2.0.3 remains the default operator Release until that event. Real deployment, upstream production-host limits, native ChatGPT attachment receipt, WordPress full-object raw binary, durable SSH resume and Agent integration remain outside candidate claims.
+
+---
+
+# MCP Gateway v2.0.3
+
+**Corrective maintenance release from v2.0.2, not the unreleased main feature line.** This patch addresses observed WordPress authorization reliability, fail-closed Ability execution and browser update diagnostics. It introduces **no Direct SSH/SFTP runtime, no new Owner operations-setting UI, no client file-transfer data plane, no public MCP tool name, no new database migration and no intentional credential, Target, client grant or role reset.** Publishing a GitHub Release never installs it on a server.
+
+## Fixes since v2.0.2
+
+- **WordPress remains logically authorized across long idle/Stale intervals.** Avoid unnecessary proactive refresh-token rotations every half-hour when the provider supplies a longer-lived offline grant. Renew expired short-lived access tokens on the next authorized operation, and perform scheduled offline refresh when truly due. Old Stale health observations are not proof of revocation. A running **Gateway host scheduler** is needed to maintain authorization beyond a finite offline-grant lifetime; the installer cannot create an indefinite token.
+- **Lost or uncertain WordPress refresh outcome:** use provider-supported one-shot, bounded, exact-client/Target/resource/scope recovery; distinguish an initial pre-consumption `invalid_client` dependency outage from confirmed `invalid_grant` or a potentially committed successor. Do not blindly repeat unknown mutating operations or erase encrypted offline credentials because a transport failed. An already unrecoverable pre-upgrade refresh cannot necessarily be repaired by installing the patch; reconnect only when truly necessary.
+- **Fail-closed WordPress Ability catalog retrieval:** transport, downstream authorization and protocol errors must propagate, never silently transform into an `Unclassified` execution permission. Successfully returned incomplete Ability annotations still follow existing explicit `Unclassified` grants.
+- **Browser updater reliability guidance:** clarify PHP worker ownership when temporary staging cannot be written, and distinguish queued final checks from checks actually running. Display an explicit one-time manual Continue fallback when automatic stage→postflight continuation has not begun. Retain secure browser-bound expiry, migration-recovery and backup-integrity gates. The existing v2.0.2 post-cleanup `/update` and `/update/` no-staging **410** guard is preserved without modifying hosting/Cloudflare rules.
+- **Release notes:** one correct GitHub release title, with only this version's change section and no previous-version duplicate headline.
+
+## Updating an existing v2.0.2 Gateway
+
+1. Obtain `mcp-gateway-update-v2.0.3.zip` and the matching `.sha256` from this release; verify the downloaded archive checksum. Do **not** unpack the fresh-install `mcp-gateway-v2.0.3.zip` over a running application.
+2. Preserve a **consistent independently restorable database backup** and secure copies of `.env`, the Laravel encryption key and both Gateway signing keypairs. A code backup is **not** a database backup. Protect the live installation from concurrent admin changes during the update window.
+3. Upload/extract the **update ZIP** in the existing Gateway application root so that the temporary `update/` and `public/update/` become available. Open the secured HTTPS `/update/` path, authenticate using the existing administrator session, and confirm **Installed: 2.0.2 → Target: 2.0.3** before starting.
+4. Run Start **once**. Let the browser continue to the authenticated postflight automatically; if still showing a visible Continue button before a request starts, use it **once**. If the browser or request fails, inspect the scoped updater status/resume state; never restart a possibly-running migration or delete evidence blindly.
+5. After explicit success, verify actual installed `2.0.3`, `/up`/OAuth discovery, a permitted WordPress read with an expired short-lived access token, installed host cron for idle credential maintenance, Target/client grants and updater cleanup. Preserve backups until the operator validates service. Do not declare a production issue resolved solely from source/CI.
+
+Earlier Target-era v2.0.0/v2.0.1 installs must retain their registered Targets, credentials and client permissions across this patch. Upgrading directly from a historical Site-era v1.x baseline remains the **breaking Target transition**, requiring exact-version operator consent and a separately tested full database restore per the Target-transition runbook; this patch does not remove that requirement. Database DDL cannot be assumed reversible after an unknown interrupted migration.
+
+## Validation boundary
+
+This version is scoped to fixes already integrated/reviewed on the main development line and selectively backported for a maintenance release ([PR #159](https://github.com/AChWorks/mcp-gateway/pull/159)). Exact patch candidate CI, MariaDB historical upgrade tests, independent backport review and checksum-verified release assets are required before publication. WordPress long-idle installed-host acceptance [#97](https://github.com/AChWorks/mcp-gateway/issues/97), the nonreproduced historical browser updater host delay [#135](https://github.com/AChWorks/mcp-gateway/issues/135), and future mixed SSH release acceptance [#112](https://github.com/AChWorks/mcp-gateway/issues/112) remain separately tracked. No production deployment is authorized by publishing this release.
+
+---
+
 # MCP Gateway v2.0.2
 
 **Backward-compatible updater reliability maintenance release.** This patch incorporates the independently reviewed browser-updater corrections from [PR #137](https://github.com/AChWorks/mcp-gateway/pull/137) for existing Target-era installations. It does not introduce a new connector runtime, an intentional connection reset, or a new application database migration. Publishing the Release does **not** install it on an operator's server.
