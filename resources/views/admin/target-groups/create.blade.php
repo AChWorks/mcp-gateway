@@ -28,6 +28,8 @@
             @include('admin.partials.permission-groups', [
                 'permissions' => $targetPermissions,
                 'selectedDenials' => old('denied_permissions', []),
+                'sshPermissionsEditable' => true,
+                'sshPermissionContext' => 'group',
             ])
         </fieldset>
 

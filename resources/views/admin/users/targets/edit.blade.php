@@ -39,8 +39,18 @@
                     'permissions' => $targetPermissions,
                     'selectedDenials' => $selectedDenials,
                     'connectorType' => $target->connector_type,
+                    'sshPermissionsEditable' => $target->connector_type === 'ssh_direct',
+                    'sshPermissionContext' => 'target',
                 ])
             </fieldset>
+            @if ($target->connector_type === 'ssh_direct')
+                <label class="checkbox-option" for="confirm_ssh_target_changes">
+                    <input id="confirm_ssh_target_changes" type="checkbox" name="confirm_ssh_target_changes" value="1"
+                        @checked(old('confirm_ssh_target_changes', false))>
+                    <span>{{ __('Owner confirmation: I reviewed this SSH Target scope rule and the command/SFTP deny checkboxes. Allowing the Target or removing an existing denial may enable authorized remote operations.') }}</span>
+                </label>
+                @error('confirm_ssh_target_changes')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+            @endif
 
             <div class="field">
                 <label for="current_password">{{ __('Your current password') }}</label>

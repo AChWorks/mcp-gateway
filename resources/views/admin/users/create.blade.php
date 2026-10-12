@@ -49,6 +49,7 @@
                         <option value="{{ $role->value }}" @selected(old('role', 'operator') === $role->value)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
                     @endforeach
                 </select>
+                <p class="field-help">{{ __('Owner bypasses every permission and Target restriction for recovery. Operator and Administrator can receive SSH only on explicitly Selected Targets; Viewer cannot execute SSH commands or SFTP tools regardless of checkbox state.') }}</p>
             </div>
             <div class="field">
                 <label for="target_scope_mode">{{ __('Target scope') }}</label>
@@ -69,12 +70,22 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
-            <p class="field-help">{{ __('Checked permissions are denied. The scope badge describes what the permission acts on; checking a Target-scoped permission here denies it on every target in the user\'s effective scope. Restrictions never add authority beyond the selected role.') }}</p>
+            <p class="field-help">{{ __('Checked means DENY. New non-owner users start with all SSH tools blocked. Uncheck an SSH denial only to intentionally authorize that tool on explicitly Selected Targets, with Owner confirmation. This does not add Targets to the account; assign Targets or Target Groups after creation.') }}</p>
+            <input type="hidden" name="ssh_permissions_reviewed" value="1">
             @include('admin.partials.permission-groups', [
                 'permissions' => $permissions,
-                'selectedDenials' => old('denied_permissions', []),
+                'selectedDenials' => old('denied_permissions', $sshDefaultDenials),
+                'sshPermissionsEditable' => true,
+                'sshPermissionContext' => 'user',
             ])
         </fieldset>
+        <label class="checkbox-option" for="confirm_ssh_permission_changes">
+            <input id="confirm_ssh_permission_changes" type="checkbox" name="confirm_ssh_permission_changes" value="1"
+                @checked(old('confirm_ssh_permission_changes', false))>
+            <span>{{ __('Owner confirmation for SSH grants: I reviewed each SSH denial checkbox. Unchecking a denial may enable remote OS commands or file access on an explicitly Selected Target; it does not sandbox remote sudo/root.') }}</span>
+        </label>
+        @error('confirm_ssh_permission_changes')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+        @error('target_scope_mode')<p class="field-error" role="alert">{{ $message }}</p>@enderror
 
         <div class="field">
             <label for="current_password">{{ __('Your current password') }}</label>

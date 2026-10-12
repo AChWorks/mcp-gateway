@@ -20,14 +20,24 @@ final readonly class UserAccessManager
      * @param  array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
-    public function create(array $attributes, array $deniedPermissions): User
+    public function create(array $attributes, array $deniedPermissions, bool $allowSshPermissionChanges = false): User
     {
         $role = GatewayRole::from((string) $attributes['role']);
         $scope = $role === GatewayRole::Owner
             ? TargetScopeMode::All
             : TargetScopeMode::from((string) $attributes['target_scope_mode']);
 
-        $user = DB::transaction(function () use ($attributes, $role, $scope, $deniedPermissions): User {
+        // The absent confirmation path (including non-UI/API callers) remains
+        // fail-closed. Only explicitly authorized Selected-scope account
+        // creation can omit an SSH denial.
+        $canGrantSsh = $allowSshPermissionChanges
+            && $scope === TargetScopeMode::Selected;
+        $defaults = array_filter(
+            $this->defaultConnectorDenials($role),
+            static fn (string $permission): bool => ! $canGrantSsh || ! str_starts_with($permission, 'ssh.'),
+        );
+
+        $user = DB::transaction(function () use ($attributes, $role, $scope, $deniedPermissions, $defaults): User {
             $user = User::query()->create([
                 'name' => (string) $attributes['name'],
                 'email' => (string) $attributes['email'],
@@ -39,7 +49,7 @@ final readonly class UserAccessManager
 
             $this->replaceGlobalDenials($user, $role, [
                 ...$deniedPermissions,
-                ...$this->defaultConnectorDenials($role),
+                ...$defaults,
             ]);
             $this->normalizeOwnerState($user, $role);
             $this->recordRequired('user-access-create:'.$user->id);
@@ -103,7 +113,11 @@ final readonly class UserAccessManager
                 ...array_filter($this->existingConnectorDenials($lockedUser),
                     static fn (string $permission): bool => ! $allowSshPermissionChanges
                         || ! str_starts_with($permission, 'ssh.')),
-                ...($currentRole !== $role ? $this->defaultConnectorDenials($role) : []),
+                ...($currentRole !== $role ? array_filter(
+                    $this->defaultConnectorDenials($role),
+                    static fn (string $permission): bool => ! $allowSshPermissionChanges
+                        || ! str_starts_with($permission, 'ssh.'),
+                ) : []),
                 // Changing away from Selected always revokes dormant SSH grants;
                 // returning to Selected later requires a new explicit Owner grant.
                 ...($scope !== TargetScopeMode::Selected

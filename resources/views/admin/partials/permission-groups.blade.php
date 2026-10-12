@@ -1,5 +1,17 @@
 @php
     // Pure presentation grouping: the existing role, Target ACL, and denial engine remain authoritative.
+    $sshPermissionContext = in_array($sshPermissionContext ?? null, ['user', 'group', 'target'], true)
+        ? $sshPermissionContext : 'user';
+    $sshHelp = match ($sshPermissionContext) {
+        'group' => __('Live SSH controls. Checked boxes DENY the capability for assigned users on matching Targets. Removing a denial never grants a capability that the user role/global policy lacks.'),
+        'target' => __('Live SSH controls for this exact Target. Checked boxes DENY the capability. Unchecking only removes this Target-level restriction; global role/grants, groups and Target reachability still apply.'),
+        default => __('Live SSH controls. Checked boxes DENY the capability; unchecked boxes may authorize it only for a separately selected Target and a role that allows SSH. Every SSH command can read/write files and use permitted sudo/root even if the SFTP boxes remain denied.'),
+    };
+    $sshStatus = match ($sshPermissionContext) {
+        'group' => __('Active · deny-only'),
+        'target' => __('Active · Target-specific denies'),
+        default => __('Active · Owner-confirmed'),
+    };
     $permissionSections = [
         'gateway' => [
             'title' => __('Gateway administration'),
@@ -21,8 +33,8 @@
         ],
         'ssh' => [
             'title' => __('Direct SSH'),
-            'help' => __('Direct SSH commands and bounded SFTP are LIVE connector capabilities. New users have SSH tools denied by default; Owners must explicitly grant them later on Edit User. Target Group SSH checkboxes add DENIALS only and cannot grant access. SSH commands may still read/write files despite SFTP denial. None of these toggles sandbox OS shell commands.'),
-            'status' => ($sshPermissionsEditable ?? false) ? __('Available: deny-only controls') : __('Owner confirmation required'),
+            'help' => $sshHelp,
+            'status' => ($sshPermissionsEditable ?? false) ? $sshStatus : __('Requires Owner edit'),
             'future' => ! ($sshPermissionsEditable ?? false),
         ],
         'agent' => [
@@ -77,7 +89,7 @@
                     <input type="hidden" name="denied_permissions[]" value="{{ $permission->value }}">
                 @endforeach
                 <details class="permission-category-collapsible" @if ($retained->isNotEmpty()) open @endif>
-                    <summary>{{ $group === 'ssh' ? __('Review SSH capabilities (read-only until Owner edits user)') : __('Review reserved permission definitions') }}@if ($retained->isNotEmpty()) ({{ __(':count existing denials retained', ['count' => $retained->count()]) }})@endif</summary>
+                    <summary>{{ $group === 'ssh' ? __('SSH settings require an authorized Owner editor') : __('View paused Agent permission identifiers (read-only)') }}@if ($retained->isNotEmpty()) ({{ __(':count existing denials retained', ['count' => $retained->count()]) }})@endif</summary>
                     <ul class="permission-reserved-list">
                         @foreach ($items as $permission)
                             <li>
@@ -91,6 +103,9 @@
                     </ul>
                 </details>
             @else
+                @if ($group === 'ssh')
+                    <p class="permission-safety-hint"><strong>{{ __('Checked = DENY. Unchecked = potentially ALLOW, never beyond role and Target scope.') }}</strong></p>
+                @endif
                 <div class="checkbox-grid">
                     @foreach ($items as $permission)
                         @include('admin.partials.permission-option', [

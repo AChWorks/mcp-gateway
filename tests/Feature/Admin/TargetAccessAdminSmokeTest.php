@@ -71,7 +71,8 @@ final class TargetAccessAdminSmokeTest extends TestCase
         $this->put('/admin/users/'.$user->id.'/targets/'.$target->target_id, [
             'access_rule' => 'allow',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+            'confirm_ssh_target_changes' => '1',
+        ])->assertRedirect()->assertSessionHasNoErrors();
 
         $this->assertDatabaseHas('user_target_access', [
             'target_record_id' => $target->getKey(),

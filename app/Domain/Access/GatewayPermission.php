@@ -71,7 +71,7 @@ enum GatewayPermission: string
             self::ActivityView => 'View activity',
             self::UsersView => 'View users',
             self::UsersManage => 'Manage users and Target groups',
-            self::SecurityManage => 'Manage security settings (reserved)',
+            self::SecurityManage => 'Manage security settings',
         };
     }
 
@@ -82,7 +82,7 @@ enum GatewayPermission: string
             self::GatewayConnectionView => 'View the Gateway MCP endpoint and OAuth/client metadata. This is Gateway-wide and does not grant access to any Target.',
             self::TargetsView => 'List and open Targets inside the user\'s effective Target scope. It never makes an out-of-scope Target visible.',
             self::TargetsCreate => 'Add a new Target to the Gateway. This is Gateway-wide. If the creator uses Selected Target scope, the new Target is automatically added to that user\'s scope.',
-            self::TargetsUpdate => 'Change only the display name of an in-scope Target when this permission is allowed. Target identity, connector type and WordPress endpoint remain immutable.',
+            self::TargetsUpdate => 'Edit the display name of an in-scope Target. Editing SSH endpoint, credentials, host-key pin or WordPress URL separately requires Owner security authority and current-password confirmation; Target ID and connector type remain stable.',
             self::TargetsRemove => 'Remove any Target inside the user\'s effective Target scope when this permission is allowed for that Target. Creation ownership is not considered; it is not limited to Targets the user created.',
             self::TargetsConnect => 'Start the supported connection workflow for an in-scope Target. WordPress currently uses OAuth; future connectors may use different authentication.',
             self::TargetsReconnect => 'Replace/re-authorize the stored connection for any in-scope Target when this permission is allowed for that Target.',
@@ -139,6 +139,12 @@ enum GatewayPermission: string
     }
 
     /** @return list<self> */
+    public static function sshCapabilities(): array
+    {
+        return [self::SshCommandRun, self::SshFileRead, self::SshFileWrite];
+    }
+
+    /** @return list<self> */
     public static function targetScoped(): array
     {
         return [
@@ -164,9 +170,7 @@ enum GatewayPermission: string
             self::AgentFileWrite,
             self::AgentBrowserSetup,
             self::AgentBrowserRun,
-            self::SshCommandRun,
-            self::SshFileRead,
-            self::SshFileWrite,
+            ...self::sshCapabilities(),
         ];
     }
 }

@@ -141,6 +141,8 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
                 ->where('purpose', 'wordpress_oauth')->exists(),
             'revocationPending' => DB::table('wp_ai_bridge_revocation_intents')
                 ->where('target_record_id', $id)->exists(),
+            'oauthFlowPending' => DB::table('wp_ai_bridge_oauth_flows')
+                ->where('target_record_id', $id)->exists(),
             'refreshIntent' => DB::table('wp_ai_bridge_refresh_intents')
                 ->where('target_record_id', $id)->first(['id', 'created_at']),
             'refreshPending' => DB::table('wp_ai_bridge_refresh_intents')

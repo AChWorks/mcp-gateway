@@ -412,6 +412,14 @@ input[type="radio"]:checked::before {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
 }
 
+/* A visible checked-means-denied explanation prevents interpreting the
+   remote-shell checkboxes as ordinary positive permission grants. */
+.permission-safety-hint {
+    margin: 0 0 0.75rem;
+    font-size: 0.8rem;
+    color: var(--ui-text);
+}
+
 .permission-category-collapsible {
     padding: 0.7rem 0.85rem;
     border: 1px solid var(--ui-border);

@@ -2,8 +2,8 @@
 
 **Planned stable release notes — not publicly published.** Candidate builds now carry distinct
 SemVer prerelease identities (starting at **2.1.2-rc.1**). The current
-**2.1.2-rc.2** candidate supersedes the previously distributed rc.1 test
-artifact; the eventual public stable release will use **2.1.2** only after
+**2.1.2-rc.3** candidate supersedes the previously distributed rc.1 and
+rc.2 test artifacts; the eventual public stable release will use **2.1.2** only after
 separate Owner authorization. Earlier
 **2.1.0** and **2.1.1** test candidates were installed by operators, but neither
 number was published as a stable Release. The updater must continue to reject
@@ -17,7 +17,7 @@ same-version and downgrade attempts. These notes describe candidate functionalit
 - **Owner operational controls:** one typed registry for bounded WordPress responses, HTTP connect/request deadlines and optional SSH transfer budgets; retains immutable authorization and network safety rules.
 - **Owner Admin usability:** one connector-first Target enrollment form, independent password-only or private-key-only SSH login fields, explicit separately verified server public host-key/fingerprint guidance, consistent control styling, and grouped Operational Settings with per-field defaults and optional reset. The authorization, encrypted SSH credential format and settings audit semantics are unchanged. Admin CSS uses a content fingerprint to avoid stale styling after valid upgrades. The updater deliberately rejects a package whose VERSION is not newer than the installed VERSION.
 - **Edit existing connector settings safely:** Owner password-gated, optimistic-revision-aware SSH host/port/user/trusted host-key and encrypted password/private-key replacement, preserving Target ID, user/Target Group membership and denial rules. Password/key may be left blank when retaining the same method. After any SSH configuration/secret change, clear old verification and require verified host key/login before SSH commands or SFTP are used. The private login key is never echoed or restored into the browser. WordPress HTTPS origin can change only after confirmed OAuth disconnect/revocation/recovery and renewed safe metadata discovery; tokens are never silently moved between sites and the Target must authorize again. No new schema migration.
-- **Live connector permissions clearly separated:** User creation remains SSH-default-deny and Owner-edited selected-scope capability grants require explicit confirmation. Target Group SSH controls are shown as active denial-only controls, with explicit Owner confirmation when any group SSH denial changes; the paused Agent is still reservation-only.
+- **Live connector permissions and readable UI:** Direct SSH is active (not a reserved/future permission). Add User defaults all remote command/SFTP controls to **DENY** but can apply an explicitly confirmed Owner grant for Selected Target scope during initial creation; older clients remain default-denied. Edit User preserves confirmed grants, requires confirmation for changes and revokes SSH when widening to All scope. User → Target permissions expose live SSH deny-only switches and confirmation for Target scope changes; Add/Edit Target Groups apply deny-only restrictions and never create grants. Clear checked=DENY help, role ceilings, preserved historical denials and paused Agent markers remain intact.
 - **Operational readiness:** candidate acceptance covers the actual published v2.0.3 ZIP as an upgrade baseline, package verification, isolated installed WordPress + SSH acceptance, and a release workflow that requires explicit manual publication against an immutable reviewed main SHA.
 
 ## Safe upgrade and release gate

@@ -151,7 +151,7 @@
                     </div>
                 </div>
             </div>
-            <p class="field-help">{{ __('Only approved public TCP destinations can connect. Registering the Target does not grant access to remote commands or files.') }}</p>
+            <p class="field-help">{{ __('Only approved public TCP destinations can connect. After registering, separately verify the pinned SSH server key and login. Then grant access through Edit User / Target access or Target Groups. Registering a Target alone never grants remote command or file capabilities.') }}</p>
         </fieldset>
 
         <div class="target-create-actions" data-target-actions @if($selected === '') hidden @endif>

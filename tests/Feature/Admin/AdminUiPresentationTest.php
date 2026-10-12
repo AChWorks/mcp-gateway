@@ -93,18 +93,31 @@ final class AdminUiPresentationTest extends TestCase
                 ->assertSee('Shared Target management')
                 ->assertSee('WordPress (WP AI Bridge)')
                 ->assertSee('Direct SSH')
-                ->assertSee('LIVE connector capabilities')
+                ->assertSee('Checked = DENY')
+                ->assertSee('Active')
                 ->assertSee('AI Server Agent')
                 ->assertSee('Paused')
-                ->assertSee('Review reserved permission definitions');
+                ->assertSee('View paused Agent permission identifiers (read-only)')
+                ->assertDontSee('SSH settings require an authorized Owner editor');
         }
 
-        $this->actingAs($owner)->get('/admin/users/create')
+        $createUser = $this->actingAs($owner)->get('/admin/users/create')->assertOk()
             ->assertSee('Gateway administration')
-            ->assertSee('Review SSH capabilities (read-only until Owner edits user)')
-            ->assertDontSee('name="denied_permissions[]" value="ssh.command.run"', false);
+            ->assertSee('Active · Owner-confirmed')
+            ->assertSee('ssh_permissions_reviewed')
+            ->assertSee('Owner bypasses every permission and Target restriction for recovery')
+            ->assertSee('confirm_ssh_permission_changes')
+            ->assertSee('value="ssh.command.run"', false)
+            ->assertSee('value="ssh.file.read"', false)
+            ->assertSee('value="ssh.file.write"', false);
+        foreach (GatewayPermission::sshCapabilities() as $permission) {
+            self::assertMatchesRegularExpression(
+                '/<input[^>]*name="denied_permissions\[\]"[^>]*value="'.preg_quote($permission->value, '/').'"[^>]*checked/s',
+                $createUser->getContent(),
+            );
+        }
         $this->actingAs($owner)->get('/admin/target-groups/create')
-            ->assertSee('Available: deny-only controls')
+            ->assertSee('Active · deny-only')
             ->assertSee('confirm_ssh_group_changes')
             ->assertSee('value="ssh.command.run"', false);
         self::assertSame('gateway', GatewayPermission::SecurityManage->adminGroup());
@@ -148,6 +161,32 @@ final class AdminUiPresentationTest extends TestCase
             ->assertDontSee('AI Server Agent')
             ->assertSee('name="denied_permissions[]" value="ssh.command.run"', false)
             ->assertSee('Existing restrictions for other connector types are preserved');
+    }
+
+    public function test_direct_ssh_target_user_scope_edits_show_live_deny_only_controls_not_reserved_definitions(): void
+    {
+        $owner = $this->owner();
+        $operator = User::query()->create([
+            'name' => 'SSH operator',
+            'email' => 'ssh-ui-'.uniqid().'@example.test',
+            'password' => 'DifferentHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+            'access_enabled' => true,
+        ]);
+        $target = Target::query()->create([
+            'target_id' => 'ssh-ui-target', 'display_name' => 'SSH Target',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $this->actingAs($owner)->get('/admin/users/'.$operator->getKey().'/targets/'.$target->target_id.'/edit')
+            ->assertOk()
+            ->assertSee('Direct SSH')
+            ->assertSee('Active · Target-specific denies')
+            ->assertSee('value="ssh.command.run"', false)
+            ->assertSee('value="ssh.file.read"', false)
+            ->assertSee('value="ssh.file.write"', false)
+            ->assertSee('confirm_ssh_target_changes')
+            ->assertDontSee('View paused Agent permission identifiers');
     }
 
     public function test_group_and_user_edit_preserve_stored_future_denials_as_hidden_values(): void

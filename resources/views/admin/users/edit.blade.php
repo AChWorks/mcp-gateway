@@ -45,6 +45,7 @@
                         <option value="{{ $role->value }}" @selected(old('role', $managedUser->role->value) === $role->value)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
                     @endforeach
                 </select>
+                <p class="field-help">{{ __('Owner bypasses all restrictions. Administrator and Operator SSH grants require Selected Target scope and Owner confirmation; Viewer does not have remote shell/SFTP permissions.') }}</p>
             </div>
             <div class="field">
                 <label for="target_scope_mode">{{ __('Target scope') }}</label>
@@ -66,12 +67,14 @@
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
-            <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. The scope badge describes what the permission acts on; a Target-scoped denial here applies across every target in the user\'s effective scope. Owner restrictions are intentionally ignored and cleared.') }}</p>
+            <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. Target-scoped denials apply across every Target in the user\'s scope. SSH can be authorized only on Selected Targets with explicit Owner confirmation. Owner restrictions are intentionally ignored and cleared.') }}</p>
+            <input type="hidden" name="ssh_permissions_reviewed" value="1">
             @php($selectedDenials = old('denied_permissions', $deniedPermissions))
             @include('admin.partials.permission-groups', [
                 'permissions' => $permissions,
                 'selectedDenials' => $selectedDenials,
                 'sshPermissionsEditable' => $sshPermissionsEditable,
+                'sshPermissionContext' => 'user',
             ])
         </fieldset>
 
@@ -81,6 +84,8 @@
                 <span>{{ __('Owner confirmation: explicitly apply each SSH command, SFTP read and SFTP write permission above. Unchecked denial boxes grant that capability only on approved Selected Targets. SSH command access can read/write files and use permitted sudo/root regardless of the SFTP switches.') }}</span>
             </label>
         @endif
+        @error('confirm_ssh_permission_changes')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+        @error('target_scope_mode')<p class="field-error" role="alert">{{ $message }}</p>@enderror
 
         <div class="form-grid">
             <div class="field">

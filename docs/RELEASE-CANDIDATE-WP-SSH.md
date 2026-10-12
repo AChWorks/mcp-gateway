@@ -13,11 +13,11 @@ VERSION, and release action.
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
   either branch, force-merge a divergent release tag, or copy VERSION alone.
-- Candidate VERSION **2.1.2-rc.2** is a distinct **unpublished prerelease
+- Candidate VERSION **2.1.2-rc.3** is a distinct **unpublished prerelease
   identity**, strictly newer than previous deployed test candidates 2.1.0,
-  2.1.1 and the GitHub-distributed 2.1.2-rc.1 artifact. CI correctly rejected
-  reusing 2.1.2-rc.1 across two different PR HEADs, proving the immutable
-  candidate-identity gate. Planned public stable is **2.1.2**, never assigned
+  2.1.1 and both GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 artifacts. CI
+  correctly rejected reusing rc.1 across two different PR HEADs, proving the
+  immutable candidate-identity gate. Planned public stable is **2.1.2**, never assigned
   to a test candidate.
   Later test rounds must increase `-rc.N` rather than reuse a deployed VERSION.
   PHP `version_compare` maintains the order `2.1.1 < 2.1.2-rc.1 <
@@ -122,12 +122,28 @@ and are not flashed after validation errors.
   memberships, direct ACLs, historical grant references and deny policies
   remain unchanged. Stored Agent Targets do not obtain new editor capabilities.
 
-Shared User creation still defaults to **SSH deny**. The Group UI exposes
-SSH permissions as **live denial-only controls** rather than reserved
-non-executable definitions. Adding/removing a Group SSH denial requires
-explicit Owner confirmation and password because removing a denial may
-widen an already-authorized user's scope; Group checkboxes never confer
-positive SSH capability. Agent permission definitions remain paused.
+Shared User creation still defaults to **SSH deny**: all three command/SFTP
+denial checkboxes render checked. The Owner can intentionally uncheck a selected
+capability during **Add User** (or **Edit User**) only after explicit confirmation
+and reauthentication, with **Selected** Target scope. An unreviewed/legacy form
+or failed confirmation never silently creates an SSH grant. Target reachability
+still requires an explicit User → Target allow or assigned Target Group; roles
+without the requested capability cannot be elevated. Widening to **All** Target
+scope revokes non-Owner SSH grants, even when the account previously had them.
+
+All permission contexts now share the same checked=DENY explanation and show
+**live** SSH controls instead of a misleading "reserved definitions" list:
+**Add/Edit User** manages global denials/grants; **User → Target access** adds
+Target-scoped denials and a separately Owner-confirmed reachability rule;
+**Add/Edit Target Group** adds only denials and never confers a capability.
+Changing a Group denial or an SSH Target scope/denial requires explicit Owner
+confirmation and password, because removing a denial or adding reachability
+can widen an already-authorized user's SSH access. SSH unrestricted OS shell
+authority can modify files even when SFTP tools are denied. Agent permission
+identifiers remain paused and **read-only**; do not activate nonexistent tools.
+Add Target itself only registers a connector endpoint; it does not grant
+remote operations. OAuth-origin edit UI also suppresses the form while a
+WordPress authorization flow is pending, matching the server-side reject.
 
 Editor regression evidence must include password-only and private-key
 rotation, both credential-preserving host/port edits and disconnected
@@ -157,7 +173,7 @@ browser-update test against a **verified unaltered candidate fresh-install ZIP**
 from each earlier installed GitHub Actions run (verify its original checksum, provenance
 and hash). The credential/Target/grant preservation assertions must run for
 both the published 2.0.x Target-era baselines and the distributed 2.1.0,
-2.1.1 and, when relevant, 2.1.2-rc.1 candidates. The updater intentionally rejects same-version/downgrade attempts:
+2.1.1 and the already distributed 2.1.2-rc.1/rc.2 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
 **never** edit an installed VERSION, bypass that comparison, rename a ZIP to
 pretend it is newer, or overwrite production files with a fresh-install ZIP.
 If a 2.1.0 -> 2.1.0 attempt was rejected during preflight, it must not be

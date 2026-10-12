@@ -150,7 +150,7 @@
             @php
                 $canChangeWordpressOrigin = in_array($target->connection_state->value, ['disconnected', 'error'], true)
                     && ! ($hasCredential ?? false) && ! ($revocationPending ?? false) && ! ($refreshPending ?? false)
-                    && ! ($refreshIntent ?? null);
+                    && ! ($oauthFlowPending ?? false) && ! ($refreshIntent ?? null);
             @endphp
             @if (! $canChangeWordpressOrigin)
                 <div class="alert alert-caution" role="status">

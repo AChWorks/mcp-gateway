@@ -340,6 +340,38 @@ final class TargetConfigurationAdminTest extends TestCase
             ->where('operation', 'wordpress-origin-reconfigure')->count());
     }
 
+    public function test_wordpress_pending_oauth_authorization_is_visibly_blocked_before_origin_edit(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge', 'target_id' => 'wp-pending',
+            'display_name' => 'Pending OAuth', 'base_url' => 'https://old.example.test',
+        ])->assertRedirect('/admin/targets/wp-pending');
+
+        $target = Target::query()->where('target_id', 'wp-pending')->sole();
+        $revision = $this->editRevision('wp-pending');
+        DB::table('wp_ai_bridge_oauth_flows')->insert([
+            'id' => (string) Str::ulid(),
+            'target_record_id' => $target->getKey(),
+            'state_hash' => str_repeat('4', 64),
+            'encrypted_context' => 'fixture-only-invalid-context-not-used',
+            'expires_at' => now()->addMinutes(5),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $this->get('/admin/targets/wp-pending/edit')
+            ->assertOk()
+            ->assertSee('Disconnect WordPress')
+            ->assertDontSee('name="base_url"', false);
+        $this->put('/admin/targets/wp-pending/configuration', $this->wpUpdate($revision, 'https://new.example.test'))
+            ->assertSessionHasErrors('base_url');
+
+        DB::table('wp_ai_bridge_oauth_flows')->delete();
+        $this->get('/admin/targets/wp-pending/edit')
+            ->assertOk()
+            ->assertSee('name="base_url"', false);
+    }
+
     public function test_wordpress_reconfiguration_rejects_unsafe_and_duplicate_origins_without_changing_records(): void
     {
         $this->actingAs($this->user('owner'));
