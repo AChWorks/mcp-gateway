@@ -6,6 +6,7 @@ use App\Application\Access\AccessControl;
 use App\Application\Targets\Concerns\StreamsSshFiles;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshFileAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
@@ -402,6 +403,7 @@ final readonly class SshFileRuntime
             // dispatcher. Denied/revoked principals must be rejected BEFORE
             // opening SSH credentials or contacting a remote Target.
             if (! $fresh instanceof Target || $fresh->connector_type !== 'ssh_direct'
+                || $fresh->getAttribute('connection_state') !== TargetConnectionState::Connected
                 || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)
                 || ! $freshUser instanceof User
                 || ! $this->access->allows($freshUser, $permission, $fresh)) {
@@ -437,6 +439,7 @@ final readonly class SshFileRuntime
                     $currentCredential = TargetCredential::query()->whereKey($credential->getKey())->first();
                     $currentConfig = SshTargetConfig::query()->whereKey($config->getKey())->first();
                     if (! $currentTarget instanceof Target || $currentTarget->connector_type !== 'ssh_direct'
+                        || $currentTarget->getAttribute('connection_state') !== TargetConnectionState::Connected
                         || ! hash_equals((string) $target->target_id, (string) $currentTarget->target_id)
                         || ! $currentUser instanceof User || ! $currentCredential instanceof TargetCredential
                         || ! $currentConfig instanceof SshTargetConfig

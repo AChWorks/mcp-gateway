@@ -11,6 +11,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 final class TargetGroupController extends Controller
@@ -33,6 +34,7 @@ final class TargetGroupController extends Controller
 
         return view('admin.target-groups.create', [
             'targetPermissions' => $groups->targetPermissions(),
+            'sshPermissionsEditable' => true,
         ]);
     }
 
@@ -44,6 +46,7 @@ final class TargetGroupController extends Controller
         Gate::authorize(GatewayPermission::UsersManage->value);
         $confirmation->confirm($request);
         $validated = $this->validated($request);
+        $this->confirmSshChanges($request, $this->deniedPermissions($validated), []);
 
         $group = $groups->create(
             (string) $validated['name'],
@@ -62,6 +65,7 @@ final class TargetGroupController extends Controller
         return view('admin.target-groups.edit', [
             'targetGroup' => $targetGroup,
             'targetPermissions' => $groups->targetPermissions(),
+            'sshPermissionsEditable' => true,
             'deniedPermissions' => $groups->permissionDenials($targetGroup),
         ]);
     }
@@ -75,6 +79,9 @@ final class TargetGroupController extends Controller
         Gate::authorize(GatewayPermission::UsersManage->value);
         $confirmation->confirm($request);
         $validated = $this->validated($request, $targetGroup);
+        $this->confirmSshChanges(
+            $request, $this->deniedPermissions($validated), $groups->permissionDenials($targetGroup),
+        );
 
         $groups->update(
             $targetGroup,
@@ -100,6 +107,33 @@ final class TargetGroupController extends Controller
         return redirect()
             ->route('admin.target-groups.index')
             ->with('status', __('Target group deleted. Direct user/target rules were preserved.'));
+    }
+
+    /**
+     * Removing an SSH group denial can increase authority for users previously
+     * granted SSH access. Require an explicit Owner decision.
+     *
+     * @param  list<string>  $requested
+     * @param  list<string>  $existing
+     */
+    private function confirmSshChanges(Request $request, array $requested, array $existing): void
+    {
+        $sshOnly = static fn (array $values): array => array_values(array_filter(
+            $values, static fn (string $value): bool => str_starts_with($value, 'ssh.'),
+        ));
+        $requestedSsh = $sshOnly($requested);
+        $existingSsh = $sshOnly($existing);
+        sort($requestedSsh);
+        sort($existingSsh);
+
+        if ($requestedSsh !== $existingSsh) {
+            Gate::authorize(GatewayPermission::SecurityManage->value);
+            if (! $request->boolean('confirm_ssh_group_changes')) {
+                throw ValidationException::withMessages([
+                    'confirm_ssh_group_changes' => __('Explicitly confirm changed SSH group restrictions. Removing a denial can expand previously authorized SSH access.'),
+                ]);
+            }
+        }
     }
 
     /** @return array<string,mixed> */

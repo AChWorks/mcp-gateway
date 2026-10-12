@@ -82,6 +82,55 @@ binary receipt over TLS, including empty, 256 KiB, ~1 MiB, PDF, PNG, ZIP and
 UTF-8 fixtures. Client-side SHA/length are mandatory: server-side staging
 alone is insufficient.
 
+## Owner-edited connector configuration safety
+
+The installed Admin `Targets → Target details → Edit Target` page has
+separate low-risk display-name editing and high-trust connector configuration.
+Owners must supply their **current Gateway password** before modifying an
+implemented connector's endpoint, trust pin or credential. The request carries
+an opaque optimistic revision: concurrent verification, disconnect, credential
+rotation or another configuration edit makes a stale form fail without applying
+its content. Sensitive passwords/private keys/passphrases are **write-only**
+and are not flashed after validation errors.
+
+- **Direct SSH:** host/IP, TCP port, OS username, independently verified
+  PUBLIC OpenSSH server host key, and either password or PRIVATE login key
+  can be changed in place. With the same login method, leaving the secret
+  blank retains its encrypted material, but **rebinds and re-encrypts it to
+  the new endpoint and pin**. Changing methods requires the new secret.
+  Invalid fresh private keys/passphrases are rejected before mutation.
+  Any actual configuration or secret change atomically clears the old
+  verification, observed peer and connection health. Executing SSH
+  commands or SFTP requires a subsequent genuine pinned-host-key/login
+  **Verify**; stale in-flight verification cannot overwrite the rotated
+  state. A no-op cannot silently reset healthy state.
+- **WordPress:** its canonical public HTTPS origin may be edited only with
+  all active/pending local OAuth credentials, callbacks, refresh and
+  revocation intents cleared via the supported safe Disconnect/Recovery
+  workflow. Never copy an existing token to the changed origin. Perform the
+  existing bounded SSRF-safe same-origin OAuth metadata discovery before
+  committing. Then reauthorize via the normal WordPress OAuth flow.
+  If remote revocation cannot be confirmed, leave the original Target
+  unchanged and blocked, not silently re-pointed.
+- **Stable identity:** target_id, connector type, User/Target Group
+  memberships, direct ACLs, historical grant references and deny policies
+  remain unchanged. Stored Agent Targets do not obtain new editor capabilities.
+
+Shared User creation still defaults to **SSH deny**. The Group UI exposes
+SSH permissions as **live denial-only controls** rather than reserved
+non-executable definitions. Adding/removing a Group SSH denial requires
+explicit Owner confirmation and password because removing a denial may
+widen an already-authorized user's scope; Group checkboxes never confer
+positive SSH capability. Agent permission definitions remain paused.
+
+Editor regression evidence must include password-only and private-key
+rotation, both credential-preserving host/port edits and disconnected
+credential reinsertion, wrong Owner password, stale edit and trusted-key
+rejection, in-flight verification fence, blocked command/SFTP before
+re-verification, safe WordPress revocation/origin switch, and preserved
+Target/Group/User ACLs. Actual operator-host update and post-install tests
+are separate production gates, not implied by disposable fixtures.
+
 ## Real released-baseline browser update
 
 Obtain `mcp-gateway-v2.0.3.zip` and the companion `.sha256` from

@@ -242,7 +242,7 @@ final class TargetManagementAdminTest extends TestCase
         $this->put('/admin/targets/permanent-id', ['display_name' => 'Unauthorized'])->assertForbidden();
 
         $this->actingAs($owner)->get('/admin/targets/permanent-id/edit')->assertOk()
-            ->assertSee('Only the display name can be changed')
+            ->assertSee('Stable Target ID')
             ->assertSee('permanent-id');
         $this->put('/admin/targets/permanent-id', [
             'display_name' => 'Updated safe label',

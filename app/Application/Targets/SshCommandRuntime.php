@@ -5,6 +5,7 @@ namespace App\Application\Targets;
 use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshCommandAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
@@ -50,6 +51,7 @@ final readonly class SshCommandRuntime
                 ->where('connector_type', 'ssh_direct')
                 ->where('purpose', SshTargetVault::PURPOSE)->first();
             if (! $fresh instanceof Target || $fresh->connector_type !== 'ssh_direct'
+                || $fresh->getAttribute('connection_state') !== TargetConnectionState::Connected
                 || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)
                 || ! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
                 throw new SshTargetConnectionException('credential_unavailable');
@@ -76,6 +78,7 @@ final readonly class SshCommandRuntime
                     $currentCredential = TargetCredential::query()->whereKey($credential->getKey())->first();
                     $currentConfig = SshTargetConfig::query()->whereKey($config->getKey())->first();
                     if (! $currentTarget instanceof Target || $currentTarget->connector_type !== 'ssh_direct'
+                        || $currentTarget->getAttribute('connection_state') !== TargetConnectionState::Connected
                         || ! hash_equals((string) $target->target_id, (string) $currentTarget->target_id)
                         || ! $currentUser instanceof User
                         || ! $currentCredential instanceof TargetCredential

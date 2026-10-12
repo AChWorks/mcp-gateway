@@ -80,7 +80,7 @@ candidate="$tmp/candidate"
 mkdir -p "$candidate"
 unzip -q "$update_zip" -d "$candidate"
 new_version="$(tr -d '[:space:]' < "$candidate/update/UPDATE_VERSION")"
-[[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid candidate version." >&2; exit 1; }
+bash "$(dirname "$0")/validate-version.sh" package "$new_version"
 
 migration_db_state() {
   local root="$1"

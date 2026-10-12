@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
@@ -65,6 +66,65 @@ final class TargetGroupManagementTest extends TestCase
             'target_group_id' => $group->id,
             'permission' => GatewayPermission::WordpressAbilitiesExecuteMutating->value,
         ]);
+    }
+
+    public function test_owner_explicitly_confirms_ssh_group_denial_changes_but_cannot_grant_ssh_by_group(): void
+    {
+        $owner = $this->owner();
+        $fields = [
+            'name' => 'SSH restricted group',
+            'denied_permissions' => [GatewayPermission::SshCommandRun->value],
+            'current_password' => 'CorrectHorse!234',
+        ];
+
+        $this->actingAs($owner)->post('/admin/target-groups', $fields)
+            ->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertSame(0, TargetGroup::query()->count());
+
+        $this->post('/admin/target-groups', [
+            ...$fields, 'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        $group = TargetGroup::query()->sole();
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        $this->put('/admin/target-groups/'.$group->getKey(), [
+            'name' => 'SSH restricted group',
+            'denied_permissions' => [],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        $this->put('/admin/target-groups/'.$group->getKey(), [
+            'name' => 'SSH restricted group',
+            'denied_permissions' => [],
+            'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        $this->assertDatabaseMissing('target_group_permission_denials', [
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        // Removing a group denial is never a positive permission grant.
+        $operator = $this->operator();
+        $target = Target::query()->create([
+            'target_id' => 'ssh-target',
+            'display_name' => 'SSH Target',
+            'connector_type' => 'ssh_direct',
+        ]);
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $operator->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+        self::assertFalse(app(AccessControl::class)->allows(
+            $operator, GatewayPermission::SshCommandRun, $target,
+        ));
     }
 
     public function test_wrong_password_or_non_owner_cannot_manage_site_groups(): void

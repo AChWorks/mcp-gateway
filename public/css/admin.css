@@ -1112,6 +1112,7 @@ td input[type="checkbox"] {
 [data-target-shared][hidden],
 [data-connector-panel][hidden],
 [data-ssh-secret][hidden],
+[data-edit-ssh-credential][hidden],
 [data-target-actions][hidden],
 .operations-reset[hidden] {
     display: none !important;
@@ -1239,4 +1240,12 @@ td input[type="checkbox"] {
     .operations-reset {
         margin-inline-start: 0;
     }
+}
+
+
+/* Endpoint rotation is security-sensitive without being a form error. */
+.alert-caution {
+    border-color: var(--ui-border);
+    background: var(--ui-surface-subtle);
+    color: var(--ui-text);
 }

@@ -151,11 +151,21 @@ final class TargetController extends Controller
         ]);
     }
 
-    public function edit(Target $target): View
+    public function edit(Target $target, TargetConnectorRegistry $connectors): View
     {
         Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
 
-        return view('admin.targets.edit', ['target' => $target]);
+        $adapter = Gate::allows(GatewayPermission::SecurityManage->value)
+            ? $connectors->availableForTarget($target) : null;
+
+        $details = $adapter?->adminDetails($target) ?? [];
+        $hasConfig = ($details['sshConfig'] ?? null) !== null || ($details['wpConfig'] ?? null) !== null;
+
+        return view('admin.targets.edit', [
+            'target' => $target,
+            'configurationRevision' => $hasConfig ? $adapter?->configurationRevision($target) : null,
+            ...$details,
+        ]);
     }
 
     public function update(Request $request, Target $target): RedirectResponse

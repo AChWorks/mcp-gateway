@@ -21,8 +21,8 @@
         ],
         'ssh' => [
             'title' => __('Direct SSH'),
-            'help' => __('SSH command execution grants remote OS-account authority, including permitted sudo/root and file access even when SFTP toggles are denied. SFTP read and write tools are separate capabilities, enabled only by separately confirmed Owner edits. None of these toggles sandbox OS shell commands.'),
-            'status' => __('Command and bounded SFTP tools'),
+            'help' => __('Direct SSH commands and bounded SFTP are LIVE connector capabilities. New users have SSH tools denied by default; Owners must explicitly grant them later on Edit User. Target Group SSH checkboxes add DENIALS only and cannot grant access. SSH commands may still read/write files despite SFTP denial. None of these toggles sandbox OS shell commands.'),
+            'status' => ($sshPermissionsEditable ?? false) ? __('Available: deny-only controls') : __('Owner confirmation required'),
             'future' => ! ($sshPermissionsEditable ?? false),
         ],
         'agent' => [
@@ -77,7 +77,7 @@
                     <input type="hidden" name="denied_permissions[]" value="{{ $permission->value }}">
                 @endforeach
                 <details class="permission-category-collapsible" @if ($retained->isNotEmpty()) open @endif>
-                    <summary>{{ __('Review reserved permission definitions') }}@if ($retained->isNotEmpty()) ({{ __(':count existing denials retained', ['count' => $retained->count()]) }})@endif</summary>
+                    <summary>{{ $group === 'ssh' ? __('Review SSH capabilities (read-only until Owner edits user)') : __('Review reserved permission definitions') }}@if ($retained->isNotEmpty()) ({{ __(':count existing denials retained', ['count' => $retained->count()]) }})@endif</summary>
                     <ul class="permission-reserved-list">
                         @foreach ($items as $permission)
                             <li>

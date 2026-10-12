@@ -9,6 +9,7 @@ use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
@@ -54,6 +55,9 @@ final class SshFileMcpTest extends TestCase
         $operator = $this->user('operator');
         $owner = $this->user('owner');
         $target = $this->target();
+        // A previously successful pinned-host login is a prerequisite before
+        // command/SFTP runtime reaches outbound egress policy.
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         DB::table('user_target_access')->insert([
             'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
         ]);

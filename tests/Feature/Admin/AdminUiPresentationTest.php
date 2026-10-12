@@ -93,14 +93,20 @@ final class AdminUiPresentationTest extends TestCase
                 ->assertSee('Shared Target management')
                 ->assertSee('WordPress (WP AI Bridge)')
                 ->assertSee('Direct SSH')
-                ->assertSee('Command and bounded SFTP tools')
+                ->assertSee('LIVE connector capabilities')
                 ->assertSee('AI Server Agent')
                 ->assertSee('Paused')
                 ->assertSee('Review reserved permission definitions');
         }
 
         $this->actingAs($owner)->get('/admin/users/create')
-            ->assertSee('Gateway administration');
+            ->assertSee('Gateway administration')
+            ->assertSee('Review SSH capabilities (read-only until Owner edits user)')
+            ->assertDontSee('name="denied_permissions[]" value="ssh.command.run"', false);
+        $this->actingAs($owner)->get('/admin/target-groups/create')
+            ->assertSee('Available: deny-only controls')
+            ->assertSee('confirm_ssh_group_changes')
+            ->assertSee('value="ssh.command.run"', false);
         self::assertSame('gateway', GatewayPermission::SecurityManage->adminGroup());
         self::assertSame('targets', GatewayPermission::TargetsView->adminGroup());
         self::assertSame('wordpress', GatewayPermission::WordpressAbilitiesInspect->adminGroup());
@@ -171,8 +177,9 @@ final class AdminUiPresentationTest extends TestCase
 
         $this->actingAs($owner)->get('/admin/target-groups/'.$group->getKey().'/edit')
             ->assertOk()
-            ->assertSee('name="denied_permissions[]" value="ssh.command.run"', false)
-            ->assertSee('Existing denial retained');
+            ->assertSee('value="ssh.command.run"', false)
+            ->assertSee('confirm_ssh_group_changes')
+            ->assertDontSee('Existing denial retained');
         $this->actingAs($owner)->get('/admin/users/'.$operator->getKey().'/edit')
             ->assertOk()
             ->assertSee('ssh.command.run')

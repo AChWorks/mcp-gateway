@@ -4,6 +4,7 @@ namespace App\Infrastructure\Connectors\SshDirect;
 
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
+use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\SshTargetRegistration;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
@@ -76,6 +77,38 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
     public function registrationStatus(): string
     {
         return __('SSH Target registered with encrypted credentials and an out-of-band host-key pin. Authentication has NOT yet been verified.');
+    }
+
+    public function configurationRules(Target $target): array
+    {
+        return [
+            'configuration_revision' => ['required', 'string', 'size:64', 'regex:/^[a-f0-9]{64}$/D'],
+            'ssh_host' => ['required', 'string', 'max:253'],
+            'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
+            'ssh_username' => ['required', 'string', 'max:128'],
+            'ssh_host_key' => ['required', 'string', 'max:4096'],
+            'ssh_trust_confirmed' => ['required', 'in:yes'],
+            'ssh_auth_method' => ['required', Rule::in(['password', 'private_key'])],
+            // Blank login fields preserve the encrypted secret when the
+            // method remains unchanged; changing methods requires new input.
+            'ssh_password' => ['nullable', 'string', 'max:4096'],
+            'ssh_private_key' => ['nullable', 'string', 'max:16384'],
+            'ssh_passphrase' => ['nullable', 'string', 'max:4096'],
+        ];
+    }
+
+    public function configurationRevision(Target $target): string
+    {
+        return $this->container->make(SshTargetReconfiguration::class)->revision($target);
+    }
+
+    public function updateConfiguration(Target $target, array $input): TargetConnectorResult
+    {
+        $changed = $this->container->make(SshTargetReconfiguration::class)->update($target, $input);
+
+        return new TargetConnectorResult(statusMessage: $changed
+            ? __('SSH settings saved with encrypted credentials. Previous verification cleared; verify the new endpoint, pinned key and login before using this Target.')
+            : __('No SSH configuration change was necessary.'));
     }
 
     public function connect(Target $target): TargetConnectorResult
