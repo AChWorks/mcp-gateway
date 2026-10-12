@@ -222,9 +222,9 @@ if [[ "$old_version" == "1.2.1" ]]; then
   echo "Seeded actual published v1.2.1 WordPress connection, Target scope/group, ChatGPT OAuth grant/access/refresh and unrelated identity/Activity."
 fi
 
-# Published Target-era patch upgrades must preserve installed v2.0.x
+# Published Target-era patch upgrades (v2.0.0 through v2.0.3) must preserve installed v2.0.x
 # identities, group ACLs, encrypted credentials and OAuth authorization.
-if [[ "$old_version" == "2.0.0" || "$old_version" == "2.0.1" ]]; then
+if [[ "$old_version" =~ ^2\.0\.[0-3]$ ]]; then
   (
     cd "$target"
     php -r '
@@ -737,7 +737,7 @@ if [[ "$old_version" == "1.2.1" ]]; then
   )
   echo "Seeded v1.2.1 reset boundary: old WordPress/ChatGPT credentials removed; users/roles/global denies and unrelated Activity preserved."
 fi
-if [[ "$old_version" == "2.0.0" || "$old_version" == "2.0.1" ]]; then
+if [[ "$old_version" =~ ^2\.0\.[0-3]$ ]]; then
   (
     cd "$target"
     php -r '
