@@ -177,6 +177,187 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
     }
 
+    public function test_owner_can_tune_connection_and_total_request_deadlines_without_env_edit_and_legacy_form_preserves_them(): void
+    {
+        config()->set('bridge.http.connect_timeout_seconds', 2);
+        config()->set('bridge.http.request_timeout_seconds', 5);
+        $owner = $this->account('owner');
+        $this->actingAs($owner)->get('/admin/operations')
+            ->assertOk()
+            ->assertSee('Connection and request deadlines')
+            ->assertSee('Overall HTTPS request time including DNS and response')
+            ->assertSee('wp_connect_timeout_seconds')
+            ->assertSee('wp_request_timeout_seconds');
+
+        self::assertSame(['connect' => 2, 'request' => 5],
+            (new OperationalSettings)->httpTimeoutsSeconds());
+
+        $this->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '6',
+                'wp_request_timeout_seconds' => '18',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect(route('admin.operations.index'));
+
+        self::assertSame(['connect' => 6, 'request' => 18],
+            (new OperationalSettings)->httpTimeoutsSeconds());
+        self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
+        self::assertEqualsCanonicalizing(
+            ['wp_connect_timeout_seconds', 'wp_request_timeout_seconds'],
+            DB::table('operational_setting_changes')->pluck('setting_key')->all(),
+        );
+        // Older app releases decode this JSON and reject unknown keys.
+        // Timeout columns are deliberately separated for safe source rollback.
+        $row = DB::table('operational_settings')->first();
+        self::assertSame([], json_decode((string) $row->overrides, true));
+        self::assertSame(6, (int) $row->wp_connect_timeout_seconds);
+        self::assertSame(18, (int) $row->wp_request_timeout_seconds);
+        // An older Owner tab still posts only the original two response keys.
+        // Its save must not discard already persisted new timeout overrides.
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => ['wp_response_kib' => '128', 'wp_readonly_response_kib' => ''],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['connect' => 6, 'request' => 18],
+            (new OperationalSettings)->httpTimeoutsSeconds());
+        self::assertSame(128 * 1024, (new OperationalSettings)->responseLimitBytes(false));
+        self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
+
+        $this->put('/admin/operations', [
+            'version' => '2',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['connect' => 2, 'request' => 5],
+            (new OperationalSettings)->httpTimeoutsSeconds());
+        self::assertSame([], (new OperationalSettings)->state()['overrides']);
+        self::assertSame(3, (int) DB::table('operational_settings')->value('version'));
+        self::assertSame(6, DB::table('operational_setting_changes')->count());
+    }
+
+    public function test_invalid_timeout_pairs_stale_version_and_unknown_fields_do_not_mutate_or_audit(): void
+    {
+        $owner = $this->account('owner');
+        $this->actingAs($owner);
+
+        foreach ([
+            ['wp_connect_timeout_seconds' => '15', 'wp_request_timeout_seconds' => '14'],
+            ['wp_connect_timeout_seconds' => '16', 'wp_request_timeout_seconds' => '30'],
+            ['wp_connect_timeout_seconds' => '1', 'wp_request_timeout_seconds' => '31'],
+        ] as $invalid) {
+            $this->put('/admin/operations', [
+                'version' => '0',
+                'values' => [
+                    'wp_response_kib' => '',
+                    'wp_readonly_response_kib' => '',
+                    ...$invalid,
+                ],
+                'current_password' => 'CorrectHorse!234',
+            ])->assertSessionHasErrors();
+        }
+        $this->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '3',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('values');
+        $this->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '4',
+                'wp_request_timeout_seconds' => '12',
+                'hidden_switch' => 'anything',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('values');
+
+        self::assertSame(0, (int) DB::table('operational_settings')->value('version'));
+        self::assertSame(0, DB::table('operational_setting_changes')->count());
+        $this->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '4',
+                'wp_request_timeout_seconds' => '12',
+            ],
+            'current_password' => 'incorrect',
+        ])->assertSessionHasErrors('current_password');
+        self::assertSame(0, DB::table('operational_setting_changes')->count());
+    }
+
+    public function test_persisted_two_second_total_deadline_includes_dns_and_new_request_sees_reset(): void
+    {
+        config()->set('bridge.http.connect_timeout_seconds', 2);
+        config()->set('bridge.http.request_timeout_seconds', 5);
+        $owner = $this->account('owner');
+        $this->actingAs($owner)->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '1',
+                'wp_request_timeout_seconds' => '2',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+
+        $resolver = new class implements DnsResolver
+        {
+            public int $queries = 0;
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                $this->queries++;
+                usleep(2_200_000);
+
+                return ['1.1.1.1'];
+            }
+        };
+        $this->app->instance(DnsResolver::class, $resolver);
+        Http::fake(fn (Request $request) => Http::response('ready', 200));
+        try {
+            app(SafeHttpClient::class)->get('https://wp.example.test/metadata');
+            self::fail('A two-second total network deadline must include the DNS time.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+        }
+        Http::assertNothingSent();
+        self::assertSame(1, $resolver->queries);
+        self::assertSame(['connect' => 1, 'request' => 2],
+            (new OperationalSettings)->httpTimeoutsSeconds());
+
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame('ready', app(SafeHttpClient::class)
+            ->get('https://wp.example.test/metadata')->body);
+        Http::assertSentCount(1);
+        self::assertSame(2, $resolver->queries);
+    }
+
     private function account(string $role): User
     {
         return User::query()->create([

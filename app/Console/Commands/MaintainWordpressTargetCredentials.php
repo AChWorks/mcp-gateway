@@ -114,12 +114,12 @@ final class MaintainWordpressTargetCredentials extends Command
         int &$recovered,
         bool $waitForReady,
     ): void {
-        $minimumAge = max(12, (int) config('bridge.http.request_timeout_seconds', 5) + 5);
         while ($pending !== []) {
             $current = $pending[0];
             $intent = DB::table('wp_ai_bridge_refresh_intents')
                 ->where('target_record_id', $current['record_id'])
-                ->first(['created_at', 'attempts']);
+                ->first(['created_at', 'attempts', 'request_timeout_seconds']);
+            $minimumAge = $intent === null ? 45 : $connections->refreshRecoveryMinimumAge($intent);
             $createdAt = $intent !== null ? strtotime((string) $intent->created_at) : false;
             $age = $createdAt === false ? 45 : time() - $createdAt;
             if ($intent === null || (int) $intent->attempts !== 1

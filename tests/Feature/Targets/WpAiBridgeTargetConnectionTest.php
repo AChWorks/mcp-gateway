@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Targets;
 
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
@@ -895,6 +896,69 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             self::assertSame('refresh_pending', $exception->reason);
         }
         self::assertSame(1, $this->refreshCalls);
+    }
+
+    public function test_owner_network_timeout_changes_cannot_shorten_inflight_refresh_recovery_fence(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $settings = app(OperationalSettings::class);
+        $settings->save($owner, [
+            'wp_response_kib' => null,
+            'wp_readonly_response_kib' => null,
+            'wp_connect_timeout_seconds' => 10,
+            'wp_request_timeout_seconds' => 30,
+        ], 0);
+
+        $alpha = $this->target('alpha');
+        $this->pair($alpha);
+        $this->expire($alpha);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->failRefresh = true;
+        try {
+            $service->accessToken($alpha);
+            self::fail('First lost response must be uncertain.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+        self::assertSame(30, (int) DB::table('wp_ai_bridge_refresh_intents')
+            ->value('request_timeout_seconds'));
+        self::assertSame(35, $service->refreshRecoveryMinimumAge(
+            DB::table('wp_ai_bridge_refresh_intents')->first()));
+
+        // A new Owner edit may shorten *subsequent* HTTP requests, never
+        // the admission fence of the already-possibly-sent refresh.
+        $settings->save($owner, [
+            'wp_response_kib' => null,
+            'wp_readonly_response_kib' => null,
+            'wp_connect_timeout_seconds' => 1,
+            'wp_request_timeout_seconds' => 2,
+        ], 1);
+        self::assertSame(['connect' => 1, 'request' => 2],
+            (new OperationalSettings)->httpTimeoutsSeconds());
+
+        DB::table('wp_ai_bridge_refresh_intents')
+            ->update(['created_at' => now()->subSeconds(20)]);
+        try {
+            $service->accessToken($alpha);
+            self::fail('Owner reset must not permit an overlap with the old 30s request.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        }
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        DB::table('wp_ai_bridge_refresh_intents')
+            ->update(['created_at' => now()->subSeconds(38)]);
+        $this->failRefresh = false;
+        self::assertSame('alpha-rotated-access', $service->accessToken($alpha));
+        self::assertSame(2, $this->refreshCalls);
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+
+        // Pre-upgrade nullable rows must not let a later Owner override
+        // shorten the original source-config request fence.
+        $legacy = (object) ['request_timeout_seconds' => null];
+        self::assertSame(12, $service->refreshRecoveryMinimumAge($legacy));
+        $corrupt = (object) ['request_timeout_seconds' => 0];
+        self::assertGreaterThanOrEqual(45, $service->refreshRecoveryMinimumAge($corrupt));
     }
 
     public function test_lost_refresh_response_fences_disconnect_and_supports_only_one_bounded_recovery(): void

@@ -2,6 +2,7 @@
 
 namespace App\Application\Targets;
 
+use App\Application\Operations\OperationalSettings;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -33,6 +34,7 @@ final readonly class WpAiBridgeTargetConnectionService
         private SafeHttpClient $http,
         private GatewayBridgeClientIdentity $identity,
         private WpAiBridgeTargetVault $vault,
+        private OperationalSettings $settings,
     ) {}
 
     public function begin(Target $target): string
@@ -337,6 +339,10 @@ final readonly class WpAiBridgeTargetConnectionService
                     'credential_id' => $credential->getKey(),
                     'generation' => $generation,
                     'attempts' => 1,
+                    // Freeze the total HTTP deadline at intent creation. Owner
+                    // changes after a lost response must never allow an
+                    // overlapping second use of a rotating refresh token.
+                    'request_timeout_seconds' => $this->settings->httpTimeoutsSeconds()['request'],
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
@@ -349,7 +355,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 // Avoid overlapping an in-flight first request, and never
                 // replay an already recovered or too-old exchange.
                 $age = time() - (new DateTimeImmutable((string) $intent->created_at))->getTimestamp();
-                $retryDelay = max(12, (int) config('bridge.http.request_timeout_seconds', 5) + 5);
+                $retryDelay = $this->refreshRecoveryMinimumAge($intent);
                 if ((int) $intent->attempts !== 1 || $age < $retryDelay || $age >= 45) {
                     throw new WpAiBridgeTargetConnectionException(
                         'refresh_pending',
@@ -421,10 +427,10 @@ final readonly class WpAiBridgeTargetConnectionService
     {
         $recordId = (string) $target->getKey();
         $intent = DB::table('wp_ai_bridge_refresh_intents')
-            ->where('target_record_id', $recordId)->first(['created_at', 'attempts']);
+            ->where('target_record_id', $recordId)->first(['created_at', 'attempts', 'request_timeout_seconds']);
         $createdAt = $intent === null ? false : strtotime((string) $intent->created_at);
         $age = $createdAt === false ? 45 : time() - $createdAt;
-        $minimumAge = max(12, (int) config('bridge.http.request_timeout_seconds', 5) + 5);
+        $minimumAge = $intent === null ? 45 : $this->refreshRecoveryMinimumAge($intent);
         if ($intent === null || (int) $intent->attempts !== 1
             || $createdAt === false || $age < 0 || $age >= 45 || $minimumAge >= 45) {
             throw new WpAiBridgeTargetConnectionException('refresh_pending',
@@ -439,9 +445,10 @@ final readonly class WpAiBridgeTargetConnectionService
         // Reread after waiting; never let the command's sleep reopen a
         // spent recovery window or a previously used recovery attempt.
         $intent = DB::table('wp_ai_bridge_refresh_intents')
-            ->where('target_record_id', $recordId)->first(['created_at', 'attempts']);
+            ->where('target_record_id', $recordId)->first(['created_at', 'attempts', 'request_timeout_seconds']);
         $createdAt = $intent === null ? false : strtotime((string) $intent->created_at);
         $age = $createdAt === false ? 45 : time() - $createdAt;
+        $minimumAge = $intent === null ? 45 : $this->refreshRecoveryMinimumAge($intent);
         if ($intent === null || (int) $intent->attempts !== 1
             || $createdAt === false || $age < $minimumAge || $age >= 45) {
             throw new WpAiBridgeTargetConnectionException('refresh_pending',
@@ -449,6 +456,36 @@ final readonly class WpAiBridgeTargetConnectionService
         }
 
         return $this->routingContext($target);
+    }
+
+    /** Snapshot-aware, one-shot recovery admission. No provider window is tunable. */
+    public function refreshRecoveryMinimumAge(object $intent): int
+    {
+        return max(12, $this->refreshRequestTimeoutSeconds($intent) + 5);
+    }
+
+    private function refreshRequestTimeoutSeconds(object $intent): int
+    {
+        $snapshot = $intent->request_timeout_seconds ?? null;
+        if ($snapshot !== null) {
+            // An unexpected value fails closed: 60s + safety margin is past
+            // the provider's 45s Gateway recovery admission boundary.
+            if ((! is_int($snapshot) && (! is_string($snapshot) || ! ctype_digit($snapshot)))
+                || (int) $snapshot < 1 || (int) $snapshot > 3600) {
+                return 60;
+            }
+
+            return (int) $snapshot;
+        }
+
+        // Pre-migration in-flight intents were never subject to Owner timeout
+        // overrides; preserve the original source/env deadline, and do not
+        // shorten it because a new Owner override was just applied.
+        return max(
+            1,
+            (int) config('bridge.http.request_timeout_seconds', 5),
+            $this->settings->httpTimeoutsSeconds()['request'],
+        );
     }
 
     public function accessToken(Target $target): string
@@ -778,7 +815,7 @@ final readonly class WpAiBridgeTargetConnectionService
             // Wait beyond the WordPress single-use recovery window and the
             // configured network timeout before accepting the *external*
             // revocation attestation. Still require WordPress-side evidence.
-            $settleSeconds = max(75, 60 + (int) config('bridge.http.request_timeout_seconds', 5) + 15);
+            $settleSeconds = max(75, 60 + $this->refreshRequestTimeoutSeconds($intent) + 15);
             if (time() - (new DateTimeImmutable((string) $intent->created_at))->getTimestamp() < $settleSeconds) {
                 throw new WpAiBridgeTargetConnectionException('refresh_settling',
                     'An OAuth refresh might still be in flight. Wait before WordPress-side reconciliation.');

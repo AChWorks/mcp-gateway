@@ -55,8 +55,9 @@ final class SafeHttpClient
      */
     private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null): SafeHttpResponse
     {
-        $connectTimeout = max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
-        $requestTimeout = max($connectTimeout, (int) config('bridge.http.request_timeout_seconds', 5));
+        $network = $this->settings->httpTimeoutsSeconds();
+        $connectTimeout = $network['connect'];
+        $requestTimeout = $network['request'];
         $startedNs = hrtime(true);
         if ($requestTimeout > intdiv(PHP_INT_MAX - $startedNs, 1_000_000_000)) {
             throw new OutboundRequestException('runtime', 'Outbound request timeout configuration is invalid.', [], true);
