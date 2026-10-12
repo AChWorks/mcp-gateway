@@ -528,6 +528,118 @@ final class TargetGroupManagementTest extends TestCase
         ]);
     }
 
+    public function test_group_wrong_password_and_name_validation_cannot_restamp_old_denials_with_fresh_revision(): void
+    {
+        $owner = $this->owner();
+        $this->actingAs($owner);
+        $manager = app(TargetGroupManager::class);
+        $group = $manager->create('Revision recovery group', [GatewayPermission::SshFileRead->value]);
+        $url = '/admin/target-groups/'.$group->id;
+        $edit = $url.'/edit';
+
+        $h0 = $manager->denialRevision($group);
+        $this->get($edit)->assertOk()->assertSee('name="denial_revision" value="'.$h0.'"', false);
+        $manager->update($group, 'Revision recovery group', [
+            GatewayPermission::SshFileRead->value,
+            GatewayPermission::SshCommandRun->value,
+        ], true, $h0);
+        $h1 = $manager->denialRevision($group);
+
+        $old = [
+            'name' => 'Renamed group',
+            'denied_permissions' => [GatewayPermission::SshFileRead->value],
+            'denial_revision' => $h0,
+            'confirm_ssh_group_changes' => '1',
+        ];
+        $this->from($edit)->put($url, [
+            ...$old, 'current_password' => 'WrongHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
+
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="denial_revision" value="'.$h1.'"', false)
+            ->assertSee('changed since you opened this form');
+        $html = (string) $page->getContent();
+        self::assertTrue($this->formDenialChecked($html, GatewayPermission::SshFileRead->value));
+        self::assertTrue($this->formDenialChecked($html, GatewayPermission::SshCommandRun->value));
+        self::assertFalse($this->formSshGroupReviewed($html));
+
+        $this->put($url, [
+            ...$old,
+            'denial_revision' => $h1,
+            'denied_permissions' => [GatewayPermission::SshFileRead->value, GatewayPermission::SshCommandRun->value],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->id, 'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        // Unrelated name validation must also reject old authorization values.
+        $manager->update($group, 'Renamed group', [
+            GatewayPermission::SshFileRead->value,
+            GatewayPermission::SshCommandRun->value,
+            GatewayPermission::SshFileWrite->value,
+        ], true, $h1);
+        $h2 = $manager->denialRevision($group);
+        $this->from($edit)->put($url, [
+            ...$old, 'name' => '',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="denial_revision" value="'.$h2.'"', false);
+        $html = (string) $page->getContent();
+        self::assertTrue($this->formDenialChecked($html, GatewayPermission::SshFileWrite->value));
+        self::assertFalse($this->formSshGroupReviewed($html));
+
+        // Missing revision after validation error is not a new approval.
+        $this->from($edit)->put($url, [
+            'name' => '', 'denied_permissions' => [],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="denial_revision" value="'.$h2.'"', false);
+        self::assertTrue($this->formDenialChecked((string) $page->getContent(), GatewayPermission::SshFileWrite->value));
+
+        // Matching fresh revision can preserve an intentionally cleared
+        // checkbox set while unrelated name validation is corrected.
+        $this->from($edit)->put($url, [
+            'name' => '', 'denial_revision' => $h2,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get($edit)->assertOk();
+        self::assertFalse($this->formDenialChecked((string) $page->getContent(), GatewayPermission::SshFileWrite->value));
+        self::assertSame($h2, $manager->denialRevision($group));
+    }
+
+    private function formDenialChecked(string $html, string $permission): bool
+    {
+        $document = new \DOMDocument;
+        $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING);
+        $inputs = (new \DOMXPath($document))->query('//input[@name="denied_permissions[]"]');
+
+        foreach ($inputs as $input) {
+            if ($input instanceof \DOMElement && $input->getAttribute('value') === $permission) {
+                return $input->hasAttribute('checked');
+            }
+        }
+
+        self::fail('Missing denial checkbox: '.$permission);
+    }
+
+    private function formSshGroupReviewed(string $html): bool
+    {
+        $document = new \DOMDocument;
+        $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING);
+        $inputs = (new \DOMXPath($document))->query('//input[@name="confirm_ssh_group_changes"]');
+
+        foreach ($inputs as $input) {
+            if ($input instanceof \DOMElement && $input->getAttribute('id') === 'confirm_ssh_group_changes') {
+                return $input->hasAttribute('checked');
+            }
+        }
+
+        self::fail('Missing SSH Target Group confirmation input.');
+    }
+
     /** @return array{User,User,Target,TargetGroup,TargetGroup} */
     private function overlappingSshGroups(): array
     {

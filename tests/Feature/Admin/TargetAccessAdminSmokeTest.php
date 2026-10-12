@@ -185,6 +185,130 @@ final class TargetAccessAdminSmokeTest extends TestCase
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
     }
 
+    public function test_password_and_missing_ssh_confirmation_errors_never_rebind_stale_denials_to_new_revision(): void
+    {
+        $owner = $this->owner();
+        $this->actingAs($owner);
+        $manager = app(UserAccessManager::class);
+        $operator = $manager->create([
+            'name' => 'Stale form SSH operator',
+            'email' => 'stale-recovery@example.test',
+            'password' => 'DifferentHorse!234',
+            'role' => 'operator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => true,
+        ], [], true);
+        $target = $this->target();
+        $url = '/admin/users/'.$operator->id.'/targets/'.$target->target_id;
+        $edit = $url.'/edit';
+
+        $manager->updateTargetRule($operator, $target, 'allow', [
+            GatewayPermission::SshFileRead->value,
+        ], true, $manager->targetRuleRevision($operator, $target));
+        $h0 = $manager->targetRuleRevision($operator, $target);
+        $this->get($edit)->assertOk()->assertSee('name="target_revision" value="'.$h0.'"', false);
+
+        // A second Owner adds a denial after the edit page was opened.
+        $manager->updateTargetRule($operator, $target, 'allow', [
+            GatewayPermission::SshFileRead->value,
+            GatewayPermission::SshCommandRun->value,
+        ], true, $h0);
+        $h1 = $manager->targetRuleRevision($operator, $target);
+
+        $oldForm = [
+            'access_rule' => 'allow',
+            'denied_permissions' => [GatewayPermission::SshFileRead->value],
+            'target_revision' => $h0,
+            'confirm_ssh_target_changes' => '1',
+        ];
+        $this->from($edit)->put($url, [
+            ...$oldForm, 'current_password' => 'WrongHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
+
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="target_revision" value="'.$h1.'"', false)
+            ->assertSee('changed since you opened this form');
+        $html = (string) $page->getContent();
+        self::assertTrue($this->formCheckboxChecked($html, 'denied_permissions[]', GatewayPermission::SshFileRead->value));
+        self::assertTrue($this->formCheckboxChecked($html, 'denied_permissions[]', GatewayPermission::SshCommandRun->value));
+        self::assertFalse($this->formCheckboxChecked($html, 'confirm_ssh_target_changes', '1'));
+
+        // The user now confirms exactly the current displayed restrictions.
+        $this->put($url, [
+            ...$oldForm,
+            'target_revision' => $h1,
+            'denied_permissions' => [GatewayPermission::SshFileRead->value, GatewayPermission::SshCommandRun->value],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('user_target_permission_denials', [
+            'user_id' => $operator->id,
+            'target_record_id' => $target->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        // Also exercise the missing SSH approval validation path (correct password).
+        $manager->updateTargetRule($operator, $target, 'allow', [
+            GatewayPermission::SshFileRead->value,
+            GatewayPermission::SshCommandRun->value,
+            GatewayPermission::SshFileWrite->value,
+        ], true, $h1);
+        $h2 = $manager->targetRuleRevision($operator, $target);
+        $this->from($edit)->put($url, [
+            'access_rule' => 'allow',
+            'denied_permissions' => [GatewayPermission::SshFileRead->value, GatewayPermission::SshCommandRun->value],
+            'target_revision' => $h1,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('confirm_ssh_target_changes');
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="target_revision" value="'.$h2.'"', false);
+        $html = (string) $page->getContent();
+        self::assertTrue($this->formCheckboxChecked($html, 'denied_permissions[]', GatewayPermission::SshFileWrite->value));
+        self::assertFalse($this->formCheckboxChecked($html, 'confirm_ssh_target_changes', '1'));
+
+        // A missing revision must never let flashed permission values be
+        // treated as reviewed against whatever the database contains now.
+        $this->from($edit)->put($url, [
+            'access_rule' => 'allow',
+            'denied_permissions' => [GatewayPermission::SshFileRead->value],
+            'current_password' => 'WrongHorse!234',
+            'confirm_ssh_target_changes' => '1',
+        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="target_revision" value="'.$h2.'"', false);
+        $html = (string) $page->getContent();
+        self::assertTrue($this->formCheckboxChecked($html, 'denied_permissions[]', GatewayPermission::SshFileWrite->value));
+        self::assertFalse($this->formCheckboxChecked($html, 'confirm_ssh_target_changes', '1'));
+
+        // A current, matching revision may restore the Owner's intentionally
+        // unchecked boxes after an unrelated validation failure.
+        $this->from($edit)->put($url, [
+            'access_rule' => 'allow',
+            'target_revision' => $h2,
+            'confirm_ssh_target_changes' => '1',
+            'current_password' => 'WrongHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
+        $page = $this->get($edit)->assertOk();
+        $html = (string) $page->getContent();
+        self::assertFalse($this->formCheckboxChecked($html, 'denied_permissions[]', GatewayPermission::SshCommandRun->value));
+        self::assertTrue($this->formCheckboxChecked($html, 'confirm_ssh_target_changes', '1'));
+        self::assertSame($h2, $manager->targetRuleRevision($operator, $target));
+    }
+
+    private function formCheckboxChecked(string $html, string $name, string $value): bool
+    {
+        $document = new \DOMDocument;
+        $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING);
+        $inputs = (new \DOMXPath($document))->query('//input[@name="'.$name.'"]');
+
+        foreach ($inputs as $input) {
+            if ($input instanceof \DOMElement && $input->getAttribute('value') === $value) {
+                return $input->hasAttribute('checked');
+            }
+        }
+
+        self::fail('Expected permission checkbox is missing: '.$name.'='.$value);
+    }
+
     private function owner(): User
     {
         return User::query()->create([

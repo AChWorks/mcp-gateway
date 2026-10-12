@@ -17,7 +17,22 @@
         <form class="form-stack" method="post" action="{{ route('admin.target-groups.update', ['targetGroup' => $targetGroup->id]) }}">
             @csrf
             @method('PUT')
+            @php
+                // A password/name validation redirect may flash old denial
+                // checkboxes; never pair them with the current DB revision.
+                $submittedDenialRevision = old('denial_revision');
+                $reuseSubmittedGroupDenials = is_string($submittedDenialRevision)
+                    && hash_equals($denialRevision, $submittedDenialRevision)
+                    && ! $errors->has('denial_revision');
+                $staleGroupForm = (session()->hasOldInput('denial_revision') || session()->hasOldInput('name'))
+                    && ! $reuseSubmittedGroupDenials;
+                $selectedDenials = $reuseSubmittedGroupDenials
+                    ? old('denied_permissions', []) : $deniedPermissions;
+            @endphp
             <input type="hidden" name="denial_revision" value="{{ $denialRevision }}">
+            @if ($staleGroupForm)
+                <p class="alert alert-error" role="alert">{{ __('Group restrictions changed since you opened this form or its revision is missing. Current saved denials are displayed. Review and confirm changes again.') }}</p>
+            @endif
             @error('denial_revision')<p class="alert alert-error" role="alert">{{ $message }}</p>@enderror
 
             <div class="field">
@@ -29,7 +44,6 @@
             <fieldset class="permission-fieldset">
                 <legend>{{ __('Group capability restrictions') }}</legend>
                 <p class="field-help">{{ __('Denials from overlapping assigned groups accumulate. Direct target permission denials remain the final capability-narrowing layer.') }}</p>
-                @php($selectedDenials = $errors->has('denial_revision') ? $deniedPermissions : old('denied_permissions', $deniedPermissions))
                 @include('admin.partials.permission-groups', [
                     'permissions' => $targetPermissions,
                     'selectedDenials' => $selectedDenials,
