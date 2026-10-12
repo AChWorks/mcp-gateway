@@ -14,7 +14,8 @@ use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
 /**
- * DRAFT, OFF-BY-DEFAULT: OAuth-authenticated raw whole-file HTTP edge.
+ * SOURCE-INTEGRATED, OFF-BY-DEFAULT: OAuth-authenticated SSH whole-file HTTP edge.
+ * Public enablement requires actual host/proxy/resource acceptance.
  * Not an MCP resource, nor proof that a ChatGPT host consumes downloaded bytes.
  */
 final class SshWholeFileController extends Controller

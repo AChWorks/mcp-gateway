@@ -9,7 +9,8 @@ Use the source that owns the kind of truth you need:
 - [`MASTER-SPEC.md`](./MASTER-SPEC.md) — canonical project purpose, durable requirements, constraints, non-goals, security boundaries, and V1 completion criteria.
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — current Target-era structure, capability discovery/evolution, shared controls and connector boundaries. Obsolete V1 Site-era diagrams remain in Git history only.
 - [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md) — detailed accepted Target/connector capability, identity, credential, security and future extension contract; historical transition sequencing must not override current source/PR/Issue truth.
-- [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md) — proportionate resource budgets, bounded responses, file transfer and failure semantics (#122/#123/#147).
+- [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md) — canonical proportional resource and failure semantics (#122/#123/#147); distinct from effective-limit measurements in #154.
+- [`WHOLE-FILE-EXCHANGE.md`](./WHOLE-FILE-EXCHANGE.md) — source-integrated optional SSH binary transfer wire contract, `target-context` discovery, verified external-client E2E, and separately gated release/host enablement (#147).
 - [`DIRECT-SSH-CONNECTOR.md`](./DIRECT-SSH-CONNECTOR.md) — owner-accepted direct SSH password/key, OS-account commands and SFTP design (#123).
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
 - [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
