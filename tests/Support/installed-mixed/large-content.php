@@ -1,6 +1,5 @@
 <?php
 
-
 // WP-CLI only, disposable fixture; no production plugin/provider mutation.
 // WordPress itself stores the large source so client tests use genuine
 // Bridge content-read through the real Adapter -> Gateway -> external MCP SDK.

@@ -29,7 +29,14 @@ DB_HOST_VALUE="${UPDATE_TEST_DB_HOST:-127.0.0.1}"
 DB_PORT_VALUE="${UPDATE_TEST_DB_PORT:-3306}"
 DB_DATABASE_VALUE="${UPDATE_TEST_DB_DATABASE:-mcp_gateway_update_test}"
 DB_USERNAME_VALUE="${UPDATE_TEST_DB_USERNAME:-mcp_gateway}"
-DB_PASSWORD_VALUE="${UPDATE_TEST_DB_PASSWORD:-test-password}"
+# Reuse the same explicit private-socket test DB contract as the browser
+# update package suite. CI's ordinary TCP MariaDB path remains unchanged.
+DB_PASSWORD_VALUE="${UPDATE_TEST_DB_PASSWORD-test-password}"
+DB_SOCKET_VALUE="${UPDATE_TEST_DB_SOCKET:-}"
+if [[ -n "$DB_SOCKET_VALUE" && ! "$DB_SOCKET_VALUE" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+  echo 'Unsafe update-test DB_SOCKET path.' >&2
+  exit 2
+fi
 
 cat > "$base/.env" <<EOF_ENV
 APP_NAME="MCP Gateway Backup Integrity Test"
@@ -40,6 +47,7 @@ APP_URL=https://gateway-update.example.test
 DB_CONNECTION=mysql
 DB_HOST=$DB_HOST_VALUE
 DB_PORT=$DB_PORT_VALUE
+DB_SOCKET=$DB_SOCKET_VALUE
 DB_DATABASE=$DB_DATABASE_VALUE
 DB_USERNAME=$DB_USERNAME_VALUE
 DB_PASSWORD=$DB_PASSWORD_VALUE
