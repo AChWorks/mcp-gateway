@@ -1,6 +1,5 @@
 <?php
 
-declare(strict_types=1);
 
 // WP-CLI only, disposable fixture; no production plugin/provider mutation.
 // WordPress itself stores the large source so client tests use genuine
