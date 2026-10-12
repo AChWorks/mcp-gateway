@@ -1,8 +1,10 @@
 # MCP Gateway v2.1.2
 
 **Planned stable release notes — not publicly published.** Candidate builds now carry distinct
-SemVer prerelease identities (starting at **2.1.2-rc.1**) and the eventual public
-stable release will use **2.1.2** only after separate Owner authorization. Earlier
+SemVer prerelease identities (starting at **2.1.2-rc.1**). The current
+**2.1.2-rc.2** candidate supersedes the previously distributed rc.1 test
+artifact; the eventual public stable release will use **2.1.2** only after
+separate Owner authorization. Earlier
 **2.1.0** and **2.1.1** test candidates were installed by operators, but neither
 number was published as a stable Release. The updater must continue to reject
 same-version and downgrade attempts. These notes describe candidate functionality; merging source or passing CI does not mean a public release, installed host or production has been changed.

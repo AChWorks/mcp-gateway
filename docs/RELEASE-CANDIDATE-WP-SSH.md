@@ -13,9 +13,12 @@ VERSION, and release action.
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
   either branch, force-merge a divergent release tag, or copy VERSION alone.
-- Candidate VERSION **2.1.2-rc.1** is a distinct **unpublished prerelease
-  identity**, strictly newer than previous deployed test candidates 2.1.0 and
-  2.1.1. Planned public stable is **2.1.2**, never assigned to a test candidate.
+- Candidate VERSION **2.1.2-rc.2** is a distinct **unpublished prerelease
+  identity**, strictly newer than previous deployed test candidates 2.1.0,
+  2.1.1 and the GitHub-distributed 2.1.2-rc.1 artifact. CI correctly rejected
+  reusing 2.1.2-rc.1 across two different PR HEADs, proving the immutable
+  candidate-identity gate. Planned public stable is **2.1.2**, never assigned
+  to a test candidate.
   Later test rounds must increase `-rc.N` rather than reuse a deployed VERSION.
   PHP `version_compare` maintains the order `2.1.1 < 2.1.2-rc.1 <
   2.1.2-rc.2 < 2.1.2`. Candidate artifact generation validates this identity;
@@ -26,6 +29,9 @@ VERSION, and release action.
   older prerelease numbers after artifact retention ends. Promotion
   to stable requires changing VERSION to 2.1.2, completing exact-stable-source
   gates, independent review and a separate Owner publication authorization.
+  GitHub CI retains the live ChatGPT OAuth/JWKS compatibility check as a hard
+  gate, with one bounded 5-second retry on a transient public-provider fetch
+  failure; it never promotes an unverified JWKS or disables compatibility validation.
   The notes retain exact public v2.0.3 history before v2.0.2.
 - Verified at branch creation: the active updater, updater browser index,
   update regression scripts, and release-note renderer match v2.0.3 byte for
@@ -146,12 +152,12 @@ bash bin/test-update-backup-integrity.sh /path/to/candidate-update.zip /path/to/
 ```
 
 For operators who already installed a 2.1.0 or 2.1.1 candidate, the
-2.1.2-rc.1 update package must additionally pass the same authenticated
+2.1.2-rc.2 update package must additionally pass the same authenticated
 browser-update test against a **verified unaltered candidate fresh-install ZIP**
 from each earlier installed GitHub Actions run (verify its original checksum, provenance
 and hash). The credential/Target/grant preservation assertions must run for
-both the published 2.0.x Target-era baselines and the distributed 2.1.0
-and 2.1.1 candidates. The updater intentionally rejects same-version/downgrade attempts:
+both the published 2.0.x Target-era baselines and the distributed 2.1.0,
+2.1.1 and, when relevant, 2.1.2-rc.1 candidates. The updater intentionally rejects same-version/downgrade attempts:
 **never** edit an installed VERSION, bypass that comparison, rename a ZIP to
 pretend it is newer, or overwrite production files with a fresh-install ZIP.
 If a 2.1.0 -> 2.1.0 attempt was rejected during preflight, it must not be
