@@ -17,6 +17,8 @@
         <form class="form-stack" method="post" action="{{ route('admin.target-groups.update', ['targetGroup' => $targetGroup->id]) }}">
             @csrf
             @method('PUT')
+            <input type="hidden" name="denial_revision" value="{{ $denialRevision }}">
+            @error('denial_revision')<p class="alert alert-error" role="alert">{{ $message }}</p>@enderror
 
             <div class="field">
                 <label for="name">{{ __('Group name') }}</label>
@@ -27,7 +29,7 @@
             <fieldset class="permission-fieldset">
                 <legend>{{ __('Group capability restrictions') }}</legend>
                 <p class="field-help">{{ __('Denials from overlapping assigned groups accumulate. Direct target permission denials remain the final capability-narrowing layer.') }}</p>
-                @php($selectedDenials = old('denied_permissions', $deniedPermissions))
+                @php($selectedDenials = $errors->has('denial_revision') ? $deniedPermissions : old('denied_permissions', $deniedPermissions))
                 @include('admin.partials.permission-groups', [
                     'permissions' => $targetPermissions,
                     'selectedDenials' => $selectedDenials,

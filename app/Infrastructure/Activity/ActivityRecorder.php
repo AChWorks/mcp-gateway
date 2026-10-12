@@ -11,12 +11,14 @@ use Throwable;
 
 final class ActivityRecorder
 {
+    /** @param array<string,mixed> $diagnostics */
     public function record(
         string $correlationId,
         string $operation,
         string $outcome,
         ?Target $target = null,
         ?string $errorCode = null,
+        array $diagnostics = [],
     ): void {
         [$correlationId, $operation, $outcome, $target, $errorCode] = $this->normalized(
             $correlationId,
@@ -35,7 +37,8 @@ final class ActivityRecorder
             if (in_array($outcome, ['failure', 'unknown'], true)
                 && ! in_array($errorCode, ['target_not_found', 'forbidden', 'invalid_input', 'mcp_principal_rate_limited', 'mcp_edge_rate_limited'], true)) {
                 OperationDiagnostics::failure($operation, $errorCode ?? 'operation_failed', $target, [
-                    'retry_safe' => $outcome === 'unknown' ? false : null,
+                    ...$diagnostics,
+                    'retry_safe' => $outcome === 'unknown' ? false : ($diagnostics['retry_safe'] ?? null),
                 ], $correlationId);
             }
         } catch (Throwable) {

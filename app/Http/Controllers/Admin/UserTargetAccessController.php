@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Access\AuthorizationRevision;
 use App\Application\Access\UserAccessManager;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
@@ -86,10 +87,16 @@ final class UserTargetAccessController extends Controller
     ): View {
         Gate::authorize(GatewayPermission::UsersManage->value);
 
+        // Render the rule and the revision derived from that SAME snapshot.
+        // Two separate reads could otherwise stamp an older form with a newer
+        // revision during a concurrent authorization update.
+        $targetRule = $access->targetRule($user, $target);
+
         return view('admin.users.targets.edit', [
             'managedUser' => $user,
             'target' => $target,
-            'targetRule' => $access->targetRule($user, $target),
+            'targetRule' => $targetRule,
+            'targetRevision' => AuthorizationRevision::targetRule($targetRule),
             'targetPermissions' => $access->targetPermissions(),
             'isOwner' => $this->role($user) === GatewayRole::Owner,
         ]);
@@ -110,18 +117,31 @@ final class UserTargetAccessController extends Controller
             'denied_permissions' => ['nullable', 'array'],
             'denied_permissions.*' => ['string', Rule::enum(GatewayPermission::class)],
             'confirm_ssh_target_changes' => ['nullable', 'boolean'],
+            'target_revision' => ['nullable', 'string', 'regex:/\\A[a-f0-9]{64}\\z/D'],
         ]);
 
-        $this->confirmSshTargetChanges($request, $user, $target, $access, $validated);
-
+        // SSH confirmation and optimistic state must be enforced inside the
+        // User-row transaction, not against a pre-lock edit snapshot.
         try {
             $access->updateTargetRule(
                 $user,
                 $target,
                 (string) $validated['access_rule'],
                 $this->deniedPermissions($validated),
+                $request->boolean('confirm_ssh_target_changes'),
+                isset($validated['target_revision']) ? (string) $validated['target_revision'] : null,
             );
         } catch (DomainException $exception) {
+            if ($exception->getMessage() === 'ssh_target_confirmation_required') {
+                throw ValidationException::withMessages([
+                    'confirm_ssh_target_changes' => __('Explicitly confirm changed SSH Target reachability and command/SFTP restrictions as Owner.'),
+                ]);
+            }
+            if ($exception->getMessage() === 'target_rule_revision_stale') {
+                throw ValidationException::withMessages([
+                    'target_revision' => __('Target access changed since you opened this form. Reload and review the latest rule and denials before approving.'),
+                ]);
+            }
             if ($exception->getMessage() === 'owner_unrestricted') {
                 return back()->withErrors([
                     'access_rule' => __('Owners always retain unrestricted target access for recovery.'),
@@ -134,40 +154,6 @@ final class UserTargetAccessController extends Controller
         return redirect()
             ->route('admin.users.targets.edit', ['user' => $user->id, 'target' => $target->target_id])
             ->with('status', __('Target-specific access updated.'));
-    }
-
-    /**
-     * Editing a live SSH Target-level denial or its scope rule must never
-     * silently turn remote shell or SFTP access on for an existing user.
-     * Other connector Target rules keep their established workflow.
-     *
-     * @param  array<string,mixed>  $validated
-     */
-    private function confirmSshTargetChanges(
-        Request $request, User $user, Target $target,
-        UserAccessManager $access, array $validated,
-    ): void {
-        if ($target->connector_type !== 'ssh_direct'
-            || $this->role($user) === GatewayRole::Owner) {
-            return;
-        }
-
-        $existing = $access->targetRule($user, $target);
-        $sshKeys = array_map(
-            static fn (GatewayPermission $permission): string => $permission->value,
-            GatewayPermission::sshCapabilities(),
-        );
-        $prior = array_values(array_intersect($existing['denied_permissions'], $sshKeys));
-        $requested = array_values(array_intersect($this->deniedPermissions($validated), $sshKeys));
-        sort($prior);
-        sort($requested);
-
-        if (($existing['access_rule'] !== $validated['access_rule'] || $prior !== $requested)
-            && ! $request->boolean('confirm_ssh_target_changes')) {
-            throw ValidationException::withMessages([
-                'confirm_ssh_target_changes' => __('Explicitly confirm changed SSH Target reachability and command/SFTP restrictions as Owner. This can enable remote access when the user has global SSH grants.'),
-            ]);
-        }
     }
 
     /** @param array<string,mixed> $validated

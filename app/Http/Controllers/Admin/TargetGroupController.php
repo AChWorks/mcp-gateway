@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Access\AuthorizationRevision;
 use App\Application\Access\TargetGroupManager;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\TargetGroup;
@@ -63,11 +64,16 @@ final class TargetGroupController extends Controller
     {
         Gate::authorize(GatewayPermission::UsersManage->value);
 
+        // The fingerprint must describe exactly the denials displayed in
+        // this form, rather than a later, separately read DB state.
+        $denials = $groups->permissionDenials($targetGroup);
+
         return view('admin.target-groups.edit', [
             'targetGroup' => $targetGroup,
             'targetPermissions' => $groups->targetPermissions(),
             'sshPermissionsEditable' => true,
-            'deniedPermissions' => $groups->permissionDenials($targetGroup),
+            'deniedPermissions' => $denials,
+            'denialRevision' => AuthorizationRevision::groupDenials($denials),
         ]);
     }
 
@@ -80,16 +86,15 @@ final class TargetGroupController extends Controller
         Gate::authorize(GatewayPermission::UsersManage->value);
         $confirmation->confirm($request);
         $validated = $this->validated($request, $targetGroup);
-        $this->confirmSshChanges(
-            $request, $this->deniedPermissions($validated), $groups->permissionDenials($targetGroup),
-        );
-
+        // The transaction-held group lock and submitted denial snapshot
+        // are authoritative. Pre-lock comparisons cannot approve stale edits.
         try {
             $groups->update(
                 $targetGroup,
                 (string) $validated['name'],
                 $this->deniedPermissions($validated),
                 $request->boolean('confirm_ssh_group_changes'),
+                isset($validated['denial_revision']) ? (string) $validated['denial_revision'] : null,
             );
         } catch (DomainException $exception) {
             $this->rethrowUnconfirmedSsh($exception);
@@ -122,6 +127,12 @@ final class TargetGroupController extends Controller
     /** Translate service-level, transaction-fenced acknowledgement into a form error. */
     private function rethrowUnconfirmedSsh(DomainException $exception): never
     {
+        if ($exception->getMessage() === 'group_revision_stale') {
+            throw ValidationException::withMessages([
+                'denial_revision' => __('Group restrictions have changed since you opened this form. Reload and review the latest denials before confirming the update.'),
+            ]);
+        }
+
         if ($exception->getMessage() === 'ssh_confirmation_required') {
             throw ValidationException::withMessages([
                 'confirm_ssh_group_changes' => __(
@@ -170,6 +181,7 @@ final class TargetGroupController extends Controller
                 'max:160',
                 Rule::unique('target_groups', 'name')->ignore($targetGroup?->getKey()),
             ],
+            'denial_revision' => ['nullable', 'string', 'regex:/\\A[a-f0-9]{64}\\z/D'],
             'denied_permissions' => ['nullable', 'array'],
             'denied_permissions.*' => [
                 'string',

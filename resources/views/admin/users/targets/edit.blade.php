@@ -19,12 +19,14 @@
         <form class="form-stack" method="post" action="{{ route('admin.users.targets.update', ['user' => $managedUser->id, 'target' => $target->target_id]) }}">
             @csrf
             @method('PUT')
+            <input type="hidden" name="target_revision" value="{{ $targetRevision }}">
+            @error('target_revision')<div class="alert alert-error" role="alert">{{ $message }}</div>@enderror
 
             <div class="field">
                 <label for="access_rule">{{ __('Explicit scope rule') }}</label>
                 <select id="access_rule" name="access_rule" required>
                     @foreach (['inherit', 'allow', 'deny'] as $rule)
-                        <option value="{{ $rule }}" @selected(old('access_rule', $targetRule['access_rule']) === $rule)>{{ \Illuminate\Support\Str::headline($rule) }}</option>
+                        <option value="{{ $rule }}" @selected(($errors->has('target_revision') ? $targetRule['access_rule'] : old('access_rule', $targetRule['access_rule'])) === $rule)>{{ \Illuminate\Support\Str::headline($rule) }}</option>
                     @endforeach
                 </select>
                 <p class="field-help">{{ __('inherit follows the user scope mode; allow/deny records a direct target rule. Direct denials remain the final narrowing layer for future group support.') }}</p>
@@ -34,7 +36,7 @@
             <fieldset class="permission-fieldset">
                 <legend>{{ __('Capability restrictions on this target') }}</legend>
                 <p class="field-help">{{ __('Only this Target’s connector capabilities are shown. Checked permissions deny operations on this Target; role ceilings and global/group restrictions still apply.') }}</p>
-                @php($selectedDenials = old('denied_permissions', $targetRule['denied_permissions']))
+                @php($selectedDenials = $errors->has('target_revision') ? $targetRule['denied_permissions'] : old('denied_permissions', $targetRule['denied_permissions']))
                 @include('admin.partials.permission-groups', [
                     'permissions' => $targetPermissions,
                     'selectedDenials' => $selectedDenials,

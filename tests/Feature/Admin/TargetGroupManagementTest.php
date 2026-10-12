@@ -107,6 +107,7 @@ final class TargetGroupManagementTest extends TestCase
             'denied_permissions' => [],
             'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
+            'denial_revision' => app(TargetGroupManager::class)->denialRevision($group),
         ])->assertRedirect();
         $this->assertDatabaseMissing('target_group_permission_denials', [
             'target_group_id' => $group->getKey(),
@@ -469,8 +470,58 @@ final class TargetGroupManagementTest extends TestCase
 
         app(TargetGroupManager::class)->update(
             $group, 'Explicitly reviewed', [], true,
+            app(TargetGroupManager::class)->denialRevision($group),
         );
         self::assertSame('Explicitly reviewed', $group->fresh()->name);
+        $this->assertDatabaseMissing('target_group_permission_denials', [
+            'target_group_id' => $group->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+    }
+
+    public function test_stale_group_confirmation_cannot_remove_unseen_ssh_denial(): void
+    {
+        $owner = $this->owner();
+        $this->actingAs($owner);
+        $manager = app(TargetGroupManager::class);
+        $group = TargetGroup::query()->create(['name' => 'Revision-bound group']);
+
+        $oldRevision = $manager->denialRevision($group);
+        $this->get('/admin/target-groups/'.$group->id.'/edit')->assertOk()
+            ->assertSee('name="denial_revision"', false)
+            ->assertSee($oldRevision);
+
+        // Another Owner adds a restriction after this edit form was opened.
+        $manager->update($group, 'Revision-bound group', [
+            GatewayPermission::SshCommandRun->value,
+        ], true, $oldRevision);
+
+        $url = '/admin/target-groups/'.$group->id;
+        $oldForm = [
+            'name' => 'Old form edit', 'denied_permissions' => [],
+            'denial_revision' => $oldRevision,
+            'current_password' => 'CorrectHorse!234',
+        ];
+        $this->put($url, $oldForm)->assertSessionHasErrors('confirm_ssh_group_changes');
+        $this->put($url, [
+            ...$oldForm, 'confirm_ssh_group_changes' => '1',
+        ])->assertSessionHasErrors('denial_revision');
+
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+        self::assertSame('Revision-bound group', $group->fresh()->name);
+
+        // The fresh view uses actual current denials, not stale old() fields.
+        $this->get($url.'/edit')->assertOk()
+            ->assertSee($manager->denialRevision($group));
+
+        $this->put($url, [
+            ...$oldForm,
+            'denial_revision' => $manager->denialRevision($group),
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect()->assertSessionHasNoErrors();
         $this->assertDatabaseMissing('target_group_permission_denials', [
             'target_group_id' => $group->id,
             'permission' => GatewayPermission::SshCommandRun->value,

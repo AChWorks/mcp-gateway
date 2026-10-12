@@ -3,6 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Application\Access\AccessControl;
+use App\Application\Access\UserAccessManager;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -249,6 +250,7 @@ final class TargetManagementAdminTest extends TestCase
             'access_rule' => 'allow',
             'current_password' => 'ThisIsATestSecret!234',
             'confirm_ssh_target_changes' => '1',
+            'target_revision' => app(UserAccessManager::class)->targetRuleRevision($admin, $ssh),
         ])->assertRedirect()->assertSessionHasNoErrors();
         $this->assertDatabaseHas('user_target_access', [
             'user_id' => $admin->getKey(),

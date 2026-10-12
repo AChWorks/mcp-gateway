@@ -13,9 +13,9 @@ VERSION, and release action.
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
   either branch, force-merge a divergent release tag, or copy VERSION alone.
-- Candidate VERSION **2.1.2-rc.6** is a distinct **unpublished prerelease
+- Candidate VERSION **2.1.2-rc.7** is a distinct **unpublished prerelease
   identity**, strictly newer than previous deployed test candidates 2.1.0,
-  2.1.1 and GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 / 2.1.2-rc.3 / 2.1.2-rc.4 / 2.1.2-rc.5 artifacts. CI
+  2.1.1 and GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 / 2.1.2-rc.3 / 2.1.2-rc.4 / 2.1.2-rc.5 / 2.1.2-rc.6 artifacts. CI
   correctly rejected reusing rc.1 across two different PR HEADs, proving the
   immutable candidate-identity gate. Planned public stable is **2.1.2**, never assigned
   to a test candidate.
@@ -162,6 +162,8 @@ Existing All-scope users and Owners retain their separately assigned scope.
 OAuth-origin edit UI also suppresses the form while a WordPress authorization
 flow is pending, matching the server-side reject.
 
+**RC7 security/diagnostics delta:** User→SSH Target changes compare the persisted Target rule and denials after locking the User row, require explicit Owner SSH acknowledgment, and compare the original rule revision before replacement. Group deny-only edits carry a canonical denial revision from the rendered form; even a checked confirmation from an old form cannot remove later SSH denies. On revision mismatch the form re-renders current DB denials, not stale form values. WordPress MCP transports only approved finite failure-stage metadata through exceptions to a structured Activity-correlated server log; public MCP codes/messages and OAuth mutating-operation uncertainty remain unchanged. Verify exact-current-HEAD regressions, fresh independent review and immutable monotonic version prior to any merge/release.
+
 **Whole-Gateway error/reporting acceptance:** Admin Target errors and stored
 Target health show a human explanation and next check, while API/MCP errors
 retain machine-readable reasons with additive safe next steps. HTTP requests,
@@ -196,12 +198,12 @@ bash bin/test-update-backup-integrity.sh /path/to/candidate-update.zip /path/to/
 ```
 
 For operators who already installed a 2.1.0 or 2.1.1 candidate, the
-2.1.2-rc.6 update package must additionally pass the same authenticated
+2.1.2-rc.7 update package must additionally pass the same authenticated
 browser-update test against a **verified unaltered candidate fresh-install ZIP**
 from each earlier installed GitHub Actions run (verify its original checksum, provenance
 and hash). The credential/Target/grant preservation assertions must run for
 both the published 2.0.x Target-era baselines and the distributed 2.1.0,
-2.1.1 and the already distributed 2.1.2-rc.1/rc.2/rc.3/rc.4/rc.5 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
+2.1.1 and the already distributed 2.1.2-rc.1/rc.2/rc.3/rc.4/rc.5/rc.6 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
 **never** edit an installed VERSION, bypass that comparison, rename a ZIP to
 pretend it is newer, or overwrite production files with a fresh-install ZIP.
 If a 2.1.0 -> 2.1.0 attempt was rejected during preflight, it must not be

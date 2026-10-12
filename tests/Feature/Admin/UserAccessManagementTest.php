@@ -245,6 +245,7 @@ final class UserAccessManagementTest extends TestCase
         ]);
         $access = app(AccessControl::class);
         $url = '/admin/users/'.$operator->id.'/targets/'.$target->target_id;
+        $ruleManager = app(UserAccessManager::class);
         $this->actingAs($owner);
         $this->put($url, [
             'access_rule' => 'allow', 'current_password' => 'CorrectHorse!234',
@@ -254,6 +255,7 @@ final class UserAccessManagementTest extends TestCase
         $this->put($url, [
             'access_rule' => 'allow', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_target_changes' => '1',
+            'target_revision' => $ruleManager->targetRuleRevision($operator, $target),
         ])->assertRedirect()->assertSessionHasNoErrors();
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $target));
 
@@ -267,6 +269,7 @@ final class UserAccessManagementTest extends TestCase
             'access_rule' => 'allow', 'current_password' => 'CorrectHorse!234',
             'denied_permissions' => [GatewayPermission::SshFileRead->value],
             'confirm_ssh_target_changes' => '1',
+            'target_revision' => $ruleManager->targetRuleRevision($operator, $target),
         ])->assertRedirect()->assertSessionHasNoErrors();
         self::assertFalse($access->allows($operator, GatewayPermission::SshFileRead, $target));
 
@@ -277,6 +280,7 @@ final class UserAccessManagementTest extends TestCase
         $this->put($url, [
             'access_rule' => 'allow', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_target_changes' => '1',
+            'target_revision' => $ruleManager->targetRuleRevision($operator, $target),
         ])->assertRedirect()->assertSessionHasNoErrors();
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $target));
     }

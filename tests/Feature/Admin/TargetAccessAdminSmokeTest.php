@@ -2,7 +2,9 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Application\Access\AccessControl;
 use App\Application\Access\UserAccessManager;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetGroup;
@@ -72,6 +74,7 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'access_rule' => 'allow',
             'current_password' => 'CorrectHorse!234',
             'confirm_ssh_target_changes' => '1',
+            'target_revision' => app(UserAccessManager::class)->targetRuleRevision($user, $target),
         ])->assertRedirect()->assertSessionHasNoErrors();
 
         $this->assertDatabaseHas('user_target_access', [
@@ -116,6 +119,70 @@ final class TargetAccessAdminSmokeTest extends TestCase
             ->get('/admin/target-groups')
             ->assertForbidden();
         $this->actingAs($owner)->get('/admin/target-groups')->assertOk();
+    }
+
+    public function test_stale_ssh_target_rule_form_cannot_remove_newer_denial_even_with_old_confirmation(): void
+    {
+        $owner = $this->owner();
+        $manager = app(UserAccessManager::class);
+        $operator = $manager->create([
+            'name' => 'Confirmed SSH operator',
+            'email' => 'stale-ssh-rule@example.test',
+            'password' => 'DifferentHorse!234',
+            'role' => 'operator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => true,
+        ], [], true);
+        $target = $this->target();
+        $this->actingAs($owner);
+
+        $url = '/admin/users/'.$operator->id.'/targets/'.$target->target_id;
+        $this->get($url.'/edit')->assertOk()->assertSee('name="target_revision"', false);
+        $originalRevision = $manager->targetRuleRevision($operator, $target);
+        $this->put($url, [
+            'access_rule' => 'allow',
+            'target_revision' => $originalRevision,
+            'confirm_ssh_target_changes' => '1',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+
+        $access = app(AccessControl::class);
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $staleRevision = $manager->targetRuleRevision($operator, $target);
+        // Another legitimate Owner writes a new denial before stale form A.
+        $manager->updateTargetRule(
+            $operator, $target, 'allow',
+            [GatewayPermission::SshCommandRun->value],
+            true, $staleRevision,
+        );
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($url, [
+            'access_rule' => 'allow', 'target_revision' => $staleRevision,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_target_changes');
+
+        $this->put($url, [
+            'access_rule' => 'allow', 'target_revision' => $staleRevision,
+            'confirm_ssh_target_changes' => '1',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('target_revision');
+
+        $this->assertDatabaseHas('user_target_permission_denials', [
+            'user_id' => $operator->id,
+            'target_record_id' => $target->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($url, [
+            'access_rule' => 'allow',
+            'target_revision' => $manager->targetRuleRevision($operator, $target),
+            'confirm_ssh_target_changes' => '1',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
     }
 
     private function owner(): User

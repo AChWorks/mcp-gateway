@@ -257,7 +257,7 @@ final readonly class WpAiBridgeMcpClient
                 ],
             ], $headers);
         } catch (OutboundRequestException $exception) {
-            throw new WpAiBridgeMcpException($exception->reason, 'WP AI Bridge MCP initialization failed.', $exception);
+            throw new WpAiBridgeMcpException($exception->reason, 'WP AI Bridge MCP initialization failed.', $exception, $exception->details);
         }
 
         $this->assertAuthenticationStatus($response);
@@ -268,7 +268,7 @@ final readonly class WpAiBridgeMcpClient
         try {
             $payload = $response->json();
         } catch (OutboundRequestException $exception) {
-            throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an invalid MCP initialization response.', $exception);
+            throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an invalid MCP initialization response.', $exception, $exception->details);
         }
 
         if (($payload['jsonrpc'] ?? null) !== '2.0' || ($payload['id'] ?? null) !== 1 || ! is_array($payload['result'] ?? null)) {
@@ -318,7 +318,7 @@ final readonly class WpAiBridgeMcpClient
             $message = $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'
                 : 'WP AI Bridge could not complete the downstream read.';
-            throw new WpAiBridgeMcpException($reason, $message, $exception);
+            throw new WpAiBridgeMcpException($reason, $message, $exception, $exception->details);
         }
 
         $this->assertAuthenticationStatus($response);
@@ -336,7 +336,7 @@ final readonly class WpAiBridgeMcpClient
             $message = $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'
                 : 'WP AI Bridge returned invalid MCP JSON.';
-            throw new WpAiBridgeMcpException($reason, $message, $exception);
+            throw new WpAiBridgeMcpException($reason, $message, $exception, $exception->details);
         }
 
         if (($payload['jsonrpc'] ?? null) !== '2.0' || ($payload['id'] ?? null) !== $requestId) {

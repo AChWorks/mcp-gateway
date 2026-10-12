@@ -30,15 +30,23 @@ final readonly class TargetGroupManager
     }
 
     /** @param list<string> $deniedPermissions */
-    public function update(TargetGroup $group, string $name, array $deniedPermissions, bool $sshReviewed = false): TargetGroup
+    public function update(TargetGroup $group, string $name, array $deniedPermissions, bool $sshReviewed = false, ?string $expectedRevision = null): TargetGroup
     {
-        DB::transaction(function () use ($group, $name, $deniedPermissions, $sshReviewed): void {
+        DB::transaction(function () use ($group, $name, $deniedPermissions, $sshReviewed, $expectedRevision): void {
             $locked = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
-            // Re-evaluate after locking: an old form cannot silently remove a
-            // newly-added SSH denial between HTTP preflight and DB mutation.
+            // The same group-row lock is acquired by membership mutation
+            // paths. Compare the originally displayed denial snapshot here,
+            // never against a pre-lock controller lookup or an old checkbox.
+            $current = $this->permissionDenials($locked);
             $requestedSsh = $this->sshDenials($deniedPermissions);
-            $currentSsh = $this->sshDenials($this->permissionDenials($locked));
-            $this->requireSshReview($requestedSsh !== $currentSsh, $sshReviewed);
+            $currentSsh = $this->sshDenials($current);
+            $sshChanged = $requestedSsh !== $currentSsh;
+            $this->requireSshReview($sshChanged, $sshReviewed);
+            $currentRevision = AuthorizationRevision::groupDenials($current);
+            if ($expectedRevision !== null && ! hash_equals($currentRevision, $expectedRevision)
+                || $sshChanged && $expectedRevision === null) {
+                throw new DomainException('group_revision_stale');
+            }
             $locked->fill(['name' => trim($name)])->save();
             $this->replacePermissionDenials($locked, $deniedPermissions);
             $this->recordRequired('target-group-update:'.$locked->id);
@@ -122,6 +130,12 @@ final readonly class TargetGroupManager
 
             $this->recordRequired('target-group-user-update:'.$lockedGroup->id.':'.$lockedUser->id);
         });
+    }
+
+    /** Optimistic revision bound to the full sorted denial set shown to the Owner. */
+    public function denialRevision(TargetGroup $group): string
+    {
+        return AuthorizationRevision::groupDenials($this->permissionDenials($group));
     }
 
     /** @return list<string> */
