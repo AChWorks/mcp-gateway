@@ -399,6 +399,89 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(2, $resolver->queries);
     }
 
+    public function test_owner_can_tune_ssh_file_transfer_budgets_without_creating_a_second_settings_service(): void
+    {
+        config()->set('ssh.file_transfer.max_bytes', 8388608);
+        config()->set('ssh.file_transfer.max_seconds', 30);
+        $owner = $this->account('owner');
+        $this->actingAs($owner);
+        $settings = app(OperationalSettings::class);
+        self::assertSame(['max_bytes' => 8388608, 'max_seconds' => 30], $settings->sshTransferLimits());
+
+        $this->get('/admin/operations')->assertOk()
+            ->assertSee('SSH whole-file transport budgets')
+            ->assertSee('ssh_transfer_max_kib')
+            ->assertSee('ssh_transfer_max_seconds');
+
+        $this->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '2048',
+                'ssh_transfer_max_seconds' => '20',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 2097152, 'max_seconds' => 20],
+            (new OperationalSettings)->sshTransferLimits());
+        $row = DB::table('operational_settings')->first();
+        self::assertSame(2048, (int) $row->ssh_transfer_max_kib);
+        self::assertSame(20, (int) $row->ssh_transfer_max_seconds);
+        self::assertSame([], json_decode((string) $row->overrides, true));
+        self::assertEqualsCanonicalizing(
+            ['ssh_transfer_max_kib', 'ssh_transfer_max_seconds'],
+            DB::table('operational_setting_changes')->pluck('setting_key')->all(),
+        );
+
+        // Previous four-key admin tab must preserve the newer SSH limits.
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 2097152, 'max_seconds' => 20],
+            (new OperationalSettings)->sshTransferLimits());
+
+        // Invalid maximum or deadline never alters a persisted configuration.
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '65537',
+                'ssh_transfer_max_seconds' => '0',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors(['values.ssh_transfer_max_kib', 'values.ssh_transfer_max_seconds']);
+        self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
+
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '',
+                'ssh_transfer_max_seconds' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 8388608, 'max_seconds' => 30],
+            (new OperationalSettings)->sshTransferLimits());
+        self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
+    }
+
     private function account(string $role): User
     {
         return User::query()->create([

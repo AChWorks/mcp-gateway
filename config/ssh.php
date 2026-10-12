@@ -1,6 +1,13 @@
 <?php
 
 return [
+    // DRAFT #147: opt-in only in disposable acceptance, not approved as a public API.
+    // These are SSH file-data-plane budgets, never WordPress/MCP frame limits.
+    'file_transfer' => [
+        'enabled' => (bool) env('SSH_FILE_TRANSFER_ENABLED', false),
+        'max_bytes' => (int) env('SSH_FILE_TRANSFER_MAX_BYTES', 8388608),
+        'max_seconds' => (int) env('SSH_FILE_TRANSFER_MAX_SECONDS', 30),
+    ],
     'verification' => [
         // Per Target. Values are clamped in SshConnectionAdmission so zero or
         // extreme environment values cannot disable or unbound protection.

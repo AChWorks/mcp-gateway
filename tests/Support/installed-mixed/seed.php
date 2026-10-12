@@ -87,6 +87,8 @@ if ($mode === 'init') {
         'wp_readonly_response_kib' => 512,
         'wp_connect_timeout_seconds' => 3,
         'wp_request_timeout_seconds' => 9,
+        'ssh_transfer_max_kib' => 4096,
+        'ssh_transfer_max_seconds' => 30,
     ], $settings->state()['version']);
 
     $wp = app(WpAiBridgeTargetRegistration::class)->register(
@@ -168,6 +170,7 @@ if ($mode === 'init') {
         'oauth_client_profiles_count' => DB::table('oauth_client_profiles')->count(),
         'owner_operational_settings' => app(OperationalSettings::class)->state(),
         'effective_http_timeouts_seconds' => app(OperationalSettings::class)->httpTimeoutsSeconds(),
+        'effective_ssh_transfer_limits' => app(OperationalSettings::class)->sshTransferLimits(),
         'effective_response_limit_bytes' => app(OperationalSettings::class)->responseLimitBytes(false),
         'effective_readonly_response_limit_bytes' => app(OperationalSettings::class)->responseLimitBytes(true),
         'absolute_http_response_bound_bytes' => SafeHttpClient::ABSOLUTE_MAX_RESPONSE_BYTES,

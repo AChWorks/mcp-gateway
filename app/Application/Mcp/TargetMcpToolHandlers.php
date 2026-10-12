@@ -3,6 +3,7 @@
 namespace App\Application\Mcp;
 
 use App\Application\Access\AccessControl;
+use App\Application\Files\TargetTransferCapabilities;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
@@ -21,6 +22,7 @@ final readonly class TargetMcpToolHandlers
         private TargetConnectorRegistry $connectors,
         private AccessControl $access,
         private ActivityRecorder $activity,
+        private TargetTransferCapabilities $transfers,
     ) {}
 
     /** @return array<string,mixed> */
@@ -106,6 +108,7 @@ final readonly class TargetMcpToolHandlers
             'connected_at' => $connectedAt instanceof DateTimeInterface ? $connectedAt->format(DATE_ATOM) : null,
         ];
         $context = [...$this->connectors->publicMetadata($target), ...$context];
+        $context['file_transfer'] = $this->transfers->describe($user, $target);
 
         return ['ok' => true, 'target' => $context];
     }

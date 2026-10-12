@@ -4,6 +4,9 @@ Controlling issue: #112. Companion protocol/permission fixture:
 `tests/Feature/Mcp/MixedTargetAuthenticatedAcceptanceTest.php`. That fixture
 remains synthetic for WordPress; **it does not substitute for this test**.
 
+**#147 extension:** The same fresh, pinned, disposable runner now also checks optional whole-file binary ingress/egress through an official PHP MCP SDK client plus an independent Python HTTP/MCP client; see [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md). The binary sidecar is enabled only in the ephemeral installed Gateway. Evidence adds `file-client.json`, `python-file-client.json`, and `file-revoked.txt`. It does not claim ChatGPT host file handoff.
+Both independently authored client implementations first call `target-context` over their real MCP session and verify the Target-specific advertised binary routes and effective SSH Owner budget; the PHP SDK client additionally confirms that the installed WordPress Target has **no** fabricated SSH binary mode. The independent Python client reconstructs a real local binary file.
+
 ## Scope and containment
 
 The installed runner starts one fresh MariaDB on a private Unix socket,
@@ -33,7 +36,8 @@ nonce-protected browser consent, authorization code, PKCE, signed JWT
 client assertion and downstream bearer exchange are all real requests.
 The installed Owner changes the existing typed operational settings through
 the normal settings service to prove DB overrides (3s connect, 9s request,
-96 KiB normal and 512 KiB readonly), distinct from the disposable
+96 KiB normal and 512 KiB readonly), plus 4 MiB/30 seconds for
+the optional SSH whole-file profile, distinct from the disposable
 configuration fallback. The fixed 8 MiB body bound remains enforced.
 No production account, web property, server listener, credential or SSRF
 policy is changed. Do not run on user-owned/production sites.

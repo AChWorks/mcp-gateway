@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Mcp\SshWholeFileController;
 use App\Http\Controllers\OAuth\AuthorizationServerMetadataController;
 use App\Http\Controllers\OAuth\ProtectedResourceMetadataController;
 use App\Http\Controllers\OAuth\RevocationController;
@@ -18,6 +19,14 @@ Route::post('/oauth/token', TokenController::class)->middleware([EnsureCorrelati
 Route::post('/oauth/revoke', RevocationController::class)->middleware('throttle:oauth-token');
 
 Route::match(['POST', 'DELETE', 'OPTIONS'], '/mcp', [GatewayMcpEndpoint::class, 'handle'])
+    ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
+
+// Draft #147: optional binary sidecar, protected by the SAME live OAuth and
+// principal/client/Target operation grants as the normal MCP endpoint.
+// OFF BY DEFAULT until a separately authorized protocol/security decision.
+Route::post('/mcp/file-transfer/ssh/{targetId}/upload', [SshWholeFileController::class, 'upload'])
+    ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
+Route::post('/mcp/file-transfer/ssh/{targetId}/download', [SshWholeFileController::class, 'download'])
     ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
 
 Route::match(

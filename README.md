@@ -18,6 +18,8 @@ A Target has a stable `target_id`, explicit Gateway user/client/Target access ch
 
 **Upgrade compatibility:** existing Target-era installations on v2.0.0, v2.0.1 or v2.0.2 can update to the public maintenance release **v2.0.3** without an intentional connection or authorization reset. This maintenance release does not ship the additional SSH/SFTP or Owner operational-settings code on the separate, unreleased `main` development line; publication is not installation. Earlier **Site-era v1.x → Target v2.x** upgrades are breaking: retired Site registrations, Site groups, and incompatible WordPress/ChatGPT authorizations must be reset under exact package-bound consent and an independently restorable database backup. An updater code backup is not a database backup. See [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md) and [release notes](RELEASE_NOTES.md).
 
+**Unreleased Issue #147 draft:** An opt-in, client-neutral SSH whole-file binary transfer edge is under development and is **disabled by default**. It requires a separate Owner protocol/security approval and independent review; it is not included in v2.0.3 and does not claim ChatGPT host attachment support. See [whole-file exchange contract](docs/WHOLE-FILE-EXCHANGE.md).
+
 ## Requirements
 
 MCP Gateway is intended for a conventional Linux PHP host such as aaPanel/OpenLiteSpeed or ordinary shared hosting.
