@@ -13,6 +13,8 @@ final class TargetTransitionMigrationTest extends TestCase
 {
     private const MIGRATION = '2026_10_09_000000_transition_site_domain_to_targets.php';
 
+    private const NETWORK_TIMEOUT_MIGRATION = '2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php';
+
     private bool $rebuildMariaDbTestSchema = false;
 
     protected function setUp(): void
@@ -265,7 +267,10 @@ final class TargetTransitionMigrationTest extends TestCase
     private function migrateLegacy(): void
     {
         foreach (glob(database_path('migrations/*.php')) ?: [] as $file) {
-            if (basename($file) === self::MIGRATION) {
+            // The fixture models a pre-Target database, so neither the
+            // breaking Target transition nor its later in-place refresh-
+            // intent/network-settings extension exists at this point.
+            if (in_array(basename($file), [self::MIGRATION, self::NETWORK_TIMEOUT_MIGRATION], true)) {
                 continue;
             }
             (require $file)->up();

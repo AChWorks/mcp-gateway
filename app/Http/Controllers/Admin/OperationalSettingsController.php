@@ -9,6 +9,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 final class OperationalSettingsController extends Controller
@@ -23,6 +24,12 @@ final class OperationalSettingsController extends Controller
             'defaults' => [
                 'wp_response_kib' => (int) config('bridge.http.max_response_bytes', 65536) / 1024,
                 'wp_readonly_response_kib' => (int) config('bridge.http.readonly_tool_max_response_bytes', 262144) / 1024,
+                'wp_connect_timeout_seconds' => max(1, (int) config('bridge.http.connect_timeout_seconds', 2)),
+                'wp_request_timeout_seconds' => max(
+                    1,
+                    (int) config('bridge.http.connect_timeout_seconds', 2),
+                    (int) config('bridge.http.request_timeout_seconds', 5),
+                ),
             ],
         ]);
     }
@@ -33,16 +40,40 @@ final class OperationalSettingsController extends Controller
         AdministratorPasswordConfirmation $confirmation,
     ): RedirectResponse {
         $this->requireOwner($request);
-        $validated = $request->validate([
+        $definitions = OperationalSettings::allowed();
+        $rules = [
             'version' => ['required', 'integer', 'min:0'],
-            'values' => ['required', 'array', 'size:2'],
-            'values.wp_response_kib' => ['present', 'nullable', 'integer', 'min:16', 'max:1024'],
-            'values.wp_readonly_response_kib' => ['present', 'nullable', 'integer', 'min:16', 'max:2048'],
-        ]);
+            'values' => ['required', 'array'],
+        ];
+        foreach ($definitions as $key => $definition) {
+            $rules['values.'.$key] = [
+                in_array($key, ['wp_response_kib', 'wp_readonly_response_kib'], true)
+                    ? 'present' : 'sometimes',
+                'nullable', 'integer',
+                'min:'.$definition['minimum'], 'max:'.$definition['maximum'],
+            ];
+        }
+        $validated = $request->validate($rules);
         $submitted = $validated['values'];
+        $names = array_keys((array) $request->input('values', []));
+        $all = array_keys($definitions);
+        $legacy = array_slice($all, 0, 2);
+        sort($names);
+        sort($all);
+        sort($legacy);
+        if ($names !== $all && $names !== $legacy) {
+            throw ValidationException::withMessages([
+                'values' => 'The operational settings request has an unknown or missing field.',
+            ]);
+        }
+
+        // Forms opened on the previous version still submit only the two
+        // response budgets. Preserve both timeout overrides instead of
+        // silently resetting them when an older tab is submitted.
+        $saved = $names === $legacy ? $settings->state()['overrides'] : [];
         $values = [];
-        foreach (OperationalSettings::allowed() as $key => $definition) {
-            $value = $submitted[$key] ?? null;
+        foreach ($definitions as $key => $definition) {
+            $value = array_key_exists($key, $submitted) ? $submitted[$key] : ($saved[$key] ?? null);
             $values[$key] = $value === null || $value === '' ? null : (int) $value;
         }
 
@@ -52,7 +83,7 @@ final class OperationalSettingsController extends Controller
         $settings->save($actor, $values, (int) $validated['version']);
 
         return redirect()->route('admin.operations.index')
-            ->with('status', __('Operational response limits saved. New requests use the updated budgets.'));
+            ->with('status', __('Operational settings saved. New requests use the updated limits.'));
     }
 
     private function requireOwner(Request $request): User

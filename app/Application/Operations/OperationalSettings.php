@@ -12,12 +12,18 @@ use RuntimeException;
 
 final class OperationalSettings
 {
-    // This is an allowlist, NOT a generic config/.env editor. Numeric
-    // envelopes are deliberately provisional until #153/#154 host benchmarks.
-    // The HTTP transport's 8 MiB absolute decoded-body guard still applies.
-    private const RESPONSE_LIMITS = [
+    // Single Owner-only allowlist, NOT a generic config/.env editor.
+    // Ranges are provisional pending #153/#154 measurements. The 8 MiB
+    // HTTP body guard, fixed OAuth recovery window and PHP host limits
+    // remain separate immutable boundaries.
+    private const SETTING_RANGES = [
         'wp_response_kib' => ['minimum' => 16, 'maximum' => 1024],
         'wp_readonly_response_kib' => ['minimum' => 16, 'maximum' => 2048],
+        // WordPress Bridge's one-shot 60-second refresh-token recovery window
+        // makes longer synchronous HTTP attempts unsafe to expose as a knob.
+        // This is NOT a logical operation or streaming/job timeout.
+        'wp_connect_timeout_seconds' => ['minimum' => 1, 'maximum' => 15],
+        'wp_request_timeout_seconds' => ['minimum' => 2, 'maximum' => 30],
     ];
 
     /** @var array<string, int>|null */
@@ -26,7 +32,7 @@ final class OperationalSettings
     /** @return array<string, array{minimum:int,maximum:int}> */
     public static function allowed(): array
     {
-        return self::RESPONSE_LIMITS;
+        return self::SETTING_RANGES;
     }
 
     public function responseLimitBytes(bool $readOnly): int
@@ -44,6 +50,21 @@ final class OperationalSettings
             : (int) config('bridge.http.max_response_bytes', 65536);
     }
 
+    /** @return array{connect:int,request:int} */
+    public function httpTimeoutsSeconds(): array
+    {
+        $overrides = $this->overrides();
+
+        // Existing env/config installations retain their exact normalized
+        // fallback, including before the first operational-settings migration.
+        $connect = $overrides['wp_connect_timeout_seconds']
+            ?? max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
+        $request = $overrides['wp_request_timeout_seconds']
+            ?? max(1, (int) config('bridge.http.request_timeout_seconds', 5));
+
+        return ['connect' => $connect, 'request' => max($connect, $request)];
+    }
+
     /** @return array{version:int,overrides:array<string,int>} */
     public function state(): array
     {
@@ -56,7 +77,7 @@ final class OperationalSettings
 
         return [
             'version' => (int) $record->version,
-            'overrides' => $this->decodeOverrides((string) $record->overrides),
+            'overrides' => $this->combineOverrides($record),
         ];
     }
 
@@ -67,24 +88,34 @@ final class OperationalSettings
      */
     public function save(User $actor, array $values, int $expectedVersion): void
     {
-        if (array_keys($values) !== array_keys(self::RESPONSE_LIMITS)) {
+        if (array_keys($values) !== array_keys(self::SETTING_RANGES)) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);
         }
 
         $next = [];
-        foreach (self::RESPONSE_LIMITS as $key => $range) {
+        foreach (self::SETTING_RANGES as $key => $range) {
             $value = $values[$key];
             if ($value === null) {
                 continue;
             }
             if ($value < $range['minimum'] || $value > $range['maximum']) {
                 throw ValidationException::withMessages([
-                    'values.'.$key => 'The requested response budget is outside its supported range.',
+                    'values.'.$key => 'The operational setting is outside its supported range.',
                 ]);
             }
             $next[$key] = $value;
+        }
+
+        $connect = $next['wp_connect_timeout_seconds']
+            ?? max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
+        $request = $next['wp_request_timeout_seconds']
+            ?? max(1, (int) config('bridge.http.request_timeout_seconds', 5));
+        if ($connect > $request) {
+            throw ValidationException::withMessages([
+                'values.wp_request_timeout_seconds' => 'The overall request timeout must be at least the connection timeout.',
+            ]);
         }
 
         DB::transaction(function () use ($actor, $expectedVersion, $next): void {
@@ -97,19 +128,30 @@ final class OperationalSettings
                     'version' => 'Operational settings changed. Reload the page before saving.',
                 ]);
             }
-            $old = $this->decodeOverrides((string) $record->overrides);
+            if (! property_exists($record, 'wp_connect_timeout_seconds')
+                || ! property_exists($record, 'wp_request_timeout_seconds')) {
+                throw new RuntimeException('Network settings migration is missing.');
+            }
+            $old = $this->combineOverrides($record);
             if ($old === $next) {
                 return;
             }
             $revision = (int) $record->version + 1;
             $now = now();
             DB::table('operational_settings')->where('id', 1)->update([
-                'overrides' => json_encode($next, JSON_THROW_ON_ERROR),
+                // Older released Gateways only understand the two response
+                // keys in this JSON. New timeout columns allow safe rollback
+                // without making older versions reject the settings row.
+                'overrides' => json_encode(array_intersect_key($next, array_flip([
+                    'wp_response_kib', 'wp_readonly_response_kib',
+                ])), JSON_THROW_ON_ERROR),
+                'wp_connect_timeout_seconds' => $next['wp_connect_timeout_seconds'] ?? null,
+                'wp_request_timeout_seconds' => $next['wp_request_timeout_seconds'] ?? null,
                 'version' => $revision,
                 'changed_by' => $actor->getKey(),
                 'updated_at' => $now,
             ]);
-            foreach (self::RESPONSE_LIMITS as $key => $range) {
+            foreach (self::SETTING_RANGES as $key => $range) {
                 $previous = $old[$key] ?? null;
                 $updated = $next[$key] ?? null;
                 if ($previous === $updated) {
@@ -138,7 +180,7 @@ final class OperationalSettings
             return $this->cachedOverrides;
         }
         try {
-            $row = DB::table('operational_settings')->where('id', 1)->first(['overrides']);
+            $row = DB::table('operational_settings')->where('id', 1)->first();
         } catch (QueryException $exception) {
             // Existing bare HTTP and installer pre-migration paths must still
             // use their source-config defaults. Never swallow DB connectivity
@@ -156,7 +198,30 @@ final class OperationalSettings
             throw new RuntimeException('Operational settings state is missing.');
         }
 
-        return $this->cachedOverrides = $this->decodeOverrides((string) $row->overrides);
+        return $this->cachedOverrides = $this->combineOverrides($row);
+    }
+
+    /** @return array<string,int> */
+    private function combineOverrides(object $record): array
+    {
+        $overrides = $this->decodeOverrides((string) $record->overrides);
+        foreach (['wp_connect_timeout_seconds', 'wp_request_timeout_seconds'] as $key) {
+            $value = $record->{$key} ?? null;
+            if ($value === null) {
+                continue;
+            }
+            if (! is_int($value) && (! is_string($value) || ! ctype_digit($value))) {
+                throw new RuntimeException('Operational network setting has an invalid type.');
+            }
+            $value = (int) $value;
+            if ($value < self::SETTING_RANGES[$key]['minimum']
+                || $value > self::SETTING_RANGES[$key]['maximum']) {
+                throw new RuntimeException('Operational network setting is out of range.');
+            }
+            $overrides[$key] = $value;
+        }
+
+        return $overrides;
     }
 
     /** @return array<string,int> */
@@ -172,10 +237,10 @@ final class OperationalSettings
         }
         $result = [];
         foreach ($values as $key => $value) {
-            if (! is_string($key) || ! isset(self::RESPONSE_LIMITS[$key])
+            if (! is_string($key) || ! in_array($key, ['wp_response_kib', 'wp_readonly_response_kib'], true)
                 || ! is_int($value)
-                || $value < self::RESPONSE_LIMITS[$key]['minimum']
-                || $value > self::RESPONSE_LIMITS[$key]['maximum']) {
+                || $value < self::SETTING_RANGES[$key]['minimum']
+                || $value > self::SETTING_RANGES[$key]['maximum']) {
                 throw new RuntimeException('Operational settings state contains an unsupported value.');
             }
             $result[$key] = $value;
