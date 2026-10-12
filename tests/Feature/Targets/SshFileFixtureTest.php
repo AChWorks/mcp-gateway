@@ -8,6 +8,7 @@ use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
@@ -752,7 +753,7 @@ final class SshFileFixtureTest extends TestCase
             ? $this->env('SSH_FIXTURE_PASSWORD')
             : (string) file_get_contents($this->env('SSH_FIXTURE_RSA_LOGIN_KEY'));
 
-        return app(SshTargetRegistration::class)->register(
+        $target = app(SshTargetRegistration::class)->register(
             'ssh-sftp-'.str_replace('_', '-', $method).($port !== null ? '-no-subsystem' : ''),
             'SFTP fixture', 'fixture.example.test',
             $port ?? (int) $this->env('SSH_FIXTURE_PORT_MODERN'),
@@ -760,6 +761,13 @@ final class SshFileFixtureTest extends TestCase
             trim((string) file_get_contents($this->env('SSH_FIXTURE_ED25519_HOST_PUB'))),
             $method, $secret, $method === 'password' ? null : $this->env('SSH_FIXTURE_KEY_PASSPHRASE'),
         );
+        // These transport fixtures exercise the command/SFTP data plane.
+        // A verified connection is a required test precondition; the real
+        // host-key-pinned verify workflow is exercised separately and in
+        // installed-mixed E2E. Never relax the production runtime gate.
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+
+        return $target;
     }
 
     private function owner(): User
