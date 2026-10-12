@@ -199,6 +199,10 @@ try {
     // Installed Owner override is 4096 KiB: send ACTUAL bytes above it.
     $bad = $send($ownerToken, $notFoundPath, str_repeat('A', 4096 * 1024 + 1));
     $check($bad->getStatusCode() === 413, 'actual over-budget binary upload not rejected');
+    $limit = json_decode((string) $bad->getBody(), true);
+    $check(($limit['error']['limit_bytes'] ?? null) === 4096 * 1024
+        && ($limit['error']['limiting_layer'] ?? null) === 'gateway.ssh.file_transfer',
+        'Owner-selected effective byte budget was not reported safely');
 
     echo json_encode([
         'outcome' => 'PASS',

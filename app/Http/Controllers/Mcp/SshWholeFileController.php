@@ -254,11 +254,25 @@ final class SshWholeFileController extends Controller
 
     private function failure(string $code): Response
     {
+        if ($code === 'file_too_large') {
+            // Returned only AFTER successful authorization for an exact Target.
+            return response()->json([
+                'ok' => false,
+                'error' => [
+                    'code' => $code,
+                    'message' => 'The file exceeds the authorized SSH transfer profile.',
+                    'limiting_layer' => 'gateway.ssh.file_transfer',
+                    'limit_bytes' => $this->files->limits()['max_bytes'],
+                ],
+            ], 413, $this->headers());
+        }
+
         return $this->fail($code, match ($code) {
             'target_not_found' => 404,
             'invalid_input', 'input_changed' => 422,
-            'file_too_large' => 413,
-            'source_changed', 'file_exists', 'staging_not_private' => 409,
+            'source_changed', 'file_exists', 'staging_not_private', 'connection_busy' => 409,
+            'rate_limited' => 429,
+            'admission_unavailable' => 503,
             'transfer_timed_out' => 504,
             default => 502,
         });
@@ -269,7 +283,7 @@ final class SshWholeFileController extends Controller
         return response()->json([
             'ok' => false,
             'error' => ['code' => $code, 'message' => 'File exchange could not be completed safely.'],
-        ], $status, $this->headers());
+        ], $status, [...$this->headers(), ...($status === 429 ? ['Retry-After' => '60'] : [])]);
     }
 
     /** @return array<string,string> */

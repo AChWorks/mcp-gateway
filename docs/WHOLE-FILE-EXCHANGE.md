@@ -141,6 +141,8 @@ finite deadline must discard the partial local download.
 | Expected remote SHA/version changes; file already exists; unsafe private staging | HTTP 409; inspect Target and re-evaluate before another mutation |
 | SFTP/remote mutation became uncertain after dispatch | HTTP 409 `outcome_unknown`, `possible_remote_effect=true`, `retry_safe=false` and `temporary_cleanup_confirmed` when known; **never auto-retry** |
 | SFTP or HTTP request exhausted finite budget | Timeout/bounded error; inspect remote effects after a write before retry |
+| Existing per-Target SFTP admission reached | HTTP 429 `rate_limited`, `Retry-After: 60`; back off instead of retrying immediately |
+| Concurrent same-Target SFTP operation or unavailable admission backend | HTTP 409 `connection_busy` or HTTP 503 `admission_unavailable`; inspect/retry within a finite budget |
 | Download interrupted *after* HTTP 200 begins | Client detects incomplete body/digest; discards local spool; no server-side persistent resumable handle |
 
 Application activity records capture sanitized operation, Target, outcome
