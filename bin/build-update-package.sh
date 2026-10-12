@@ -23,7 +23,7 @@ done
 
 version="$(tr -d '[:space:]' < "$repo_root/VERSION")"
 source_version="$(tr -d '[:space:]' < "$runtime_tree/VERSION")"
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Repository VERSION is invalid: $version" >&2; exit 1; }
+bash "$repo_root/bin/validate-version.sh" package "$version"
 [[ "$source_version" == "$version" ]] || { echo "Runtime tree VERSION ($source_version) does not match repository VERSION ($version)." >&2; exit 1; }
 
 stage="$dist_dir/.$package-stage"

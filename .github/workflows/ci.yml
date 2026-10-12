@@ -59,6 +59,10 @@ jobs:
       - name: Validate Composer metadata
         run: composer validate --strict
 
+      - name: Validate immutable prerelease and public version policy
+        shell: bash
+        run: bash bin/test-version-policy.sh
+
       - name: Validate release-note identity and rendered GitHub body
         shell: bash
         run: bash bin/test-github-release-notes.sh

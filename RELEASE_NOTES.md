@@ -1,6 +1,11 @@
-# MCP Gateway v2.1.1
+# MCP Gateway v2.1.2
 
-**Candidate release notes — unpublished until separately authorized.** This is the first proposed combined WordPress + Direct SSH public release after the corrective maintenance v2.0.3. An earlier **unpublished 2.1.0 test candidate** was already installed by operators. The corrected candidate is now **2.1.1** so its existing secure browser updater accepts a strictly newer target; there is no publicly published v2.1.0 release. These notes describe candidate functionality; merging source or passing CI does not mean a public release, installed host or production has been changed.
+**Planned stable release notes — not publicly published.** Candidate builds now carry distinct
+SemVer prerelease identities (starting at **2.1.2-rc.1**) and the eventual public
+stable release will use **2.1.2** only after separate Owner authorization. Earlier
+**2.1.0** and **2.1.1** test candidates were installed by operators, but neither
+number was published as a stable Release. The updater must continue to reject
+same-version and downgrade attempts. These notes describe candidate functionality; merging source or passing CI does not mean a public release, installed host or production has been changed.
 
 ## Changes since v2.0.3
 
@@ -13,7 +18,9 @@
 
 ## Safe upgrade and release gate
 
-Use the **matching update ZIP**, not the fresh-install ZIP, over an existing v2.0.3 Target-era installation **or a previously installed 2.1.0 test candidate**. The update must have a strictly newer VERSION; do not edit installed VERSION or suppress same-version/downgrade rejection. Verify its matching SHA-256 first, preserve a consistent independently restorable database backup plus protected .env/APP_KEY/OAuth and Bridge signing keys, then run the authenticated browser updater and verify Target/client/grant persistence. Never replay an ambiguous migration; preserve rollback or roll-forward evidence. Additional migrations require restoration rehearsals, not assumed DDL reversibility. Earlier v1.x Site-era baselines retain their explicit consent/reset requirements.
+Use the **matching update ZIP**, not the fresh-install ZIP, over an existing v2.0.3 Target-era installation **or a previously installed 2.1.0/2.1.1 test candidate**.
+Prereleases advance monotonically: `2.1.1 -> 2.1.2-rc.1 -> 2.1.2-rc.2 -> 2.1.2`.
+Each `-rc.N` package is a separate test artifact and is never itself a public Release. The update must have a strictly newer VERSION; do not edit installed VERSION or suppress same-version/downgrade rejection. Verify its matching SHA-256 first, preserve a consistent independently restorable database backup plus protected .env/APP_KEY/OAuth and Bridge signing keys, then run the authenticated browser updater and verify Target/client/grant persistence. Never replay an ambiguous migration; preserve rollback or roll-forward evidence. Additional migrations require restoration rehearsals, not assumed DDL reversibility. Earlier v1.x Site-era baselines retain their explicit consent/reset requirements.
 
 Publication is **manual only** after explicit Owner approval of the exact integrated commit and version; a PR merge or VERSION edit does not itself publish. Existing published v2.0.3 remains the default operator Release until that event. Real deployment, upstream production-host limits, native ChatGPT attachment receipt, WordPress full-object raw binary, durable SSH resume and Agent integration remain outside candidate claims.
 

@@ -13,11 +13,20 @@ VERSION, and release action.
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
   either branch, force-merge a divergent release tag, or copy VERSION alone.
-- Candidate VERSION **2.1.1** is the prospective first combined WordPress+SSH
-  public release, after v2.0.3. A **2.1.0 unpublished test candidate** was
-  previously distributed and installed; strict update ordering means a changed
-  candidate must be newer than it. No public v2.1.0 Release is presumed. The
-  release notes retain the exact v2.0.3 historical section before v2.0.2.
+- Candidate VERSION **2.1.2-rc.1** is a distinct **unpublished prerelease
+  identity**, strictly newer than previous deployed test candidates 2.1.0 and
+  2.1.1. Planned public stable is **2.1.2**, never assigned to a test candidate.
+  Later test rounds must increase `-rc.N` rather than reuse a deployed VERSION.
+  PHP `version_compare` maintains the order `2.1.1 < 2.1.2-rc.1 <
+  2.1.2-rc.2 < 2.1.2`. Candidate artifact generation validates this identity;
+  manual public Release dispatch still rejects prerelease versions. CI
+  also compares the intended candidate identity against every currently retained
+  GitHub Actions artifact and rejects any same `-rc.N` used by a different
+  PR HEAD; GitHub expires test artifacts, so owners must still never recycle
+  older prerelease numbers after artifact retention ends. Promotion
+  to stable requires changing VERSION to 2.1.2, completing exact-stable-source
+  gates, independent review and a separate Owner publication authorization.
+  The notes retain exact public v2.0.3 history before v2.0.2.
 - Verified at branch creation: the active updater, updater browser index,
   update regression scripts, and release-note renderer match v2.0.3 byte for
   byte; the WordPress connection/transport paths on main contain subsequent
@@ -87,20 +96,20 @@ bash bin/test-update-package.sh /path/to/candidate-update.zip /path/to/mcp-gatew
 bash bin/test-update-backup-integrity.sh /path/to/candidate-update.zip /path/to/mcp-gateway-v2.0.3.zip
 ```
 
-For operators who already installed a 2.1.0 candidate, the 2.1.1 update
-package must additionally pass the same authenticated browser-update test
-against the **unaltered exact 2.1.0 candidate fresh-install ZIP** from the
-previous reviewed GitHub Actions run (verify its original checksum, provenance
+For operators who already installed a 2.1.0 or 2.1.1 candidate, the
+2.1.2-rc.1 update package must additionally pass the same authenticated
+browser-update test against a **verified unaltered candidate fresh-install ZIP**
+from each earlier installed GitHub Actions run (verify its original checksum, provenance
 and hash). The credential/Target/grant preservation assertions must run for
 both the published 2.0.x Target-era baselines and the distributed 2.1.0
-candidate. The updater intentionally rejects same-version/downgrade attempts:
+and 2.1.1 candidates. The updater intentionally rejects same-version/downgrade attempts:
 **never** edit an installed VERSION, bypass that comparison, rename a ZIP to
 pretend it is newer, or overwrite production files with a fresh-install ZIP.
 If a 2.1.0 -> 2.1.0 attempt was rejected during preflight, it must not be
-treated as a completed upgrade or replayed. Before attempting 2.1.1, confirm
+treated as a completed upgrade or replayed. Before attempting a new candidate, confirm
 that no earlier update is staged/in progress and make a separately restorable
 DB/config/key backup. Replace only the rejected *temporary updater staging*
-with the new 2.1.1 update ZIP, following updater status/recovery instructions
+with the newer prerelease update ZIP, following updater status/recovery instructions
 if any state exists.
 
 These run the real authenticated browser-update workflow, preserve

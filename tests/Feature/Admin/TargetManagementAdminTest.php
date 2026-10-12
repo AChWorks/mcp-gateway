@@ -103,6 +103,8 @@ final class TargetManagementAdminTest extends TestCase
             self::assertSame($wpDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="wp_ai_bridge"][@disabled])'));
             self::assertSame($sshDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="ssh_direct"][@disabled])'));
             self::assertStringContainsString('How to obtain and verify the server host key', $html);
+            self::assertStringContainsString('ssh_host_rsa_key.pub', $html);
+            self::assertStringContainsString('ssh_host_ed25519_key.pub', $html);
         }
     }
 

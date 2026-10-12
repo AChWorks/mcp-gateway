@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       approved_version:
-        description: 'Approved VERSION (e.g. 2.1.1)'
+        description: 'Approved stable VERSION (e.g. 2.1.2)'
         required: true
         type: string
 
@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$APPROVED_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'Invalid approved SHA.' >&2; exit 1; }
-          [[ "$APPROVED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid approved VERSION.' >&2; exit 1; }
+          bash bin/validate-version.sh release "$APPROVED_VERSION"
           [[ "$GITHUB_REF" == 'refs/heads/main' && "$GITHUB_SHA" == "$APPROVED_SHA" ]] || {
             echo 'Publication must run on the exact Owner-approved main HEAD.' >&2; exit 1;
           }
@@ -87,10 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "VERSION must contain a semantic version such as 1.1.5" >&2
-            exit 1
-          fi
+          bash bin/validate-version.sh release "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "package=mcp-gateway-v$version" >> "$GITHUB_OUTPUT"

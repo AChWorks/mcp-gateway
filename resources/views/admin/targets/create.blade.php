@@ -104,10 +104,14 @@
                 </div>
                 <details class="target-help-details">
                     <summary>{{ __('How to obtain and verify the server host key') }}</summary>
-                    <p class="field-help">{{ __('From an independently trusted server console, copy the first two fields of the server public host key (never the private host key).') }}</p>
+                    <p class="field-help">{{ __('From an independently trusted server console, inspect which PUBLIC host-key files actually exist:') }}</p>
+                    <code>ls -l /etc/ssh/ssh_host_*_key.pub</code>
+                    <p class="field-help">{{ __('If an Ed25519 public host key exists, use its first two fields:') }}</p>
                     <code>sudo awk '{print $1, $2}' /etc/ssh/ssh_host_ed25519_key.pub</code>
-                    <p class="field-help">{{ __('Compare its SHA256 fingerprint using the same trusted channel:') }}</p>
-                    <code>sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256</code>
+                    <p class="field-help">{{ __('Otherwise, an existing RSA public host key is also supported (do not use DSA):') }}</p>
+                    <code>sudo awk '{print $1, $2}' /etc/ssh/ssh_host_rsa_key.pub</code>
+                    <p class="field-help">{{ __('Compare the matching SHA256 fingerprint using the same trusted channel (substitute the actual existing file):') }}</p>
+                    <code>sudo ssh-keygen -lf /etc/ssh/ssh_host_rsa_key.pub -E sha256</code>
                     <div class="target-fingerprint-tools">
                         <button class="button button-secondary" type="button" id="show_host_fingerprint">{{ __('Preview pasted key fingerprint') }}</button>
                         <output id="host_fingerprint" role="status" aria-live="polite"></output>
