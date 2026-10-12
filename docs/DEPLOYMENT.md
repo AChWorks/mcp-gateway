@@ -474,36 +474,78 @@ V1 production-like readiness evidence was completed under Issue #8 and is preser
 
 ## Owner operational settings — integrated source; release/installation pending (#153)
 
-After the operational-settings migration and an independently accepted public
-release/update, the Owner-only /admin/operations page can edit and reset two
-finite downstream WordPress response budgets without changing the environment,
-code or PHP-FPM processes. Each write requires Owner authentication, the current
-password, CSRF protection and a version match; a DB transaction writes each
-changed non-secret key, old/new numeric values, actor ID and time to a dedicated
-audit table. Blank fields restore the exact existing env/config defaults.
+After the operational-settings migrations and a separately authorized
+release/update, the Owner-only `/admin/operations` page can edit **four finite
+WordPress downstream resource settings** without editing `.env` or restarting
+PHP workers. Current default values remain the original environment/source
+settings. Leaving a value empty removes its override and restores the
+normalized source setting in the next request/CLI maintenance invocation.
 
-| Budget | Original fallback | Provisional Owner override |
+| Operational setting | Default source setting | Owner override range |
 | --- | --- | --- |
-| Ordinary, OAuth and potentially mutating HTTP responses | BRIDGE_REMOTE_MAX_RESPONSE_BYTES, 64 KiB | 16–1024 KiB |
-| Authenticated confirmed readonly WordPress MCP result | BRIDGE_REMOTE_READONLY_TOOL_MAX_RESPONSE_BYTES, 256 KiB | 16–2048 KiB |
+| Ordinary, OAuth, metadata, mutating response | `BRIDGE_REMOTE_MAX_RESPONSE_BYTES` (64 KiB) | 16–1024 KiB |
+| Confirmed read-only WP MCP response | `BRIDGE_REMOTE_READONLY_TOOL_MAX_RESPONSE_BYTES` (256 KiB) | 16–2048 KiB |
+| WordPress HTTPS connection timeout | `BRIDGE_REMOTE_CONNECT_TIMEOUT_SECONDS` (2 s) | 1–15 seconds |
+| WordPress HTTPS total request timeout | `BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS` (5 s) | 2–30 seconds |
 
-These values bound the decoded downstream HTTP response including its JSON-RPC
-envelope; they are NOT full-file or client-upload maxima. The separate absolute
-8 MiB decoded-response ceiling, real Target/client authorization, no blind
-mutation replay, SSRF/host identity policy, and OAuth provider timing contracts
-remain independent security safeguards. Ranges are deliberately provisional,
-NOT measured optimal host profiles: see #153 for benchmarking, #154 for
-Bridge-vNext and actual client/WordPress/SSH effective-limit compatibility.
+The connect timeout cannot exceed the total request timeout. The total request
+deadline is shared by DNS A+AAAA validation and pinned HTTPS dispatch; it is
+not a file/object size, overall logical job lifetime, or PHP/CDN/LSAPI worker
+timeout. Both finite timeout overrides affect the same shared outbound HTTP
+client used by WordPress metadata, OAuth and MCP Ability requests. The
+independent 8 MiB decoded-response ceiling, fail-closed origin/IP policy,
+no blind mutation replay, and provider-owned refresh/recovery timing remain
+non-overridable. Ranges are provisional safety bounds, **not** measured
+optimal settings for an actual host; #153 owns measurements and #154 owns
+effective limits across client/proxy/WordPress/SSH layers.
 
-Each new PHP request or new Artisan maintenance command reads persistent
-overrides. With no override, original environment/config behavior is unchanged,
-including existing non-KiB-aligned defaults; a pre-migration bare HTTP path
-also retains that fallback. The Admin UI requires the new migration. Do not
-represent this source-only functionality as released/installed until separately
-approved exact-version upgrade/rollback and real-host validation.
+A first *possibly sent* rotating WordPress refresh creates an immutable
+request-timeout snapshot in `wp_ai_bridge_refresh_intents` before network
+I/O. The single-use retry fence, CLI maintenance wait and manual revocation
+settle period use that original timeout, **not a subsequent Owner setting**.
+An older pre-migration intent with a NULL timeout snapshot preserves at
+least **max(source connect timeout, source request timeout, current effective
+request timeout)**. Before this migration, the transport's actual source
+request deadline was max(connect, request), even when the environment's
+connect value exceeded request. New Owner overrides must not hide that older
+connect contribution. Keep the legacy source timeout environment stable while
+unresolved pre-upgrade refreshes exist; if the historical environment is no
+longer known, reconcile the unknown refresh with the provider rather than
+assuming a new lower timeout is a safe replay fence. This prevents increasing
+or decreasing Admin settings from reopening a spent provider recovery window
+or overlapping a prior in-flight request. This implementation does not modify
+the provider's 60-second one-shot window, Gateway's 45-second admission
+boundary, or credential identity/expiry/revocation rules.
 
-Connection timeout knobs remain outside this first slice. The WordPress
-refresh/recovery fix in PR #152 is integrated in source, but an editable
-connect/request timeout pair must feed both outbound HTTP and the OAuth
-recovery settle/deadline logic coherently. Measure and validate that
-combined policy under #153; changing HTTP timeout alone would be unsafe.
+The existing persisted single-row `operational_settings` version prevents
+stale Owner forms from overwriting a concurrent edit. The current password,
+CSRF, Owner role and enabled-account checks remain mandatory; a transaction
+audits changed numeric values, actor, version and timestamp. Legacy Owner
+browser tabs that submit the original two response keys preserve the new
+network overrides. **Downgrade compatibility:** timeout overrides live in
+two nullable columns of the same `operational_settings` row, not inside the
+legacy JSON response-budget map. Older application code ignores the new
+columns and continues reading valid response budgets. This is one settings
+subsystem, not an independent second registry.
+
+Upgrading applies the small additive migration
+`2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php`;
+existing Target credentials, grants, refreshing intents, values and audit
+history are preserved. Before deploying a different release, verify its
+declared migrations and normal backup/recovery procedures. Rolling code back
+does not roll an in-flight remote refresh back, nor does dropping a snapshot
+column prove successful revocation. Finish/resolve pending uncertain refreshes
+before a manual schema rollback; retain encrypted credentials and recovery
+fences rather than forcing a replay. The migration's `down()` deliberately
+**rejects rollback if any refresh intent still holds a timeout snapshot**.
+This is a fail-closed schema gate, not a replacement for a safe code rollout:
+**do not start a downgraded PHP binary while any such uncertain refresh may
+still be in flight.** Keep Gateway in maintenance, check/reconcile or wait for
+the provider window to expire (without blind replay), verify the intent state,
+then roll back the schema/code in a controlled sequence. Old PHP cannot enforce
+these newer per-intent fences on its own.
+
+Do not represent this source-only functionality as publicly installed or
+host-verified until a reviewed version, approved deployment and actual
+PHP-FPM/CLI/cron/WordPress Bridge checks establish that. #147 remains the
+owner of client-visible bidirectional file bytes; #111 Agent is paused.
