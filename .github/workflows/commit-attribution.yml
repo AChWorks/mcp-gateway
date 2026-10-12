@@ -1,0 +1,46 @@
+name: Commit Attribution
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commit-attribution-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-commit-attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out full repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reject unexpected identities in new commits
+        shell: bash
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == 'pull_request' ]]; then
+            bash bin/check-commit-attribution.sh "$PR_BASE" "$PR_HEAD"
+          elif [[ "$EVENT_NAME" == 'push' ]]; then
+            bash bin/check-commit-attribution.sh "$PUSH_BEFORE" "$GITHUB_SHA"
+          else
+            echo 'Unexpected event type.' >&2
+            exit 2
+          fi
+
+      - name: Verify attribution guard with isolated Git fixtures
+        shell: bash
+        run: bash tests/Support/test-commit-attribution.sh
