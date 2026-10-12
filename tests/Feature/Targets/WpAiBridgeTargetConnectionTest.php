@@ -24,6 +24,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -959,6 +960,33 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(12, $service->refreshRecoveryMinimumAge($legacy));
         $corrupt = (object) ['request_timeout_seconds' => 0];
         self::assertGreaterThanOrEqual(45, $service->refreshRecoveryMinimumAge($corrupt));
+    }
+
+    public function test_rollback_refuses_to_discard_unresolved_original_http_timeout_snapshot(): void
+    {
+        $alpha = $this->target('alpha');
+        $this->pair($alpha);
+        $this->expire($alpha);
+        $this->failRefresh = true;
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->accessToken($alpha);
+            self::fail('Lost refresh response must be ambiguous.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_ambiguous', $exception->reason);
+        }
+        self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertNotNull(DB::table('wp_ai_bridge_refresh_intents')->value('request_timeout_seconds'));
+        $migration = require database_path('migrations/2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php');
+        try {
+            $migration->down();
+            self::fail('Schema rollback must not discard an unresolved possibly sent refresh timeout fence.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('snapshotted refresh intents remain unresolved', $exception->getMessage());
+        }
+        self::assertTrue(Schema::hasColumn('wp_ai_bridge_refresh_intents', 'request_timeout_seconds'));
+        self::assertTrue(Schema::hasColumn('operational_settings', 'wp_request_timeout_seconds'));
+        self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(1, $this->refreshCalls);
     }
 
     public function test_lost_refresh_response_fences_disconnect_and_supports_only_one_bounded_recovery(): void

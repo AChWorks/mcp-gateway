@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -24,6 +25,16 @@ return new class extends Migration
 
     public function down(): void
     {
+        // Older PHP code has no knowledge of the frozen timeout snapshot and
+        // could retry a still-in-flight rotating token using a shorter .env
+        // timeout. Fail BEFORE dropping any column rather than erase its only
+        // replay fence. The operator must reconcile unknown outcomes first.
+        if (DB::table('wp_ai_bridge_refresh_intents')->whereNotNull('request_timeout_seconds')->exists()) {
+            throw new RuntimeException(
+                'Cannot roll back WordPress network timeout migration while snapshotted refresh intents remain unresolved.',
+            );
+        }
+
         Schema::table('wp_ai_bridge_refresh_intents', static function (Blueprint $table): void {
             $table->dropColumn('request_timeout_seconds');
         });
