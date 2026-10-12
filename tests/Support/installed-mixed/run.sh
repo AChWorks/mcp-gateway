@@ -106,6 +106,8 @@ if [[ "${1:-}" == inside ]]; then
     php tests/Support/installed-mixed/seed.php report >"$MIXED_EVIDENCE/report.json"
   runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/client.php" positive >"$MIXED_EVIDENCE/client.json"
+  runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+    php "$ROOT/client/file-client.php" >"$MIXED_EVIDENCE/file-client.json"
   runuser -u aiworker -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php tests/Support/installed-mixed/seed.php disable
   runuser -u aiworker -- env MIXED_ROOT="$ROOT" \
@@ -224,6 +226,7 @@ unzip -q "$WP_BRIDGE_ARCHIVE" -d "$ROOT/wp/wp-content/plugins"
 unzip -q "$WP_ADAPTER_ARCHIVE" -d "$ROOT/wp/wp-content/plugins"
 cp "$WP_CLI" "$ROOT/wp-cli.phar"
 cp "$ROOT/gateway/tests/Support/installed-mixed/client.php" "$ROOT/client/"
+cp "$ROOT/gateway/tests/Support/installed-mixed/file-client.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/dynamic-ability.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/FixtureClientProfiles.php" "$ROOT/gateway/app/Providers/"
 cat > "$ROOT/gateway/bootstrap/providers.php" <<'EOF_PROVIDERS'
@@ -257,6 +260,7 @@ openssl rand -hex 16 >"$ROOT/secrets/wp-password"
 chmod 600 "$ROOT/secrets/"*
 useradd -m -s /bin/bash "$MIXED_SSH_USER"
 CREATED_USER=1
+runuser -u "$MIXED_SSH_USER" -- mkdir -m 0700 "/home/$MIXED_SSH_USER/.gateway-transfer-private"
 printf '%s:%s\n' "$MIXED_SSH_USER" "$(cat "$ROOT/secrets/ssh-password")" | chpasswd
 cat > "$ROOT/secrets/sshd.conf" <<EOF_SSHD
 Port 46231
@@ -330,6 +334,9 @@ SESSION_SECURE_COOKIE=true
 CACHE_STORE=file
 QUEUE_CONNECTION=sync
 MCP_BOOTSTRAP_FIXTURE_ENABLED=false
+SSH_FILE_TRANSFER_ENABLED=true
+SSH_FILE_TRANSFER_MAX_BYTES=8388608
+SSH_FILE_TRANSFER_MAX_SECONDS=30
 MIXED_ACCEPTANCE_JWKS=$ROOT/secrets/client-jwks.json
 BRIDGE_REMOTE_CONNECT_TIMEOUT_SECONDS=2
 BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS=6
