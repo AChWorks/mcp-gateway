@@ -22,6 +22,11 @@
             <span>{{ __('Include this target in the group') }}</span>
         </label>
         <p class="field-help">{{ __('For selected-scope users, group membership can make this target reachable. A direct target deny still blocks it.') }}</p>
+        <label class="checkbox-option" for="confirm_ssh_group_changes">
+            <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1">
+            <span>{{ __('Confirm SSH Target group membership changes. Adding this SSH Target may enable an already approved capability; removing it may lift this group’s SSH denials when other Target memberships remain.') }}</span>
+        </label>
+        @error('confirm_ssh_group_changes')<p class="form-error" role="alert">{{ $message }}</p>@enderror
 
         <div class="field">
             <label for="current_password">{{ __('Your current password') }}</label>

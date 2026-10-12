@@ -58,10 +58,15 @@
     <section class="panel panel-danger" aria-labelledby="delete-target-group-title">
         <div class="eyebrow">{{ __('Danger zone') }}</div>
         <h2 id="delete-target-group-title">{{ __('Delete target group') }}</h2>
-        <p>{{ __('Deleting this group removes only its group memberships and group denials. Users, targets, and direct per-target rules remain intact.') }}</p>
+        <p>{{ __('Deleting this group removes only its group memberships and group denials. Users, targets, and direct per-target rules remain intact. Removing SSH group denials can restore previously authorized SSH commands and file access through other memberships.') }}</p>
         <form class="form-stack" method="post" action="{{ route('admin.target-groups.destroy', ['targetGroup' => $targetGroup->id]) }}">
             @csrf
             @method('DELETE')
+            <label class="checkbox-option" for="confirm_ssh_group_delete">
+                <input type="checkbox" id="confirm_ssh_group_delete" name="confirm_ssh_group_changes" value="1">
+                <span>{{ __('I confirm that deleting this group may remove SSH Target reachability or lift SSH denials for other already-authorized memberships.') }}</span>
+            </label>
+            @error('confirm_ssh_group_changes')<p class="form-error" role="alert">{{ $message }}</p>@enderror
             <div class="field">
                 <label for="delete_current_password">{{ __('Your current password') }}</label>
                 <input id="delete_current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password">

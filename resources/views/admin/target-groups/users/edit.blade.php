@@ -25,6 +25,11 @@
                 <span>{{ __('Assign this user to the group') }}</span>
             </label>
             <p class="field-help">{{ __('The group can add selected-target reachability and can narrow target capabilities, but can never grant a permission missing from the user role or global permission ceiling.') }}</p>
+            <label class="checkbox-option" for="confirm_ssh_group_changes">
+                <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1">
+                <span>{{ __('Confirm SSH membership changes. Adding a user may enable already-approved SSH capabilities on this group’s Targets; removing a user may lift a group SSH denial if another group still supplies reachability.') }}</span>
+            </label>
+            @error('confirm_ssh_group_changes')<p class="form-error" role="alert">{{ $message }}</p>@enderror
             @error('assigned')<p class="field-error">{{ $message }}</p>@enderror
 
             <div class="field">

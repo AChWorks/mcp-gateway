@@ -7,6 +7,7 @@ use App\Application\Access\TargetGroupManager;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\TargetGroup;
 use App\Http\Controllers\Controller;
+use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -83,11 +84,16 @@ final class TargetGroupController extends Controller
             $request, $this->deniedPermissions($validated), $groups->permissionDenials($targetGroup),
         );
 
-        $groups->update(
-            $targetGroup,
-            (string) $validated['name'],
-            $this->deniedPermissions($validated),
-        );
+        try {
+            $groups->update(
+                $targetGroup,
+                (string) $validated['name'],
+                $this->deniedPermissions($validated),
+                $request->boolean('confirm_ssh_group_changes'),
+            );
+        } catch (DomainException $exception) {
+            $this->rethrowUnconfirmedSsh($exception);
+        }
 
         return redirect()
             ->route('admin.target-groups.edit', ['targetGroup' => $targetGroup->id])
@@ -102,11 +108,29 @@ final class TargetGroupController extends Controller
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::UsersManage->value);
         $confirmation->confirm($request);
-        $groups->delete($targetGroup);
+        try {
+            $groups->delete($targetGroup, $request->boolean('confirm_ssh_group_changes'));
+        } catch (DomainException $exception) {
+            $this->rethrowUnconfirmedSsh($exception);
+        }
 
         return redirect()
             ->route('admin.target-groups.index')
             ->with('status', __('Target group deleted. Direct user/target rules were preserved.'));
+    }
+
+    /** Translate service-level, transaction-fenced acknowledgement into a form error. */
+    private function rethrowUnconfirmedSsh(DomainException $exception): never
+    {
+        if ($exception->getMessage() === 'ssh_confirmation_required') {
+            throw ValidationException::withMessages([
+                'confirm_ssh_group_changes' => __(
+                    'Explicitly confirm SSH group changes. Deleting a group or changing its restrictions can expand previously authorized SSH access.',
+                ),
+            ]);
+        }
+
+        throw $exception;
     }
 
     /**

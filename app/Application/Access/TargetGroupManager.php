@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Support\CorrelationId;
 use DomainException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 
 final readonly class TargetGroupManager
 {
@@ -29,10 +30,15 @@ final readonly class TargetGroupManager
     }
 
     /** @param list<string> $deniedPermissions */
-    public function update(TargetGroup $group, string $name, array $deniedPermissions): TargetGroup
+    public function update(TargetGroup $group, string $name, array $deniedPermissions, bool $sshReviewed = false): TargetGroup
     {
-        DB::transaction(function () use ($group, $name, $deniedPermissions): void {
+        DB::transaction(function () use ($group, $name, $deniedPermissions, $sshReviewed): void {
             $locked = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
+            // Re-evaluate after locking: an old form cannot silently remove a
+            // newly-added SSH denial between HTTP preflight and DB mutation.
+            $requestedSsh = $this->sshDenials($deniedPermissions);
+            $currentSsh = $this->sshDenials($this->permissionDenials($locked));
+            $this->requireSshReview($requestedSsh !== $currentSsh, $sshReviewed);
             $locked->fill(['name' => trim($name)])->save();
             $this->replacePermissionDenials($locked, $deniedPermissions);
             $this->recordRequired('target-group-update:'.$locked->id);
@@ -41,25 +47,32 @@ final readonly class TargetGroupManager
         return $group->refresh();
     }
 
-    public function delete(TargetGroup $group): void
+    public function delete(TargetGroup $group, bool $sshReviewed = false): void
     {
-        DB::transaction(function () use ($group): void {
+        DB::transaction(function () use ($group, $sshReviewed): void {
             $locked = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
+            // Deleting a group can drop its SSH denial while an overlapping
+            // group/direct rule still supplies positive Target reachability.
+            $this->requireSshReview($this->hasSshTargets($locked) || $this->hasSshDenials($locked), $sshReviewed);
             $groupId = (string) $locked->id;
             $locked->delete();
             $this->recordRequired('target-group-delete:'.$groupId);
         });
     }
 
-    public function updateTargetMembership(TargetGroup $group, Target $target, bool $assigned): void
+    public function updateTargetMembership(TargetGroup $group, Target $target, bool $assigned, bool $sshReviewed = false): void
     {
-        DB::transaction(function () use ($group, $target, $assigned): void {
+        DB::transaction(function () use ($group, $target, $assigned, $sshReviewed): void {
             $lockedGroup = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
             $lockedTarget = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
             $identity = [
                 'target_group_id' => $lockedGroup->getKey(),
                 'target_record_id' => $lockedTarget->getKey(),
             ];
+            if (DB::table('target_group_targets')->where($identity)->exists() === $assigned) {
+                return; // No-op: no change to authorization and no audit mutation.
+            }
+            $this->requireSshReview((string) $lockedTarget->connector_type === 'ssh_direct', $sshReviewed);
 
             if ($assigned) {
                 DB::table('target_group_targets')->updateOrInsert(
@@ -77,9 +90,9 @@ final readonly class TargetGroupManager
         });
     }
 
-    public function updateUserAssignment(TargetGroup $group, User $user, bool $assigned): void
+    public function updateUserAssignment(TargetGroup $group, User $user, bool $assigned, bool $sshReviewed = false): void
     {
-        DB::transaction(function () use ($group, $user, $assigned): void {
+        DB::transaction(function () use ($group, $user, $assigned, $sshReviewed): void {
             $lockedGroup = TargetGroup::query()->whereKey($group->getKey())->lockForUpdate()->firstOrFail();
             $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
 
@@ -91,6 +104,12 @@ final readonly class TargetGroupManager
                 'target_group_id' => $lockedGroup->getKey(),
                 'user_id' => $lockedUser->getKey(),
             ];
+            if (DB::table('target_group_users')->where($identity)->exists() === $assigned) {
+                return;
+            }
+            $this->requireSshReview(
+                $this->hasSshTargets($lockedGroup) || $this->hasSshDenials($lockedGroup), $sshReviewed,
+            );
 
             if ($assigned) {
                 DB::table('target_group_users')->updateOrInsert(
@@ -192,6 +211,49 @@ final readonly class TargetGroupManager
             ->where('target_group_id', $group->getKey())
             ->where('user_id', $user->getKey())
             ->exists();
+    }
+
+    /** @param list<string> $denials
+     * @return list<string>
+     */
+    private function sshDenials(array $denials): array
+    {
+        $ssh = array_values(array_unique(array_filter(
+            $denials, static fn (string $value): bool => str_starts_with($value, 'ssh.'),
+        )));
+        sort($ssh);
+
+        return $ssh;
+    }
+
+    private function hasSshTargets(TargetGroup $group): bool
+    {
+        return DB::table('target_group_targets')
+            ->join('targets', 'targets.id', '=', 'target_group_targets.target_record_id')
+            ->where('target_group_targets.target_group_id', $group->getKey())
+            ->where('targets.connector_type', 'ssh_direct')
+            ->exists();
+    }
+
+    private function hasSshDenials(TargetGroup $group): bool
+    {
+        return DB::table('target_group_permission_denials')
+            ->where('target_group_id', $group->getKey())
+            ->where('permission', 'like', 'ssh.%')
+            ->exists();
+    }
+
+    private function requireSshReview(bool $sshImpact, bool $reviewed): void
+    {
+        if (! $sshImpact) {
+            return;
+        }
+        // Check authority AND explicit acknowledgement under the same group
+        // row lock as the mutation, never against a stale edit-page snapshot.
+        Gate::authorize(GatewayPermission::SecurityManage->value);
+        if (! $reviewed) {
+            throw new DomainException('ssh_confirmation_required');
+        }
     }
 
     /** @param list<string> $values */

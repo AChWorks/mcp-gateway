@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 final class TargetGroupUserController extends Controller
@@ -77,8 +78,16 @@ final class TargetGroupUserController extends Controller
         $request->validate(['assigned' => ['nullable', 'boolean']]);
 
         try {
-            $groups->updateUserAssignment($targetGroup, $user, $request->boolean('assigned'));
+            $groups->updateUserAssignment($targetGroup, $user, $request->boolean('assigned'),
+                $request->boolean('confirm_ssh_group_changes'));
         } catch (DomainException $exception) {
+            if ($exception->getMessage() === 'ssh_confirmation_required') {
+                throw ValidationException::withMessages([
+                    'confirm_ssh_group_changes' => __(
+                        'Confirm changing SSH group membership. It can enable SSH Target reachability or remove an existing SSH restriction.',
+                    ),
+                ]);
+            }
             if ($exception->getMessage() === 'owner_unrestricted') {
                 return back()->withErrors([
                     'assigned' => __('Owners remain unrestricted and cannot be assigned to narrowing target groups.'),

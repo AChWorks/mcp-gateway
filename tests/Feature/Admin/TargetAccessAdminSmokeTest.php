@@ -85,10 +85,18 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'current_password' => 'CorrectHorse!234',
         ])->assertRedirect();
         $group = TargetGroup::query()->where('name', 'Operations')->firstOrFail();
-        $this->put('/admin/target-groups/'.$group->getKey().'/targets/'.$target->target_id, [
+        $membershipUrl = '/admin/target-groups/'.$group->getKey().'/targets/'.$target->target_id;
+        $this->put($membershipUrl, [
             'assigned' => '1',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertFalse($group->targets()->whereKey($target->getKey())->exists());
+
+        $this->put($membershipUrl, [
+            'assigned' => '1',
+            'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect()->assertSessionHasNoErrors();
 
         self::assertTrue($group->targets()->whereKey($target->getKey())->exists());
     }

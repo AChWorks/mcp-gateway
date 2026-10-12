@@ -13,9 +13,9 @@ VERSION, and release action.
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
   either branch, force-merge a divergent release tag, or copy VERSION alone.
-- Candidate VERSION **2.1.2-rc.5** is a distinct **unpublished prerelease
+- Candidate VERSION **2.1.2-rc.6** is a distinct **unpublished prerelease
   identity**, strictly newer than previous deployed test candidates 2.1.0,
-  2.1.1 and GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 / 2.1.2-rc.3 / 2.1.2-rc.4 artifacts. CI
+  2.1.1 and GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 / 2.1.2-rc.3 / 2.1.2-rc.4 / 2.1.2-rc.5 artifacts. CI
   correctly rejected reusing rc.1 across two different PR HEADs, proving the
   immutable candidate-identity gate. Planned public stable is **2.1.2**, never assigned
   to a test candidate.
@@ -140,7 +140,16 @@ Target-scoped denials and a separately Owner-confirmed reachability rule;
 **Add/Edit Target Group** adds only denials and never confers a capability.
 Changing a Group denial or an SSH Target scope/denial requires explicit Owner
 confirmation and password, because removing a denial or adding reachability
-can widen an already-authorized user's SSH access. SSH unrestricted OS shell
+can widen an already-authorized user's SSH access.
+Deleting a Target Group or changing its User/Target membership can also lift
+SSH denials or activate already Owner-approved SSH rights, even with overlapping
+group membership. Require the explicit `confirm_ssh_group_changes` checkbox,
+`security.manage` authority and Owner password for changes involving SSH
+Targets or SSH denial groups, with the required confirmation checked again
+under a locked DB group row immediately before mutation. Non-SSH changes and
+true no-ops remain functional without SSH-specific acknowledgement. Regression
+must exercise deny lifting via overlapping groups, both assignment directions,
+stale denial edits and the positive preauthorized SSH case. SSH unrestricted OS shell
 authority can modify files even when SFTP tools are denied. Agent permission
 identifiers remain paused and **read-only**; do not activate nonexistent tools.
 Add Target itself only registers a connector endpoint; it never creates
@@ -187,12 +196,12 @@ bash bin/test-update-backup-integrity.sh /path/to/candidate-update.zip /path/to/
 ```
 
 For operators who already installed a 2.1.0 or 2.1.1 candidate, the
-2.1.2-rc.5 update package must additionally pass the same authenticated
+2.1.2-rc.6 update package must additionally pass the same authenticated
 browser-update test against a **verified unaltered candidate fresh-install ZIP**
 from each earlier installed GitHub Actions run (verify its original checksum, provenance
 and hash). The credential/Target/grant preservation assertions must run for
 both the published 2.0.x Target-era baselines and the distributed 2.1.0,
-2.1.1 and the already distributed 2.1.2-rc.1/rc.2/rc.3/rc.4 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
+2.1.1 and the already distributed 2.1.2-rc.1/rc.2/rc.3/rc.4/rc.5 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
 **never** edit an installed VERSION, bypass that comparison, rename a ZIP to
 pretend it is newer, or overwrite production files with a fresh-install ZIP.
 If a 2.1.0 -> 2.1.0 attempt was rejected during preflight, it must not be
