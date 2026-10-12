@@ -21,7 +21,10 @@ final class AdminUiPresentationTest extends TestCase
         $this->actingAs($this->owner())
             ->get('/admin/users/create')
             ->assertOk()
-            ->assertSee('css/admin.css?v='.trim((string) file_get_contents(base_path('VERSION'))), false);
+            ->assertSee(
+                'css/admin.css?v='.trim((string) file_get_contents(base_path('VERSION'))).'-'
+                .substr((string) hash_file('sha256', public_path('css/admin.css')), 0, 12), false,
+            );
     }
 
     public function test_ai_client_panels_have_scoped_spacing_and_revoke_form_styles(): void
@@ -71,7 +74,13 @@ final class AdminUiPresentationTest extends TestCase
             ->assertDontSee('value="ai_server_agent"', false)
             ->assertSee('WordPress public HTTPS URL')
             ->assertSee('Trusted OpenSSH server public host key')
-            ->assertSee('out-of-band');
+            ->assertSee('separate trusted channel')
+            ->assertSee('Password only')
+            ->assertSee('Private key only')
+            ->assertDontSee('Password + private key')
+            ->assertSee('name="connector_type"', false)
+            ->assertSee('data-connector-panel="wp_ai_bridge"', false)
+            ->assertSee('data-connector-panel="ssh_direct"', false);
     }
 
     public function test_user_and_group_denials_are_grouped_without_exposing_future_connectors_as_active(): void

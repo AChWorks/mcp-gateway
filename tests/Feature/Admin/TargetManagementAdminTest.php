@@ -69,6 +69,43 @@ final class TargetManagementAdminTest extends TestCase
             ->assertSee('Authorize this Target to connect WordPress securely');
     }
 
+    public function test_new_target_is_a_single_connector_first_form_with_server_rendered_no_js_fallback(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        foreach ([
+            ['', '', true, true],
+            ['?connector_type=wp_ai_bridge', 'wp_ai_bridge', false, true],
+            ['?connector_type=ssh_direct', 'ssh_direct', true, false],
+            ['?connector_type=ai_server_agent', '', true, true],
+        ] as [$query, $selected, $wpDisabled, $sshDisabled]) {
+            $html = $this->get('/admin/targets/create'.$query)->assertOk()->getContent();
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+            self::assertSame(1, (int) $xpath->evaluate('count(//form[@id="target-create-form"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//select[@name="connector_type"])'));
+            self::assertSame(0, (int) $xpath->evaluate('count(//option[@value="ai_server_agent"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="target_id"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="display_name"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="ssh_password"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//textarea[@name="ssh_private_key"])'));
+            self::assertSame(0, (int) $xpath->evaluate('count(//option[@value="both"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="ssh_host_key" or @id="ssh_host_key"] | //textarea[@name="ssh_host_key"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//textarea[@id="ssh_host_key"][@required])'));
+            self::assertSame($selected === '' ? 0 : 1,
+                (int) $xpath->evaluate('count(//select[@id="connector_type"]/option[@selected])'));
+            if ($selected !== '') {
+                self::assertSame($selected, $xpath->evaluate('string(//select[@id="connector_type"]/option[@selected]/@value)'));
+            }
+            self::assertSame($wpDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="wp_ai_bridge"][@disabled])'));
+            self::assertSame($sshDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="ssh_direct"][@disabled])'));
+            self::assertStringContainsString('How to obtain and verify the server host key', $html);
+        }
+    }
+
     public function test_paused_stored_agent_target_remains_readable_without_enabling_its_connector(): void
     {
         $this->actingAs($this->user('owner', 'all'));

@@ -54,12 +54,24 @@ final class TargetController extends Controller
         ]);
     }
 
-    public function create(): View
+    public function create(Request $request, TargetConnectorRegistry $connectors): View
     {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
-        // Enrollment only presents implemented connector-specific forms.
-        return view('admin.targets.create');
+        // Never offer a paused/historical connector for enrollment. A new
+        // adapter must also have a reviewed connector-specific form panel.
+        $labels = [
+            'wp_ai_bridge' => __('WordPress (WP AI Bridge)'),
+            'ssh_direct' => __('Direct SSH'),
+        ];
+        $options = array_intersect_key($labels, array_flip($connectors->types()));
+        $requested = $request->query('connector_type');
+        $selected = is_string($requested) && array_key_exists($requested, $options) ? $requested : '';
+
+        return view('admin.targets.create', [
+            'connectorOptions' => $options,
+            'selectedConnector' => $selected,
+        ]);
     }
 
     public function store(

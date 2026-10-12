@@ -985,3 +985,258 @@ td input[type="checkbox"] {
         border-color: #596575;
     }
 }
+
+/* Connector enrollment: one form, one active adapter, shared control styling. */
+.target-enrollment {
+    max-width: 54rem;
+}
+
+.target-form-section {
+    display: grid;
+    gap: 1rem;
+    margin: 0;
+    padding: 1.2rem 0 0;
+    border: 0;
+    border-top: 1px solid var(--ui-border);
+    min-width: 0;
+}
+
+.target-form-section legend,
+.operations-group legend {
+    padding-inline-end: 0.75rem;
+    font-size: 1.05rem;
+    font-weight: 750;
+}
+
+.target-field-grid,
+.target-credential-grid,
+.operations-field-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
+.target-span-all,
+.target-credential-grid > .field:has(textarea) {
+    grid-column: 1 / -1;
+}
+
+.target-subsection {
+    display: grid;
+    gap: 0.85rem;
+    padding: 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--ui-border);
+    background: var(--ui-surface-subtle);
+    min-width: 0;
+}
+
+.target-subsection h3 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.target-subsection .field-help {
+    margin: 0;
+}
+
+.target-help-details,
+.operations-guidance {
+    border: 1px solid var(--ui-border);
+    border-radius: 0.7rem;
+    background: var(--ui-surface);
+    padding: 0.85rem 1rem;
+}
+
+.target-help-details summary,
+.operations-guidance summary {
+    cursor: pointer;
+    font-weight: 650;
+}
+
+.target-help-details[open],
+.operations-guidance[open] {
+    display: grid;
+    gap: 0.7rem;
+}
+
+.target-help-details code {
+    display: block;
+    padding: 0.65rem;
+    background: var(--ui-surface-subtle);
+    border-radius: 0.45rem;
+    font-size: 0.87rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.target-fingerprint-tools,
+.target-create-actions,
+.operations-save-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+}
+
+.target-fingerprint-tools output {
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
+
+.target-trust-confirmation {
+    display: flex;
+    align-items: start;
+    gap: 0.7rem;
+    cursor: pointer;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.target-trust-confirmation input[type="checkbox"] {
+    margin-top: 0.15rem;
+}
+
+.target-create-actions {
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--ui-border);
+}
+
+.target-create-actions .field-help,
+.operations-save-row .field-help {
+    margin: 0;
+}
+
+.target-form-section[hidden],
+[data-target-shared][hidden],
+[data-connector-panel][hidden],
+[data-ssh-secret][hidden],
+[data-target-actions][hidden],
+.operations-reset[hidden] {
+    display: none !important;
+}
+
+/* Operational settings: legible finite policies, not a wall of full-width inputs. */
+.operations-panel {
+    max-width: 68rem;
+}
+
+.operations-heading {
+    align-items: start;
+}
+
+.operations-heading .field-help {
+    margin: 0;
+}
+
+.operations-version {
+    color: var(--ui-muted);
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.operations-guidance {
+    margin: 1rem 0 1.5rem;
+    background: var(--ui-surface-subtle);
+}
+
+.operations-guidance ul {
+    padding-inline-start: 1.25rem;
+    margin-block: 0.7rem 0.15rem;
+    color: var(--ui-muted);
+}
+
+.operations-guidance li + li {
+    margin-top: 0.55rem;
+}
+
+.operations-form {
+    display: grid;
+    gap: 1.5rem;
+}
+
+.operations-group {
+    min-width: 0;
+    margin: 0;
+    padding: 1rem 0 0;
+    border: 0;
+    border-top: 1px solid var(--ui-border);
+}
+
+.operations-group-intro {
+    margin: 0.3rem 0 1rem;
+    max-width: 56rem;
+}
+
+.operations-setting {
+    min-width: 0;
+    padding: 1.1rem;
+    border: 1px solid var(--ui-border);
+    border-radius: 0.8rem;
+    background: var(--ui-surface-subtle);
+}
+
+.operations-setting-control {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.operations-setting .operations-setting-control input[type="number"] {
+    flex: 0 1 9rem;
+    width: min(100%, 9rem);
+    min-width: 6rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.operations-unit {
+    font-size: 0.9rem;
+    color: var(--ui-muted);
+}
+
+.operations-reset {
+    margin-inline-start: auto;
+    font-size: 0.9rem;
+}
+
+.operations-setting-meta p {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.operations-setting-meta p + p {
+    margin-top: 0.35rem;
+}
+
+.operations-setting-source {
+    color: var(--ui-muted);
+    margin-inline-start: 0.45rem;
+    font-size: 0.83rem;
+}
+
+.operations-confirmation .field {
+    max-width: 26rem;
+    margin-block: 0.8rem;
+}
+
+@media (max-width: 48rem) {
+    .target-field-grid,
+    .target-credential-grid,
+    .operations-field-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .operations-version {
+        white-space: normal;
+    }
+
+    .operations-setting-control {
+        align-items: center;
+    }
+
+    .operations-reset {
+        margin-inline-start: 0;
+    }
+}

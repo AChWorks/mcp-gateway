@@ -5,7 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title>@yield('title', __('Administration')) · {{ config('app.name') }}</title>
-    <link rel="stylesheet" href="{{ asset('css/admin.css').'?v='.rawurlencode((string) config('app.release_version', 'dev')) }}">
+    @php
+        // A candidate may be replaced by a corrected build of the same
+        // VERSION. Fingerprint the actual CSS so browsers never retain stale
+        // administration form styles after an in-place package update.
+        $cssDigest = hash_file('sha256', public_path('css/admin.css'));
+        $cssFingerprint = is_string($cssDigest) ? substr($cssDigest, 0, 12) : 'unavailable';
+    @endphp
+    <link rel="stylesheet" href="{{ asset('css/admin.css').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$cssFingerprint }}">
 </head>
 <body>
 <header class="site-header">
