@@ -301,6 +301,47 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(0, DB::table('operational_setting_changes')->count());
     }
 
+    public function test_legacy_env_timeout_normalization_does_not_block_unrelated_owner_response_budget_edits(): void
+    {
+        // The pre-existing safe HTTP transport accepted this source pair by
+        // using max(connect, request) as its total deadline. A response-only
+        // Owner change must not newly brick the form on such installations.
+        config()->set('bridge.http.connect_timeout_seconds', 12);
+        config()->set('bridge.http.request_timeout_seconds', 5);
+        self::assertSame(['connect' => 12, 'request' => 12],
+            (new OperationalSettings)->httpTimeoutsSeconds());
+
+        $owner = $this->account('owner');
+        $this->actingAs($owner)->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '128',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect(route('admin.operations.index'));
+        self::assertSame(128 * 1024, (new OperationalSettings)->responseLimitBytes(false));
+        self::assertSame(['connect' => 12, 'request' => 12],
+            (new OperationalSettings)->httpTimeoutsSeconds());
+        self::assertSame(1, DB::table('operational_settings')->value('version'));
+
+        // Explicitly unsafe new pairs are still blocked; no audit change.
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '128',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '10',
+                'wp_request_timeout_seconds' => '5',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('values.wp_request_timeout_seconds');
+        self::assertSame(1, DB::table('operational_settings')->value('version'));
+        self::assertSame(1, DB::table('operational_setting_changes')->count());
+    }
+
     public function test_persisted_two_second_total_deadline_includes_dns_and_new_request_sees_reset(): void
     {
         config()->set('bridge.http.connect_timeout_seconds', 2);

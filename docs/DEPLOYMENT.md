@@ -529,7 +529,14 @@ declared migrations and normal backup/recovery procedures. Rolling code back
 does not roll an in-flight remote refresh back, nor does dropping a snapshot
 column prove successful revocation. Finish/resolve pending uncertain refreshes
 before a manual schema rollback; retain encrypted credentials and recovery
-fences rather than forcing a replay.
+fences rather than forcing a replay. The migration's `down()` deliberately
+**rejects rollback if any refresh intent still holds a timeout snapshot**.
+This is a fail-closed schema gate, not a replacement for a safe code rollout:
+**do not start a downgraded PHP binary while any such uncertain refresh may
+still be in flight.** Keep Gateway in maintenance, check/reconcile or wait for
+the provider window to expire (without blind replay), verify the intent state,
+then roll back the schema/code in a controlled sequence. Old PHP cannot enforce
+these newer per-intent fences on its own.
 
 Do not represent this source-only functionality as publicly installed or
 host-verified until a reviewed version, approved deployment and actual

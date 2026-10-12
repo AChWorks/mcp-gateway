@@ -112,7 +112,15 @@ final class OperationalSettings
             ?? max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
         $request = $next['wp_request_timeout_seconds']
             ?? max(1, (int) config('bridge.http.request_timeout_seconds', 5));
-        if ($connect > $request) {
+        // A previously supported .env configuration may have a connection
+        // timeout greater than the request timeout: the existing HTTP client
+        // normalized the whole deadline to the connect timeout. With *no*
+        // Owner network overrides, preserve that behavior even when changing
+        // only response budgets. A newly explicit override must instead be a
+        // valid pair, never silently clamped to an unexpected effective value.
+        $hasNetworkOverride = isset($next['wp_connect_timeout_seconds'])
+            || isset($next['wp_request_timeout_seconds']);
+        if ($hasNetworkOverride && $connect > $request) {
             throw ValidationException::withMessages([
                 'values.wp_request_timeout_seconds' => 'The overall request timeout must be at least the connection timeout.',
             ]);
