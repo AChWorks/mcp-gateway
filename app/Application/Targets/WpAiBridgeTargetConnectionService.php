@@ -478,11 +478,14 @@ final readonly class WpAiBridgeTargetConnectionService
             return (int) $snapshot;
         }
 
-        // Pre-migration in-flight intents were never subject to Owner timeout
-        // overrides; preserve the original source/env deadline, and do not
-        // shorten it because a new Owner override was just applied.
+        // Before this migration, total HTTP time was normalized to
+        // max(source connect, source request). A NULL legacy intent has no
+        // persisted timeout, so preserve BOTH original source components:
+        // a later Owner override must never shorten its old-token replay
+        // fence or the manual revocation settling interval.
         return max(
             1,
+            (int) config('bridge.http.connect_timeout_seconds', 2),
             (int) config('bridge.http.request_timeout_seconds', 5),
             $this->settings->httpTimeoutsSeconds()['request'],
         );

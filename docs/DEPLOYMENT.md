@@ -503,12 +503,19 @@ A first *possibly sent* rotating WordPress refresh creates an immutable
 request-timeout snapshot in `wp_ai_bridge_refresh_intents` before network
 I/O. The single-use retry fence, CLI maintenance wait and manual revocation
 settle period use that original timeout, **not a subsequent Owner setting**.
-An older pre-migration intent conservatively uses at least the original
-source-config timeout. This prevents increasing or decreasing the Admin
-settings from reopening a spent provider recovery window or overlapping a
-prior in-flight request. This implementation does not modify the provider's
-60-second one-shot window, Gateway's 45-second admission boundary, or
-credential identity/expiry/revocation rules.
+An older pre-migration intent with a NULL timeout snapshot preserves at
+least **max(source connect timeout, source request timeout, current effective
+request timeout)**. Before this migration, the transport's actual source
+request deadline was max(connect, request), even when the environment's
+connect value exceeded request. New Owner overrides must not hide that older
+connect contribution. Keep the legacy source timeout environment stable while
+unresolved pre-upgrade refreshes exist; if the historical environment is no
+longer known, reconcile the unknown refresh with the provider rather than
+assuming a new lower timeout is a safe replay fence. This prevents increasing
+or decreasing Admin settings from reopening a spent provider recovery window
+or overlapping a prior in-flight request. This implementation does not modify
+the provider's 60-second one-shot window, Gateway's 45-second admission
+boundary, or credential identity/expiry/revocation rules.
 
 The existing persisted single-row `operational_settings` version prevents
 stale Owner forms from overwriting a concurrent edit. The current password,
