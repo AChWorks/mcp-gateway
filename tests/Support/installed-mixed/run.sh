@@ -177,6 +177,12 @@ chmod 700 "$ROOT" "$ROOT/secrets"
 # sessions, .env, compiled views, private keys and untracked test data can
 # never enter this staging root, even when git status reports a clean checkout.
 git -c safe.directory="$SOURCE" -C "$SOURCE" archive --format=tar HEAD | tar -C "$ROOT/gateway" -xf -
+for prohibited in "$ROOT/gateway/.env" "$ROOT/gateway/.git" "$ROOT/gateway/vendor"; do
+  if [[ -e "$prohibited" || -L "$prohibited" ]]; then
+    echo 'Fresh installed Gateway cannot inherit application credentials, Git internals or vendor.' >&2
+    exit 1
+  fi
+done
 for state_dir in "$ROOT/gateway/storage" "$ROOT/gateway/bootstrap/cache"; do
   if find "$state_dir" -type f ! -name '.gitignore' -print -quit | grep -q .; then
     echo 'Tracked application runtime state is not permitted in a fresh installation.' >&2

@@ -99,7 +99,8 @@ now asserts the exact object shape.
 Before provisioning, the runner checks for tracked changes and uses
 **`git archive HEAD`** for the installed Gateway: Git-ignored `.env`, compiled
 views, MCP sessions, private runtime files and preexisting caches are not
-included. Composer dependencies are freshly installed against the committed
+included. The install fails closed if tracked input attempts to inject `.env`,
+`.git` or preexisting `vendor`. Composer dependencies are freshly installed against the committed
 `composer.lock` in the isolated target, never copied from checkout `vendor`.
 All writable `storage` paths and `bootstrap/cache` are re-created **empty**
 after dependency installation, then checked for remaining files. The runner
