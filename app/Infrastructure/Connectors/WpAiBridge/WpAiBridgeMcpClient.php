@@ -251,6 +251,8 @@ final readonly class WpAiBridgeMcpClient
                 'method' => 'initialize',
                 'params' => [
                     'protocolVersion' => self::PROTOCOL_VERSION,
+                    // MCP initialize requires a capabilities object, even when empty.
+                    'capabilities' => (object) [],
                     'clientInfo' => ['name' => 'mcp-gateway', 'version' => '0.1.0'],
                 ],
             ], $headers);

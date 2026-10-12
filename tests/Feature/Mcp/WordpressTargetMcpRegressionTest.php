@@ -689,6 +689,10 @@ final class WordpressTargetMcpRegressionTest extends TestCase
 
         $payload = $request->data();
         if (($payload['method'] ?? null) === 'initialize') {
+            // Real WordPress MCP Adapter validates the required empty object, not [].
+            $wire = json_decode($request->body(), false, 64, JSON_THROW_ON_ERROR);
+            self::assertInstanceOf(\stdClass::class, $wire->params->capabilities ?? null);
+            self::assertSame([], get_object_vars($wire->params->capabilities));
             self::assertSame('Bearer '.$siteId.'-access', $this->requestHeader($request, 'Authorization'));
             self::assertStringContainsString('application/json', $this->requestHeader($request, 'Accept'));
 
