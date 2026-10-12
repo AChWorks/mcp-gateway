@@ -21,7 +21,6 @@ ssh_user = os.environ["MIXED_SSH_USER"]
 host = "11.22.33.45"
 target = state["ssh_target"]
 token = state["owner_token"]
-endpoint = f"/mcp/file-transfer/ssh/{target}"
 session_id = None
 context = ssl.create_default_context(cafile=str(root / "secrets/tls.crt"))
 assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
@@ -85,6 +84,23 @@ tools = mcp("tools/list")
 names = [tool["name"] for tool in tools["tools"]]
 require("ssh-file-stat" in names and "ssh-command-run" in names,
         "independent MCP client did not negotiate Gateway SSH tools")
+context_response = mcp("tools/call", {"name": "target-context", "arguments": {
+    "target_id": target
+}})
+capabilities = context_response.get("structuredContent", {}).get("target", {}).get("file_transfer", {})
+modes = capabilities.get("whole_file_modes", [])
+require(len(modes) == 1 and modes[0].get("id") == "ssh_https_raw_binary_v1",
+        "Python client's standard MCP negotiation did not discover whole-file mode")
+mode = modes[0]
+expected_prefix = f"/mcp/file-transfer/ssh/{target}"
+require(mode["endpoints"]["upload"]["path"] == expected_prefix + "/upload"
+        and mode["endpoints"]["download"]["path"] == expected_prefix + "/download",
+        "MCP advertised non-target-bound or cross-origin URL")
+require(mode["max_object_bytes"] == 4194304
+        and mode["bounds_scope"] == "this_synchronous_ssh_mode_only"
+        and mode["model_attachment_handoff_verified"] is False,
+        "MCP capability did not report per-mode effective Owner limits")
+endpoint = mode['endpoints']['upload']['path'][:-len('/upload')]
 start = time.monotonic()
 remote = f"/home/{ssh_user}/python-whole-file-{os.urandom(6).hex()}.bin"
 payload = bytes(range(256)) * 4097 + b"\\x00\\xff"
@@ -186,4 +202,6 @@ print(json.dumps({
     "roundtrip_ms": round((time.monotonic() - start) * 1000, 2),
     "model_consumed": False,
     "tls_verified": True,
+    "mcp_discovered_binary_mode": mode["id"],
+    "advertised_effective_max_bytes": mode["max_object_bytes"],
 }, indent=2))

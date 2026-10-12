@@ -34,6 +34,84 @@ currently advertise a raw binary whole-file Target interface. No duplicate
 WordPress media/plugin manager or insecure PHP filesystem bypass is added.
 AI Server Agent Issue #111 remains paused and unchanged.
 
+## Discover supported transfer modes through ordinary MCP
+
+**Do not hardcode the sidecar route in future AI clients.** Call the already
+available `target-context` MCP tool with the explicitly selected authorized
+`target_id`. Its additive `target.file_transfer` field is a permission-
+filtered capability catalog, with `schema_version=1`,
+`whole_file_modes`, `native_interfaces`, and an explicit
+`model_file_consumption_verified=false`. An unauthorized Target yields the
+same `target_not_found` response as a nonexistent one; a visible but
+read-denied/write-denied Target never advertises that operation.
+
+For an SSH Target **only when the feature is enabled** and the user has
+the relevant SSH grant, `whole_file_modes` contains
+`id=ssh_https_raw_binary_v1`. The mode carries the exact
+`endpoints.upload.path` and/or `endpoints.download.path` (each `POST`),
+`auth=current_oauth_access_token_bearer`, actual current Owner-
+configured `max_object_bytes`, `max_operation_seconds`,
+`integrity=exact_bytes_and_sha256`, and `resume=false`. **Paths are
+relative to the authenticated MCP resource origin**: construct neither
+an untrusted host nor a Target-supplied absolute remote URL. A client
+may use this mode only if it can make separate, authenticated HTTPS
+binary requests and locally verify every returned octet and SHA-256.
+The advertised Gateway profile does not override stricter
+client/proxy/Target limits or promise that a chat host can ingest
+attachments.
+
+Even with the binary mode disabled, `native_interfaces` documents
+the already operational 16 KiB **per-call** SSH read window and atomic
+single-window write. Read windows can address a larger file with
+size/mtime *best-effort* consistency; repeated write calls are **not**
+an append/resumable whole-file API. An authorized WordPress Target
+instead advertises its existing dynamically discovered native Ability
+tools, with **no SSH max-object limit inherited** and **no fabricated
+raw whole-file HTTP mode**. This does not whitelist downstream Ability
+names, bypass WordPress-native permissions or claim that a WordPress
+Media Ability is a universal binary interface. A future connector may
+advertise a wholly different real transfer mode.
+
+The real installed PHP MCP SDK client **and independent Python
+JSON-RPC MCP client** now first discover and validate this same catalog
+through `target-context`, then send and receive binary bytes over the
+advertised authenticated SSH paths. The sidecar is still not an MCP
+Resource or an automatically invoked Tool; a host unable to send/receive
+raw HTTPS bodies must use an actually supported native mode instead
+of treating the catalog as a promise of file delivery.
+
+### Compatibility reference: AI Server Agent (READ-ONLY comparison)
+
+As of Agent main `d0f98848513bc518b9dd4f8397c089bf3f1acf81`, the
+**standalone** Agent's own `workspace_transfer` MCP tool provides
+`begin/chunk/status/commit/abort`, stable idempotency keys, sequential
+up to 256 KiB decoded Base64 chunks, per-chunk and whole-object SHA-256,
+durable offset/TTL, bounded 4 MiB preparation windows and atomic
+version-preconditioned publication. Its independent `workspace_stat`
+and `workspace_read` paths support version-pinned outbound byte windows
+up to 128 KiB in the tested SDK client. The Agent defaults to **512 MiB
+cumulative staged storage**, 8 active sessions and 3600-second TTL,
+with separately configurable limits. A 33 MiB object has been covered by
+the Agent's separate isolated executable acceptance; that is **not**
+evidence of successful routing through Gateway or a ChatGPT attachment.
+
+**Future connector invariant:** The Gateway must preserve downstream
+Agent session keys, offsets, commit receipts, user/workspace authority
+and error/unknown-outcome semantics if a real Agent connector is
+approved. Its staged logical operation is **not** constrained by this
+Gateway's 16 KiB inline SSH tool window, 64 MiB synchronous SSH profile,
+40-second SFTP primitive, or WordPress HTTP response limits. The
+Gateway may have finite **per MCP call** framing/admission safeguards,
+but must not silently reclassify a series of authorized bounded Agent
+calls as one SSH binary operation. Keep logical lifetime, per-call
+windows, aggregate staged bytes and connected-host capability distinct;
+select an actually implemented downstream mode. Do not duplicate the
+Agent's durable journal or security engine in Gateway merely for proxying.
+Agent Gateway integration remains separately Owner-paused under
+[Issue #111](https://github.com/AChWorks/mcp-gateway/issues/111),
+so **no Agent connector, pass-through or long-running Agent file mode is
+claimed in this PR**.
+
 ## Auth and request representation
 
 Existing `RequireMcpAccessToken` middleware validates signed OAuth access

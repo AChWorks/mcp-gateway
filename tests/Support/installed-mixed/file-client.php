@@ -49,7 +49,26 @@ try {
     $ids = array_column(($listed->structuredContent ?? [])['targets'] ?? [], 'target_id');
     $check(in_array($target, $ids, true), 'authorized SSH target not discoverable over real MCP SDK');
 
-    $url = $base.rawurlencode($target);
+    // A real independently developed MCP client discovers an optional binary
+    // data plane through standard target-context, not undocumented URL guesses.
+    $targetContext = $client->callTool('target-context', ['target_id' => $target])->structuredContent;
+    $modes = $targetContext['target']['file_transfer']['whole_file_modes'] ?? [];
+    $check(count($modes) === 1 && $modes[0]['id'] === 'ssh_https_raw_binary_v1',
+        'Target did not advertise its authorized raw binary transfer mode');
+    $mode = $modes[0];
+    $uploadPath = $mode['endpoints']['upload']['path'] ?? '';
+    $downloadPath = $mode['endpoints']['download']['path'] ?? '';
+    $prefix = '/mcp/file-transfer/ssh/'.rawurlencode($target);
+    $check($uploadPath === $prefix.'/upload' && $downloadPath === $prefix.'/download',
+        'MCP advertised binary endpoints not pinned to selected Target and expected origin');
+    $check($mode['max_object_bytes'] === 4194304 && $mode['max_operation_seconds'] === 30
+        && $mode['bounds_scope'] === 'this_synchronous_ssh_mode_only'
+        && $mode['model_attachment_handoff_verified'] === false,
+        'MCP advertised capabilities not aligned with actual Owner SSH profile');
+    $wpContext = $client->callTool('target-context', ['target_id' => $state['wp_target']])->structuredContent;
+    $check(($wpContext['target']['file_transfer']['whole_file_modes'] ?? null) === [],
+        'WordPress Target incorrectly inherited SSH whole-file sidecar');
+    $url = 'https://11.22.33.45'.substr($uploadPath, 0, -strlen('/upload'));
     $send = static function (string $token, string $path, string $bytes, array $extra = []) use ($http, $url, $stage): ResponseInterface {
         $metadata = [
             'path' => $path, 'private_staging_dir' => $stage,
@@ -207,7 +226,7 @@ try {
     echo json_encode([
         'outcome' => 'PASS',
         'direction' => 'authorized external PHP MCP SDK client -> binary HTTP sidecar -> real SFTP Target -> binary HTTP sidecar -> client-owned stream',
-        'client_mode' => 'SDK target discovery and stat; OAuth-bound direct binary upload/download on optional sidecar',
+        'client_mode' => 'SDK Target+binary-mode discovery through MCP target-context; OAuth-bound direct binary upload/download on advertised optional sidecar',
         'model_consumed' => false,
         'chatgpt_host_file_handoff' => 'NOT_TESTED',
         'fixtures' => $tests,

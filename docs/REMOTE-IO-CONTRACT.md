@@ -6,6 +6,7 @@ Provenance: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), 
 Related: [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [Direct SSH connector](./DIRECT-SSH-CONNECTOR.md).
 
 **#147 source-only draft:** The opt-in, authenticated raw HTTP ↔ existing SFTP whole-file path and its exact client/Target/host limits are specified in [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md). It is not released, not a ChatGPT host attachment capability, and requires Owner API approval plus independent review before integration.
+The draft also provides **permission-filtered, per-Target transfer-mode discovery** through the existing MCP `target-context` result; its limits are SSH-mode scoped, not a common cap on WordPress/Agent/future connectors. See the Agent compatibility comparison in [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md).
 
 ## Purpose and scope
 

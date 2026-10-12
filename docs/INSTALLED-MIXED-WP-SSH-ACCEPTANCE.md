@@ -5,6 +5,7 @@ Controlling issue: #112. Companion protocol/permission fixture:
 remains synthetic for WordPress; **it does not substitute for this test**.
 
 **#147 extension:** The same fresh, pinned, disposable runner now also checks optional whole-file binary ingress/egress through an official PHP MCP SDK client plus an independent Python HTTP/MCP client; see [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md). The binary sidecar is enabled only in the ephemeral installed Gateway. Evidence adds `file-client.json`, `python-file-client.json`, and `file-revoked.txt`. It does not claim ChatGPT host file handoff.
+Both independently authored client implementations first call `target-context` over their real MCP session and verify the Target-specific advertised binary routes and effective SSH Owner budget; the PHP SDK client additionally confirms that the installed WordPress Target has **no** fabricated SSH binary mode. The independent Python client reconstructs a real local binary file.
 
 ## Scope and containment
 
