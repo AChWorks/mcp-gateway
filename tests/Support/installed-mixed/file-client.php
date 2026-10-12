@@ -59,7 +59,10 @@ try {
                 'body' => $source,
             ]);
         } finally {
-            fclose($source);
+            // Guzzle may already close the body resource it owns.
+            if (is_resource($source)) {
+                fclose($source);
+            }
         }
     };
     $recv = static function (string $token, string $path, array $extra = []) use ($http, $url): array {
