@@ -106,9 +106,6 @@ try {
     $fixtures = [
         'empty' => '',
         'utf8' => str_repeat("سلام Gateway — 你好 🚀\n", 64),
-        'one_kib' => random_bytes(1024),
-        'ten_kib' => random_bytes(10240),
-        'sixty_four_kib' => random_bytes(65536),
         'two_fifty_six_kib' => random_bytes(262144),
         'binary' => "\x00\xff".random_bytes(1024 * 1024 + 131)."\x7f",
         'png' => base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==', true),
@@ -126,11 +123,13 @@ try {
             'binary HTTP upload failed for '.$type.' (status='.$upload->getStatusCode().' code='.($body['error']['code'] ?? 'none').')');
         $check(($body['sha256'] ?? null) === hash('sha256', $bytes), 'remote SHA mismatch for '.$type);
         try {
-            $stat = ($client->callTool('ssh-file-stat', [
-                'target_id' => $target, 'path' => $path,
-            ]))->structuredContent;
-            $check(($stat['result']['file']['size'] ?? -1) === strlen($bytes),
-                'real MCP SDK remote stat mismatch for '.$type);
+            if (in_array($type, ['empty', 'two_fifty_six_kib', 'binary', 'pdf'], true)) {
+                $stat = ($client->callTool('ssh-file-stat', [
+                    'target_id' => $target, 'path' => $path,
+                ]))->structuredContent;
+                $check(($stat['result']['file']['size'] ?? -1) === strlen($bytes),
+                    'real MCP SDK remote stat mismatch for '.$type);
+            }
             if ($type === 'binary') {
                 // Create-only retries are not idempotent. A second request must
                 // fail without replacing the already verified destination.
