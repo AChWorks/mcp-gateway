@@ -222,9 +222,9 @@ if [[ "$old_version" == "1.2.1" ]]; then
   echo "Seeded actual published v1.2.1 WordPress connection, Target scope/group, ChatGPT OAuth grant/access/refresh and unrelated identity/Activity."
 fi
 
-# Published Target-era patch upgrades (v2.0.0 through v2.0.3) must preserve installed v2.0.x
-# identities, group ACLs, encrypted credentials and OAuth authorization.
-if [[ "$old_version" =~ ^2\.0\.[0-3]$ ]]; then
+# Published v2.0.x Target-era and distributed v2.1.0 test-candidate upgrades
+# must preserve identities, group ACLs, encrypted credentials and OAuth grants.
+if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.0)$ ]]; then
   (
     cd "$target"
     php -r '
@@ -291,7 +291,7 @@ if [[ "$old_version" =~ ^2\.0\.[0-3]$ ]]; then
       }
     '
   )
-  echo "Seeded published $old_version Target, credential, Target Group, user rules, denials and ChatGPT authorization for patch-upgrade preservation."
+  echo "Seeded Target-era $old_version Target, credential, Target Group, user rules, denials and ChatGPT authorization for upgrade preservation."
 fi
 
 candidate="$tmp/candidate"
@@ -737,7 +737,7 @@ if [[ "$old_version" == "1.2.1" ]]; then
   )
   echo "Seeded v1.2.1 reset boundary: old WordPress/ChatGPT credentials removed; users/roles/global denies and unrelated Activity preserved."
 fi
-if [[ "$old_version" =~ ^2\.0\.[0-3]$ ]]; then
+if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.0)$ ]]; then
   (
     cd "$target"
     php -r '
@@ -771,12 +771,12 @@ if [[ "$old_version" =~ ^2\.0\.[0-3]$ ]]; then
       }
       $failed = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
       if ($failed !== []) {
-        fwrite(STDERR, "Released Target-era patch-upgrade state preservation failed: ".implode(", ", $failed)."\n");
+        fwrite(STDERR, "Target-era upgrade state preservation failed: ".implode(", ", $failed)."\n");
         exit(1);
       }
     '
   )
-  echo "Released $old_version patch-upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant remain intact."
+  echo "Target-era $old_version upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant remain intact."
 fi
 [[ ! -e "$target/app/obsolete-update-test.txt" ]] || { echo "Stale managed file survived update." >&2; exit 1; }
 [[ "$(sha256sum "$target/.env" | awk '{print $1}')" == "$env_hash_before" ]] || { echo ".env changed during update." >&2; exit 1; }

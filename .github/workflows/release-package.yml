@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       approved_version:
-        description: 'Approved VERSION (e.g. 2.1.0)'
+        description: 'Approved VERSION (e.g. 2.1.1)'
         required: true
         type: string
 

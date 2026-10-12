@@ -13,9 +13,11 @@ VERSION, and release action.
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
   either branch, force-merge a divergent release tag, or copy VERSION alone.
-- Candidate VERSION **2.1.0** is a prospective next minor release because SSH
-  Targets and optional binary transfer first enter public packaging. The
-  release notes now retain the exact v2.0.3 historical section before v2.0.2.
+- Candidate VERSION **2.1.1** is the prospective first combined WordPress+SSH
+  public release, after v2.0.3. A **2.1.0 unpublished test candidate** was
+  previously distributed and installed; strict update ordering means a changed
+  candidate must be newer than it. No public v2.1.0 Release is presumed. The
+  release notes retain the exact v2.0.3 historical section before v2.0.2.
 - Verified at branch creation: the active updater, updater browser index,
   update regression scripts, and release-note renderer match v2.0.3 byte for
   byte; the WordPress connection/transport paths on main contain subsequent
@@ -84,6 +86,22 @@ scripts and hash the final archives. Use disposable MariaDB and:
 bash bin/test-update-package.sh /path/to/candidate-update.zip /path/to/mcp-gateway-v2.0.3.zip
 bash bin/test-update-backup-integrity.sh /path/to/candidate-update.zip /path/to/mcp-gateway-v2.0.3.zip
 ```
+
+For operators who already installed a 2.1.0 candidate, the 2.1.1 update
+package must additionally pass the same authenticated browser-update test
+against the **unaltered exact 2.1.0 candidate fresh-install ZIP** from the
+previous reviewed GitHub Actions run (verify its original checksum, provenance
+and hash). The credential/Target/grant preservation assertions must run for
+both the published 2.0.x Target-era baselines and the distributed 2.1.0
+candidate. The updater intentionally rejects same-version/downgrade attempts:
+**never** edit an installed VERSION, bypass that comparison, rename a ZIP to
+pretend it is newer, or overwrite production files with a fresh-install ZIP.
+If a 2.1.0 -> 2.1.0 attempt was rejected during preflight, it must not be
+treated as a completed upgrade or replayed. Before attempting 2.1.1, confirm
+that no earlier update is staged/in progress and make a separately restorable
+DB/config/key backup. Replace only the rejected *temporary updater staging*
+with the new 2.1.1 update ZIP, following updater status/recovery instructions
+if any state exists.
 
 These run the real authenticated browser-update workflow, preserve
 `.env`, OAuth and Bridge signing keys, private runtime state, host-managed
