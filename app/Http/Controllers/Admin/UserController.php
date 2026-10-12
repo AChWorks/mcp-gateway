@@ -61,7 +61,8 @@ final class UserController extends Controller
         $user = $access->create(
             $validated,
             $this->deniedPermissions($validated),
-            $request->boolean('confirm_ssh_permission_changes')
+            $request->boolean('ssh_permissions_reviewed')
+                && $request->boolean('confirm_ssh_permission_changes')
                 && $this->isOwner($request)
                 && $validated['target_scope_mode'] === TargetScopeMode::Selected->value,
         );
@@ -106,7 +107,8 @@ final class UserController extends Controller
                 $user,
                 $validated,
                 $this->deniedPermissions($validated),
-                $request->boolean('confirm_ssh_permission_changes')
+                $request->boolean('ssh_permissions_reviewed')
+                    && $request->boolean('confirm_ssh_permission_changes')
                     && $this->isOwner($request)
                     && $validated['target_scope_mode'] === TargetScopeMode::Selected->value,
             );

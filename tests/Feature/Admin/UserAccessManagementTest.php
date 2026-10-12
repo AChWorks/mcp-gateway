@@ -133,6 +133,9 @@ final class UserAccessManagementTest extends TestCase
         $this->post('/admin/users', [
             ...$base,
             'ssh_permissions_reviewed' => null,
+            // An old form is not a grant-capable form, even if it submits
+            // the standalone confirmation flag and omits all SSH denials.
+            'confirm_ssh_permission_changes' => '1',
         ])->assertRedirect()->assertSessionHasNoErrors();
         $newUser = User::query()->where('email', $base['email'])->sole();
         foreach (GatewayPermission::sshCapabilities() as $permission) {
@@ -314,8 +317,20 @@ final class UserAccessManagementTest extends TestCase
         $this->actingAs($owner)->put('/admin/users/'.$operator->id, $payload)->assertRedirect();
         self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
 
+        // A legacy/unreviewed form cannot use an isolated confirmation flag
+        // to lift existing default SSH denials.
         $this->put('/admin/users/'.$operator->id, [
             ...$payload,
+            'confirm_ssh_permission_changes' => '1',
+            'denied_permissions' => [],
+        ])->assertRedirect();
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
+        self::assertFalse($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
+        self::assertFalse($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
+
+        $this->put('/admin/users/'.$operator->id, [
+            ...$payload,
+            'ssh_permissions_reviewed' => '1',
             'confirm_ssh_permission_changes' => '1',
             // All three SSH tools are visible: this explicitly grants each
             // capability on the selected Target.
@@ -328,6 +343,7 @@ final class UserAccessManagementTest extends TestCase
         // An explicit Owner edit can restrict only write without restricting read.
         $this->put('/admin/users/'.$operator->id, [
             ...$payload,
+            'ssh_permissions_reviewed' => '1',
             'confirm_ssh_permission_changes' => '1',
             'denied_permissions' => [GatewayPermission::SshFileWrite->value],
         ])->assertRedirect();

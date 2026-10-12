@@ -13,9 +13,9 @@ VERSION, and release action.
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
   either branch, force-merge a divergent release tag, or copy VERSION alone.
-- Candidate VERSION **2.1.2-rc.3** is a distinct **unpublished prerelease
+- Candidate VERSION **2.1.2-rc.4** is a distinct **unpublished prerelease
   identity**, strictly newer than previous deployed test candidates 2.1.0,
-  2.1.1 and both GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 artifacts. CI
+  2.1.1 and GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 / 2.1.2-rc.3 artifacts. CI
   correctly rejected reusing rc.1 across two different PR HEADs, proving the
   immutable candidate-identity gate. Planned public stable is **2.1.2**, never assigned
   to a test candidate.
@@ -125,7 +125,9 @@ and are not flashed after validation errors.
 Shared User creation still defaults to **SSH deny**: all three command/SFTP
 denial checkboxes render checked. The Owner can intentionally uncheck a selected
 capability during **Add User** (or **Edit User**) only after explicit confirmation
-and reauthentication, with **Selected** Target scope. An unreviewed/legacy form
+and reauthentication, with **Selected** Target scope. The submitted form must
+also carry the actual SSH-permissions-reviewed marker: a standalone confirmation
+flag on a legacy/unreviewed form cannot lift default SSH denials. An unreviewed/legacy form
 or failed confirmation never silently creates an SSH grant. Target reachability
 still requires an explicit User → Target allow or assigned Target Group; roles
 without the requested capability cannot be elevated. Widening to **All** Target
@@ -168,12 +170,12 @@ bash bin/test-update-backup-integrity.sh /path/to/candidate-update.zip /path/to/
 ```
 
 For operators who already installed a 2.1.0 or 2.1.1 candidate, the
-2.1.2-rc.2 update package must additionally pass the same authenticated
+2.1.2-rc.4 update package must additionally pass the same authenticated
 browser-update test against a **verified unaltered candidate fresh-install ZIP**
 from each earlier installed GitHub Actions run (verify its original checksum, provenance
 and hash). The credential/Target/grant preservation assertions must run for
 both the published 2.0.x Target-era baselines and the distributed 2.1.0,
-2.1.1 and the already distributed 2.1.2-rc.1/rc.2 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
+2.1.1 and the already distributed 2.1.2-rc.1/rc.2/rc.3 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
 **never** edit an installed VERSION, bypass that comparison, rename a ZIP to
 pretend it is newer, or overwrite production files with a fresh-install ZIP.
 If a 2.1.0 -> 2.1.0 attempt was rejected during preflight, it must not be
