@@ -12,6 +12,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use DateTimeInterface;
 use InvalidArgumentException;
 
@@ -119,6 +120,10 @@ final readonly class TargetMcpToolHandlers
         $this->activity->record($correlationId, $operation, 'failure', null, $code);
 
         // Internal correlation and request/client identifiers stay in Activity only.
-        return ['ok' => false, 'error' => ['code' => $code, 'message' => $message]];
+        return ['ok' => false, 'error' => [
+            'code' => $code,
+            'message' => $message,
+            'next_step' => OperationDiagnostics::nextStep($code),
+        ]];
     }
 }

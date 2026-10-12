@@ -15,6 +15,7 @@ use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -109,11 +110,25 @@ final class TargetController extends Controller
         try {
             $target = $adapter->register($validated);
         } catch (TargetConnectorFailure $exception) {
+            $code = $exception->reason ?? 'registration_rejected';
+            $reference = OperationDiagnostics::failure('target-registration', $code, null, $exception->diagnostics);
+
             return back()->withInput($this->safeOldInput($request, $adapter))
-                ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()]);
+                ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()])
+                ->with('diagnostic_code', $code)
+                ->with('diagnostic_reference', $reference);
         }
 
-        $access->includeCreatedTarget($user, $target);
+        // Enrollment is not an authorization grant. Selected-scope creators
+        // cannot inspect or operate the new endpoint until the Owner explicitly
+        // assigns it through User -> Target access or an approved Target Group.
+        if (! $access->allows($user, GatewayPermission::TargetsView, $target)) {
+            return redirect()->route('admin.targets.index')
+                ->with('status', $adapter->registrationStatus().' '.__(
+                    'Target :id was registered but is outside your permitted scope. Ask an Owner to assign access before using it.',
+                    ['id' => $target->target_id],
+                ));
+        }
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
             ->with('status', $adapter->registrationStatus());

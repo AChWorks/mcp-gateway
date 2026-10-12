@@ -27,10 +27,10 @@ final class WpAiBridgeDiscovery
         }
 
         if ($protected->status === 404 || $protected->status === 410) {
-            throw new BridgeDiscoveryException('missing_bridge', 'WP AI Bridge protected-resource metadata was not found.');
+            throw new BridgeDiscoveryException('missing_bridge', 'WP AI Bridge protected-resource metadata was not found.', ['http_status' => $protected->status]);
         }
         if ($protected->status !== 200) {
-            throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge protected-resource metadata returned an unexpected status.');
+            throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge protected-resource metadata returned an unexpected status.', ['http_status' => $protected->status]);
         }
 
         try {
@@ -75,7 +75,7 @@ final class WpAiBridgeDiscovery
         }
 
         if ($server->status !== 200) {
-            throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge authorization-server metadata returned an unexpected status.');
+            throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge authorization-server metadata returned an unexpected status.', ['http_status' => $server->status]);
         }
 
         try {
@@ -155,6 +155,9 @@ final class WpAiBridgeDiscovery
             ? $exception->reason
             : 'network_failure';
 
-        return new BridgeDiscoveryException($reason, 'WP AI Bridge metadata could not be reached safely.');
+        return new BridgeDiscoveryException($reason, 'WP AI Bridge metadata could not be reached safely.', [
+            ...$exception->details,
+            'pre_dispatch' => $exception->preDispatch,
+        ]);
     }
 }

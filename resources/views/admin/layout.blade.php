@@ -72,6 +72,21 @@
     @if ($errors->has('target'))
         <div class="alert alert-error" role="alert">{{ $errors->first('target') }}</div>
     @endif
+    @if (session('diagnostic_code'))
+        <section class="panel" aria-label="{{ __('Operation diagnostic') }}" role="status">
+            <p><strong>{{ __('Diagnostic category') }}:</strong>
+                <code>{{ session('diagnostic_code') }}</code>
+                @if (session('diagnostic_stage'))
+                    · <strong>{{ __('Failure stage') }}:</strong> <code>{{ session('diagnostic_stage') }}</code>
+                @endif
+            </p>
+            <p>{{ \App\Support\OperationDiagnostics::summary((string) session('diagnostic_code')) }}</p>
+            <p><strong>{{ __('What to check') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep((string) session('diagnostic_code')) }}</p>
+            @if (session('diagnostic_reference'))
+                <p><strong>{{ __('Log reference') }}:</strong> <code>{{ session('diagnostic_reference') }}</code></p>
+            @endif
+        </section>
+    @endif
 
     @yield('content')
 </main>

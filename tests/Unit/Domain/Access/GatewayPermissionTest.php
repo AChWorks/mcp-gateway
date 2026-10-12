@@ -27,12 +27,13 @@ final class GatewayPermissionTest extends TestCase
         self::assertStringContainsString('not limited to Targets the user created', $permission->description());
     }
 
-    public function test_target_create_is_gateway_wide_but_documents_selected_scope_auto_inclusion(): void
+    public function test_target_create_is_gateway_wide_but_does_not_auto_grant_target_scope(): void
     {
         $permission = GatewayPermission::TargetsCreate;
 
         self::assertSame('Gateway-wide', $permission->scopeLabel());
         self::assertFalse($permission->isTargetScoped());
-        self::assertStringContainsString('automatically added', $permission->description());
+        self::assertStringContainsString('grants no Target access', $permission->description());
+        self::assertStringContainsString('Owner-approved Target or group assignment', $permission->description());
     }
 }

@@ -10,6 +10,9 @@ final class TargetConnectorFailure extends RuntimeException
     public function __construct(
         string $message,
         public readonly ?string $field = null,
+        public readonly ?string $reason = null,
+        /** @var array<string,mixed> */
+        public readonly array $diagnostics = [],
     ) {
         parent::__construct($message);
     }

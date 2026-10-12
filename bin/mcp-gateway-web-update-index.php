@@ -19,6 +19,20 @@ function updaterEscape(string $value): string
     return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+/**
+ * This updater can run while the Laravel application is down. Use only PHP's
+ * host log and a short random support reference; never log exception messages,
+ * package paths, credentials, database details or updater browser secrets.
+ */
+function updaterErrorReference(string $phase, Throwable $exception): string
+{
+    $reference = bin2hex(random_bytes(8));
+    error_log('MCP Gateway updater failure reference='.$reference
+        .' phase='.$phase.' class='.get_class($exception));
+
+    return $reference;
+}
+
 function updaterIsHttps(array $server): bool
 {
     $https = strtolower((string) ($server['HTTPS'] ?? ''));
@@ -256,9 +270,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
             .updaterNoScriptBusy(),
             202, updaterPollScript());
     } catch (Throwable $exception) {
+        $reference = updaterErrorReference('postflight', $exception);
         updaterRender(
             'MCP Gateway Update Needs Attention',
-            '<p class="error">'.updaterEscape($exception->getMessage()).'</p><div class="notice">Do not re-extract or start another update unless the message above confirms that the previous application files were restored and the application returned to service.</div>',
+            '<p class="error">'.updaterEscape($exception->getMessage()).'</p><div class="notice">Do not re-extract or start another update unless the message above confirms that the previous application files were restored and the application returned to service.</div><p>Server error-log reference: <code>'.$reference.'</code></p>',
             500,
         );
     }
@@ -378,8 +393,9 @@ try {
     $csrf = (string) $authRequest->session()->token();
     $httpKernel->terminate($authRequest, $authResponse);
     $app->make(ConsoleKernel::class)->bootstrap();
-} catch (Throwable) {
-    updaterRender('MCP Gateway Update', '<p class="error">Could not initialize the authenticated update session.</p>', 500);
+} catch (Throwable $exception) {
+    $reference = updaterErrorReference('bootstrap', $exception);
+    updaterRender('MCP Gateway Update', '<p class="error">Could not initialize the authenticated update session.</p><p>Server error-log reference: <code>'.$reference.'</code></p>', 500);
 }
 
 if ($browserToken === '' || ! preg_match('/^[a-f0-9]{64}$/', $browserToken)) {
@@ -391,7 +407,8 @@ try {
     $info = $updater->inspect();
     $resetPlan = $updater->targetResetPreflight();
 } catch (Throwable $exception) {
-    updaterRender('MCP Gateway Update', '<p class="error">'.updaterEscape($exception->getMessage()).'</p>', 400);
+    $reference = updaterErrorReference('preflight', $exception);
+    updaterRender('MCP Gateway Update', '<p class="error">'.updaterEscape($exception->getMessage()).'</p><p>Server error-log reference: <code>'.$reference.'</code></p>', 400);
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
@@ -428,9 +445,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
             updaterSteps('files').'<div class="notice" role="status">This request did not start a second update. Return to the original browser tab; do not submit again.</div>',
             409);
     } catch (Throwable $exception) {
+        $reference = updaterErrorReference('stage', $exception);
         updaterRender(
             'MCP Gateway Update Failed',
-            '<p class="error">'.updaterEscape($exception->getMessage()).'</p><p>Follow the recovery state reported above before attempting another update.</p>',
+            '<p class="error">'.updaterEscape($exception->getMessage()).'</p><p>Follow the recovery state reported above before attempting another update.</p><p>Server error-log reference: <code>'.$reference.'</code></p>',
             500,
         );
     }

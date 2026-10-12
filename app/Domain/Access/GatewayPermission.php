@@ -81,7 +81,7 @@ enum GatewayPermission: string
             self::DashboardView => 'Open the admin dashboard. Target counts and health still follow targets.view and the effective Target scope; recent activity also requires activity.view.',
             self::GatewayConnectionView => 'View the Gateway MCP endpoint and OAuth/client metadata. This is Gateway-wide and does not grant access to any Target.',
             self::TargetsView => 'List and open Targets inside the user\'s effective Target scope. It never makes an out-of-scope Target visible.',
-            self::TargetsCreate => 'Add a new Target to the Gateway. This is Gateway-wide. If the creator uses Selected Target scope, the new Target is automatically added to that user\'s scope.',
+            self::TargetsCreate => 'Register a new Target endpoint at Gateway scope. Registration grants no Target access; users with Selected scope require separate Owner-approved Target or group assignment before viewing or operating it.',
             self::TargetsUpdate => 'Edit the display name of an in-scope Target. Editing SSH endpoint, credentials, host-key pin or WordPress URL separately requires Owner security authority and current-password confirmation; Target ID and connector type remain stable.',
             self::TargetsRemove => 'Remove any Target inside the user\'s effective Target scope when this permission is allowed for that Target. Creation ownership is not considered; it is not limited to Targets the user created.',
             self::TargetsConnect => 'Start the supported connection workflow for an in-scope Target. WordPress currently uses OAuth; future connectors may use different authentication.',

@@ -2,7 +2,9 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Application\Access\AccessControl;
 use App\Application\Targets\TargetInventory;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Http\DnsResolver;
@@ -14,6 +16,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class TargetManagementAdminTest extends TestCase
@@ -159,6 +162,103 @@ final class TargetManagementAdminTest extends TestCase
 
         Http::assertNothingSent();
         self::assertSame(2, Target::query()->count());
+    }
+
+    public function test_selected_administrator_cannot_expand_ssh_or_wordpress_target_scope_by_registration(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $this->actingAs($owner)->post('/admin/users', [
+            'name' => 'Selected SSH administrator',
+            'email' => 'selected-ssh-admin@example.test',
+            'password' => 'DifferentHorse!234',
+            'password_confirmation' => 'DifferentHorse!234',
+            'role' => 'administrator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => '1',
+            'ssh_permissions_reviewed' => '1',
+            'confirm_ssh_permission_changes' => '1',
+            'denied_permissions' => [
+                GatewayPermission::SshFileRead->value,
+                GatewayPermission::SshFileWrite->value,
+            ],
+            'current_password' => 'ThisIsATestSecret!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+
+        $admin = User::query()->where('email', 'selected-ssh-admin@example.test')->sole();
+        $access = app(AccessControl::class);
+        self::assertTrue($access->allows($admin, GatewayPermission::TargetsCreate));
+        self::assertTrue($access->allows($admin, GatewayPermission::SshCommandRun));
+        $this->assertDatabaseMissing('user_permission_denials', [
+            'user_id' => $admin->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        $hostKey = 'ssh-ed25519 '.base64_encode(
+            pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat("\x33", 32),
+        );
+        $newTargets = [
+            'ssh-new-admin' => [
+                'connector_type' => 'ssh_direct',
+                'target_id' => 'ssh-new-admin',
+                'display_name' => 'SSH newly enrolled',
+                'ssh_host' => '1.1.1.1',
+                'ssh_port' => 22,
+                'ssh_username' => 'deploy',
+                'ssh_host_key' => $hostKey,
+                'ssh_auth_method' => 'password',
+                'ssh_password' => 'test-credential-not-a-server-password',
+                'ssh_trust_confirmed' => 'yes',
+            ],
+            'wp-new-admin' => [
+                'connector_type' => 'wp_ai_bridge',
+                'target_id' => 'wp-new-admin',
+                'display_name' => 'WordPress newly enrolled',
+                'base_url' => 'https://wordpress.example.test/',
+            ],
+        ];
+
+        $this->actingAs($admin);
+        foreach ($newTargets as $id => $payload) {
+            $this->post('/admin/targets', $payload)
+                ->assertRedirect('/admin/targets')->assertSessionHasNoErrors()
+                ->assertSessionHas('status', static fn (string $message): bool => str_contains($message, $id) && str_contains($message, 'Ask an Owner'));
+            $created = Target::query()->where('target_id', $id)->sole();
+            $this->assertDatabaseMissing('user_target_access', [
+                'user_id' => $admin->getKey(),
+                'target_record_id' => $created->getKey(),
+                'allowed' => true,
+            ]);
+            self::assertFalse($access->allows($admin, GatewayPermission::TargetsView, $created));
+            $this->get('/admin/targets/'.$id)->assertForbidden();
+        }
+
+        $ssh = Target::query()->where('target_id', 'ssh-new-admin')->sole();
+        $wordpress = Target::query()->where('target_id', 'wp-new-admin')->sole();
+        self::assertFalse($access->allows($admin, GatewayPermission::SshCommandRun, $ssh));
+        $this->get('/admin/targets')->assertOk()
+            ->assertDontSee('ssh-new-admin')->assertDontSee('wp-new-admin');
+
+        $targetRule = '/admin/users/'.$admin->getKey().'/targets/'.$ssh->target_id;
+        $this->actingAs($owner)->put($targetRule, [
+            'access_rule' => 'allow',
+            'current_password' => 'ThisIsATestSecret!234',
+        ])->assertSessionHasErrors('confirm_ssh_target_changes');
+        self::assertFalse($access->allows($admin, GatewayPermission::SshCommandRun, $ssh));
+
+        $this->put($targetRule, [
+            'access_rule' => 'allow',
+            'current_password' => 'ThisIsATestSecret!234',
+            'confirm_ssh_target_changes' => '1',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('user_target_access', [
+            'user_id' => $admin->getKey(),
+            'target_record_id' => $ssh->getKey(),
+            'allowed' => true,
+        ]);
+        self::assertTrue($access->allows($admin, GatewayPermission::SshCommandRun, $ssh));
+        self::assertFalse($access->allows($admin, GatewayPermission::SshFileRead, $ssh));
+        self::assertFalse($access->allows($admin, GatewayPermission::TargetsView, $wordpress));
+        $this->actingAs($admin)->get('/admin/targets/'.$ssh->target_id)->assertOk();
     }
 
     public function test_admin_registration_rejects_unreviewed_connector_and_non_https_or_unsafe_target(): void
@@ -337,9 +437,12 @@ final class TargetManagementAdminTest extends TestCase
         $this->get('/admin/targets/'.$target->target_id)->assertOk();
         Http::assertNothingSent();
 
-        $this->post(route('admin.targets.test', ['target' => $target->target_id], false))
+        $failure = $this->post(route('admin.targets.test', ['target' => $target->target_id], false))
             ->assertRedirect('/admin/targets/'.$target->target_id)
-            ->assertSessionHasErrors('target');
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'missing_bridge');
+        self::assertTrue(Str::isUuid((string) session('diagnostic_reference')));
+        $failure->assertHeader('X-Correlation-ID', (string) session('diagnostic_reference'));
         $target->refresh();
         self::assertNotNull($target->last_tested_at);
         self::assertSame('missing_bridge', $target->last_error_code);

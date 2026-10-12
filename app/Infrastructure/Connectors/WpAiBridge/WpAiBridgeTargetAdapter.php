@@ -51,6 +51,8 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
                     'reason' => $exception->reason,
                 ]),
                 'base_url',
+                $exception->reason,
+                $exception->diagnostics,
             );
         } catch (InvalidArgumentException) {
             throw new TargetConnectorFailure(
@@ -92,7 +94,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
         try {
             return new TargetConnectorResult(redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->connectionFailureMessage($exception));
+            throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -103,7 +105,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->connectionFailureMessage($exception));
+            throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -114,7 +116,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(statusMessage: __('WordPress Target disconnected after confirmed credential revocation.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->connectionFailureMessage($exception));
+            throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -125,7 +127,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(statusMessage: __('WordPress metadata is reachable and compatible.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->connectionFailureMessage($exception));
+            throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 

@@ -13,9 +13,9 @@ VERSION, and release action.
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
   either branch, force-merge a divergent release tag, or copy VERSION alone.
-- Candidate VERSION **2.1.2-rc.4** is a distinct **unpublished prerelease
+- Candidate VERSION **2.1.2-rc.5** is a distinct **unpublished prerelease
   identity**, strictly newer than previous deployed test candidates 2.1.0,
-  2.1.1 and GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 / 2.1.2-rc.3 artifacts. CI
+  2.1.1 and GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 / 2.1.2-rc.3 / 2.1.2-rc.4 artifacts. CI
   correctly rejected reusing rc.1 across two different PR HEADs, proving the
   immutable candidate-identity gate. Planned public stable is **2.1.2**, never assigned
   to a test candidate.
@@ -143,9 +143,26 @@ confirmation and password, because removing a denial or adding reachability
 can widen an already-authorized user's SSH access. SSH unrestricted OS shell
 authority can modify files even when SFTP tools are denied. Agent permission
 identifiers remain paused and **read-only**; do not activate nonexistent tools.
-Add Target itself only registers a connector endpoint; it does not grant
-remote operations. OAuth-origin edit UI also suppresses the form while a
-WordPress authorization flow is pending, matching the server-side reject.
+Add Target itself only registers a connector endpoint; it never creates
+positive User-to-Target scope rows. A Selected-scope creator is redirected
+to their permitted Target list, not an inaccessible Target detail page, and
+receives instructions to request explicit Owner assignment through User →
+Target access or a Target Group. Only after that assignment can previously
+Owner-approved global connector capabilities be used on the new Target.
+Existing All-scope users and Owners retain their separately assigned scope.
+OAuth-origin edit UI also suppresses the form while a WordPress authorization
+flow is pending, matching the server-side reject.
+
+**Whole-Gateway error/reporting acceptance:** Admin Target errors and stored
+Target health show a human explanation and next check, while API/MCP errors
+retain machine-readable reasons with additive safe next steps. HTTP requests,
+Activity and application logs share a correlation ID. Network failures carry
+finite DNS/TCP/TLS/timeout stages when actually known, while WordPress OAuth
+revocation intent, refresh uncertainty, SSH trust and unknown remote file
+writes continue to fail closed. No raw credentials, command contents or
+network payloads enter logs. Fresh install and standalone browser updater
+failures have PHP-host-log references. See [deployment diagnostics](DEPLOYMENT.md#production-diagnostics-runbook).
+These are local candidate features, not yet proof of an installed upgrade.
 
 Editor regression evidence must include password-only and private-key
 rotation, both credential-preserving host/port edits and disconnected
@@ -170,12 +187,12 @@ bash bin/test-update-backup-integrity.sh /path/to/candidate-update.zip /path/to/
 ```
 
 For operators who already installed a 2.1.0 or 2.1.1 candidate, the
-2.1.2-rc.4 update package must additionally pass the same authenticated
+2.1.2-rc.5 update package must additionally pass the same authenticated
 browser-update test against a **verified unaltered candidate fresh-install ZIP**
 from each earlier installed GitHub Actions run (verify its original checksum, provenance
 and hash). The credential/Target/grant preservation assertions must run for
 both the published 2.0.x Target-era baselines and the distributed 2.1.0,
-2.1.1 and the already distributed 2.1.2-rc.1/rc.2/rc.3 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
+2.1.1 and the already distributed 2.1.2-rc.1/rc.2/rc.3/rc.4 candidates where required. The updater intentionally rejects same-version/downgrade attempts:
 **never** edit an installed VERSION, bypass that comparison, rename a ZIP to
 pretend it is newer, or overwrite production files with a fresh-install ZIP.
 If a 2.1.0 -> 2.1.0 attempt was rejected during preflight, it must not be

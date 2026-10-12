@@ -280,31 +280,6 @@ final readonly class AccessControl
             && $this->scopeMode($user) === TargetScopeMode::All;
     }
 
-    public function includeCreatedTarget(User $user, Target $target): void
-    {
-        $role = $this->role($user);
-
-        if ($role === GatewayRole::Owner || $this->scopeMode($user) === TargetScopeMode::All) {
-            return;
-        }
-
-        if (! $role instanceof GatewayRole || $this->scopeMode($user) !== TargetScopeMode::Selected) {
-            return;
-        }
-
-        DB::table('user_target_access')->updateOrInsert(
-            [
-                'user_id' => $user->getKey(),
-                'target_record_id' => $target->getKey(),
-            ],
-            [
-                'allowed' => true,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-        );
-    }
-
     private function globalAllows(
         User $user,
         ?GatewayRole $role,

@@ -8,6 +8,7 @@
         <div class="eyebrow">{{ __('Activity') }}</div>
         <h1>{{ __('Operator activity view') }}</h1>
         <p class="muted">{{ __('Only bounded metadata is shown. Raw MCP payloads and credentials are not stored in this feed.') }}</p>
+        <p class="muted">{{ __('Use the Correlation ID to find the matching server diagnostic event. Expand any failed row for a plain-language explanation and suggested checks.') }}</p>
     </div>
 </div>
 
@@ -51,7 +52,16 @@
                         <td><code>{{ $item['client_profile_key'] ?? '—' }}</code></td>
                         <td>{{ $item['operation'] }}</td>
                         <td><span class="badge badge-{{ $item['outcome'] === 'success' ? 'success' : 'danger' }}">{{ $item['outcome'] }}</span></td>
-                        <td><code>{{ $item['error_code'] ?? '—' }}</code></td>
+                        <td>
+                            <code>{{ $item['error_code'] ?? '—' }}</code>
+                            @if ($item['error_code'] !== null)
+                                <details>
+                                    <summary>{{ __('Explain error') }}</summary>
+                                    <p>{{ \App\Support\OperationDiagnostics::summary($item['error_code']) }}</p>
+                                    <p><strong>{{ __('Suggested checks') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep($item['error_code']) }}</p>
+                                </details>
+                            @endif
+                        </td>
                         <td><code class="small-code">{{ $item['correlation_id'] }}</code></td>
                     </tr>
                 @endforeach

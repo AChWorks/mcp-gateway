@@ -10,6 +10,7 @@ use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use Throwable;
 
 /** Target-scoped, privilege-truthful MCP operation. Never logs command text. */
@@ -65,6 +66,7 @@ final readonly class SshCommandMcpToolHandlers
             ...($unknown ? ['error' => [
                 'code' => 'outcome_unknown',
                 'message' => 'Remote command may have executed; do not retry automatically.',
+                'next_step' => OperationDiagnostics::nextStep('outcome_unknown'),
             ]] : []),
         ];
     }
@@ -81,6 +83,7 @@ final readonly class SshCommandMcpToolHandlers
                 'message' => $code === 'target_not_found'
                     ? 'SSH Target is unavailable.'
                     : 'SSH command could not be started safely.',
+                'next_step' => OperationDiagnostics::nextStep($code),
             ],
         ];
     }

@@ -392,6 +392,69 @@ Do not include access tokens, refresh tokens, authorization codes, client assert
 
 ### Production diagnostics runbook
 
+### Candidate-wide structured diagnostics and safe support references
+
+On the *unreleased candidate*, operational failures across the Admin panel,
+WordPress and Direct SSH Target lifecycle, MCP tool results, optional SSH file
+exchange, OAuth callbacks, and HTTP request handling use bounded machine error
+codes and an actionable explanation rather than only a generic red alert.
+Every Admin/HTTP response includes an `X-Correlation-ID` UUID. Authenticated
+Admin operations show a failure category, the safe failure stage when known,
+the recommended investigation, and the matching **Log reference**. The stored
+Target page explains its last error without making another network request.
+MCP tool errors preserve their existing `code` and `message` and add an
+operator-oriented `next_step`; request IDs stay out of public MCP tool bodies.
+
+Application failures log one structured `Gateway operation failure.` event
+with correlation ID, bounded operation/error identity, authorized Target
+identifier/type where known and only allowlisted safe diagnostics: e.g.
+`failure_stage` = `dns_lookup`, `dns_timeout`, `tcp_connect`,
+`tls_handshake`, `request_timeout`, `response_transfer`;
+optional remote HTTP status and proven request-not-sent flag. This is not a
+packet capture or complete root-cause diagnosis: when the network library
+cannot prove the phase, treat it as unknown rather than guessing. The SAME
+correlation identity joins Activity records to log records for routed MCP
+operations. Routine malformed/unauthorized input remains visible in Activity,
+not a high-volume detailed server error log. Nothing records OAuth tokens,
+client assertions, passwords, SSH keys, shell text, SFTP paths, file contents,
+raw untrusted HTTP response bodies or raw exception messages.
+
+The fresh-install web installer and standalone authenticated browser updater
+also display a short support reference on server-side failure. They run before
+or during Laravel bootstrap, so **their references are written to the PHP
+host/site error log**, not necessarily `storage/logs`. Preserve the updater
+state, private backups, recovery evidence and original safety controls after
+an unknown migration outcome; an error reference is not a retry authorization.
+
+To investigate a real installed WordPress Target failure, first collect the
+Target ID, action (e.g. metadata-check vs credential disconnect), last-error
+code, UTC timestamp and displayed diagnostic reference from that exact
+installed Gateway. On the **actual installed Gateway host** (not your laptop
+or a different development/test server), run only anonymous non-secret checks
+against the configured public WordPress origin:
+
+```bash
+getent ahosts wordpress.example.com
+curl --noproxy '*' --silent --show-error --connect-timeout 5 --max-time 14 \
+  --output /dev/null \
+  --write-out 'HTTP=%{http_code} DNS=%{time_namelookup} TCP=%{time_connect} TLS=%{time_appconnect} TOTAL=%{time_total}\n' \
+  https://wordpress.example.com/.well-known/oauth-protected-resource
+grep -F '<diagnostic-uuid>' storage/logs/laravel-*.log
+```
+
+Use the Target's actual public hostname instead of `wordpress.example.com`.
+Repeat the anonymous probe for `/.well-known/oauth-authorization-server` if
+needed. A success from another host does not prove that the Gateway's source
+IP or resolver is accepted by the WordPress firewall/WAF, DNS, TLS endpoint
+or Iranian/international network path; nor does one failure prove intentional
+geographic blocking. Compare finite `failure_stage` and response status
+before changing networking. Do not send OAuth POSTs, refresh tokens, access
+tokens, client assertions, credentials, or remote commands to obtain logs.
+For `revocation_pending`, keep encrypted credentials and the pending intent
+until upstream revocation is confirmed; do not force-clear a potentially
+live remote grant. On an older public stable release these improved diagnostic
+fields do **not** exist until an approved update is installed.
+
 Start diagnosis with the exact failure time/time zone, affected site/operation, HTTP status when known, and the Gateway correlation ID. Preserve identifiers and bounded metadata; never preserve raw credentials or request bodies merely to make a failure easier to inspect.
 
 Use the evidence in this order:

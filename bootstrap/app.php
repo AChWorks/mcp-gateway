@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\EnsureCorrelationId;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -23,6 +24,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->trustProxies(
             headers: Request::HEADER_X_FORWARDED_FOR | Request::HEADER_X_FORWARDED_PROTO,
         );
+        // Admin, OAuth, MCP and future HTTP routes share a request reference.
+        // Existing MCP-local middleware reuses the attribute already set.
+        $middleware->append(EnsureCorrelationId::class);
         // MCP routes are registered outside the stateful web middleware group.
     })
     ->withExceptions(function (Exceptions $exceptions): void {

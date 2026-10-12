@@ -118,7 +118,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(statusMessage: __('SSH host key, numeric TCP peer and login verified. No command was run.'));
         } catch (SshTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->failureMessage($exception));
+            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason);
         }
     }
 
@@ -129,7 +129,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(statusMessage: __('SSH recheck verified the pinned host key and login.'));
         } catch (SshTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->failureMessage($exception));
+            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason);
         }
     }
 
@@ -140,7 +140,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(statusMessage: __('SSH credential deleted from this Gateway. This does NOT revoke the remote Unix account or terminate external sessions.'));
         } catch (SshTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->failureMessage($exception));
+            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason);
         }
     }
 
@@ -151,7 +151,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(statusMessage: __('SSH TCP peer, pinned host key and login verified.'));
         } catch (SshTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->failureMessage($exception));
+            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason);
         }
     }
 

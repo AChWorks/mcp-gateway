@@ -6,7 +6,8 @@ use RuntimeException;
 
 final class BridgeDiscoveryException extends RuntimeException
 {
-    public function __construct(public readonly string $reason, string $message)
+    /** @param array<string,mixed> $diagnostics No URL, token, response body or exception text. */
+    public function __construct(public readonly string $reason, string $message, public readonly array $diagnostics = [])
     {
         parent::__construct($message);
     }

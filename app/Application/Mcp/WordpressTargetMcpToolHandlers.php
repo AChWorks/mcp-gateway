@@ -12,6 +12,7 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
 use App\Models\User;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use JsonException;
 
 final readonly class WordpressTargetMcpToolHandlers
@@ -150,6 +151,10 @@ final readonly class WordpressTargetMcpToolHandlers
             $code,
         );
 
-        return ['ok' => false, 'error' => ['code' => $code, 'message' => $message]];
+        return ['ok' => false, 'error' => [
+            'code' => $code,
+            'message' => $message,
+            'next_step' => OperationDiagnostics::nextStep($code),
+        ]];
     }
 }

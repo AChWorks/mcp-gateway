@@ -9,6 +9,7 @@ use App\Application\Targets\TargetConnectorRegistry;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
+use App\Support\OperationDiagnostics;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -44,9 +45,14 @@ final class TargetConfigurationController extends Controller
 
             return back()->withErrors($exception->errors())->withInput($this->safeInput($request, $adapter->safeOldInputFields()));
         } catch (TargetConnectorFailure $exception) {
+            $code = $exception->reason ?? 'configuration_rejected';
+            $reference = OperationDiagnostics::failure('target-configuration-update', $code, $target, $exception->diagnostics);
+
             return back()
                 ->withErrors([$exception->field ?? 'configuration' => $exception->getMessage()])
-                ->withInput($this->safeInput($request, $adapter->safeOldInputFields()));
+                ->withInput($this->safeInput($request, $adapter->safeOldInputFields()))
+                ->with('diagnostic_code', $code)
+                ->with('diagnostic_reference', $reference);
         }
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
