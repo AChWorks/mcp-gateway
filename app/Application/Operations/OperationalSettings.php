@@ -24,6 +24,9 @@ final class OperationalSettings
         // This is NOT a logical operation or streaming/job timeout.
         'wp_connect_timeout_seconds' => ['minimum' => 1, 'maximum' => 15],
         'wp_request_timeout_seconds' => ['minimum' => 2, 'maximum' => 30],
+        // Distinct aggregate SFTP object and whole-transfer budgets (not MCP frames).
+        'ssh_transfer_max_kib' => ['minimum' => 256, 'maximum' => 65536],
+        'ssh_transfer_max_seconds' => ['minimum' => 5, 'maximum' => 40],
     ];
 
     /** @var array<string, int>|null */
@@ -65,6 +68,20 @@ final class OperationalSettings
         return ['connect' => $connect, 'request' => max($connect, $request)];
     }
 
+    /** @return array{max_bytes:int,max_seconds:int} */
+    public function sshTransferLimits(): array
+    {
+        $overrides = $this->overrides();
+        $configuredMax = min(67108864, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608)));
+        $configuredSeconds = min(40, max(1, (int) config('ssh.file_transfer.max_seconds', 30)));
+
+        return [
+            'max_bytes' => isset($overrides['ssh_transfer_max_kib'])
+                ? $overrides['ssh_transfer_max_kib'] * 1024 : $configuredMax,
+            'max_seconds' => $overrides['ssh_transfer_max_seconds'] ?? $configuredSeconds,
+        ];
+    }
+
     /** @return array{version:int,overrides:array<string,int>} */
     public function state(): array
     {
@@ -88,10 +105,20 @@ final class OperationalSettings
      */
     public function save(User $actor, array $values, int $expectedVersion): void
     {
-        if (array_keys($values) !== array_keys(self::SETTING_RANGES)) {
+        $keys = array_keys($values);
+        $all = array_keys(self::SETTING_RANGES);
+        // A caller on an existing four-field source still needs a safe
+        // upgrade path. Preserve rather than erase the new SSH overrides.
+        if ($keys !== $all && $keys !== array_slice($all, 0, 4)) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);
+        }
+        if ($keys !== $all) {
+            $previous = $this->state()['overrides'];
+            foreach (array_slice($all, 4) as $key) {
+                $values[$key] = $previous[$key] ?? null;
+            }
         }
 
         $next = [];
@@ -155,6 +182,8 @@ final class OperationalSettings
                 ])), JSON_THROW_ON_ERROR),
                 'wp_connect_timeout_seconds' => $next['wp_connect_timeout_seconds'] ?? null,
                 'wp_request_timeout_seconds' => $next['wp_request_timeout_seconds'] ?? null,
+                'ssh_transfer_max_kib' => $next['ssh_transfer_max_kib'] ?? null,
+                'ssh_transfer_max_seconds' => $next['ssh_transfer_max_seconds'] ?? null,
                 'version' => $revision,
                 'changed_by' => $actor->getKey(),
                 'updated_at' => $now,
@@ -213,7 +242,8 @@ final class OperationalSettings
     private function combineOverrides(object $record): array
     {
         $overrides = $this->decodeOverrides((string) $record->overrides);
-        foreach (['wp_connect_timeout_seconds', 'wp_request_timeout_seconds'] as $key) {
+        foreach (['wp_connect_timeout_seconds', 'wp_request_timeout_seconds',
+            'ssh_transfer_max_kib', 'ssh_transfer_max_seconds'] as $key) {
             $value = $record->{$key} ?? null;
             if ($value === null) {
                 continue;

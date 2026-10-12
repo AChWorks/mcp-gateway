@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Gateway operations') }}</div>
         <h1>{{ __('Operational settings') }}</h1>
-        <p class="muted">{{ __('Tune finite WordPress response and connection limits without editing environment files or publishing a new version. Only the Owner may change these values.') }}</p>
+        <p class="muted">{{ __('Tune finite WordPress response, connection and SSH whole-file transfer limits without editing environment files or publishing a new version. Only the Owner may change these values.') }}</p>
     </div>
 </div>
 
@@ -16,6 +16,7 @@
     <p class="muted">{{ __('Only the Owner can modify this finite, audited allowlist. The default for each field comes from the existing source/environment configuration. Blank values restore that default without a code release.') }}</p>
     <p class="muted">{{ __('Response limits apply per decoded HTTP reply, including the JSON-RPC wrapper; they are not full-file limits. Confirmed read-only operations may use the larger response budget. The independent 8 MiB decoded-body safety guard still applies.') }}</p>
     <p class="muted">{{ __('Connection and total request timeouts apply to WordPress Bridge HTTPS requests including metadata and OAuth. The complete DNS lookup and HTTPS dispatch share the overall deadline. The connect limit must not exceed the overall request limit. OAuth one-shot recovery is still governed by the provider window and the original attempt timeout; changing settings cannot reopen or shorten that window.') }}</p>
+    <p class="muted">{{ __('SSH file limits are distinct from 16 KiB inline MCP reads and writes, the temporary 64 KiB buffer, and WordPress JSON limits. The optional binary edge must be explicitly enabled; changing quotas does not publish or authorize a new endpoint.') }}</p>
     <p class="muted">{{ __('These are conservative provisional ranges pending evidence in Issues #153 and #154. They do not extend PHP-FPM/CDN worker limits, change Target permissions, permit indefinite streaming or add file attachment support.') }}</p>
 
     <form method="post" action="{{ route('admin.operations.update') }}" class="form-stack">
@@ -26,6 +27,8 @@
         @foreach ($definitions as $key => $range)
             @if($key === 'wp_response_kib')
                 <h3>{{ __('Response budgets') }}</h3>
+            @elseif($key === 'ssh_transfer_max_kib')
+                <h3>{{ __('SSH whole-file transport budgets') }}</h3>
             @elseif($key === 'wp_connect_timeout_seconds')
                 <h3>{{ __('Connection and request deadlines') }}</h3>
             @endif
@@ -37,6 +40,8 @@
                     'wp_readonly_response_kib' => __('Confirmed read-only WordPress Ability response limit'),
                     'wp_connect_timeout_seconds' => __('Maximum HTTPS connection establishment time'),
                     'wp_request_timeout_seconds' => __('Overall HTTPS request time including DNS and response'),
+                    'ssh_transfer_max_kib' => __('Maximum completed SSH file transfer size per operation'),
+                    'ssh_transfer_max_seconds' => __('Maximum synchronous SSH whole-file transfer time'),
                 };
                 $effective = $state['overrides'][$key] ?? $defaults[$key];
                 if ($key === 'wp_request_timeout_seconds') {

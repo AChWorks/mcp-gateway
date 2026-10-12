@@ -114,6 +114,8 @@ if [[ "${1:-}" == inside ]]; then
     php tests/Support/installed-mixed/seed.php disable
   runuser -u aiworker -- env MIXED_ROOT="$ROOT" \
     php "$ROOT/client/client.php" revoked >"$MIXED_EVIDENCE/revoked.txt"
+  runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+    php "$ROOT/client/file-client.php" revoked >"$MIXED_EVIDENCE/file-revoked.txt"
   echo "PASS installed WordPress and OpenSSH share one Gateway through a real external MCP SDK client."
   exit 0
 fi

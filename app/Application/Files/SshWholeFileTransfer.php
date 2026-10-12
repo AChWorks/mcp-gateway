@@ -3,6 +3,7 @@
 namespace App\Application\Files;
 
 use App\Application\Access\AccessControl;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Domain\Access\GatewayPermission;
@@ -25,6 +26,7 @@ final readonly class SshWholeFileTransfer
         private AccessControl $access,
         private SshFileRuntime $ssh,
         private ActivityRecorder $activity,
+        private OperationalSettings $settings,
     ) {}
 
     public function target(User $user, string $id, GatewayPermission $permission): Target
@@ -48,11 +50,7 @@ final readonly class SshWholeFileTransfer
     /** @return array{max_bytes:int,max_seconds:int} */
     public function limits(): array
     {
-        return [
-            // Current experimental profile, NOT a global Gateway/file-type limit.
-            'max_bytes' => min(67108864, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608))),
-            'max_seconds' => min(40, max(1, (int) config('ssh.file_transfer.max_seconds', 30))),
-        ];
+        return $this->settings->sshTransferLimits();
     }
 
     /**

@@ -17,6 +17,17 @@ $ownerToken = $state['owner_token'];
 $sshUser = (string) getenv('MIXED_SSH_USER');
 $stage = '/home/'.$sshUser.'/.gateway-transfer-private';
 $tests = [];
+if (($argv[1] ?? '') === 'revoked') {
+    $probe = $http->post($base.rawurlencode($target).'/download', [
+        'headers' => ['Authorization' => 'Bearer '.$ownerToken],
+        'json' => ['path' => '/home/'.$sshUser.'/cannot-read-after-revocation'],
+    ]);
+    if ($probe->getStatusCode() !== 401) {
+        throw new RuntimeException('Existing revoked Owner bearer accessed binary file edge.');
+    }
+    echo "PASS previously issued bearer rejected at binary download edge with HTTP 401\n";
+    exit(0);
+}
 
 $check = static function (bool $success, string $label): void {
     if (! $success) {
@@ -95,6 +106,10 @@ try {
     $fixtures = [
         'empty' => '',
         'utf8' => str_repeat("سلام Gateway — 你好 🚀\n", 64),
+        'one_kib' => random_bytes(1024),
+        'ten_kib' => random_bytes(10240),
+        'sixty_four_kib' => random_bytes(65536),
+        'two_fifty_six_kib' => random_bytes(262144),
         'binary' => "\x00\xff".random_bytes(1024 * 1024 + 131)."\x7f",
         'png' => base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==', true),
         'pdf' => "%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\nxref\n0 1\n0000000000 65535 f \ntrailer<</Root 1 0 R>>\n%%EOF\n",
@@ -116,6 +131,14 @@ try {
             ]))->structuredContent;
             $check(($stat['result']['file']['size'] ?? -1) === strlen($bytes),
                 'real MCP SDK remote stat mismatch for '.$type);
+            if ($type === 'binary') {
+                // Create-only retries are not idempotent. A second request must
+                // fail without replacing the already verified destination.
+                $replay = $send($ownerToken, $path, $bytes);
+                $check($replay->getStatusCode() === 409, 'duplicate upload retried and mutated data');
+                $changed = $recv($ownerToken, $path, ['expected_sha256' => hash('sha256', 'different-source')]);
+                $check($changed['status'] === 409, 'wrong expected remote SHA was accepted');
+            }
             $download = $recv($ownerToken, $path, ['expected_sha256' => hash('sha256', $bytes)]);
             $check($download['status'] === 200, 'raw HTTP download failed for '.$type);
             $check($download['size'] === strlen($bytes)
@@ -153,8 +176,9 @@ try {
     $check($bad->getStatusCode() === 422, 'declared length mismatch accepted');
     $bad = $send($ownerToken, $notFoundPath, 'hello', ['expected_size' => 0]);
     $check($bad->getStatusCode() === 422, 'unpaired version accepted');
-    $bad = $send($ownerToken, $notFoundPath, str_repeat('A', 1024), ['size' => 8388609]);
-    $check(in_array($bad->getStatusCode(), [413, 422], true), 'oversize limit not enforced');
+    // Installed Owner override is 4096 KiB: send ACTUAL bytes above it.
+    $bad = $send($ownerToken, $notFoundPath, str_repeat('A', 4096 * 1024 + 1));
+    $check($bad->getStatusCode() === 413, 'actual over-budget binary upload not rejected');
 
     echo json_encode([
         'outcome' => 'PASS',
@@ -163,7 +187,7 @@ try {
         'model_consumed' => false,
         'chatgpt_host_file_handoff' => 'NOT_TESTED',
         'fixtures' => $tests,
-        'security_denials' => 'PASS invalid bearer, disabled client, scoped operator, denied destination, bad hash, missing source, wrong length, invalid version, oversize',
+        'security_denials' => 'PASS invalid bearer, disabled client, scoped operator, denied destination, bad hash, missing source, wrong length, invalid version, actual oversize, duplicate write, stale source hash',
         'aggregate_ms' => round((hrtime(true) - $startOverall) / 1e6, 2),
         'client_peak_memory_bytes' => memory_get_peak_usage(true),
     ], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n";
