@@ -2,7 +2,10 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Application\Access\AccessControl;
+use App\Application\Access\UserAccessManager;
 use App\Application\Targets\TargetInventory;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Http\DnsResolver;
@@ -14,6 +17,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class TargetManagementAdminTest extends TestCase
@@ -69,6 +73,45 @@ final class TargetManagementAdminTest extends TestCase
             ->assertSee('Authorize this Target to connect WordPress securely');
     }
 
+    public function test_new_target_is_a_single_connector_first_form_with_server_rendered_no_js_fallback(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        foreach ([
+            ['', '', true, true],
+            ['?connector_type=wp_ai_bridge', 'wp_ai_bridge', false, true],
+            ['?connector_type=ssh_direct', 'ssh_direct', true, false],
+            ['?connector_type=ai_server_agent', '', true, true],
+        ] as [$query, $selected, $wpDisabled, $sshDisabled]) {
+            $html = $this->get('/admin/targets/create'.$query)->assertOk()->getContent();
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+            self::assertSame(1, (int) $xpath->evaluate('count(//form[@id="target-create-form"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//select[@name="connector_type"])'));
+            self::assertSame(0, (int) $xpath->evaluate('count(//option[@value="ai_server_agent"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="target_id"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="display_name"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="ssh_password"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//textarea[@name="ssh_private_key"])'));
+            self::assertSame(0, (int) $xpath->evaluate('count(//option[@value="both"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="ssh_host_key" or @id="ssh_host_key"] | //textarea[@name="ssh_host_key"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//textarea[@id="ssh_host_key"][@required])'));
+            self::assertSame($selected === '' ? 0 : 1,
+                (int) $xpath->evaluate('count(//select[@id="connector_type"]/option[@selected])'));
+            if ($selected !== '') {
+                self::assertSame($selected, $xpath->evaluate('string(//select[@id="connector_type"]/option[@selected]/@value)'));
+            }
+            self::assertSame($wpDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="wp_ai_bridge"][@disabled])'));
+            self::assertSame($sshDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="ssh_direct"][@disabled])'));
+            self::assertStringContainsString('How to obtain and verify the server host key', $html);
+            self::assertStringContainsString('ssh_host_rsa_key.pub', $html);
+            self::assertStringContainsString('ssh_host_ed25519_key.pub', $html);
+        }
+    }
+
     public function test_paused_stored_agent_target_remains_readable_without_enabling_its_connector(): void
     {
         $this->actingAs($this->user('owner', 'all'));
@@ -120,6 +163,104 @@ final class TargetManagementAdminTest extends TestCase
 
         Http::assertNothingSent();
         self::assertSame(2, Target::query()->count());
+    }
+
+    public function test_selected_administrator_cannot_expand_ssh_or_wordpress_target_scope_by_registration(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $this->actingAs($owner)->post('/admin/users', [
+            'name' => 'Selected SSH administrator',
+            'email' => 'selected-ssh-admin@example.test',
+            'password' => 'DifferentHorse!234',
+            'password_confirmation' => 'DifferentHorse!234',
+            'role' => 'administrator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => '1',
+            'ssh_permissions_reviewed' => '1',
+            'confirm_ssh_permission_changes' => '1',
+            'denied_permissions' => [
+                GatewayPermission::SshFileRead->value,
+                GatewayPermission::SshFileWrite->value,
+            ],
+            'current_password' => 'ThisIsATestSecret!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+
+        $admin = User::query()->where('email', 'selected-ssh-admin@example.test')->sole();
+        $access = app(AccessControl::class);
+        self::assertTrue($access->allows($admin, GatewayPermission::TargetsCreate));
+        self::assertTrue($access->allows($admin, GatewayPermission::SshCommandRun));
+        $this->assertDatabaseMissing('user_permission_denials', [
+            'user_id' => $admin->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        $hostKey = 'ssh-ed25519 '.base64_encode(
+            pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat("\x33", 32),
+        );
+        $newTargets = [
+            'ssh-new-admin' => [
+                'connector_type' => 'ssh_direct',
+                'target_id' => 'ssh-new-admin',
+                'display_name' => 'SSH newly enrolled',
+                'ssh_host' => '1.1.1.1',
+                'ssh_port' => 22,
+                'ssh_username' => 'deploy',
+                'ssh_host_key' => $hostKey,
+                'ssh_auth_method' => 'password',
+                'ssh_password' => 'test-credential-not-a-server-password',
+                'ssh_trust_confirmed' => 'yes',
+            ],
+            'wp-new-admin' => [
+                'connector_type' => 'wp_ai_bridge',
+                'target_id' => 'wp-new-admin',
+                'display_name' => 'WordPress newly enrolled',
+                'base_url' => 'https://wordpress.example.test/',
+            ],
+        ];
+
+        $this->actingAs($admin);
+        foreach ($newTargets as $id => $payload) {
+            $this->post('/admin/targets', $payload)
+                ->assertRedirect('/admin/targets')->assertSessionHasNoErrors()
+                ->assertSessionHas('status', static fn (string $message): bool => str_contains($message, $id) && str_contains($message, 'Ask an Owner'));
+            $created = Target::query()->where('target_id', $id)->sole();
+            $this->assertDatabaseMissing('user_target_access', [
+                'user_id' => $admin->getKey(),
+                'target_record_id' => $created->getKey(),
+                'allowed' => true,
+            ]);
+            self::assertFalse($access->allows($admin, GatewayPermission::TargetsView, $created));
+            $this->get('/admin/targets/'.$id)->assertForbidden();
+        }
+
+        $ssh = Target::query()->where('target_id', 'ssh-new-admin')->sole();
+        $wordpress = Target::query()->where('target_id', 'wp-new-admin')->sole();
+        self::assertFalse($access->allows($admin, GatewayPermission::SshCommandRun, $ssh));
+        $this->get('/admin/targets')->assertOk()
+            ->assertDontSee('ssh-new-admin')->assertDontSee('wp-new-admin');
+
+        $targetRule = '/admin/users/'.$admin->getKey().'/targets/'.$ssh->target_id;
+        $this->actingAs($owner)->put($targetRule, [
+            'access_rule' => 'allow',
+            'current_password' => 'ThisIsATestSecret!234',
+        ])->assertSessionHasErrors('confirm_ssh_target_changes');
+        self::assertFalse($access->allows($admin, GatewayPermission::SshCommandRun, $ssh));
+
+        $this->put($targetRule, [
+            'access_rule' => 'allow',
+            'current_password' => 'ThisIsATestSecret!234',
+            'confirm_ssh_target_changes' => '1',
+            'target_revision' => app(UserAccessManager::class)->targetRuleRevision($admin, $ssh),
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('user_target_access', [
+            'user_id' => $admin->getKey(),
+            'target_record_id' => $ssh->getKey(),
+            'allowed' => true,
+        ]);
+        self::assertTrue($access->allows($admin, GatewayPermission::SshCommandRun, $ssh));
+        self::assertFalse($access->allows($admin, GatewayPermission::SshFileRead, $ssh));
+        self::assertFalse($access->allows($admin, GatewayPermission::TargetsView, $wordpress));
+        $this->actingAs($admin)->get('/admin/targets/'.$ssh->target_id)->assertOk();
     }
 
     public function test_admin_registration_rejects_unreviewed_connector_and_non_https_or_unsafe_target(): void
@@ -203,7 +344,7 @@ final class TargetManagementAdminTest extends TestCase
         $this->put('/admin/targets/permanent-id', ['display_name' => 'Unauthorized'])->assertForbidden();
 
         $this->actingAs($owner)->get('/admin/targets/permanent-id/edit')->assertOk()
-            ->assertSee('Only the display name can be changed')
+            ->assertSee('Stable Target ID')
             ->assertSee('permanent-id');
         $this->put('/admin/targets/permanent-id', [
             'display_name' => 'Updated safe label',
@@ -298,9 +439,12 @@ final class TargetManagementAdminTest extends TestCase
         $this->get('/admin/targets/'.$target->target_id)->assertOk();
         Http::assertNothingSent();
 
-        $this->post(route('admin.targets.test', ['target' => $target->target_id], false))
+        $failure = $this->post(route('admin.targets.test', ['target' => $target->target_id], false))
             ->assertRedirect('/admin/targets/'.$target->target_id)
-            ->assertSessionHasErrors('target');
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'missing_bridge');
+        self::assertTrue(Str::isUuid((string) session('diagnostic_reference')));
+        $failure->assertHeader('X-Correlation-ID', (string) session('diagnostic_reference'));
         $target->refresh();
         self::assertNotNull($target->last_tested_at);
         self::assertSame('missing_bridge', $target->last_error_code);

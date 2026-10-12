@@ -11,10 +11,12 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetGroup;
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 final class TargetGroupTargetController extends Controller
@@ -98,7 +100,19 @@ final class TargetGroupTargetController extends Controller
         $confirmation->confirm($request);
         $request->validate(['assigned' => ['nullable', 'boolean']]);
 
-        $groups->updateTargetMembership($targetGroup, $target, $request->boolean('assigned'));
+        try {
+            $groups->updateTargetMembership($targetGroup, $target, $request->boolean('assigned'),
+                $request->boolean('confirm_ssh_group_changes'));
+        } catch (DomainException $exception) {
+            if ($exception->getMessage() === 'ssh_confirmation_required') {
+                throw ValidationException::withMessages([
+                    'confirm_ssh_group_changes' => __(
+                        'Confirm changing SSH Target membership. It can enable SSH reachability or remove an existing SSH restriction.',
+                    ),
+                ]);
+            }
+            throw $exception;
+        }
 
         return redirect()
             ->route('admin.target-groups.targets.edit', [

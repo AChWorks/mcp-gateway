@@ -5,6 +5,7 @@ namespace App\Http\Controllers\OAuth;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Http\Controllers\Controller;
+use App\Support\OperationDiagnostics;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
@@ -27,10 +28,15 @@ final class TargetOAuthCallbackController extends Controller
 
             return redirect()->route('admin.targets.show', ['target' => $target->target_id])
                 ->with('status', __('WordPress Target authorization completed.'));
-        } catch (WpAiBridgeTargetConnectionException) {
-            // Never redirect on the basis of a forged/unverified callback Target ID.
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            // A callback Target is untrusted until state verification. Never
+            // log or echo inbound OAuth query, state, code or authorization data.
+            $reference = OperationDiagnostics::failure('wordpress-oauth-callback', $exception->reason);
+
             return redirect()->route('admin.targets.index')
-                ->with('target_connection_failed', true);
+                ->with('target_connection_failed', true)
+                ->with('diagnostic_code', $exception->reason)
+                ->with('diagnostic_reference', $reference);
         }
     }
 }

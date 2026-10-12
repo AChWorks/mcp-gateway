@@ -25,6 +25,7 @@ $checks = SimpleWebInstaller::preflight($basePath, $https);
 $preflightPassed = ! in_array(false, $checks, true);
 $errors = [];
 $success = false;
+$installerLogReference = null;
 
 $nonceCookie = 'mcp_gateway_installer_nonce';
 $nonce = (string) ($_COOKIE[$nonceCookie] ?? '');
@@ -83,6 +84,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'samesite' => 'Strict',
                 ]);
             } catch (Throwable $exception) {
+                // This path runs before Laravel is fully installed. Report
+                // only a lookup reference and exception class to the PHP host
+                // error log, never DB credentials, form input or stack details.
+                $installerLogReference = bin2hex(random_bytes(8));
+                error_log('MCP Gateway installer failure reference='.$installerLogReference
+                    .' class='.get_class($exception));
                 $errors['installer'] = $exception->getMessage();
             }
         }
@@ -156,6 +163,9 @@ function installerEscape(string $value): string
 
             <?php if (isset($errors['installer'])) { ?>
                 <p class="error"><?= installerEscape($errors['installer']) ?></p>
+                <?php if ($installerLogReference !== null) { ?>
+                    <p>PHP server error-log reference: <code><?= installerEscape($installerLogReference) ?></code>. Inspect the installer stage and server checks before retrying.</p>
+                <?php } ?>
             <?php } ?>
 
             <form method="post" autocomplete="off">

@@ -7,7 +7,22 @@ WP_ARCHIVE="${MIXED_WORDPRESS_ARCHIVE:-/srv/ai-workspace/wpai-r004-agent-runtime
 WP_CLI="${MIXED_WP_CLI_PHAR:-/srv/ai-workspace/wpai-r004-agent-runtime/downloads/wp-cli.phar}"
 WP_BRIDGE_ARCHIVE="${MIXED_WP_BRIDGE_ARCHIVE:-/srv/ai-workspace/mcp-gateway-acceptance-20261012/inputs/wp-ai-bridge-0.5.1.zip}"
 WP_ADAPTER_ARCHIVE="${MIXED_MCP_ADAPTER_ARCHIVE:-/srv/ai-workspace/wpai-r004-agent-runtime/downloads/mcp-adapter-0.7.0.zip}"
-PINS="$SOURCE/tests/Support/installed-mixed/fixture-pins.sha256"
+# Released v0.5.1 remains the default. An exact-source Bridge main lane is
+# explicitly opt-in and separately pinned; it is NOT a public Bridge release.
+MIXED_BRIDGE_PROFILE="${MIXED_BRIDGE_PROFILE:-released-0.5.1}"
+case "$MIXED_BRIDGE_PROFILE" in
+  released-0.5.1)
+    PINS="$SOURCE/tests/Support/installed-mixed/fixture-pins.sha256"
+    BRIDGE_PIN_NAME=wp-ai-bridge-0.5.1.zip
+    ;;
+  merged-main-c522ae9)
+    PINS="$SOURCE/tests/Support/installed-mixed/fixture-pins-bridge-main-c522ae9.sha256"
+    BRIDGE_PIN_NAME=wp-ai-bridge-main-c522ae9.zip
+    ;;
+  *)
+    echo "Unsupported Bridge source fixture profile." >&2; exit 2
+    ;;
+esac
 
 # Pinned artifacts are explicitly sourced from upstream release distributions,
 # not mutable directories of an already installed WordPress site.
@@ -104,7 +119,7 @@ if [[ "${1:-}" == inside ]]; then
     php -d curl.cainfo="$ROOT/secrets/tls.crt" -d openssl.cafile="$ROOT/secrets/tls.crt" tests/Support/installed-mixed/seed.php diagnose
   runuser -u aiworker -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php tests/Support/installed-mixed/seed.php report >"$MIXED_EVIDENCE/report.json"
-  runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+  runuser -u aiworker -- env MIXED_BRIDGE_PROFILE="$MIXED_BRIDGE_PROFILE" MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/client.php" positive >"$MIXED_EVIDENCE/client.json"
   runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/file-client.php" >"$MIXED_EVIDENCE/file-client.json"
@@ -129,7 +144,7 @@ fi
 # Validate every input before allocating test users, databases or listeners.
 verify_input wordpress-6.9.tar.gz "$WP_ARCHIVE"
 verify_input wp-cli-2.12.0.phar "$WP_CLI"
-verify_input wp-ai-bridge-0.5.1.zip "$WP_BRIDGE_ARCHIVE"
+verify_input "$BRIDGE_PIN_NAME" "$WP_BRIDGE_ARCHIVE"
 verify_input mcp-adapter-0.7.0.zip "$WP_ADAPTER_ARCHIVE"
 mkdir -p "$EVIDENCE_BASE"
 ROOT="$(mktemp -d /srv/ai-workspace/mcp-gateway-installed-112-XXXXXX)"
@@ -143,7 +158,7 @@ cleanup() {
   trap - EXIT
   if [[ "$status" -ne 0 ]]; then
     echo "Disposable setup failed at last reported stage; pre-OAuth log excerpts:" >&2
-    for name in composer-install composer-platform wp-config wp-install wp-site-url wp-plugins wp-rewrite gateway-migrations gateway-oauth-keygen gateway-bridge-keygen; do
+    for name in composer-install composer-platform wp-config wp-install wp-site-url wp-plugins large-content wp-rewrite gateway-migrations gateway-oauth-keygen gateway-bridge-keygen; do
       if [[ -f "$ROOT/logs/$name.log" ]]; then
         printf '%s: ' "$name" >&2
         if [[ "$name" == gateway-migrations ]]; then
@@ -380,6 +395,12 @@ runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     option update siteurl 'https://11.22.33.44' >>"$ROOT/logs/wp-site-url.log" 2>&1
 runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     plugin activate mcp-adapter wp-ai-bridge >"$ROOT/logs/wp-plugins.log" 2>&1
+if [[ "$MIXED_BRIDGE_PROFILE" == merged-main-c522ae9 ]]; then
+  runuser -u aiworker -- env MIXED_LARGE_POST_FILE="$ROOT/secrets/large-content.json" \
+    php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+    eval-file "$ROOT/gateway/tests/Support/installed-mixed/large-content.php" \
+    >"$ROOT/logs/large-content.log" 2>&1
+fi
 runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     option update permalink_structure '/%postname%/' >"$ROOT/logs/wp-rewrite.log" 2>&1
 runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
@@ -401,6 +422,10 @@ echo "PASS installed fresh WordPress 6.9, WP AI Bridge, MCP Adapter, private Mar
   printf 'source_head=%s\n' "$(git -c safe.directory="$SOURCE" -C "$SOURCE" rev-parse HEAD)"
   printf 'source_tree=%s\n' "$(git -c safe.directory="$SOURCE" -C "$SOURCE" rev-parse HEAD^{tree})"
   printf 'source_version=%s\n' "$(cat "$ROOT/gateway/VERSION")"
+  printf 'bridge_fixture_profile=%s\n' "$MIXED_BRIDGE_PROFILE"
+  if [[ "$MIXED_BRIDGE_PROFILE" == merged-main-c522ae9 ]]; then
+    printf 'bridge_merged_source_sha=%s\n' 'c522ae99bd11926eb74c007d187354013202fc4c'
+  fi
   printf 'wordpress_version=%s\n' "$(runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" core version)"
   for plugin in wp-ai-bridge mcp-adapter; do
     printf '%s_version=%s\n' "$plugin" \

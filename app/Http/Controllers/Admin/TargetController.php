@@ -15,6 +15,7 @@ use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -54,12 +55,24 @@ final class TargetController extends Controller
         ]);
     }
 
-    public function create(): View
+    public function create(Request $request, TargetConnectorRegistry $connectors): View
     {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
-        // Enrollment only presents implemented connector-specific forms.
-        return view('admin.targets.create');
+        // Never offer a paused/historical connector for enrollment. A new
+        // adapter must also have a reviewed connector-specific form panel.
+        $labels = [
+            'wp_ai_bridge' => __('WordPress (WP AI Bridge)'),
+            'ssh_direct' => __('Direct SSH'),
+        ];
+        $options = array_intersect_key($labels, array_flip($connectors->types()));
+        $requested = $request->query('connector_type');
+        $selected = is_string($requested) && array_key_exists($requested, $options) ? $requested : '';
+
+        return view('admin.targets.create', [
+            'connectorOptions' => $options,
+            'selectedConnector' => $selected,
+        ]);
     }
 
     public function store(
@@ -97,11 +110,25 @@ final class TargetController extends Controller
         try {
             $target = $adapter->register($validated);
         } catch (TargetConnectorFailure $exception) {
+            $code = $exception->reason ?? 'registration_rejected';
+            $reference = OperationDiagnostics::failure('target-registration', $code, null, $exception->diagnostics);
+
             return back()->withInput($this->safeOldInput($request, $adapter))
-                ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()]);
+                ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()])
+                ->with('diagnostic_code', $code)
+                ->with('diagnostic_reference', $reference);
         }
 
-        $access->includeCreatedTarget($user, $target);
+        // Enrollment is not an authorization grant. Selected-scope creators
+        // cannot inspect or operate the new endpoint until the Owner explicitly
+        // assigns it through User -> Target access or an approved Target Group.
+        if (! $access->allows($user, GatewayPermission::TargetsView, $target)) {
+            return redirect()->route('admin.targets.index')
+                ->with('status', $adapter->registrationStatus().' '.__(
+                    'Target :id was registered but is outside your permitted scope. Ask an Owner to assign access before using it.',
+                    ['id' => $target->target_id],
+                ));
+        }
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
             ->with('status', $adapter->registrationStatus());
@@ -139,11 +166,21 @@ final class TargetController extends Controller
         ]);
     }
 
-    public function edit(Target $target): View
+    public function edit(Target $target, TargetConnectorRegistry $connectors): View
     {
         Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
 
-        return view('admin.targets.edit', ['target' => $target]);
+        $adapter = Gate::allows(GatewayPermission::SecurityManage->value)
+            ? $connectors->availableForTarget($target) : null;
+
+        $details = $adapter?->adminDetails($target) ?? [];
+        $hasConfig = ($details['sshConfig'] ?? null) !== null || ($details['wpConfig'] ?? null) !== null;
+
+        return view('admin.targets.edit', [
+            'target' => $target,
+            'configurationRevision' => $hasConfig ? $adapter?->configurationRevision($target) : null,
+            ...$details,
+        ]);
     }
 
     public function update(Request $request, Target $target): RedirectResponse

@@ -19,12 +19,31 @@
         <form class="form-stack" method="post" action="{{ route('admin.users.targets.update', ['user' => $managedUser->id, 'target' => $target->target_id]) }}">
             @csrf
             @method('PUT')
+            @php
+                // Never stamp flashed authorization selections from an old form
+                // with a fresh DB revision after an unrelated validation error.
+                $submittedTargetRevision = old('target_revision');
+                $reuseSubmittedTargetAcl = is_string($submittedTargetRevision)
+                    && hash_equals($targetRevision, $submittedTargetRevision)
+                    && ! $errors->has('target_revision');
+                $staleTargetForm = (session()->hasOldInput('target_revision') || session()->hasOldInput('access_rule'))
+                    && ! $reuseSubmittedTargetAcl;
+                $selectedAccessRule = $reuseSubmittedTargetAcl
+                    ? old('access_rule', $targetRule['access_rule']) : $targetRule['access_rule'];
+                $selectedDenials = $reuseSubmittedTargetAcl
+                    ? old('denied_permissions', []) : $targetRule['denied_permissions'];
+            @endphp
+            <input type="hidden" name="target_revision" value="{{ $targetRevision }}">
+            @if ($staleTargetForm)
+                <div class="alert alert-error" role="alert">{{ __('Target access changed since you opened this form or its revision is missing. Current saved restrictions are displayed. Review them and confirm SSH changes again.') }}</div>
+            @endif
+            @error('target_revision')<div class="alert alert-error" role="alert">{{ $message }}</div>@enderror
 
             <div class="field">
                 <label for="access_rule">{{ __('Explicit scope rule') }}</label>
                 <select id="access_rule" name="access_rule" required>
                     @foreach (['inherit', 'allow', 'deny'] as $rule)
-                        <option value="{{ $rule }}" @selected(old('access_rule', $targetRule['access_rule']) === $rule)>{{ \Illuminate\Support\Str::headline($rule) }}</option>
+                        <option value="{{ $rule }}" @selected($selectedAccessRule === $rule)>{{ \Illuminate\Support\Str::headline($rule) }}</option>
                     @endforeach
                 </select>
                 <p class="field-help">{{ __('inherit follows the user scope mode; allow/deny records a direct target rule. Direct denials remain the final narrowing layer for future group support.') }}</p>
@@ -34,13 +53,22 @@
             <fieldset class="permission-fieldset">
                 <legend>{{ __('Capability restrictions on this target') }}</legend>
                 <p class="field-help">{{ __('Only this Target’s connector capabilities are shown. Checked permissions deny operations on this Target; role ceilings and global/group restrictions still apply.') }}</p>
-                @php($selectedDenials = old('denied_permissions', $targetRule['denied_permissions']))
                 @include('admin.partials.permission-groups', [
                     'permissions' => $targetPermissions,
                     'selectedDenials' => $selectedDenials,
                     'connectorType' => $target->connector_type,
+                    'sshPermissionsEditable' => $target->connector_type === 'ssh_direct',
+                    'sshPermissionContext' => 'target',
                 ])
             </fieldset>
+            @if ($target->connector_type === 'ssh_direct')
+                <label class="checkbox-option" for="confirm_ssh_target_changes">
+                    <input id="confirm_ssh_target_changes" type="checkbox" name="confirm_ssh_target_changes" value="1"
+                        @checked($reuseSubmittedTargetAcl && old('confirm_ssh_target_changes', false))>
+                    <span>{{ __('Owner confirmation: I reviewed this SSH Target scope rule and the command/SFTP deny checkboxes. Allowing the Target or removing an existing denial may enable authorized remote operations.') }}</span>
+                </label>
+                @error('confirm_ssh_target_changes')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+            @endif
 
             <div class="field">
                 <label for="current_password">{{ __('Your current password') }}</label>

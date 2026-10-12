@@ -25,6 +25,14 @@ interface TargetConnectorAdapter
 
     public function registrationStatus(): string;
 
+    /** @return array<string, array<int, mixed>> */
+    public function configurationRules(Target $target): array;
+
+    public function configurationRevision(Target $target): string;
+
+    /** @param array<string, mixed> $input */
+    public function updateConfiguration(Target $target, array $input): TargetConnectorResult;
+
     public function connect(Target $target): TargetConnectorResult;
 
     public function reconnect(Target $target): TargetConnectorResult;

@@ -1,8 +1,42 @@
 # Direct SSH Target Connector
 
-Status: Owner-accepted Target design. SSH login (#144), commands (#145), bounded MCP SFTP tools (#146), internal streams (#148) **and optional authenticated SSH whole-file HTTPS transfer with permission-filtered MCP discovery ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)) are merged in source**. Real bidirectional bytes were verified using two external binary-capable clients in a **disposable installed environment**. They are **not in the v2.0.3 maintenance release or proven production-deployed**. Native ChatGPT attachment/model file ingestion, key rotation, private/VPN egress, real-host capacity and full #112 acceptance remain pending.
+Status: Owner-accepted Target design. SSH login (#144), commands (#145), bounded MCP SFTP tools (#146), internal streams (#148) **and optional authenticated SSH whole-file HTTPS transfer with permission-filtered MCP discovery ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)) are merged in source**. Real bidirectional bytes were verified using two external binary-capable clients in a **disposable installed environment**. They are **not in the v2.0.3 maintenance release or proven production-deployed**. Native ChatGPT attachment/model file ingestion, private/VPN egress, real-host capacity and full #112 acceptance remain pending. Safe SSH endpoint/private login credential rotation and live Owner-controlled SSH permission forms are now implemented in [open candidate PR #168](https://github.com/AChWorks/mcp-gateway/pull/168), **not merged/released/installed**.
 Parent: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106).
 See also [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [remote I/O contract](./REMOTE-IO-CONTRACT.md).
+
+## Current pending release candidate: Owner operations and permission UI
+
+In open PR #168, Target details → Edit Target separates display name from
+Owner-only/password-confirmed connector configuration. SSH registered host,
+TCP port, username, independently verified **server public host key**, and
+the **write-only** password/private-key/passphrase can be changed without
+removing the Target or its User/Target Group references. Existing encrypted
+login material is re-encrypted against the new exact endpoint/pin binding
+when retained; a method change requires a fresh password/private login key.
+The new key must parse with its supplied passphrase. Any real change
+clears the old verified connection/observed peer and forces **Verify SSH
+host and login** again before SSH commands or SFTP can run. In-flight
+old verification results and stale Owner forms are fenced; no change to
+remote OS users, keys or active remote sessions is implied.
+
+The installed legacy Add User screenshot may show SSH under "Review reserved
+permission definitions" because the open candidate has not been released
+or deployed. The corrected source renders three **active** SSH capability
+checkboxes (command run, SFTP read, SFTP write) with **checked = DENY**,
+not a future/reserved label. Add User starts with all three checked and may
+apply explicit Owner-confirmed **Selected Target scope** grants at creation;
+normal unreviewed callers stay default-denied. Edit User and User → Target
+access permit audited, Owner-confirmed deliberate SSH ACL changes. Target
+Group controls are live deny-only rules; they cannot grant shell authority
+without the role, global grant and selected Target. SSH command permissions
+enable general shell/file access even when SFTP toggles deny file tools.
+AI Server Agent is a separate paused connector; its reservation-only
+permission definitions remain non-executable.
+
+These are source-candidate capabilities, not evidence that the currently
+installed Gateway has received an update. The sections below describing
+immutable bindings refer to the **historical first SSH implementation
+slice**, not the currently proposed Owner-controlled rotation.
 
 ## Historical initial SSH registration and verified-login slice (source-integrated, not released)
 
@@ -20,7 +54,7 @@ The integrated `ssh-command-run` tool authorizes exactly one stored `target_id` 
 
 Per-command timeout is 1–15 seconds; command input is at most 8192 bytes. Captured stdout is limited to 16384 bytes, stderr to 8192 bytes, with independent UTF-8 or base64 representations, nullable exit status, completeness/truncation markers and the verified connection IP. A timeout, channel failure, or exceeded preview budget after possible dispatch is `outcome_unknown`; the command is never retried automatically, and no continuation/resume is invented. The remote process may continue after disconnect, so a caller must not repeat a mutating command without independent verification. Activity records do not include raw command strings or output.
 
-SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. Bounded SFTP was integrated separately in #146, and deliberate host-key/credential rotation is still pending. Command exec was merged as #145 after independent review; it remains unreleased.
+SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. Bounded SFTP was integrated separately in #146, and Owner-controlled host-key/credential rotation is now proposed in PR #168. Command exec was merged as #145 after independent review; the new rotation candidate remains unreleased.
 
 ## SFTP file I/O — source-integrated, not yet released
 
@@ -32,7 +66,7 @@ For SFTP, the SSH TCP DNS policy resolves both A and AAAA records through an iso
 
 The locked phpseclib 4.0.2 SFTP client has a shell exec fallback when the SFTP subsystem is refused; the integrated SFTP path explicitly rejects this fallback. Unsupported SFTP must never become implicit shell execution. No generic terminal, arbitrary URL/host routing, public filesystem endpoint or mandatory background daemon is introduced.
 
-Optional authenticated raw-binary **HTTP** upload/download now composes the existing streams in [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166), with a separate, finite SSH-only whole-file budget and independent client byte/SHA-256 proof. It remains **OFF by default**, source-integrated but not in public v2.0.3. Strict immutable remote snapshots, durable interrupted-transfer recovery, key rotation/re-enrollment and private/VPN destination approval are still outside this implementation; do not call bounded Base64 MCP payloads streaming or imply any production installation.
+Optional authenticated raw-binary **HTTP** upload/download now composes the existing streams in [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166), with a separate, finite SSH-only whole-file budget and independent client byte/SHA-256 proof. It remains **OFF by default**, source-integrated but not in public v2.0.3. Strict immutable remote snapshots, durable interrupted-transfer recovery and private/VPN destination approval remain outside this file-I/O implementation; Owner-driven Target endpoint/credential rotation is separately proposed in PR #168; do not call bounded Base64 MCP payloads streaming or imply any production installation.
 
 ## Internal SFTP byte streams — source-integrated, not a public file endpoint
 

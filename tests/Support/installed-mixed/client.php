@@ -85,6 +85,77 @@ try {
         'input' => (object) []], 'wp_denied');
     $check(! ($denied['ok'] ?? false) && ($denied['error']['code'] ?? null) === 'downstream_rejected',
         'WordPress provider denial must be classified as downstream_rejected, not transport failure.');
+    // Test the merged Bridge (not published v0.5.1) 128 KiB-capable
+    // UTF-8/window source contract through actual Adapter JSON-RPC wrapping.
+    // The test verifies complete client receipt, not merely provider staging.
+    $bridgeText = null;
+    if (getenv('MIXED_BRIDGE_PROFILE') === 'merged-main-c522ae9') {
+        $fixture = json_decode((string) file_get_contents($root.'/secrets/large-content.json'),
+            true, 512, JSON_THROW_ON_ERROR);
+        $source = '';
+        $offset = 0;
+        $expected = null;
+        $windows = 0;
+        $maxWindowBytes = 0;
+        $largestResultBytes = 0;
+        do {
+            $input = ['action' => 'get', 'id' => (int) $fixture['post_id'],
+                'content_offset' => $offset, 'content_max_bytes' => 131072];
+            if ($expected !== null) {
+                $input['expected_content_hash'] = $expected;
+            }
+            $response = $call($client, 'wordpress-ability-execute', [
+                'target_id' => $state['wp_target'],
+                'ability' => 'wp-ai-bridge/content-read',
+                'input' => $input,
+            ], 'wp_unicode_window_'.$windows);
+            $check(($response['ok'] ?? false) === true,
+                'New Bridge Unicode window not executable through Gateway: '.
+                json_encode($response['error'] ?? [], JSON_THROW_ON_ERROR));
+            $item = $response['result']['items'][0] ?? null;
+            $check(is_array($item), 'Missing native WordPress content-read item.');
+            $chunk = $item['content'] ?? null;
+            $next = $item['content_next_offset'] ?? null;
+            $hash = $item['content_hash'] ?? null;
+            $check(is_string($chunk) && is_int($next) && is_string($hash)
+                && $next > $offset && $next <= (int) $fixture['bytes']
+                && strlen($chunk) === $next - $offset
+                && preg_match('//u', $chunk) === 1, 'Truncated/invalid UTF-8 continuation.');
+            if ($expected === null) {
+                $expected = $hash;
+            }
+            $check(hash_equals($expected, $hash), 'Provider content changed during continuation.');
+            $source .= $chunk;
+            $maxWindowBytes = max($maxWindowBytes, strlen($chunk));
+            $largestResultBytes = max($largestResultBytes,
+                strlen(json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)));
+            $offset = $next;
+            $windows++;
+            $check($windows < 64, 'No bounded source-read progress.');
+            $complete = $item['content_complete'] ?? false;
+        } while (! $complete);
+        $check($offset === (int) $fixture['bytes']
+            && strlen($source) === (int) $fixture['bytes']
+            && hash_equals((string) $fixture['sha256'], hash('sha256', $source))
+            && hash_equals($expected, hash('sha256', $source)),
+            'External SDK did not receive exact complete Unicode document.');
+        $stale = $call($client, 'wordpress-ability-execute', [
+            'target_id' => $state['wp_target'], 'ability' => 'wp-ai-bridge/content-read',
+            'input' => ['action' => 'get', 'id' => (int) $fixture['post_id'],
+                'content_offset' => 1, 'content_max_bytes' => 4096,
+                'expected_content_hash' => str_repeat('0', 64)],
+        ], 'wp_stale_source_denial');
+        $check(! ($stale['ok'] ?? false), 'Wrong hash continuation was incorrectly accepted.');
+        $bridgeText = [
+            'source_sha' => 'c522ae99bd11926eb74c007d187354013202fc4c',
+            'whole_utf8_bytes' => strlen($source),
+            'sha256' => hash('sha256', $source),
+            'windows' => $windows,
+            'max_decoded_window_bytes' => $maxWindowBytes,
+            'max_gateway_result_json_bytes' => $largestResultBytes,
+            'wrong_source_hash_denied' => true,
+        ];
+    }
     $ssh = $call($client, 'ssh-command-run', [
         'target_id' => $state['ssh_target'], 'command' => "printf 'installed-ssh-ok'"], 'ssh_command');
     $check(($ssh['result']['stdout'] ?? null) === 'installed-ssh-ok', 'Host-key verified SSH failed.');
@@ -142,6 +213,7 @@ try {
         'invalid_token' => 'HTTP 401', 'disabled_client_profile' => 'HTTP 401',
         'never_granted_client_profile' => 'token issuance denied',
         'operator_wp_only' => true, 'cross_target_denied' => true,
+        'merged_bridge_unicode' => $bridgeText,
         'client_peak_memory_bytes' => memory_get_peak_usage(true),
         'latency_ms' => $timings,
     ], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n";

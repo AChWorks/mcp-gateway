@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Support\CorrelationId;
 use DomainException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 
 final readonly class UserAccessManager
 {
@@ -20,14 +21,24 @@ final readonly class UserAccessManager
      * @param  array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
-    public function create(array $attributes, array $deniedPermissions): User
+    public function create(array $attributes, array $deniedPermissions, bool $allowSshPermissionChanges = false): User
     {
         $role = GatewayRole::from((string) $attributes['role']);
         $scope = $role === GatewayRole::Owner
             ? TargetScopeMode::All
             : TargetScopeMode::from((string) $attributes['target_scope_mode']);
 
-        $user = DB::transaction(function () use ($attributes, $role, $scope, $deniedPermissions): User {
+        // The absent confirmation path (including non-UI/API callers) remains
+        // fail-closed. Only explicitly authorized Selected-scope account
+        // creation can omit an SSH denial.
+        $canGrantSsh = $allowSshPermissionChanges
+            && $scope === TargetScopeMode::Selected;
+        $defaults = array_filter(
+            $this->defaultConnectorDenials($role),
+            static fn (string $permission): bool => ! $canGrantSsh || ! str_starts_with($permission, 'ssh.'),
+        );
+
+        $user = DB::transaction(function () use ($attributes, $role, $scope, $deniedPermissions, $defaults): User {
             $user = User::query()->create([
                 'name' => (string) $attributes['name'],
                 'email' => (string) $attributes['email'],
@@ -39,7 +50,7 @@ final readonly class UserAccessManager
 
             $this->replaceGlobalDenials($user, $role, [
                 ...$deniedPermissions,
-                ...$this->defaultConnectorDenials($role),
+                ...$defaults,
             ]);
             $this->normalizeOwnerState($user, $role);
             $this->recordRequired('user-access-create:'.$user->id);
@@ -103,7 +114,11 @@ final readonly class UserAccessManager
                 ...array_filter($this->existingConnectorDenials($lockedUser),
                     static fn (string $permission): bool => ! $allowSshPermissionChanges
                         || ! str_starts_with($permission, 'ssh.')),
-                ...($currentRole !== $role ? $this->defaultConnectorDenials($role) : []),
+                ...($currentRole !== $role ? array_filter(
+                    $this->defaultConnectorDenials($role),
+                    static fn (string $permission): bool => ! $allowSshPermissionChanges
+                        || ! str_starts_with($permission, 'ssh.'),
+                ) : []),
                 // Changing away from Selected always revokes dormant SSH grants;
                 // returning to Selected later requires a new explicit Owner grant.
                 ...($scope !== TargetScopeMode::Selected
@@ -124,15 +139,50 @@ final readonly class UserAccessManager
         Target $target,
         string $accessRule,
         array $deniedPermissions,
+        bool $sshReviewed = false,
+        ?string $expectedRevision = null,
     ): void {
         if (in_array($accessRule, ['inherit', 'allow', 'deny'], true) === false) {
             throw new DomainException('invalid_target_rule');
         }
 
-        DB::transaction(function () use ($user, $target, $accessRule, $deniedPermissions): void {
+        DB::transaction(function () use ($user, $target, $accessRule, $deniedPermissions, $sshReviewed, $expectedRevision): void {
             $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
             if ($this->role($lockedUser) === GatewayRole::Owner) {
                 throw new DomainException('owner_unrestricted');
+            }
+
+            // All writers of this user's Target rules serialize through the
+            // locked User row. Check fresh persisted permissions after lock;
+            // an old form must not erase a newer SSH-specific denial.
+            $existing = $this->targetRule($lockedUser, $target);
+            $permissions = $this->normalizedDenials(
+                $this->role($lockedUser), $deniedPermissions, true,
+            );
+            $requestedDenials = array_map(
+                static fn (GatewayPermission $permission): string => $permission->value,
+                $permissions,
+            );
+            $existingRevision = AuthorizationRevision::targetRule($existing);
+            $requestedRevision = AuthorizationRevision::targetRule([
+                'access_rule' => $accessRule, 'denied_permissions' => $requestedDenials,
+            ]);
+            $sshTarget = $target->connector_type === 'ssh_direct';
+            if ($sshTarget && $existingRevision !== $requestedRevision) {
+                Gate::authorize(GatewayPermission::SecurityManage->value);
+                if (! $sshReviewed) {
+                    throw new DomainException('ssh_target_confirmation_required');
+                }
+                if ($expectedRevision === null || ! hash_equals($existingRevision, $expectedRevision)) {
+                    throw new DomainException('target_rule_revision_stale');
+                }
+            }
+            if ($sshTarget && $expectedRevision !== null && ! hash_equals($existingRevision, $expectedRevision)) {
+                throw new DomainException('target_rule_revision_stale');
+            }
+
+            if ($existingRevision === $requestedRevision) {
+                return; // True no-op: no permission replacement or audit mutation.
             }
 
             $identity = [
@@ -155,11 +205,6 @@ final readonly class UserAccessManager
 
             DB::table('user_target_permission_denials')->where($identity)->delete();
 
-            $permissions = $this->normalizedDenials(
-                $this->role($lockedUser),
-                $deniedPermissions,
-                true,
-            );
             $rows = array_map(
                 static fn (GatewayPermission $permission): array => [
                     ...$identity,
@@ -215,6 +260,11 @@ final readonly class UserAccessManager
                 ->map(static fn (mixed $value): string => (string) $value)
                 ->all(),
         ];
+    }
+
+    public function targetRuleRevision(User $user, Target $target): string
+    {
+        return AuthorizationRevision::targetRule($this->targetRule($user, $target));
     }
 
     /**

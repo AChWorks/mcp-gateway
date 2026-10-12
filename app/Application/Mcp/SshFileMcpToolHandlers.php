@@ -10,6 +10,7 @@ use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use Closure;
 use Throwable;
 
@@ -98,6 +99,7 @@ final readonly class SshFileMcpToolHandlers
             ...($unknown ? ['error' => [
                 'code' => 'outcome_unknown',
                 'message' => 'Remote file mutation may have occurred; inspect before any manual retry.',
+                'next_step' => OperationDiagnostics::nextStep('outcome_unknown'),
             ]] : []),
         ];
     }
@@ -114,6 +116,7 @@ final readonly class SshFileMcpToolHandlers
                 'message' => $code === 'target_not_found'
                     ? 'SSH Target is unavailable.'
                     : 'SSH file operation could not be completed safely.',
+                'next_step' => OperationDiagnostics::nextStep($code),
             ],
         ];
     }

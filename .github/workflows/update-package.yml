@@ -11,6 +11,8 @@ on:
       - composer.lock
       - 'bin/build-release-package.sh'
       - 'bin/build-update-package.sh'
+      - 'bin/validate-version.sh'
+      - 'bin/check-candidate-artifact-reuse.sh'
       - 'bin/mcp-gateway-web-updater.php'
       - 'bin/update-managed-public-paths.txt'
       - 'bin/mcp-gateway-web-update-index.php'
@@ -35,6 +37,8 @@ on:
       - composer.lock
       - 'bin/build-release-package.sh'
       - 'bin/build-update-package.sh'
+      - 'bin/validate-version.sh'
+      - 'bin/check-candidate-artifact-reuse.sh'
       - 'bin/mcp-gateway-web-updater.php'
       - 'bin/update-managed-public-paths.txt'
       - 'bin/mcp-gateway-web-update-index.php'
@@ -49,6 +53,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: update-package-${{ github.workflow }}-${{ github.ref }}
@@ -88,6 +93,33 @@ jobs:
           coverage: none
           tools: composer:v2
 
+      - name: Classify candidate versus stable version
+        id: version_policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          bash bin/validate-version.sh package "$version"
+          bash bin/test-version-policy.sh
+          if bash bin/validate-version.sh candidate "$version" >/dev/null 2>&1; then
+            echo 'is_candidate=true' >> "$GITHUB_OUTPUT"
+          else
+            # Stable promotion PRs can run all package/update checks,
+            # but MUST NOT distribute stable-named "candidate" ZIPs.
+            echo 'is_candidate=false' >> "$GITHUB_OUTPUT"
+            echo 'Stable VERSION: no candidate artifact will be uploaded.'
+          fi
+
+      - name: Prevent distributing an already-used candidate VERSION
+        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          bash bin/check-candidate-artifact-reuse.sh "$version" "$CANDIDATE_SHA"
+
       - name: Verify browser update state and lock fail-safes
         run: php bin/test-updater-recovery.php
 
@@ -105,7 +137,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3; do
             gh release download "v$version" \
               --pattern "mcp-gateway-v$version.zip*" \
               --dir dist/baseline
@@ -124,7 +156,7 @@ jobs:
           UPDATE_TEST_DB_PASSWORD: test-password
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3; do
             bash bin/test-update-package.sh \
               dist/mcp-gateway-update-ci.zip \
               "dist/baseline/mcp-gateway-v$version.zip"
@@ -138,14 +170,14 @@ jobs:
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3; do
             bash bin/test-update-backup-integrity.sh \
               dist/mcp-gateway-update-ci.zip \
               "dist/baseline/mcp-gateway-v$version.zip"
           done
 
       - name: Prepare owner-test candidate artifacts
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true'
         id: candidate
         shell: bash
         run: |
@@ -167,7 +199,7 @@ jobs:
           echo "artifact=mcp-gateway-v$version-candidate-${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Upload owner-test candidate artifacts
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.candidate.outputs.artifact }}

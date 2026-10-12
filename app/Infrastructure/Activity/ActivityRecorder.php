@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Activity;
 
 use App\Domain\Targets\Target;
+use App\Support\OperationDiagnostics;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -10,12 +11,14 @@ use Throwable;
 
 final class ActivityRecorder
 {
+    /** @param array<string,mixed> $diagnostics */
     public function record(
         string $correlationId,
         string $operation,
         string $outcome,
         ?Target $target = null,
         ?string $errorCode = null,
+        array $diagnostics = [],
     ): void {
         [$correlationId, $operation, $outcome, $target, $errorCode] = $this->normalized(
             $correlationId,
@@ -27,6 +30,17 @@ final class ActivityRecorder
 
         try {
             $this->persist($correlationId, $operation, $outcome, $target, $errorCode);
+            // One shared operational diagnostic path across WordPress, SSH,
+            // inventory, MCP and file handlers; no raw inputs or tool outputs.
+            // Routine rejected/invalid requests remain in Activity only so
+            // hostile traffic cannot amplify the daily server log.
+            if (in_array($outcome, ['failure', 'unknown'], true)
+                && ! in_array($errorCode, ['target_not_found', 'forbidden', 'invalid_input', 'mcp_principal_rate_limited', 'mcp_edge_rate_limited'], true)) {
+                OperationDiagnostics::failure($operation, $errorCode ?? 'operation_failed', $target, [
+                    ...$diagnostics,
+                    'retry_safe' => $outcome === 'unknown' ? false : ($diagnostics['retry_safe'] ?? null),
+                ], $correlationId);
+            }
         } catch (Throwable) {
             // Activity persistence must never change the authoritative outcome of a
             // routed operation, especially after a remote mutation may have executed.

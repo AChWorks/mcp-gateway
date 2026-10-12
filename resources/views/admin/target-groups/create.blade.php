@@ -28,9 +28,16 @@
             @include('admin.partials.permission-groups', [
                 'permissions' => $targetPermissions,
                 'selectedDenials' => old('denied_permissions', []),
+                'sshPermissionsEditable' => true,
+                'sshPermissionContext' => 'group',
             ])
         </fieldset>
 
+        <label class="checkbox-option" for="confirm_ssh_group_changes">
+            <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1">
+            <span>{{ __('Confirm SSH group permission changes. Groups only DENY access, but removing an existing denial can expand access for authorized users.') }}</span>
+        </label>
+        @error('confirm_ssh_group_changes')<p class="form-error" role="alert">{{ $message }}</p>@enderror
         <div class="field">
             <label for="current_password">{{ __('Your current password') }}</label>
             <input id="current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password">

@@ -19,6 +19,7 @@ use GuzzleHttp\Exception\NetworkTimeoutException as GuzzleNetworkTimeoutExceptio
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -150,6 +151,58 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         } catch (WpAiBridgeTargetConnectionException $exception) {
             self::assertSame('credential_unavailable', $exception->reason);
         }
+    }
+
+    public function test_admin_wordpress_disconnect_reports_precise_safe_transport_stage_and_preserves_revocation_intent(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->actingAs($this->user('owner', 'all'));
+
+        // Replacing HTTP stubs after authorization simulates an actual
+        // connection refusal at the WordPress revocation endpoint.
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(static fn (Request $request) => Http::failedConnection(
+            'cURL error 7: Connection refused PRIVATE_OAUTH_TOKEN_SHOULD_NEVER_LOG',
+        ));
+
+        Log::spy();
+        $result = $this->post('/admin/targets/alpha/disconnect')
+            ->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'network_failure')
+            ->assertSessionHas('diagnostic_stage', 'tcp_connect');
+        $reference = (string) session('diagnostic_reference');
+        self::assertTrue(Str::isUuid($reference));
+        $result->assertHeader('X-Correlation-ID', $reference);
+
+        $this->assertDatabaseHas('wp_ai_bridge_revocation_intents', [
+            'target_record_id' => $target->getKey(),
+            'kind' => 'disconnect',
+        ]);
+        self::assertSame(1, TargetCredential::query()->where('target_record_id', $target->getKey())->count());
+        self::assertSame(TargetConnectionState::Error, $target->fresh()->connection_state);
+        self::assertSame('network_failure', $target->fresh()->last_error_code);
+
+        $this->get('/admin/targets/alpha')->assertOk()
+            ->assertSee('Credential revocation is pending')
+            ->assertSee('network_failure')
+            ->assertSee('tcp_connect')
+            ->assertSee($reference)
+            ->assertSee('What to check');
+
+        Log::shouldHaveReceived('warning')->once()->withArgs(
+            static function (string $message, array $context) use ($reference): bool {
+                return $message === 'Gateway operation failure.'
+                    && ($context['correlation_id'] ?? null) === $reference
+                    && ($context['operation'] ?? null) === 'target-disconnect'
+                    && ($context['error_code'] ?? null) === 'network_failure'
+                    && ($context['failure_stage'] ?? null) === 'tcp_connect'
+                    && ($context['request_not_sent'] ?? null) === true
+                    && ! str_contains(json_encode($context, JSON_THROW_ON_ERROR), 'PRIVATE_OAUTH_TOKEN');
+            },
+        );
     }
 
     public function test_disconnect_requires_confirmed_remote_revocation_and_supports_safe_retry(): void

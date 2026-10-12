@@ -19,9 +19,9 @@ final class SystemDnsResolver implements DnsResolver
                 return ($this->boundedLookup ?? new DeadlineDnsLookup)
                     ->resolveBeforeDeadline(rtrim($host, '.').'.', $deadlineNs);
             } catch (DnsLookupDeadlineExceeded) {
-                throw new OutboundRequestException('network_failure', 'Outbound DNS resolution timed out.', [], true);
+                throw new OutboundRequestException('network_failure', 'Outbound DNS resolution timed out.', ['failure_stage' => 'dns_timeout'], true);
             } catch (RuntimeException) {
-                throw new OutboundRequestException('network_failure', 'Outbound DNS resolution failed.', [], true);
+                throw new OutboundRequestException('network_failure', 'Outbound DNS resolution failed.', ['failure_stage' => 'dns_lookup'], true);
             }
         }
 

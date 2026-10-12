@@ -69,7 +69,7 @@ final class SafeHttpClient
         $target = $this->targets->validate($url, 2048, $deadlineNs);
         $remainingSeconds = ($deadlineNs - hrtime(true)) / 1_000_000_000;
         if ($remainingSeconds <= 0) {
-            throw new OutboundRequestException('network_failure', 'Outbound request deadline expired before dispatch.', [], true);
+            throw new OutboundRequestException('network_failure', 'Outbound request deadline expired before dispatch.', ['failure_stage' => 'deadline_before_dispatch'], true);
         }
         $requestedBytes = $responseLimitBytes ?? $this->settings->responseLimitBytes(false);
         $maxBytes = min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $requestedBytes));
@@ -119,7 +119,7 @@ final class SafeHttpClient
                 }
 
                 $message = $exception->getMessage();
-                $reason = preg_match('/(?:SSL|TLS|certificate|cURL error 60)/i', $message) === 1 ? 'tls_failure' : 'network_failure';
+                $reason = preg_match('/(?:SSL|TLS|certificate|cURL error (?:35|51|60)\\b)/i', $message) === 1 ? 'tls_failure' : 'network_failure';
 
                 // The exact Guzzle cURL handler uses ConnectException
                 // (including ConnectTimeoutException) only when the TCP/TLS
@@ -128,7 +128,20 @@ final class SafeHttpClient
                 // occur after the request body was transmitted.
                 $preDispatch = $exception->getPrevious() instanceof GuzzleConnectException;
 
-                throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.', [], $preDispatch);
+                // Retain only a finite transport stage, never raw cURL text,
+                // remote response, request headers, URLs or credentials.
+                $stage = match (true) {
+                    preg_match('/(?:cURL error 6\\b|could not resolve)/i', $message) === 1 => 'dns_lookup',
+                    $reason === 'tls_failure' => 'tls_handshake',
+                    preg_match('/(?:cURL error 7\\b|connection refused|failed to connect)/i', $message) === 1 => 'tcp_connect',
+                    preg_match('/(?:cURL error 28\\b|timed out|timeout)/i', $message) === 1 => 'request_timeout',
+                    $preDispatch => 'connection_setup',
+                    default => 'response_transfer',
+                };
+
+                throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.', [
+                    'failure_stage' => $stage,
+                ], $preDispatch);
             }
 
             if ($responseBody->limitExceeded()) {
@@ -148,12 +161,12 @@ final class SafeHttpClient
 
             $stream = $responseBody->stream();
             if (! rewind($stream)) {
-                throw new OutboundRequestException('network_failure', 'Remote response body could not be read.');
+                throw new OutboundRequestException('network_failure', 'Remote response body could not be read.', ['failure_stage' => 'response_body']);
             }
 
             $body = stream_get_contents($stream);
             if ($body === false) {
-                throw new OutboundRequestException('network_failure', 'Remote response body could not be read.');
+                throw new OutboundRequestException('network_failure', 'Remote response body could not be read.', ['failure_stage' => 'response_body']);
             }
 
             if (strlen($body) > $maxBytes) {

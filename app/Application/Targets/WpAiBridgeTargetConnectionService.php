@@ -47,7 +47,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $discovery = $this->discovery->discover($configuration->base_url);
         } catch (BridgeDiscoveryException $exception) {
             $this->recordDiscoveryFailure((string) $target->getKey(), $exception->reason);
-            throw new WpAiBridgeTargetConnectionException($exception->reason, 'WordPress metadata could not be verified safely.');
+            throw new WpAiBridgeTargetConnectionException($exception->reason, 'WordPress metadata could not be verified safely.', $exception->diagnostics);
         }
 
         $clientId = $this->identity->clientId();
@@ -909,11 +909,15 @@ final readonly class WpAiBridgeTargetConnectionService
                     'client_assertion' => $this->identity->assertion((string) $plan['revocation_url']),
                 ]);
                 if ($response->status !== 200) {
-                    throw new WpAiBridgeTargetConnectionException('revocation_failed', 'WordPress did not confirm credential revocation.');
+                    throw new WpAiBridgeTargetConnectionException('revocation_failed', 'WordPress did not confirm credential revocation.', ['http_status' => $response->status]);
                 }
             } catch (OutboundRequestException $exception) {
                 $this->recordFailure($id, $exception->reason);
-                throw new WpAiBridgeTargetConnectionException($exception->reason, 'Remote credential revocation is incomplete.');
+                throw new WpAiBridgeTargetConnectionException($exception->reason, 'Remote credential revocation is incomplete.', [
+                    ...$exception->details,
+                    'pre_dispatch' => $exception->preDispatch,
+                    'retry_safe' => $exception->preDispatch,
+                ]);
             } catch (WpAiBridgeTargetConnectionException $exception) {
                 $this->recordFailure($id, $exception->reason);
                 throw $exception;
@@ -951,7 +955,7 @@ final readonly class WpAiBridgeTargetConnectionService
             }
         } catch (BridgeDiscoveryException $exception) {
             $this->recordDiscoveryFailure((string) $target->getKey(), $exception->reason);
-            throw new WpAiBridgeTargetConnectionException($exception->reason, 'WordPress metadata check failed.');
+            throw new WpAiBridgeTargetConnectionException($exception->reason, 'WordPress metadata check failed.', $exception->diagnostics);
         }
 
         $this->withLockedTarget((string) $target->getKey(), function (Target $locked) use ($configuration): void {

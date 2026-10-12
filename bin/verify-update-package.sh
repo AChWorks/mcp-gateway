@@ -104,7 +104,7 @@ done < <(find "$root/update/payload/public" -type f -printf '%P\n' | LC_ALL=C so
 version="$(tr -d '[:space:]' < "$root/update/UPDATE_VERSION")"
 payload_version="$(tr -d '[:space:]' < "$root/update/payload/VERSION")"
 repo_version="$(tr -d '[:space:]' < "$repo_root/VERSION")"
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid update semantic version: $version" >&2; exit 1; }
+bash "$repo_root/bin/validate-version.sh" package "$version"
 [[ "$version" == "$payload_version" && "$version" == "$repo_version" ]] || { echo "Update/repository/payload versions do not match." >&2; exit 1; }
 
 cat > "$tmp/expected-payload-top.txt" <<'EOF_PAYLOAD'

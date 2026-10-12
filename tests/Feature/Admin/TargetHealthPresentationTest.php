@@ -6,10 +6,12 @@ use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class TargetHealthPresentationTest extends TestCase
@@ -56,7 +58,29 @@ final class TargetHealthPresentationTest extends TestCase
             ->assertSee('Connection state')
             ->assertSee('Last tested');
 
+        $this->get('/admin/targets/unreachable')->assertOk()
+            ->assertSee('What happened')
+            ->assertSee('Suggested checks')
+            ->assertSee('network_failure')
+            ->assertSee('outbound TCP 443');
+
         Http::assertNothingSent();
+    }
+
+    public function test_activity_errors_offer_bounded_explanations_without_expanding_scope(): void
+    {
+        $owner = $this->user(GatewayRole::Owner, TargetScopeMode::All);
+        $target = $this->site('activity-diagnostic', TargetConnectionState::Error, [
+            'last_error_code' => 'network_failure',
+        ]);
+        $reference = (string) Str::uuid();
+        app(ActivityRecorder::class)->record($reference, 'wordpress-abilities-read', 'failure', $target, 'network_failure');
+
+        $this->actingAs($owner)->get('/admin/activity')->assertOk()
+            ->assertSee($reference)
+            ->assertSee('Explain error')
+            ->assertSee('DNS')
+            ->assertSee('Suggested checks');
     }
 
     public function test_health_rendering_honors_site_scope_before_pagination_and_serialization(): void

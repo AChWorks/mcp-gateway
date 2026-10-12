@@ -49,6 +49,34 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(0, DB::table('operational_setting_changes')->count());
     }
 
+    public function test_operator_settings_form_is_grouped_but_preserves_every_audited_allowlist_input(): void
+    {
+        $this->actingAs($this->account('owner'));
+        $html = $this->get('/admin/operations')->assertOk()
+            ->assertSee('WordPress responses')
+            ->assertSee('WordPress connection deadlines')
+            ->assertSee('SSH whole-file transfer')
+            ->assertSee('Use default')
+            ->assertSee('Settings revision')
+            ->getContent();
+        $dom = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($dom);
+        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@class,"operations-form")])'));
+        self::assertSame(3, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
+        self::assertSame(6, (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
+        self::assertSame(6, (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
+        self::assertSame(6, (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//input[@type="password"][@name="current_password"][@required])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//input[@type="hidden"][@name="version"])'));
+        foreach (array_keys(OperationalSettings::allowed()) as $key) {
+            self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="values['.$key.']"])'));
+        }
+    }
+
     public function test_owner_can_set_both_finite_response_budgets_and_reset_them_without_redeploy(): void
     {
         config()->set('bridge.http.max_response_bytes', 65537);
@@ -184,8 +212,8 @@ final class OperationalSettingsAdminTest extends TestCase
         $owner = $this->account('owner');
         $this->actingAs($owner)->get('/admin/operations')
             ->assertOk()
-            ->assertSee('Connection and request deadlines')
-            ->assertSee('Overall HTTPS request time including DNS and response')
+            ->assertSee('WordPress connection deadlines')
+            ->assertSee('Total request deadline')
             ->assertSee('wp_connect_timeout_seconds')
             ->assertSee('wp_request_timeout_seconds');
 
@@ -409,7 +437,7 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(['max_bytes' => 8388608, 'max_seconds' => 30], $settings->sshTransferLimits());
 
         $this->get('/admin/operations')->assertOk()
-            ->assertSee('SSH whole-file transport budgets')
+            ->assertSee('SSH whole-file transfer')
             ->assertSee('ssh_transfer_max_kib')
             ->assertSee('ssh_transfer_max_seconds');
 

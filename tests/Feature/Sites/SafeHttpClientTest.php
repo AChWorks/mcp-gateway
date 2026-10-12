@@ -64,6 +64,7 @@ final class SafeHttpClientTest extends TestCase
             self::fail('TLS failure was accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('tls_failure', $exception->reason);
+            self::assertSame('tls_handshake', $exception->details['failure_stage']);
             self::assertTrue($exception->preDispatch, 'TLS setup failure could not transmit HTTP.');
         }
         Http::assertSentCount(1);
@@ -80,6 +81,7 @@ final class SafeHttpClientTest extends TestCase
             self::fail('Network failure was accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('network_failure', $exception->reason);
+            self::assertSame('tcp_connect', $exception->details['failure_stage']);
             self::assertTrue($exception->preDispatch, 'TCP refusal could not transmit HTTP.');
         }
         Http::assertSentCount(1);
@@ -104,6 +106,7 @@ final class SafeHttpClientTest extends TestCase
             self::fail('An uncertain token-exchange transfer must not be accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('network_failure', $exception->reason);
+            self::assertSame('request_timeout', $exception->details['failure_stage']);
             self::assertFalse($exception->preDispatch);
         }
         Http::assertSentCount(1);

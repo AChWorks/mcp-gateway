@@ -7,6 +7,7 @@ use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorResult;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
+use App\Application\Targets\WpAiBridgeTargetReconfiguration;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
@@ -50,6 +51,8 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
                     'reason' => $exception->reason,
                 ]),
                 'base_url',
+                $exception->reason,
+                $exception->diagnostics,
             );
         } catch (InvalidArgumentException) {
             throw new TargetConnectorFailure(
@@ -64,12 +67,34 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
         return __('WordPress Target registered. Connection authorization is not yet configured.');
     }
 
+    public function configurationRules(Target $target): array
+    {
+        return [
+            'configuration_revision' => ['required', 'string', 'size:64', 'regex:/^[a-f0-9]{64}$/D'],
+            'base_url' => ['required', 'string', 'url:https', 'max:2048'],
+        ];
+    }
+
+    public function configurationRevision(Target $target): string
+    {
+        return $this->container->make(WpAiBridgeTargetReconfiguration::class)->revision($target);
+    }
+
+    public function updateConfiguration(Target $target, array $input): TargetConnectorResult
+    {
+        $changed = $this->container->make(WpAiBridgeTargetReconfiguration::class)->update($target, $input);
+
+        return new TargetConnectorResult(statusMessage: $changed
+            ? __('WordPress origin updated after safe metadata discovery. Reauthorize this Target with WordPress OAuth before using it.')
+            : __('No WordPress origin change was necessary.'));
+    }
+
     public function connect(Target $target): TargetConnectorResult
     {
         try {
             return new TargetConnectorResult(redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->connectionFailureMessage($exception));
+            throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -80,7 +105,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->connectionFailureMessage($exception));
+            throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -91,7 +116,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(statusMessage: __('WordPress Target disconnected after confirmed credential revocation.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->connectionFailureMessage($exception));
+            throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -102,7 +127,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
 
             return new TargetConnectorResult(statusMessage: __('WordPress metadata is reachable and compatible.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->connectionFailureMessage($exception));
+            throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -117,6 +142,8 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
                 ->where('target_record_id', $id)->where('connector_type', $this->type())
                 ->where('purpose', 'wordpress_oauth')->exists(),
             'revocationPending' => DB::table('wp_ai_bridge_revocation_intents')
+                ->where('target_record_id', $id)->exists(),
+            'oauthFlowPending' => DB::table('wp_ai_bridge_oauth_flows')
                 ->where('target_record_id', $id)->exists(),
             'refreshIntent' => DB::table('wp_ai_bridge_refresh_intents')
                 ->where('target_record_id', $id)->first(['id', 'created_at']),

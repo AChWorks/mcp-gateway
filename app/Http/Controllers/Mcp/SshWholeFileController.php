@@ -6,6 +6,7 @@ use App\Application\Files\SshWholeFileTransfer;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Domain\Access\GatewayPermission;
 use App\Models\User;
+use App\Support\OperationDiagnostics;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
@@ -47,7 +48,8 @@ final class SshWholeFileController extends Controller
                 return response()->json([
                     'ok' => false,
                     'error' => ['code' => 'outcome_unknown',
-                        'message' => 'Remote mutation may have occurred. Inspect the Target before manual retry.'],
+                        'message' => 'Remote mutation may have occurred. Inspect the Target before manual retry.',
+                        'next_step' => OperationDiagnostics::nextStep('outcome_unknown')],
                     'possible_remote_effect' => true,
                     'temporary_cleanup_confirmed' => $result['temporary_cleanup_confirmed'] ?? false,
                     'retry_safe' => false,
@@ -257,11 +259,14 @@ final class SshWholeFileController extends Controller
     {
         if ($code === 'file_too_large') {
             // Returned only AFTER successful authorization for an exact Target.
+            OperationDiagnostics::failure('ssh-file-http', $code);
+
             return response()->json([
                 'ok' => false,
                 'error' => [
                     'code' => $code,
                     'message' => 'The file exceeds the authorized SSH transfer profile.',
+                    'next_step' => OperationDiagnostics::nextStep($code),
                     'limiting_layer' => 'gateway.ssh.file_transfer',
                     'limit_bytes' => $this->files->limits()['max_bytes'],
                 ],
@@ -281,9 +286,19 @@ final class SshWholeFileController extends Controller
 
     private function fail(string $code, int $status): JsonResponse
     {
+        // Non-routine error codes go to the shared diagnostic log. The
+        // public binary response never exposes internal request references.
+        if (! in_array($code, ['invalid_input', 'target_not_found', 'unsupported_mode'], true)) {
+            OperationDiagnostics::failure('ssh-file-http', $code, null, ['http_status' => $status]);
+        }
+
         return response()->json([
             'ok' => false,
-            'error' => ['code' => $code, 'message' => 'File exchange could not be completed safely.'],
+            'error' => [
+                'code' => $code,
+                'message' => 'File exchange could not be completed safely.',
+                'next_step' => OperationDiagnostics::nextStep($code),
+            ],
         ], $status, [...$this->headers(), ...($status === 429 ? ['Retry-After' => '60'] : [])]);
     }
 

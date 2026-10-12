@@ -19,6 +19,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 final class WordpressTargetMcpRegressionTest extends TestCase
@@ -286,13 +287,14 @@ final class WordpressTargetMcpRegressionTest extends TestCase
                 if ($ability === 'demo/read') {
                     $targetCalls++;
 
-                    return Http::failedConnection();
+                    return Http::failedConnection('cURL error 7: Failed to connect.');
                 }
             }
 
             return $this->bridgeResponse($request);
         });
 
+        Log::spy();
         $result = app(WordpressTargetMcpToolHandlers::class)->execute($this->principal, 'alpha', 'demo/read', []);
 
         self::assertFalse($result['ok']);
@@ -305,6 +307,60 @@ final class WordpressTargetMcpRegressionTest extends TestCase
             'target_id' => 'alpha',
             'error_code' => 'network_failure',
         ]);
+        $event = DB::table('activity_events')->where('operation', 'wordpress-ability-execute')->firstOrFail();
+        Log::shouldHaveReceived('warning')->withArgs(
+            static fn (string $message, array $context): bool => $message === 'Gateway operation failure.'
+                && ($context['operation'] ?? null) === 'wordpress-ability-execute'
+                && ($context['failure_stage'] ?? null) === 'tcp_connect'
+                && ($context['correlation_id'] ?? null) === $event->correlation_id,
+        )->atLeast()->once();
+    }
+
+    public function test_wordpress_mcp_transport_diagnostics_keep_safe_stages_and_shared_activity_reference(): void
+    {
+        $target = $this->createSite('alpha');
+        $this->pair($target);
+
+        $cases = [
+            'dns_lookup' => 'cURL error 6: Could not resolve host PRIVATE_OAUTH_TOKEN URL_SECRET',
+            'tcp_connect' => 'cURL error 7: Failed to connect to PRIVATE_OAUTH_TOKEN URL_SECRET',
+            'tls_handshake' => 'cURL error 60: SSL certificate problem PRIVATE_OAUTH_TOKEN URL_SECRET',
+            'request_timeout' => 'cURL error 28: Operation timed out PRIVATE_OAUTH_TOKEN URL_SECRET',
+        ];
+
+        foreach ($cases as $stage => $message) {
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(static fn (Request $request) => Http::failedConnection($message));
+            Log::spy();
+
+            $result = app(WordpressTargetMcpToolHandlers::class)
+                ->read($this->principal, 'alpha');
+            self::assertFalse($result['ok']);
+            self::assertSame($stage === 'tls_handshake' ? 'tls_failure' : 'network_failure', $result['error']['code']);
+            self::assertArrayHasKey('next_step', $result['error']);
+            self::assertArrayNotHasKey('correlation_id', $result['error']);
+            self::assertStringNotContainsString('PRIVATE_OAUTH_TOKEN', json_encode($result, JSON_THROW_ON_ERROR));
+            self::assertStringNotContainsString('URL_SECRET', json_encode($result, JSON_THROW_ON_ERROR));
+
+            $event = DB::table('activity_events')->where('operation', 'wordpress-abilities-read')
+                ->orderByDesc('created_at')->orderByDesc('id')->firstOrFail();
+            Log::shouldHaveReceived('warning')->withArgs(
+                static function (string $description, array $context) use ($stage, $event): bool {
+                    $encoded = json_encode($context, JSON_THROW_ON_ERROR);
+
+                    return $description === 'Gateway operation failure.'
+                        && ($context['operation'] ?? null) === 'wordpress-abilities-read'
+                        && ($context['error_code'] ?? null) === ($stage === 'tls_handshake' ? 'tls_failure' : 'network_failure')
+                        && ($context['failure_stage'] ?? null) === $stage
+                        && ($context['correlation_id'] ?? null) === $event->correlation_id
+                        && ! str_contains($encoded, 'PRIVATE_OAUTH_TOKEN')
+                        && ! str_contains($encoded, 'URL_SECRET')
+                        && ! str_contains($encoded, 'oauth/token')
+                        && ! str_contains($encoded, 'access_token');
+                },
+            )->atLeast()->once();
+        }
     }
 
     public function test_real_mcp_transport_accepts_nested_empty_object_and_preserves_object_identity_downstream(): void

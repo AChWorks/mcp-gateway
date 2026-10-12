@@ -1218,7 +1218,7 @@ final class WebUpdater
     {
         $raw = @file_get_contents($path);
         $version = is_string($raw) ? trim($raw) : '';
-        if (! preg_match('/^\d+\.\d+\.\d+$/', $version)) {
+        if (! preg_match('/^\d+\.\d+\.\d+(?:-rc\.[1-9][0-9]*)?$/D', $version)) {
             throw new RuntimeException($label.' is invalid.');
         }
 

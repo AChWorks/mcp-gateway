@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\OAuthClientAuthorizationsController;
 use App\Http\Controllers\Admin\OperationalSettingsController;
+use App\Http\Controllers\Admin\TargetConfigurationController;
 use App\Http\Controllers\Admin\TargetConnectionController;
 use App\Http\Controllers\Admin\TargetController;
 use App\Http\Controllers\Admin\TargetGroupController;
@@ -31,6 +32,7 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::get('/targets/{target:target_id}', [TargetController::class, 'show'])->name('targets.show');
     Route::get('/targets/{target:target_id}/edit', [TargetController::class, 'edit'])->name('targets.edit');
     Route::put('/targets/{target:target_id}', [TargetController::class, 'update'])->name('targets.update');
+    Route::put('/targets/{target:target_id}/configuration', [TargetConfigurationController::class, 'update'])->name('targets.configuration.update');
     Route::delete('/targets/{target:target_id}', [TargetController::class, 'destroy'])->name('targets.destroy');
     Route::post('/targets/{target:target_id}/connect', [TargetConnectionController::class, 'connect'])->name('targets.connect');
     Route::post('/targets/{target:target_id}/reconnect', [TargetConnectionController::class, 'reconnect'])->name('targets.reconnect');

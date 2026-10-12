@@ -8,8 +8,13 @@ trap 'rm -rf "$temp"' EXIT
 renderer="$repo_root/bin/render-github-release-notes.sh"
 version="$(tr -d '[:space:]' < "$repo_root/VERSION")"
 
-# Test the actual tracked changelog and current release identity.
-bash "$renderer" "$version" "$repo_root/RELEASE_NOTES.md" "$temp/current.md"
+# The tracked VERSION can be a candidate, but GitHub's public Release
+# renderer is explicitly stable-only. Validate planned stable notes now
+# without turning this prerelease into a public Release identity.
+bash "$repo_root/bin/validate-version.sh" package "$version"
+stable_version="${version%%-rc.*}"
+bash "$repo_root/bin/validate-version.sh" release "$stable_version"
+bash "$renderer" "$stable_version" "$repo_root/RELEASE_NOTES.md" "$temp/current.md"
 [[ -s "$temp/current.md" ]]
 if grep -q '^# ' "$temp/current.md"; then
   echo "Rendered release body contains an H1/version heading." >&2
@@ -34,6 +39,12 @@ grep -Fxq '**Current release.**' "$temp/rendered.md"
 grep -Fxq '## Changes' "$temp/rendered.md"
 if grep -Eq '^# |Historical release' "$temp/rendered.md"; then
   echo "Rendered body repeated a release heading or leaked past versions." >&2
+  exit 1
+fi
+
+# Never render prerelease candidate notes as a public stable Release.
+if bash "$renderer" 9.9.9-rc.1 "$temp/fixture.md" "$temp/invalid-rc.md" >/dev/null 2>&1; then
+  echo "Renderer accepted a prerelease identity as a public stable Release." >&2
   exit 1
 fi
 

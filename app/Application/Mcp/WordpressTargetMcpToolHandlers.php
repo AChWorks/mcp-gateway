@@ -12,6 +12,7 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
 use App\Models\User;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use JsonException;
 
 final readonly class WordpressTargetMcpToolHandlers
@@ -50,7 +51,7 @@ final readonly class WordpressTargetMcpToolHandlers
         try {
             $catalog = $this->bridge->readAbilities($target, CorrelationId::current(), $ability, $page, $per_page, $namespace, $search);
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
-            return $this->failed($operation, $target, $exception->reason, 'WordPress catalog request could not complete safely.');
+            return $this->failed($operation, $target, $exception->reason, 'WordPress catalog request could not complete safely.', $this->safeDetails($exception));
         }
 
         $this->activity->record(CorrelationId::current(), $operation, 'success', $target);
@@ -103,7 +104,7 @@ final readonly class WordpressTargetMcpToolHandlers
                 static fn (AbilityExecutionClass $class): bool => $allowed[$class->permission()->value] ?? false,
             );
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
-            return $this->failed($operation, $target, $exception->reason, 'WordPress Ability could not complete safely.');
+            return $this->failed($operation, $target, $exception->reason, 'WordPress Ability could not complete safely.', $this->safeDetails($exception));
         }
 
         $this->activity->record(CorrelationId::current(), $operation, 'success', $target);
@@ -139,8 +140,17 @@ final readonly class WordpressTargetMcpToolHandlers
             && (mb_strlen($value) > 255 || preg_match('/[\x00-\x1F\x7F]/', $value) === 1);
     }
 
-    /** @return array<string, mixed> */
-    private function failed(string $operation, ?Target $target, string $code, string $message): array
+    /** @return array<string,mixed> */
+    private function safeDetails(WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception): array
+    {
+        return $exception instanceof WpAiBridgeMcpException
+            ? $exception->details : $exception->diagnostics;
+    }
+
+    /** @param array<string,mixed> $diagnostics
+     * @return array<string, mixed>
+     */
+    private function failed(string $operation, ?Target $target, string $code, string $message, array $diagnostics = []): array
     {
         $this->activity->record(
             CorrelationId::current(),
@@ -148,8 +158,13 @@ final readonly class WordpressTargetMcpToolHandlers
             $code === 'outcome_unknown' ? 'unknown' : 'failure',
             $target,
             $code,
+            $diagnostics,
         );
 
-        return ['ok' => false, 'error' => ['code' => $code, 'message' => $message]];
+        return ['ok' => false, 'error' => [
+            'code' => $code,
+            'message' => $message,
+            'next_step' => OperationDiagnostics::nextStep($code),
+        ]];
     }
 }

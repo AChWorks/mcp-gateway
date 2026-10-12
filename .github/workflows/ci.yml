@@ -59,6 +59,10 @@ jobs:
       - name: Validate Composer metadata
         run: composer validate --strict
 
+      - name: Validate immutable prerelease and public version policy
+        shell: bash
+        run: bash bin/test-version-policy.sh
+
       - name: Validate release-note identity and rendered GitHub body
         shell: bash
         run: bash bin/test-github-release-notes.sh
@@ -76,7 +80,16 @@ jobs:
         run: composer test
 
       - name: Validate live ChatGPT OAuth client metadata
-        run: php artisan gateway:oauth-client-check --env=testing --refresh
+        shell: bash
+        run: |
+          # Read-only public JWKS retrieval occasionally encounters transient
+          # provider/CDN errors. Retry once; a persistent bad response or an
+          # actual compatibility failure MUST still fail CI.
+          if ! php artisan gateway:oauth-client-check --env=testing --refresh; then
+            echo 'Initial live OAuth metadata check failed; retry once after 5 seconds.' >&2
+            sleep 5
+            php artisan gateway:oauth-client-check --env=testing --refresh
+          fi
 
       - name: Generate ephemeral Gateway OAuth signing keys
         env:

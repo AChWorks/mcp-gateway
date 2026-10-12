@@ -2,6 +2,9 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Application\Access\AccessControl;
+use App\Application\Access\TargetGroupManager;
+use App\Application\Access\UserAccessManager;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
@@ -65,6 +68,66 @@ final class TargetGroupManagementTest extends TestCase
             'target_group_id' => $group->id,
             'permission' => GatewayPermission::WordpressAbilitiesExecuteMutating->value,
         ]);
+    }
+
+    public function test_owner_explicitly_confirms_ssh_group_denial_changes_but_cannot_grant_ssh_by_group(): void
+    {
+        $owner = $this->owner();
+        $fields = [
+            'name' => 'SSH restricted group',
+            'denied_permissions' => [GatewayPermission::SshCommandRun->value],
+            'current_password' => 'CorrectHorse!234',
+        ];
+
+        $this->actingAs($owner)->post('/admin/target-groups', $fields)
+            ->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertSame(0, TargetGroup::query()->count());
+
+        $this->post('/admin/target-groups', [
+            ...$fields, 'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        $group = TargetGroup::query()->sole();
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        $this->put('/admin/target-groups/'.$group->getKey(), [
+            'name' => 'SSH restricted group',
+            'denied_permissions' => [],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        $this->put('/admin/target-groups/'.$group->getKey(), [
+            'name' => 'SSH restricted group',
+            'denied_permissions' => [],
+            'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+            'denial_revision' => app(TargetGroupManager::class)->denialRevision($group),
+        ])->assertRedirect();
+        $this->assertDatabaseMissing('target_group_permission_denials', [
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        // Removing a group denial is never a positive permission grant.
+        $operator = $this->operator();
+        $target = Target::query()->create([
+            'target_id' => 'ssh-target',
+            'display_name' => 'SSH Target',
+            'connector_type' => 'ssh_direct',
+        ]);
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $operator->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+        self::assertFalse(app(AccessControl::class)->allows(
+            $operator, GatewayPermission::SshCommandRun, $target,
+        ));
     }
 
     public function test_wrong_password_or_non_owner_cannot_manage_site_groups(): void
@@ -217,6 +280,427 @@ final class TargetGroupManagementTest extends TestCase
         ]);
         self::assertSame(0, DB::table('target_group_targets')->where('target_group_id', $group->id)->count());
         self::assertSame(0, DB::table('target_group_users')->where('target_group_id', $group->id)->count());
+    }
+
+    public function test_deleting_an_ssh_deny_group_requires_confirmation_before_implicit_grant_expansion(): void
+    {
+        [$owner, $operator, $target, $restricted, $alternate] = $this->overlappingSshGroups();
+        $access = app(AccessControl::class);
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->actingAs($owner)->delete('/admin/target-groups/'.$restricted->id, [
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+
+        self::assertNotNull($restricted->fresh());
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->delete('/admin/target-groups/'.$restricted->id, [
+            'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect('/admin/target-groups');
+
+        self::assertNull($restricted->fresh());
+        self::assertNotNull($alternate->fresh());
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+    }
+
+    public function test_ssh_group_user_and_target_membership_changes_require_separate_confirmation(): void
+    {
+        [$owner, $operator, $target, $restricted] = $this->overlappingSshGroups();
+        $access = app(AccessControl::class);
+        $userRoute = route('admin.target-groups.users.update', [
+            'targetGroup' => $restricted->id, 'user' => $operator->id,
+        ], false);
+        $targetRoute = route('admin.target-groups.targets.update', [
+            'targetGroup' => $restricted->id, 'target' => $target->target_id,
+        ], false);
+
+        $this->actingAs($owner)->get(route('admin.target-groups.users.edit', [
+            'targetGroup' => $restricted->id, 'user' => $operator->id,
+        ], false))->assertOk()->assertSee('confirm_ssh_group_changes');
+        $this->get(route('admin.target-groups.targets.edit', [
+            'targetGroup' => $restricted->id, 'target' => $target->target_id,
+        ], false))->assertOk()->assertSee('confirm_ssh_group_changes');
+
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($userRoute, [
+            'assigned' => '0', 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($userRoute, [
+            'assigned' => '0', 'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($userRoute, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($userRoute, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($targetRoute, [
+            'assigned' => '0', 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($targetRoute, [
+            'assigned' => '0', 'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($targetRoute, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($targetRoute, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        // No-op membership should not require a new SSH grant acknowledgment.
+        $this->put($targetRoute, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+    }
+
+    public function test_adding_a_user_to_ssh_group_requires_confirmed_owner_scope_assignment(): void
+    {
+        $owner = $this->owner();
+        $operator = $this->operatorWithApprovedSsh($owner);
+        $target = Target::query()->create([
+            'target_id' => 'group-new-ssh-target',
+            'display_name' => 'Group new SSH target',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $group = TargetGroup::query()->create(['name' => 'SSH Scope Group']);
+        $this->linkGroupTarget($group, $target);
+
+        $access = app(AccessControl::class);
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+        $url = route('admin.target-groups.users.update', [
+            'targetGroup' => $group->id, 'user' => $operator->id,
+        ], false);
+
+        $this->actingAs($owner)->put($url, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($url, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+    }
+
+    public function test_adding_an_ssh_target_to_existing_group_requires_review_before_scope_expansion(): void
+    {
+        $owner = $this->owner();
+        $operator = $this->operatorWithApprovedSsh($owner);
+        $target = Target::query()->create([
+            'target_id' => 'ssh-target-new-member',
+            'display_name' => 'SSH Target pending membership',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $group = TargetGroup::query()->create(['name' => 'Selected SSH owner group']);
+        DB::table('target_group_users')->insert([
+            'target_group_id' => $group->id,
+            'user_id' => $operator->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $access = app(AccessControl::class);
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $url = route('admin.target-groups.targets.update', [
+            'targetGroup' => $group->id, 'target' => $target->target_id,
+        ], false);
+        $this->actingAs($owner)->put($url, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_group_changes');
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+
+        $this->put($url, [
+            'assigned' => '1', 'current_password' => 'CorrectHorse!234',
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect();
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+    }
+
+    public function test_group_denial_update_rechecks_actual_locked_state_even_from_stale_caller(): void
+    {
+        $owner = $this->owner();
+        $group = TargetGroup::query()->create(['name' => 'Initially restricted']);
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $group->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // Model a previously opened form which was already validated before
+        // the SSH denial was added: the service must inspect live locked rows.
+        $this->actingAs($owner);
+        try {
+            app(TargetGroupManager::class)->update(
+                $group, 'Stale form attempted', [], false,
+            );
+            self::fail('A stale form erased a newly active SSH denial.');
+        } catch (\DomainException $exception) {
+            self::assertSame('ssh_confirmation_required', $exception->getMessage());
+        }
+        self::assertSame('Initially restricted', $group->fresh()->name);
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        app(TargetGroupManager::class)->update(
+            $group, 'Explicitly reviewed', [], true,
+            app(TargetGroupManager::class)->denialRevision($group),
+        );
+        self::assertSame('Explicitly reviewed', $group->fresh()->name);
+        $this->assertDatabaseMissing('target_group_permission_denials', [
+            'target_group_id' => $group->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+    }
+
+    public function test_stale_group_confirmation_cannot_remove_unseen_ssh_denial(): void
+    {
+        $owner = $this->owner();
+        $this->actingAs($owner);
+        $manager = app(TargetGroupManager::class);
+        $group = TargetGroup::query()->create(['name' => 'Revision-bound group']);
+
+        $oldRevision = $manager->denialRevision($group);
+        $this->get('/admin/target-groups/'.$group->id.'/edit')->assertOk()
+            ->assertSee('name="denial_revision"', false)
+            ->assertSee($oldRevision);
+
+        // Another Owner adds a restriction after this edit form was opened.
+        $manager->update($group, 'Revision-bound group', [
+            GatewayPermission::SshCommandRun->value,
+        ], true, $oldRevision);
+
+        $url = '/admin/target-groups/'.$group->id;
+        $oldForm = [
+            'name' => 'Old form edit', 'denied_permissions' => [],
+            'denial_revision' => $oldRevision,
+            'current_password' => 'CorrectHorse!234',
+        ];
+        $this->put($url, $oldForm)->assertSessionHasErrors('confirm_ssh_group_changes');
+        $this->put($url, [
+            ...$oldForm, 'confirm_ssh_group_changes' => '1',
+        ])->assertSessionHasErrors('denial_revision');
+
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+        self::assertSame('Revision-bound group', $group->fresh()->name);
+
+        // The fresh view uses actual current denials, not stale old() fields.
+        $this->get($url.'/edit')->assertOk()
+            ->assertSee($manager->denialRevision($group));
+
+        $this->put($url, [
+            ...$oldForm,
+            'denial_revision' => $manager->denialRevision($group),
+            'confirm_ssh_group_changes' => '1',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertDatabaseMissing('target_group_permission_denials', [
+            'target_group_id' => $group->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+    }
+
+    public function test_group_wrong_password_and_name_validation_cannot_restamp_old_denials_with_fresh_revision(): void
+    {
+        $owner = $this->owner();
+        $this->actingAs($owner);
+        $manager = app(TargetGroupManager::class);
+        $group = $manager->create('Revision recovery group', [GatewayPermission::SshFileRead->value]);
+        $url = '/admin/target-groups/'.$group->id;
+        $edit = $url.'/edit';
+
+        $h0 = $manager->denialRevision($group);
+        $this->get($edit)->assertOk()->assertSee('name="denial_revision" value="'.$h0.'"', false);
+        $manager->update($group, 'Revision recovery group', [
+            GatewayPermission::SshFileRead->value,
+            GatewayPermission::SshCommandRun->value,
+        ], true, $h0);
+        $h1 = $manager->denialRevision($group);
+
+        $old = [
+            'name' => 'Renamed group',
+            'denied_permissions' => [GatewayPermission::SshFileRead->value],
+            'denial_revision' => $h0,
+            'confirm_ssh_group_changes' => '1',
+        ];
+        $this->from($edit)->put($url, [
+            ...$old, 'current_password' => 'WrongHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
+
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="denial_revision" value="'.$h1.'"', false)
+            ->assertSee('changed since you opened this form');
+        $html = (string) $page->getContent();
+        self::assertTrue($this->formDenialChecked($html, GatewayPermission::SshFileRead->value));
+        self::assertTrue($this->formDenialChecked($html, GatewayPermission::SshCommandRun->value));
+        self::assertFalse($this->formSshGroupReviewed($html));
+
+        $this->put($url, [
+            ...$old,
+            'denial_revision' => $h1,
+            'denied_permissions' => [GatewayPermission::SshFileRead->value, GatewayPermission::SshCommandRun->value],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('target_group_permission_denials', [
+            'target_group_id' => $group->id, 'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+
+        // Unrelated name validation must also reject old authorization values.
+        $manager->update($group, 'Renamed group', [
+            GatewayPermission::SshFileRead->value,
+            GatewayPermission::SshCommandRun->value,
+            GatewayPermission::SshFileWrite->value,
+        ], true, $h1);
+        $h2 = $manager->denialRevision($group);
+        $this->from($edit)->put($url, [
+            ...$old, 'name' => '',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="denial_revision" value="'.$h2.'"', false);
+        $html = (string) $page->getContent();
+        self::assertTrue($this->formDenialChecked($html, GatewayPermission::SshFileWrite->value));
+        self::assertFalse($this->formSshGroupReviewed($html));
+
+        // Missing revision after validation error is not a new approval.
+        $this->from($edit)->put($url, [
+            'name' => '', 'denied_permissions' => [],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get($edit)->assertOk()
+            ->assertSee('name="denial_revision" value="'.$h2.'"', false);
+        self::assertTrue($this->formDenialChecked((string) $page->getContent(), GatewayPermission::SshFileWrite->value));
+
+        // Matching fresh revision can preserve an intentionally cleared
+        // checkbox set while unrelated name validation is corrected.
+        $this->from($edit)->put($url, [
+            'name' => '', 'denial_revision' => $h2,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get($edit)->assertOk();
+        self::assertFalse($this->formDenialChecked((string) $page->getContent(), GatewayPermission::SshFileWrite->value));
+        self::assertSame($h2, $manager->denialRevision($group));
+    }
+
+    private function formDenialChecked(string $html, string $permission): bool
+    {
+        $document = new \DOMDocument;
+        $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING);
+        $inputs = (new \DOMXPath($document))->query('//input[@name="denied_permissions[]"]');
+
+        foreach ($inputs as $input) {
+            if ($input instanceof \DOMElement && $input->getAttribute('value') === $permission) {
+                return $input->hasAttribute('checked');
+            }
+        }
+
+        self::fail('Missing denial checkbox: '.$permission);
+    }
+
+    private function formSshGroupReviewed(string $html): bool
+    {
+        $document = new \DOMDocument;
+        $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING);
+        $inputs = (new \DOMXPath($document))->query('//input[@name="confirm_ssh_group_changes"]');
+
+        foreach ($inputs as $input) {
+            if ($input instanceof \DOMElement && $input->getAttribute('id') === 'confirm_ssh_group_changes') {
+                return $input->hasAttribute('checked');
+            }
+        }
+
+        self::fail('Missing SSH Target Group confirmation input.');
+    }
+
+    /** @return array{User,User,Target,TargetGroup,TargetGroup} */
+    private function overlappingSshGroups(): array
+    {
+        $owner = $this->owner();
+        $operator = $this->operatorWithApprovedSsh($owner);
+        $target = Target::query()->create([
+            'target_id' => 'ssh-deny-overlap',
+            'display_name' => 'SSH denial overlap',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $restricted = TargetGroup::query()->create(['name' => 'Restrictive SSH Group']);
+        $alternate = TargetGroup::query()->create(['name' => 'Alternate SSH Scope']);
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $restricted->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        foreach ([$restricted, $alternate] as $group) {
+            $this->linkGroupTarget($group, $target);
+            DB::table('target_group_users')->insert([
+                'target_group_id' => $group->id,
+                'user_id' => $operator->id,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+
+        return [$owner, $operator, $target, $restricted, $alternate];
+    }
+
+    private function linkGroupTarget(TargetGroup $group, Target $target): void
+    {
+        DB::table('target_group_targets')->insert([
+            'target_group_id' => $group->id,
+            'target_record_id' => $target->id,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+    }
+
+    private function operatorWithApprovedSsh(User $owner): User
+    {
+        $operator = app(UserAccessManager::class)->create([
+            'name' => 'Explicit SSH operator',
+            'email' => 'ssh-group-operator-'.uniqid().'@example.test',
+            'password' => 'DifferentHorse!234',
+            'role' => 'operator', 'target_scope_mode' => 'selected',
+            'access_enabled' => true,
+        ], []);
+
+        $this->actingAs($owner)->put('/admin/users/'.$operator->id, [
+            'name' => $operator->name, 'email' => $operator->email,
+            'role' => 'operator', 'target_scope_mode' => 'selected',
+            'access_enabled' => '1', 'denied_permissions' => [],
+            'ssh_permissions_reviewed' => '1',
+            'confirm_ssh_permission_changes' => '1',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+
+        self::assertTrue(app(AccessControl::class)->allows($operator, GatewayPermission::SshCommandRun));
+
+        return $operator;
     }
 
     private function owner(): User

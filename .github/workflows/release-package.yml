@@ -1,22 +1,18 @@
 name: Release deployment package
 
+# Explicit Owner release action only: a VERSION change or PR merge must not
+# independently publish a public artifact or move/create any release tag.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - VERSION
-      - .github/workflows/release-package.yml
-      - bin/build-release-package.sh
-      - bin/build-update-package.sh
-      - bin/mcp-gateway-web-updater.php
-      - bin/update-managed-public-paths.txt
-      - bin/mcp-gateway-web-update-index.php
-      - bin/test-update-package.sh
-      - bin/test-update-backup-integrity.sh
-      - bin/prune-production-vendor.php
-      - bin/verify-release-package.sh
-      - bin/verify-update-package.sh
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: 'Exact, independently reviewed main commit approved by Owner'
+        required: true
+        type: string
+      approved_version:
+        description: 'Approved stable VERSION (e.g. 2.1.2)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -27,6 +23,7 @@ concurrency:
 
 jobs:
   package:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -67,16 +64,30 @@ jobs:
           composer audit --locked
           composer check
 
+      - name: Verify explicit immutable publication envelope
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          APPROVED_VERSION: ${{ inputs.approved_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$APPROVED_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'Invalid approved SHA.' >&2; exit 1; }
+          bash bin/validate-version.sh release "$APPROVED_VERSION"
+          [[ "$GITHUB_REF" == 'refs/heads/main' && "$GITHUB_SHA" == "$APPROVED_SHA" ]] || {
+            echo 'Publication must run on the exact Owner-approved main HEAD.' >&2; exit 1;
+          }
+          current="$(git ls-remote --exit-code origin refs/heads/main | awk '{print $1}')"
+          [[ "$current" == "$APPROVED_SHA" ]] || { echo 'main moved after approval; review again.' >&2; exit 1; }
+          current_version="$(tr -d '[:space:]' < VERSION)"
+          [[ "$current_version" == "$APPROVED_VERSION" ]] || { echo 'Approved release version differs from checked-out source.' >&2; exit 1; }
+
       - name: Resolve release identity
         id: release
         shell: bash
         run: |
           set -euo pipefail
           version="$(tr -d '[:space:]' < VERSION)"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "VERSION must contain a semantic version such as 1.1.5" >&2
-            exit 1
-          fi
+          bash bin/validate-version.sh release "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "package=mcp-gateway-v$version" >> "$GITHUB_OUTPUT"
@@ -132,7 +143,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3; do
             gh release download "v$version" \
               --pattern "mcp-gateway-v$version.zip*" \
               --dir dist/baseline
@@ -153,7 +164,7 @@ jobs:
           UPDATE_TEST_DB_PASSWORD: test-password
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3; do
             bash bin/test-update-package.sh \
               "dist/$UPDATE_PACKAGE.zip" \
               "dist/baseline/mcp-gateway-v$version.zip"
@@ -169,7 +180,7 @@ jobs:
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3; do
             bash bin/test-update-backup-integrity.sh \
               "dist/$UPDATE_PACKAGE.zip" \
               "dist/baseline/mcp-gateway-v$version.zip"
