@@ -1,10 +1,10 @@
 <?php
 
+use App\Http\Controllers\Mcp\SshWholeFileController;
 use App\Http\Controllers\OAuth\AuthorizationServerMetadataController;
 use App\Http\Controllers\OAuth\ProtectedResourceMetadataController;
 use App\Http\Controllers\OAuth\RevocationController;
 use App\Http\Controllers\OAuth\TokenController;
-use App\Http\Controllers\Mcp\SshWholeFileController;
 use App\Http\Middleware\EnsureCorrelationId;
 use App\Http\Middleware\ObserveOAuthTokenRequest;
 use App\Http\Middleware\RequireMcpAccessToken;

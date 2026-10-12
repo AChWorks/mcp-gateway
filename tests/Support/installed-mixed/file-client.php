@@ -103,13 +103,34 @@ try {
         }
     };
 
+    // Produce a structurally valid one-page PDF with accurate xref offsets,
+    // not just a file named .pdf with a signature prefix.
+    $pdf = "%PDF-1.4\n";
+    $pdfObjects = [
+        '<< /Type /Catalog /Pages 2 0 R >>',
+        '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 160] /Contents 4 0 R >>',
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    $offsets = [];
+    foreach ($pdfObjects as $index => $object) {
+        $offsets[] = strlen($pdf);
+        $pdf .= ($index + 1)." 0 obj\n".$object."\nendobj\n";
+    }
+    $xref = strlen($pdf);
+    $pdf .= "xref\n0 5\n0000000000 65535 f \n";
+    foreach ($offsets as $offset) {
+        $pdf .= sprintf("%010d 00000 n \n", $offset);
+    }
+    $pdf .= "trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n".$xref."\n%%EOF\n";
+
     $fixtures = [
         'empty' => '',
         'utf8' => str_repeat("سلام Gateway — 你好 🚀\n", 64),
         'two_fifty_six_kib' => random_bytes(262144),
         'binary' => "\x00\xff".random_bytes(1024 * 1024 + 131)."\x7f",
         'png' => base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==', true),
-        'pdf' => "%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\nxref\n0 1\n0000000000 65535 f \ntrailer<</Root 1 0 R>>\n%%EOF\n",
+        'pdf' => $pdf,
         'zip' => "PK\x05\x06".str_repeat("\x00", 18),
     ];
     $startOverall = hrtime(true);

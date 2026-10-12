@@ -41,7 +41,16 @@ final class SshWholeFileController extends Controller
             }
             $result = $this->files->upload($user, $target, $metadata['path'], $source, $metadata);
             if (($result['status'] ?? '') === 'outcome_unknown') {
-                return $this->fail('outcome_unknown', 409);
+                // Never claim an interrupted post-dispatch write was rolled
+                // back. The caller must inspect the Target before retrying.
+                return response()->json([
+                    'ok' => false,
+                    'error' => ['code' => 'outcome_unknown',
+                        'message' => 'Remote mutation may have occurred. Inspect the Target before manual retry.'],
+                    'possible_remote_effect' => true,
+                    'temporary_cleanup_confirmed' => $result['temporary_cleanup_confirmed'] ?? false,
+                    'retry_safe' => false,
+                ], 409, $this->headers());
             }
             if (($result['status'] ?? '') !== 'completed'
                 || ($result['bytes_written'] ?? null) !== $metadata['size']
@@ -71,9 +80,16 @@ final class SshWholeFileController extends Controller
             $user = $this->user($request);
             $metadata = $this->downloadMetadata($request);
             $target = $this->files->target($user, $targetId, GatewayPermission::SshFileRead);
+            // Budget covers SFTP + PHP verification + client-side delivery.
+            // Host/proxy write deadlines must be independently configured.
+            $deadline = hrtime(true) + $this->files->limits()['max_seconds'] * 1_000_000_000;
             $file = $this->files->download($user, $target, $metadata['path'], $metadata);
             $result = $file['identity'];
             $stream = $file['stream'];
+            if (hrtime(true) >= $deadline) {
+                fclose($stream);
+                throw new SshTargetConnectionException('transfer_timed_out');
+            }
             $name = basename($metadata['path']);
             $encodedName = rawurlencode($name);
             $headers = [
@@ -90,9 +106,14 @@ final class SshWholeFileController extends Controller
             // A failure before any bytes are returned is an HTTP error.
             // After bytes start, a client disconnect is NOT resumable; client
             // must verify Content-Length and SHA-256 before treating it as a file.
-            return response()->stream(static function () use ($stream): void {
+            return response()->stream(static function () use ($stream, $deadline): void {
                 try {
-                    while (! feof($stream)) {
+                    while (! feof($stream) && ! connection_aborted()) {
+                        if (hrtime(true) >= $deadline) {
+                            // A partial HTTP 200 body is NOT a completed file.
+                            // Clients MUST verify length and SHA-256.
+                            break;
+                        }
                         $chunk = fread($stream, 65536);
                         if (! is_string($chunk) || $chunk === '') {
                             break;

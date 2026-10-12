@@ -5,6 +5,8 @@ Current work owners: [client-neutral transfer #147](https://github.com/AChWorks/
 Provenance: [Program #106](https://github.com/AChWorks/mcp-gateway/issues/106), [completed bounded-response #122](https://github.com/AChWorks/mcp-gateway/issues/122), [SSH backend #123](https://github.com/AChWorks/mcp-gateway/issues/123).
 Related: [Target foundation](./TARGET-CONNECTOR-FOUNDATION.md), [Direct SSH connector](./DIRECT-SSH-CONNECTOR.md).
 
+**#147 source-only draft:** The opt-in, authenticated raw HTTP ↔ existing SFTP whole-file path and its exact client/Target/host limits are specified in [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md). It is not released, not a ChatGPT host attachment capability, and requires Owner API approval plus independent review before integration.
+
 ## Purpose and scope
 
 A registered Target may expose small JSON, large structured collections, command output, binary files, or long-running work. These have different continuation and integrity properties. The Gateway must offer **one coherent set of semantics**, not one unlimited transport/body size. Design semantics here are common; implementation belongs to the actual connector and operation. Do not claim every backend can page or resume.
