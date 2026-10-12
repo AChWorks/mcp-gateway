@@ -108,6 +108,8 @@ if [[ "${1:-}" == inside ]]; then
     php "$ROOT/client/client.php" positive >"$MIXED_EVIDENCE/client.json"
   runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/file-client.php" >"$MIXED_EVIDENCE/file-client.json"
+  runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+    python3 "$ROOT/client/file-client.py" >"$MIXED_EVIDENCE/python-file-client.json"
   runuser -u aiworker -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php tests/Support/installed-mixed/seed.php disable
   runuser -u aiworker -- env MIXED_ROOT="$ROOT" \
@@ -227,6 +229,7 @@ unzip -q "$WP_ADAPTER_ARCHIVE" -d "$ROOT/wp/wp-content/plugins"
 cp "$WP_CLI" "$ROOT/wp-cli.phar"
 cp "$ROOT/gateway/tests/Support/installed-mixed/client.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/file-client.php" "$ROOT/client/"
+cp "$ROOT/gateway/tests/Support/installed-mixed/file-client.py" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/dynamic-ability.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/FixtureClientProfiles.php" "$ROOT/gateway/app/Providers/"
 cat > "$ROOT/gateway/bootstrap/providers.php" <<'EOF_PROVIDERS'
