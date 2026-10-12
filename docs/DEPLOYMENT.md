@@ -212,6 +212,60 @@ The ChatGPT-facing MCP limiter is burst-aware by default: the unauthenticated ed
 
 The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
+### Optional SSH whole-file data plane: host acceptance (not yet shipped)
+
+The authenticated SSH whole-file HTTP sidecar was integrated into source in
+[PR #166](https://github.com/AChWorks/mcp-gateway/pull/166), but the current
+public maintenance release does **not** ship it. The route is **OFF by default**
+and source/test success is not public-host authorization. Its exact wire
+contract, per-mode bounded operation limits and source-integrated client
+proof live in [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md); keep that
+document as the only detailed protocol definition.
+
+**Before a future explicit production enablement**, an operator must
+validate the exact installed release and nominated host/profile, then:
+
+- Confirm the HTTPS origin, OAuth client/user/Target read/write permissions,
+  remote verified SSH host identity, reachable SFTP port, and pre-provisioned
+  owner-owned private `0700` remote staging directory on the destination
+  filesystem; no anonymous/remote URL fetch or generic filesystem proxy.
+- Test that the real reverse proxy/CDN/webserver/PHP handler passes separate
+  authenticated `application/octet-stream` requests and complete binary
+  responses without lossy encoding or truncation. Measure request body
+  buffering, accurate `Content-Length`, worker/sockets, first-byte/idle
+  and downstream send/receive deadlines, including interrupted clients.
+- Distinguish the **Owner-configured synchronous SSH object maximum** from
+  the effective proxy upload limit, PHP request size, per-worker memory,
+  `php://temp` spill directory quota, free inode/disk headroom and the
+  actual client-capacity limit. These are **separate resource ceilings**;
+  a larger setting is not allocated up-front.
+- Measure **aggregate concurrent ingress staging** before remote SFTP
+  admission: each accepted request may consume temporary disk even if
+  another operation holds the per-Target SFTP lease. Exercise one and
+  multiple simultaneously active uploads/downloads at actual accepted
+  object sizes and slow-client rates, with disk pressure, cleanup and
+  meaningful margin for application/update/OAuth state. Add earlier
+  bounded ingress admission **only** when host measurements demonstrate
+  insufficient safety; reuse existing quota/auth systems.
+- Check revoked bearer/client/Target permission, over-limit/partial bytes,
+  source changes, create-only collisions, uncertain writes and post-request
+  cleanup. A server-side `download success` Activity event means **remote
+  read + verified staging**, not confirmed end-client receipt; the receiving
+  client must reject incomplete length or SHA-256 mismatch.
+- Keep the feature disabled until the operator has recorded a *specific*
+  host/proxy capacity result and any separate production rollout approval.
+  Do not set `SSH_FILE_TRANSFER_ENABLED=true` simply because source CI or
+  an isolated fixture passed. Model-native ChatGPT attachments and Agent
+  Gateway routing are **not** implied.
+
+[#154](https://github.com/AChWorks/mcp-gateway/issues/154) owns the
+versioned effective host/client limits and measurement evidence;
+[#112](https://github.com/AChWorks/mcp-gateway/issues/112) owns release
+and installed-host go/no-go; [#147](https://github.com/AChWorks/mcp-gateway/issues/147)
+owns supported transport/client delivery gaps. These are separate from
+ordinary WordPress response size settings and from a future Owner-paused
+AI Server Agent connector [#111](https://github.com/AChWorks/mcp-gateway/issues/111).
+
 ### Activity retention scheduling
 
 Activity recording stays off the retention hot path: a routed operation writes one bounded metadata event, while `activity:prune` applies the configured age and row-count policy separately. Defaults are 30 days and 5,000 rows through `ACTIVITY_RETENTION_DAYS` and `ACTIVITY_MAX_ROWS`. Because pruning is scheduled rather than synchronous with every write, the row count can temporarily exceed the configured target between prune runs.

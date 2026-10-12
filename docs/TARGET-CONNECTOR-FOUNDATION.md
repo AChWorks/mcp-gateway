@@ -184,7 +184,7 @@ Connector onboarding that accepts a secret through the Admin UI treats that fiel
 
 Supported connectors are built-in, explicitly registered implementations.
 
-Accepted built-in connector vocabulary (not a claim of simultaneous installed availability): WordPress is shipped; Direct SSH commands (#145), bounded SFTP file operations (#146) and internal stream primitives (#148) are **source-integrated but not yet released**; client-neutral file transfer/handoff #147 and final mixed acceptance #112 remain open. AI Server Agent #111 remains Owner-paused:
+Accepted built-in connector vocabulary (not a claim of simultaneous installed availability): WordPress is shipped; Direct SSH commands (#145), bounded SFTP calls (#146), internal streams (#148) and optional authenticated SSH whole-file HTTP exchange with per-Target MCP capability discovery ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)) are **source-integrated but not yet in the published maintenance release**. External PHP/Python clients actually exchanged complete binary bytes on a disposable installed Gateway; host-native ChatGPT attachments, additional Target transfer modes and full release acceptance remain open under #147/#112. AI Server Agent #111 remains Owner-paused:
 
 ```text
 wp_ai_bridge

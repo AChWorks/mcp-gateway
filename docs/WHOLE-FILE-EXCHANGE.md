@@ -1,9 +1,6 @@
-# Whole-file binary data plane — Issue #147 (draft, not released)
+# Whole-file binary data plane — Issue #147 (source-integrated, not released)
 
-**Status:** Source-only candidate on Issue #147. Requires an explicit Owner
-protocol/security-contract decision before public enablement. The default
-`SSH_FILE_TRANSFER_ENABLED=false` keeps this extension OFF. It is **not**
-part of the public `v2.0.3` release and no production site was deployed.
+**Integration evidence:** [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) was merged after exact-HEAD four-workflow CI, independent **HIGH_ASSURANCE APPROVE**, and explicit Owner merge authorization. This is a **source integration**, not a new published release or proof of production deployment. The public `v2.0.3` release does not contain the feature. The default `SSH_FILE_TRANSFER_ENABLED=false` keeps this optional HTTP route **OFF**; actual public enablement depends on separate host/proxy/resource and operational acceptance. Source-supported binary-capable clients are not synonymous with native ChatGPT model file handoff.
 
 ## Proven contract and what it does not claim
 
@@ -269,18 +266,30 @@ effective limits, file sizes/digests/timings, memory peak and cleanup are
 recorded. Do not copy ephemeral signed client tokens, SSH passwords,
 private keys, MariaDB files or test users into GitHub.
 
-## Owner decision / readiness boundary
+## Integration and operational readiness boundaries
 
-This is a **new optional HTTP protocol contract**, not previously part of
-the released MCP API. The Owner must decide whether the exact sidecar
-paths, bearer binding, base64url metadata + raw body shape, response
-integrity headers, host timeout prerequisites and 0700 SSH staging
-provisioning are an acceptable supported public contract. Until this
-decision, leave the feature disabled; do not merge, release or deploy.
-Independent author-separated review is also required before merge.
+The optional HTTP wire/security contract was accepted for **source
+integration** through independently reviewed [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and Owner-authorized merge. **It remains OFF by default** and is not in the public maintenance release. Before enabling it on a *specific* supported hosting profile, follow the single [deployment pre-enablement checklist](DEPLOYMENT.md#optional-ssh-whole-file-data-plane-host-acceptance-not-yet-shipped): request-body/worker/proxy timeouts, temporary-disk and concurrent-upload budgets, verified TLS, remote private SFTP staging, and client-side full-file verification must be measured, not assumed.
 
-Not covered by this implementation: ChatGPT host attachment/model file
-hand-off; provider-native WordPress whole-file binary ingress/egress;
-resumable partial writes; durable download jobs; true filesystem snapshots;
-multi-GiB files; untested proxies/shared hosts. Report these as
-**unsupported/unverified**, not completed.
+**Ingress resource boundary (independent review OPTIONAL O1):** inbound HTTP
+bytes can occupy one PHP temporary spool *before* the per-Target SFTP
+admission lease is obtained. That lease serializes **remote SFTP work**,
+not aggregate concurrent HTTP staging. Bound worker count, accepted body
+size, client timeouts and spill storage on the real hosting profile; add
+earlier aggregate ingress admission only if measurements justify it,
+without a second quota engine or unnecessary new processes.
+
+**Outgoing audit semantics (review OPTIONAL O2):** the server records
+successful **remote read and verified local staging** before its HTTP
+download callback finishes streaming to the client. This audit event
+does **not** certify complete client receipt. The receiving client must
+verify exact `Content-Length` and SHA-256 and discard incomplete data;
+never claim delivery from a server-side staging event alone.
+
+Not covered: ChatGPT host-native attachment/model handoff, WordPress
+whole-file binary transport, Agent routing (Owner-paused #111), durable
+SSH partial-write resume, retained download jobs, true remote snapshots,
+multi-GiB files or arbitrary proxies/shared hosts. Report these as
+**unsupported/unverified**, not completed. #147 and #154 retain distinct
+remaining host/client/capacity evidence; #112 owns release and
+production-host acceptance.

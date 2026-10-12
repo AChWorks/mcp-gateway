@@ -142,12 +142,15 @@ memory. Repeat the command to prove clean reproducibility.
 
 ## Boundaries and review gate
 
-This proves the actual PHP MCP SDK over HTTPS, **not** a complete external
-Gateway client onboarding flow, installed hostname DNS-rebinding handling
+This proves the actual PHP MCP SDK over HTTPS and a separately authored
+Python HTTPS/MCP client **do** receive and verify real bidirectional SSH
+file bytes via the optional sidecar. It is **not** a complete external Gateway
+client OAuth-onboarding flow, installed hostname DNS-rebinding handling
 (the test uses public-looking numeric namespace IPs), ChatGPT runtime
-compatibility, arbitrary clients, client-visible bidirectional file delivery
-(#147) or speculative one-hour streaming. #97 retains long-idle/deployed
-OAuth acceptance; #154 retains effective-limit/client compatibility evidence.
+model-file ingestion, all arbitrary clients/hosts, native WordPress binary
+handoff, or speculative one-hour streaming. #97 retains long-idle/deployed
+OAuth acceptance; #154 retains broader effective-limit/client/hosting
+compatibility and #147 remains open for unproven client/Target modes.
 The Gateway source `VERSION` and public release tags must be reported
 separately from installed identities; passing tests is not deployment.
 
