@@ -158,7 +158,7 @@ cleanup() {
   trap - EXIT
   if [[ "$status" -ne 0 ]]; then
     echo "Disposable setup failed at last reported stage; pre-OAuth log excerpts:" >&2
-    for name in composer-install composer-platform wp-config wp-install wp-site-url wp-plugins wp-rewrite gateway-migrations gateway-oauth-keygen gateway-bridge-keygen; do
+    for name in composer-install composer-platform wp-config wp-install wp-site-url wp-plugins large-content wp-rewrite gateway-migrations gateway-oauth-keygen gateway-bridge-keygen; do
       if [[ -f "$ROOT/logs/$name.log" ]]; then
         printf '%s: ' "$name" >&2
         if [[ "$name" == gateway-migrations ]]; then
