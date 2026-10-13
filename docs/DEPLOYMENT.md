@@ -1,8 +1,21 @@
 # MCP Gateway Deployment Baseline
 
-This document defines the supported **V1 deployment and validation baseline** for MCP Gateway on PHP 8.4 + MariaDB 10.11 (primary) or MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory.
+This document defines the supported **current deployment and validation baseline** for MCP Gateway on PHP 8.4 + MariaDB 10.11 (primary) or MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory.
 
 GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide.
+
+## v2.1.2 release and migration inventory
+
+[Public v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) is the reviewed WordPress + Direct SSH release built at immutable source SHA `75d0b2284d0ec7dc918795ae3f16198a86e1e656`. Its verified browser-update ZIP is `mcp-gateway-update-v2.1.2.zip`; its fresh-install ZIP is `mcp-gateway-v2.1.2.zip`. **Only the official assets and matching SHA256 companions on that Release page should be used.** Source publication is not server installation; installed Gateway/Bridge versions and actual host health require independent verification.
+
+Upgrading from the **published v2.0.3** line to public v2.1.2 applies **four new additive database migrations** (the later v2.1.2 Stable promotion PR #169 itself changed only VERSION/documentation):
+
+- `2026_10_10_000000_create_ssh_direct_target_configs.php` — direct SSH connector config storage;
+- `2026_10_11_000000_create_operational_settings.php` — typed Owner settings;
+- `2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php` — per-refresh intent timeout snapshots;
+- `2026_10_12_010000_add_ssh_transfer_operational_limits.php` — bounded SSH transfer settings.
+
+Run the authenticated browser updater only after taking and **test-restoring** a consistent database backup, plus separately protecting `.env`, `APP_KEY`, OAuth/Bridge signing keys, other private state and the old release artifacts. A code backup is **not** a database backup. The refresh timeout snapshot migration has a deliberate `down()` safeguard that rejects rollback while unresolved snapshotted intents remain. **Do not automatically reverse SQL or re-run an uncertain refresh, revoke or migration**. Use the updater's staged failure evidence and an operator-approved roll-forward/recovery plan. Published-baseline and RC8→Stable browser upgrades passed isolated tests, **not live aaPanel/OpenLiteSpeed/Cloudflare host acceptance**; see open [#135](https://github.com/AChWorks/mcp-gateway/issues/135) and [#97](https://github.com/AChWorks/mcp-gateway/issues/97).
 
 ## What this baseline proves
 
@@ -212,12 +225,12 @@ The ChatGPT-facing MCP limiter is burst-aware by default: the unauthenticated ed
 
 The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
-### Optional SSH whole-file data plane: host acceptance (not yet shipped)
+### Optional SSH whole-file data plane: released but disabled; host acceptance pending
 
-The authenticated SSH whole-file HTTP sidecar was integrated into source in
-[PR #166](https://github.com/AChWorks/mcp-gateway/pull/166), but the current
-public maintenance release does **not** ship it. The route is **OFF by default**
-and source/test success is not public-host authorization. Its exact wire
+The authenticated SSH whole-file HTTP sidecar was introduced by
+[PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and ships in
+public **v2.1.2**, but the route is **OFF by default**. A published code feature
+and successful disposable tests are not authorization to enable it on an operator host. Its exact wire
 contract, per-mode bounded operation limits and source-integrated client
 proof live in [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md); keep that
 document as the only detailed protocol definition.
@@ -662,7 +675,7 @@ the provider window to expire (without blind replay), verify the intent state,
 then roll back the schema/code in a controlled sequence. Old PHP cannot enforce
 these newer per-intent fences on its own.
 
-Do not represent this source-only functionality as publicly installed or
-host-verified until a reviewed version, approved deployment and actual
-PHP-FPM/CLI/cron/WordPress Bridge checks establish that. #147 remains the
+Do not represent v2.1.2's released code as **installed or host-verified**
+without an approved deployment and actual PHP-FPM/CLI/cron/WordPress Bridge
+checks establishing that. #147 remains the
 owner of client-visible bidirectional file bytes; #111 Agent is paused.

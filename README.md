@@ -1,24 +1,26 @@
 
 # MCP Gateway
 
-MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The current released connector is **WP AI Bridge** for WordPress. Direct SSH and AI Server Agent runtimes are not shipped.
+MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The public **v2.1.2** release contains both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
 
 A Target has a stable `target_id`, explicit Gateway user/client/Target access checks and connector-owned credentials. For WordPress, the authenticated WordPress principal and WP AI Bridge access groups remain authoritative; Gateway does not widen their permissions.
 
 ## Current release highlights
 
 - Generic Target inventory, Target Groups, per-user access and scoped Activity.
-- Target Admin pages for WordPress registration, connection, status and management.
+- Target Admin pages for WordPress and Direct SSH registration, connection, verified trust, credential/endpoint editing, status and management.
+- Direct SSH command execution, host-key-verified password/private-key login, bounded SFTP list/stat/ranged read/write, and Owner-approved default-deny permission controls.
+- Bounded, owner-configurable WordPress response and HTTPS timeouts, plus optional SSH whole-file transfer limits.
 - Target-specific WordPress OAuth PKCE, encrypted credentials, guarded rotating refresh/revocation and idle credential renewal.
 - Client-profile-based Gateway OAuth/MCP, currently with the reviewed ChatGPT application profile.
-- Four Target-era MCP tools: `targets-list`, `target-context`, `wordpress-abilities-read`, `wordpress-ability-execute`.
+- Client-neutral `targets-list` / `target-context`, dynamic WordPress Ability discovery/execution, and independently authorized SSH command/SFTP MCP tool families; the tool catalog does not grow with the number of Targets.
 - Explicit `target_id` routing, read/mutation effect authorization, bounded downstream I/O and fail-closed ambiguous outcomes.
 - HTTPS/DNS/redirect protections, `php artisan gateway:check` diagnostics, and PHP 8.4 + MariaDB 10.11 primary deployment compatibility.
 - Clean deployment ZIP/web installer and guarded browser-update ZIP for aaPanel and compatible hosting.
 
-**Upgrade compatibility:** existing Target-era installations on v2.0.0, v2.0.1 or v2.0.2 can update to the public maintenance release **v2.0.3** without an intentional connection or authorization reset. This maintenance release does not ship the additional SSH/SFTP or Owner operational-settings code on the separate, unreleased `main` development line; publication is not installation. Earlier **Site-era v1.x → Target v2.x** upgrades are breaking: retired Site registrations, Site groups, and incompatible WordPress/ChatGPT authorizations must be reset under exact package-bound consent and an independently restorable database backup. An updater code backup is not a database backup. See [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md) and [release notes](RELEASE_NOTES.md).
+**Upgrade compatibility (public v2.1.2):** existing Target-era v2.0.0–v2.0.3 deployments and previously distributed 2.1.0/2.1.1/2.1.2-rc.N test installations must use the **matching `mcp-gateway-update-v2.1.2.zip`** browser-update asset, not the fresh-install ZIP. The isolated authenticated updater regressions verify published-baseline and RC8-to-Stable upgrades; they do **not** establish successful upgrades on every operator host. Before any actual upgrade, capture and test an independently restorable **database backup**, preserve `.env`, APP_KEY and OAuth/Bridge signing keys, check pending operations, and follow the updater's safe rollback/roll-forward state. **Four additive schema migrations** shipped between public v2.0.3 and v2.1.2 (SSH Target configuration, operational settings, WordPress refresh timeout snapshot, SSH transfer limits); the VERSION/docs-only Stable promotion PR itself introduced no migrations. An updater *code backup* is **not** a database backup, and SQL migrations are not necessarily safe to reverse after effects have occurred. Earlier **Site-era v1.x → Target v2.x** upgrades remain breaking and require the explicitly documented Target transition/reset and permission/consent recovery; do not treat them as nonbreaking. See [Deployment and migration inventory](docs/DEPLOYMENT.md#v212-release-and-migration-inventory), [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md), and [release notes](RELEASE_NOTES.md).
 
-**Source-integrated, NOT released — #147:** [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) merged an optional OAuth-authenticated SSH whole-file binary HTTP data plane and permission-filtered transfer-mode discovery through the existing `target-context` MCP tool. Two independent binary-capable clients passed a disposable installed end-to-end test. The new route is **OFF by default**, absent from the published v2.0.3 maintenance release, and **not** proof of native ChatGPT attachment/model ingestion or production-host compatibility. Release, host-capacity approval and public enablement remain separate. See [whole-file exchange contract](docs/WHOLE-FILE-EXCHANGE.md).
+**Released but disabled by default — [#147](https://github.com/AChWorks/mcp-gateway/issues/147):** v2.1.2 includes OAuth-authenticated, permission-filtered SSH whole-file binary HTTP upload/download plus `target-context` capability discovery from [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). `SSH_FILE_TRANSFER_ENABLED=false` remains the safe default. Independent PHP and Python clients passed isolated installed end-to-end transfer, byte-count/SHA-256 and denial tests. This does **not** prove native ChatGPT attachment/model file ingestion, live operator-host compatibility or permission to enable this route in production. See [whole-file exchange contract](docs/WHOLE-FILE-EXCHANGE.md).
 
 ## Requirements
 
