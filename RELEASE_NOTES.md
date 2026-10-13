@@ -1,7 +1,7 @@
 # MCP Gateway v2.2.0
 
 **WordPress recovery and Admin reliability release line after public v2.1.2.**
-The 2.2.0-rc.1 build is a **non-public owner-test candidate**: successful
+The 2.2.0-rc.2 build is a **non-public owner-test candidate**: successful
 CI or candidate artifact creation is not a published GitHub Release, an
 operator-host upgrade, or permission to change a production OAuth grant.
 Public v2.2.0 publication requires separate Owner approval of the exact
