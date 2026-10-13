@@ -27,7 +27,7 @@ final class AdminUiPresentationTest extends TestCase
             );
     }
 
-    public function test_ai_client_panels_have_scoped_spacing_and_revoke_form_styles(): void
+    public function test_adjacent_admin_panels_use_shared_spacing_without_page_specific_card_fixes(): void
     {
         $this->actingAs($this->owner())
             ->get('/admin/oauth-clients')
@@ -36,8 +36,17 @@ final class AdminUiPresentationTest extends TestCase
 
         $css = file_get_contents(public_path('css/admin.css'));
         self::assertIsString($css);
-        self::assertStringContainsString('.ai-client-authorizations {', $css);
+        self::assertStringContainsString('--ui-panel-stack-gap: 1.25rem;', $css);
+        self::assertMatchesRegularExpression(
+            '/\.main-content\s*>\s*\.panel\s*\+\s*\.panel\s*\{\s*margin-block-start:\s*var\(--ui-panel-stack-gap\);\s*\}/',
+            $css,
+        );
+        self::assertStringNotContainsString('.ai-client-authorizations {', $css);
         self::assertStringContainsString('.client-grant-revoke-form {', $css);
+
+        $targetEditor = file_get_contents(resource_path('views/admin/targets/edit.blade.php'));
+        self::assertIsString($targetEditor);
+        self::assertSame(2, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
     }
 
     public function test_permission_controls_explain_title_scope_and_effective_behavior(): void

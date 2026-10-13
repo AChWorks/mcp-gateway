@@ -78,9 +78,12 @@ Access-control mutations require the acting Owner's current password, preserve a
 
 The administration panel uses one small server-rendered visual system in `public/css/admin.css`. New Admin views must reuse this foundation rather than falling back to browser-native controls or creating a second page-specific design system.
 
+**Required UI acceptance contract:** [Admin UI Quality Standard](ADMIN-UI-QUALITY.md). This covers every Admin page and future UI change, not just the screen that first exposed a layout defect. Before integration, check the shared spacing and form/action rules, narrow/mobile and desktop composition, keyboard/focus, error/empty/loading feedback, localization, dark mode and reduced motion in all affected states. Do not fix a repeated component defect with a new page-specific CSS margin; repair the shared selector/token and add targeted regression coverage.
+
 Use these shared conventions:
 
 - design values belong in the existing `--ui-*` tokens; avoid one-off colors, borders, radii, focus treatments, or control heights when an existing token fits;
+- top-level sibling `.panel` cards must be separated by `.main-content > .panel + .panel` using `--ui-panel-stack-gap`, including the Edit Target and AI clients pages; do not add per-page margin fixes to make adjacent cards appear separate;
 - normal two-column form rows use `.form-grid`; `.content-grid` is reserved for intentionally asymmetric content/aside layouts;
 - text/select controls belong in `.field`; selects use the shared custom appearance and must not rely on the browser-default arrow/chrome;
 - boolean choices use the shared `.checkbox-option` treatment so the full label is the click target and checked/focus/disabled states remain consistent;
