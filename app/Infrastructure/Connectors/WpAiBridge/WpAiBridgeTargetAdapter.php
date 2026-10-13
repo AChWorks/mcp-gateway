@@ -141,6 +141,9 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
             'hasCredential' => TargetCredential::query()
                 ->where('target_record_id', $id)->where('connector_type', $this->type())
                 ->where('purpose', 'wordpress_oauth')->exists(),
+            'revocationIntent' => DB::table('wp_ai_bridge_revocation_intents')
+                ->where('target_record_id', $id)
+                ->first(['id', 'kind', 'phase', 'token_total', 'token_confirmed', 'created_at', 'updated_at']),
             'revocationPending' => DB::table('wp_ai_bridge_revocation_intents')
                 ->where('target_record_id', $id)->exists(),
             'oauthFlowPending' => DB::table('wp_ai_bridge_oauth_flows')
@@ -174,7 +177,8 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
             'missing_bridge', 'incompatible_metadata' => __('WordPress connector OAuth/MCP metadata is missing or incompatible.'),
             'already_connected' => __('Disconnect or reconnect the existing credential before starting a new authorization.'),
             'callback_pending' => __('An OAuth callback is being completed. Check its result before retrying.'),
-            'revocation_pending', 'revocation_failed', 'revocation_conflict' => __('Remote credential revocation is incomplete. Review Target status and retry the disconnect.'),
+            'revocation_pending', 'revocation_failed', 'revocation_conflict', 'revocation_uncertain' => __('WordPress disconnect is not confirmed. Open recovery details; only a proven never-sent revoke can be retried.'),
+            'cancel_not_safe', 'cancel_verification_unavailable', 'cancel_verification_failed' => __('Cancellation was not verified. The existing authorization stays blocked; review the safe recovery options.'),
             'refresh_settling' => __('The refresh recovery window is still active. Wait before reconciling.'),
             'refresh_conflict' => __('The pending refresh changed. Reload Target details before any reconciliation.'),
             'credential_unavailable' => __('Stored credential cannot be verified. Restore the matching encryption key before retrying.'),

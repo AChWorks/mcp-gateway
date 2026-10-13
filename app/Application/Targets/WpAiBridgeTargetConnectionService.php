@@ -6,6 +6,7 @@ use App\Application\Operations\OperationalSettings;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
@@ -13,6 +14,7 @@ use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Infrastructure\OAuth\GatewayBridgeClientIdentity;
+use App\Support\CorrelationId;
 use DateTimeImmutable;
 use Exception;
 use Illuminate\Support\Facades\DB;
@@ -35,6 +37,7 @@ final readonly class WpAiBridgeTargetConnectionService
         private GatewayBridgeClientIdentity $identity,
         private WpAiBridgeTargetVault $vault,
         private OperationalSettings $settings,
+        private ActivityRecorder $activity,
     ) {}
 
     public function begin(Target $target): string
@@ -75,6 +78,8 @@ final readonly class WpAiBridgeTargetConnectionService
                 'oauth_authorization_url' => $discovery->authorizationUrl,
                 'oauth_token_url' => $discovery->tokenUrl,
                 'oauth_revocation_url' => $discovery->revocationUrl,
+                'metadata_checked_at' => now(),
+                'metadata_reachable' => true,
                 'updated_at' => now(),
             ]);
 
@@ -838,52 +843,113 @@ final readonly class WpAiBridgeTargetConnectionService
         });
     }
 
-    public function disconnect(Target $target): void
+    /**
+     * WordPress revoke is NOT assumed idempotent. An immutable intent fences
+     * each remote token call before I/O, and its acknowledgment is committed
+     * before the next token may be transmitted. Lost responses/DB writes and
+     * all pre-upgrade intents require external reconciliation, not replay.
+     */
+    public function disconnect(Target $target, ?string $expectedIntentId = null): void
     {
+        $this->requireWordpress($target);
         $id = (string) $target->getKey();
-        /** @var array{credential_id:?string,tokens:list<string>,revocation_url:?string,database_session_id:?int} $plan */
-        $plan = $this->withLockedTarget($id, function (Target $locked): array {
+        /** @var array{intent_id:?string,credential_id:?string,generation:?int,tokens:list<string>,revocation_url:?string,confirmed:int,session_id:?int} $plan */
+        $plan = $this->withLockedTarget($id, function (Target $locked) use ($expectedIntentId): array {
             if ($this->hasRefreshIntent($locked)) {
-                // A rotating successor may exist remotely even when only the
-                // old secret is retained. Revoking the old token is not proof
-                // of successor revocation.
                 throw new WpAiBridgeTargetConnectionException('refresh_pending',
-                    'Unresolved WordPress refresh must be reconciled at WordPress before disconnecting.');
+                    'Reconcile the possibly rotated WordPress token at WordPress before disconnecting.');
             }
             $flow = DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->first();
             if ($flow !== null && $flow->consumed_at !== null) {
                 throw new WpAiBridgeTargetConnectionException('callback_pending', 'An OAuth token exchange may still be running.');
             }
+
             $credential = $this->credential($locked);
             $tokens = [];
             $url = null;
+            $generation = null;
             if ($credential instanceof TargetCredential) {
                 try {
                     $secret = $this->vault->openCredential($locked, $credential);
                 } catch (RuntimeException) {
                     throw new WpAiBridgeTargetConnectionException('credential_unavailable', 'The stored credential cannot be opened safely.');
                 }
-                $configuration = $this->configuration((string) $locked->getKey());
-                if (! hash_equals((string) $configuration->mcp_resource_url, $secret['resource_url'])) {
-                    throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress credential is bound to another remote resource.');
+                $config = $this->configuration((string) $locked->getKey());
+                if (! hash_equals((string) $config->mcp_resource_url, $secret['resource_url'])
+                    || ! hash_equals($this->identity->clientId(), $secret['client_id'])) {
+                    throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress credential binding changed.');
                 }
-                $url = (string) $configuration->oauth_revocation_url;
-                $this->assertStoredSameOrigin($url, (string) $configuration->base_url);
+                $url = (string) $config->oauth_revocation_url;
+                $this->assertStoredSameOrigin($url, (string) $config->base_url);
                 $tokens = array_values(array_unique([$secret['refresh_token'], $secret['access_token']]));
+                $metadata = DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credential->getKey())->first();
+                if ($metadata === null) {
+                    throw new WpAiBridgeTargetConnectionException('credential_unavailable', 'WordPress credential generation is missing.');
+                }
+                $generation = (int) $metadata->generation;
             }
 
             $intent = DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $locked->getKey())->first();
-            if ($intent !== null && $intent->kind !== 'disconnect') {
-                throw new WpAiBridgeTargetConnectionException('revocation_pending', 'Another revocation operation owns this Target.');
+            if ($intent === null && $expectedIntentId !== null) {
+                throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'The pending disconnect changed; reload Target details.');
             }
-            if ($intent === null) {
+            if ($intent !== null) {
+                if ($expectedIntentId === null || ! hash_equals((string) $intent->id, $expectedIntentId)
+                    || $intent->kind !== 'disconnect' || $credential === null
+                    || (string) $intent->credential_id !== (string) $credential->getKey()
+                    || (int) $intent->generation !== $generation
+                    || (int) $intent->token_total !== count($tokens)) {
+                    throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'The pending disconnect changed; reload Target details.');
+                }
+                if (! in_array($intent->phase, ['retryable', 'confirmed'], true)) {
+                    throw new WpAiBridgeTargetConnectionException('revocation_uncertain',
+                        'A prior revoke could have reached WordPress. Repeating it is not safe; use WordPress-side reconciliation.');
+                }
+                $confirmed = (int) $intent->token_confirmed;
+                if ($confirmed < 0 || $confirmed > count($tokens)
+                    || ($intent->phase === 'confirmed' && $confirmed !== count($tokens))
+                    || ($intent->phase === 'retryable' && $confirmed === count($tokens))) {
+                    throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'Invalid persisted revocation progress.');
+                }
+                if ($intent->phase === 'retryable') {
+                    DB::table('wp_ai_bridge_revocation_intents')->where('id', $intent->id)
+                        ->update(['phase' => 'in_flight', 'updated_at' => now()]);
+                }
+            } elseif ($tokens === []) {
+                // Unconsumed OAuth flow: no stored token can have been sent for
+                // remote revocation. A consumed callback was fenced above.
+                DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->delete();
+                $locked->forceFill([
+                    'connection_state' => TargetConnectionState::Disconnected,
+                    'last_error_code' => null,
+                    'connected_at' => null,
+                ])->save();
+
+                return [
+                    'intent_id' => null, 'credential_id' => null, 'generation' => null,
+                    'tokens' => [], 'revocation_url' => null, 'confirmed' => 0, 'session_id' => null,
+                ];
+            } else {
+                $intentId = (string) Str::ulid();
                 DB::table('wp_ai_bridge_revocation_intents')->insert([
-                    'id' => (string) Str::ulid(),
+                    'id' => $intentId,
                     'target_record_id' => $locked->getKey(),
                     'kind' => 'disconnect',
+                    'phase' => 'in_flight',
+                    'credential_id' => $credential->getKey(),
+                    'generation' => $generation,
+                    'token_total' => count($tokens),
+                    'token_confirmed' => 0,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
+                $intent = (object) ['id' => $intentId, 'token_confirmed' => 0];
+                $confirmed = 0;
+                // A failed required audit rolls back the intent before any
+                // HTTP request can be sent.
+                $this->activity->recordRequired(
+                    CorrelationId::current(), 'wordpress-disconnect-intent', 'pending', $locked,
+                );
             }
 
             DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->delete();
@@ -894,52 +960,251 @@ final readonly class WpAiBridgeTargetConnectionService
             ])->save();
 
             return [
-                'credential_id' => $credential?->getKey(),
+                'intent_id' => (string) $intent->id,
+                'credential_id' => (string) $credential->getKey(),
+                'generation' => $generation,
                 'tokens' => $tokens,
                 'revocation_url' => $url,
-                'database_session_id' => $tokens === [] ? null : $this->databaseSessionId(),
+                'confirmed' => $confirmed,
+                'session_id' => $this->databaseSessionId(),
             ];
         });
 
-        foreach ($plan['tokens'] as $token) {
+        if ($plan['intent_id'] === null) {
+            return;
+        }
+
+        for ($index = $plan['confirmed']; $index < count($plan['tokens']); $index++) {
             try {
                 $response = $this->http->postForm((string) $plan['revocation_url'], [
-                    'token' => $token,
+                    'token' => $plan['tokens'][$index],
                     'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
                     'client_assertion' => $this->identity->assertion((string) $plan['revocation_url']),
                 ]);
                 if ($response->status !== 200) {
-                    throw new WpAiBridgeTargetConnectionException('revocation_failed', 'WordPress did not confirm credential revocation.', ['http_status' => $response->status]);
+                    throw new WpAiBridgeTargetConnectionException('revocation_failed',
+                        'WordPress did not confirm credential revocation.', ['http_status' => $response->status]);
                 }
             } catch (OutboundRequestException $exception) {
+                $this->markRevocationAttempt($id, $plan, $index,
+                    $exception->preDispatch ? 'retryable' : 'unknown');
                 $this->recordFailure($id, $exception->reason);
-                throw new WpAiBridgeTargetConnectionException($exception->reason, 'Remote credential revocation is incomplete.', [
-                    ...$exception->details,
-                    'pre_dispatch' => $exception->preDispatch,
-                    'retry_safe' => $exception->preDispatch,
-                ]);
+                throw new WpAiBridgeTargetConnectionException($exception->reason,
+                    'Remote credential revocation is incomplete.', [
+                        ...$exception->details,
+                        'pre_dispatch' => $exception->preDispatch,
+                        'retry_safe' => $exception->preDispatch,
+                    ]);
             } catch (WpAiBridgeTargetConnectionException $exception) {
+                $this->markRevocationAttempt($id, $plan, $index, 'unknown');
                 $this->recordFailure($id, $exception->reason);
                 throw $exception;
             }
+
+            $this->assertDatabaseSessionId($plan['session_id']);
+            // A failure to persist this acknowledgment intentionally leaves
+            // phase=in_flight. Never replay an already-acknowledged token.
+            $this->markRevocationAttempt($id, $plan, $index, 'acknowledged');
         }
 
-        // On a lost MySQL session, do not erase the credential based on an
-        // unverified remote outcome; retain the durable revocation intent.
-        $this->assertDatabaseSessionId($plan['database_session_id']);
-        $this->withLockedTarget($id, function (Target $locked) use ($plan): void {
-            $intent = DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $locked->getKey())->first();
-            $credential = $this->credential($locked);
-            if ($intent === null || $intent->kind !== 'disconnect'
-                || $credential?->getKey() !== $plan['credential_id']) {
-                throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'Credential or intent changed during revocation.');
+        $this->assertDatabaseSessionId($plan['session_id']);
+        $this->completeConfirmedDisconnect($id, $plan);
+    }
+
+    /** @param array{intent_id:?string,credential_id:?string,generation:?int,tokens:list<string>,revocation_url:?string,confirmed:int,session_id:?int} $plan */
+    private function markRevocationAttempt(string $id, array $plan, int $index, string $result): void
+    {
+        $this->withLockedTarget($id, function (Target $locked) use ($plan, $index, $result): void {
+            $intent = $this->matchingDisconnectIntent($locked, $plan);
+            if ($intent->phase !== 'in_flight' || (int) $intent->token_confirmed !== $index) {
+                throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'Another operation changed revocation progress.');
             }
-            $credential?->delete();
+            $next = $result === 'acknowledged' ? $index + 1 : $index;
+            DB::table('wp_ai_bridge_revocation_intents')->where('id', $intent->id)->update([
+                'phase' => $result === 'acknowledged'
+                    ? ($next === (int) $intent->token_total ? 'confirmed' : 'in_flight')
+                    : $result,
+                'token_confirmed' => $next,
+                'updated_at' => now(),
+            ]);
+        });
+    }
+
+    /** @param array{intent_id:?string,credential_id:?string,generation:?int,tokens:list<string>,revocation_url:?string,confirmed:int,session_id:?int} $plan */
+    private function matchingDisconnectIntent(Target $locked, array $plan): object
+    {
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $locked->getKey())->first();
+        $credential = $this->credential($locked);
+        $metadata = $credential === null ? null : DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())->first();
+        if ($intent === null || $intent->kind !== 'disconnect'
+            || ! hash_equals((string) $intent->id, (string) $plan['intent_id'])
+            || $credential === null || (string) $credential->getKey() !== $plan['credential_id']
+            || $metadata === null || (int) $metadata->generation !== $plan['generation']
+            || (string) $intent->credential_id !== $plan['credential_id']
+            || (int) $intent->generation !== $plan['generation']
+            || (int) $intent->token_total !== count($plan['tokens'])
+            || $this->hasRefreshIntent($locked)
+            || DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
+            throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'Credential or revocation intent changed.');
+        }
+
+        return $intent;
+    }
+
+    /** @param array{intent_id:?string,credential_id:?string,generation:?int,tokens:list<string>,revocation_url:?string,confirmed:int,session_id:?int} $plan */
+    private function completeConfirmedDisconnect(string $id, array $plan): void
+    {
+        $this->withLockedTarget($id, function (Target $locked) use ($plan): void {
+            $intent = $this->matchingDisconnectIntent($locked, $plan);
+            if ($intent->phase !== 'confirmed' || (int) $intent->token_confirmed !== (int) $intent->token_total) {
+                throw new WpAiBridgeTargetConnectionException('revocation_uncertain', 'Remote token acknowledgments remain incomplete.');
+            }
+            // The local removal and required completion audit commit as one
+            // unit; on DB failure phase=confirmed permits safe finalization
+            // without resending a WordPress revoke request.
+            $this->activity->recordRequired(
+                CorrelationId::current(), 'wordpress-disconnect-confirmed', 'success', $locked,
+            );
+            $this->credential($locked)?->delete();
             DB::table('wp_ai_bridge_revocation_intents')->where('id', $intent->id)->delete();
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Disconnected,
                 'last_error_code' => null,
                 'connected_at' => null,
+            ])->save();
+        });
+    }
+
+    /**
+     * Cancel is an authenticated live WordPress catalog verification, not a
+     * blind revert. Only an exact no-dispatch proof for *all* tokens permits
+     * the action. No rotation, revoke or network I/O occurs under row locks.
+     *
+     * @param  callable(array{resource_url:string,access_token:string}):void  $verifyCatalog
+     * @param  callable(Target):void  $audit
+     */
+    public function cancelNeverSentDisconnect(Target $target, string $intentId, callable $verifyCatalog, callable $audit): void
+    {
+        $this->requireWordpress($target);
+        $id = (string) $target->getKey();
+        $snapshot = $this->withLockedTarget($id, function (Target $locked) use ($intentId): array {
+            $intent = DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $locked->getKey())->first();
+            $credential = $this->credential($locked);
+            $metadata = $credential === null ? null : DB::table('wp_ai_bridge_credential_metadata')
+                ->where('credential_id', $credential->getKey())->first();
+            if ($intent === null || $intent->kind !== 'disconnect'
+                || ! hash_equals((string) $intent->id, $intentId)
+                || $intent->phase !== 'retryable' || (int) $intent->token_confirmed !== 0
+                || (int) $intent->token_total < 1
+                || $credential === null || $metadata === null
+                || (string) $intent->credential_id !== (string) $credential->getKey()
+                || (int) $intent->generation !== (int) $metadata->generation
+                || $this->hasRefreshIntent($locked)
+                || DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
+                throw new WpAiBridgeTargetConnectionException('cancel_not_safe',
+                    'Cancellation is only possible when every revoke is durably proven never sent.');
+            }
+            try {
+                $secret = $this->vault->openCredential($locked, $credential);
+            } catch (RuntimeException) {
+                throw new WpAiBridgeTargetConnectionException('credential_unavailable', 'Stored credential is unavailable.');
+            }
+            $config = $this->configuration((string) $locked->getKey());
+            if (! hash_equals((string) $config->mcp_resource_url, $secret['resource_url'])
+                || ! hash_equals($this->identity->clientId(), $secret['client_id'])) {
+                throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress credential binding changed.');
+            }
+            $this->assertStoredSameOrigin($secret['resource_url'], (string) $config->base_url);
+            if ($secret['access_expires_at'] === null || $secret['access_expires_at']->getTimestamp() <= time() + 30) {
+                throw new WpAiBridgeTargetConnectionException('cancel_verification_unavailable',
+                    'The stored access token expired; finish disconnect and authorize again.');
+            }
+            DB::table('wp_ai_bridge_revocation_intents')->where('id', $intent->id)
+                ->update(['phase' => 'verify_in_flight', 'updated_at' => now()]);
+
+            return [
+                'credential_id' => (string) $credential->getKey(),
+                'generation' => (int) $metadata->generation,
+                'resource_url' => (string) $secret['resource_url'],
+                'access_token' => (string) $secret['access_token'],
+            ];
+        });
+
+        try {
+            $verifyCatalog(['resource_url' => $snapshot['resource_url'], 'access_token' => $snapshot['access_token']]);
+        } catch (\Throwable $exception) {
+            $this->withLockedTarget($id, function (Target $locked) use ($intentId): void {
+                DB::table('wp_ai_bridge_revocation_intents')
+                    ->where('target_record_id', $locked->getKey())->where('id', $intentId)
+                    ->where('phase', 'verify_in_flight')
+                    ->update(['phase' => 'retryable', 'updated_at' => now()]);
+            });
+            throw new WpAiBridgeTargetConnectionException('cancel_verification_failed',
+                'Authenticated WordPress catalog verification did not succeed; disconnection remains pending.');
+        }
+
+        $this->withLockedTarget($id, function (Target $locked) use ($intentId, $snapshot, $audit): void {
+            $intent = DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $locked->getKey())->first();
+            $credential = $this->credential($locked);
+            $meta = $credential === null ? null : DB::table('wp_ai_bridge_credential_metadata')
+                ->where('credential_id', $credential->getKey())->first();
+            if ($intent === null || (string) $intent->id !== $intentId
+                || $intent->phase !== 'verify_in_flight' || (int) $intent->token_confirmed !== 0
+                || $credential === null || (string) $credential->getKey() !== $snapshot['credential_id']
+                || $meta === null || (int) $meta->generation !== $snapshot['generation']
+                || $this->hasRefreshIntent($locked)) {
+                throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'Authorization changed during verification.');
+            }
+
+            $audit($locked); // Mandatory write; failed transaction leaves durable safety fence.
+            DB::table('wp_ai_bridge_revocation_intents')->where('id', $intent->id)->delete();
+            $locked->forceFill([
+                'connection_state' => TargetConnectionState::Connected,
+                'connected_at' => now(),
+                'last_error_code' => null,
+                'last_success_at' => now(),
+            ])->save();
+        });
+    }
+
+    /**
+     * Explicit external full-client authorization removal, NOT a Gateway
+     * claim of remotely verified revoke. Reuse the existing Owner/password
+     * attestation model for unknown/legacy/partially dispatched outcomes.
+     */
+    public function reconcileRevokedDisconnect(Target $target, string $intentId, callable $audit): void
+    {
+        $this->requireWordpress($target);
+        $this->withLockedTarget((string) $target->getKey(), function (Target $locked) use ($intentId, $audit): void {
+            $intent = DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $locked->getKey())->first();
+            $credential = $this->credential($locked);
+            $metadata = $credential === null ? null : DB::table('wp_ai_bridge_credential_metadata')
+                ->where('credential_id', $credential->getKey())->first();
+            if ($intent === null || $intent->kind !== 'disconnect'
+                || ! hash_equals((string) $intent->id, $intentId)
+                || ($intent->credential_id !== null && (
+                    $credential === null || (string) $intent->credential_id !== (string) $credential->getKey()
+                    || $metadata === null || (int) $intent->generation !== (int) $metadata->generation))
+                || $this->hasRefreshIntent($locked)
+                || DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
+                throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'Pending disconnect changed.');
+            }
+            // Old/snapshot-free attempts may have used a longer previous timeout.
+            $settleSeconds = max(120, 60 + $this->settings->httpTimeoutsSeconds()['request'] + 15);
+            if (time() - (new DateTimeImmutable((string) $intent->updated_at))->getTimestamp() < $settleSeconds) {
+                throw new WpAiBridgeTargetConnectionException('refresh_settling',
+                    'A remote revoke might still be in flight. Wait before attestation.');
+            }
+            $audit($locked);
+            $this->credential($locked)?->delete();
+            DB::table('wp_ai_bridge_revocation_intents')->where('id', $intent->id)->delete();
+            $locked->forceFill([
+                'connection_state' => TargetConnectionState::Disconnected,
+                'connected_at' => null,
+                'last_error_code' => 'manual_revocation_attested',
+                'last_failure_at' => now(),
+                'last_failure_code' => 'manual_revocation_attested',
             ])->save();
         });
     }
@@ -963,6 +1228,10 @@ final readonly class WpAiBridgeTargetConnectionService
             if ($current->base_url !== $configuration->base_url) {
                 throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress Target changed during the test.');
             }
+            // Discovery proof applies only to public metadata. The OAuth
+            // credential and pending remote intents stay completely separate.
+            DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $locked->getKey())
+                ->update(['metadata_checked_at' => now(), 'metadata_reachable' => true, 'updated_at' => now()]);
             // A successful metadata probe is not proof that a pending remote
             // revocation was completed; retain its failure status and intent.
             $fields = [
@@ -1064,6 +1333,8 @@ final readonly class WpAiBridgeTargetConnectionService
     private function recordDiscoveryFailure(string $targetRecordId, string $reason): void
     {
         $this->withLockedTarget($targetRecordId, function (Target $locked) use ($reason): void {
+            DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $locked->getKey())
+                ->update(['metadata_checked_at' => now(), 'metadata_reachable' => false, 'updated_at' => now()]);
             if ($this->credential($locked) instanceof TargetCredential
                 || $this->hasRevocationIntent($locked)
                 || DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {

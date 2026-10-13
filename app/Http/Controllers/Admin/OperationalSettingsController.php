@@ -7,6 +7,7 @@ use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayRole;
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\OutboundDnsCompatibility;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -21,6 +22,7 @@ final class OperationalSettingsController extends Controller
         return view('admin.operations.index', [
             'state' => $settings->state(),
             'definitions' => OperationalSettings::allowed(),
+            'dnsCompatibility' => OutboundDnsCompatibility::snapshot(),
             'defaults' => [
                 'wp_response_kib' => (int) config('bridge.http.max_response_bytes', 65536) / 1024,
                 'wp_readonly_response_kib' => (int) config('bridge.http.readonly_tool_max_response_bytes', 262144) / 1024,

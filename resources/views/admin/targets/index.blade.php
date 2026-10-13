@@ -68,6 +68,12 @@
                                 <span class="badge badge-{{ $target->connection_state->value === 'connected' ? 'success' : 'neutral' }}">
                                     {{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}
                                 </span>
+                                @if (isset($recoveries[$target->target_id]))
+                                    <small class="target-inventory-recovery">{{ $recoveries[$target->target_id]['title'] }}</small>
+                                    @if ($target->connector_type === 'wp_ai_bridge' && $recoveries[$target->target_id]['canFinish'])
+                                        <small>{{ __('Safe completion available — inspect Target') }}</small>
+                                    @endif
+                                @endif
                             </td>
                             <td class="table-action">
                                 <a href="{{ route('admin.targets.show', ['target' => $target->target_id]) }}">{{ __('Inspect') }}</a>

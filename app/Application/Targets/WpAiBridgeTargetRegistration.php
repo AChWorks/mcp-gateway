@@ -68,6 +68,8 @@ final readonly class WpAiBridgeTargetRegistration
                     'oauth_authorization_url' => $metadata->authorizationUrl,
                     'oauth_token_url' => $metadata->tokenUrl,
                     'oauth_revocation_url' => $metadata->revocationUrl,
+                    'metadata_checked_at' => now(),
+                    'metadata_reachable' => true,
                 ]);
 
                 DB::table('wp_ai_bridge_target_reservations')
