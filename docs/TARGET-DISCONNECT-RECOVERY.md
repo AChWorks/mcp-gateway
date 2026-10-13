@@ -1,6 +1,6 @@
 # WordPress Target disconnect recovery — Issue #173
 
-**Release status:** integrated and independently reviewed in `main`, but not included in the published v2.1.2 release. A separately reviewed and Owner-approved new release and operator upgrade are required. Do not test these actions against a working production Target without explicit authorization.
+**Version availability:** these source-integrated recovery actions are **not in v2.1.2**. Consult the exact approved public GitHub Release and the actual installed Gateway version before assuming they are available. Publishing a release never upgrades an operator host automatically. Do not test the actions against a working production Target without explicit authorization.
 
 The Target Details recovery panel separates public WordPress metadata reachability, OAuth authorization, pending operations, and diagnostic history. Public metadata success is not OAuth success, proof of remote revocation, or proof that an authenticated WordPress Ability can run.
 
