@@ -39,7 +39,7 @@ Under the pinned WP AI Bridge compatibility contract, OAuth `invalid_client` is 
 
 ## Unreleased WordPress recovery and effective PHP DNS file access
 
-Source-only Issue #173 adds a guarded WordPress disconnect-recovery ledger, conditional Owner cancellation, and separately recorded public metadata evidence. See [WordPress Target disconnect recovery](TARGET-DISCONNECT-RECOVERY.md); **these functions are not part of published v2.1.2**. Old outstanding intents default to legacy_unknown, and migration rollback refuses to erase the ledger while pending intents exist.
+Source-integrated Issue #173 adds a guarded WordPress disconnect-recovery ledger, conditional Owner cancellation, and separately recorded public metadata evidence. See [WordPress Target disconnect recovery](TARGET-DISCONNECT-RECOVERY.md); **these functions are not part of published v2.1.2**. Old outstanding intents default to legacy_unknown, and migration rollback refuses to erase the ledger while pending intents exist.
 
 Under aaPanel/OpenLiteSpeed PHP 8.4 LSAPI, the **effective VHost** php_admin_value open_basedir allowlist may prevent bounded React DNS from reading /etc/resolv.conf, /etc/hosts or symlink destinations, yielding a pre-dispatch dns_lookup network_failure. Use the Owner's **Operations → Outbound DNS compatibility preflight**, adjust only the required allowlisted files via approved aaPanel configuration, and rerun the checks under the actual LSAPI worker. Do not disable open_basedir globally, relax SSRF/TLS policy, add arbitrary DNS fallback or infer OAuth validity from successful public metadata. Verify previous public/.user.ini edits separately rather than assuming they were reverted.
 

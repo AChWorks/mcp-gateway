@@ -1,6 +1,6 @@
 # Offline Target removal — local-only Owner recovery
 
-**Status:** proposed source change for [Target lifecycle Issue #109](https://github.com/AChWorks/mcp-gateway/issues/109), **not included in public v2.1.2** until separately reviewed, integrated and released. This is a deliberate irreversible exception to normal connector disconnect, not a DNS/OAuth/network troubleshooting shortcut. Never delete an operator's Target in place without explicit instruction and backup.
+**Status:** source-integrated and independently security-reviewed under [Target lifecycle Issue #109](https://github.com/AChWorks/mcp-gateway/issues/109), but **not included in public v2.1.2**. Its availability on an installed Gateway still requires a separately Owner-approved public release and operator upgrade. This is a deliberate irreversible exception to normal connector disconnect, not a DNS/OAuth/network troubleshooting shortcut. Never delete an operator's Target in place without explicit instruction and backup.
 
 ## Two distinct operations
 

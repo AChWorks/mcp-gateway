@@ -1,3 +1,85 @@
+# MCP Gateway v2.2.0
+
+**WordPress recovery and Admin reliability release line after public v2.1.2.**
+The 2.2.0-rc.1 build is a **non-public owner-test candidate**: successful
+CI or candidate artifact creation is not a published GitHub Release, an
+operator-host upgrade, or permission to change a production OAuth grant.
+Public v2.2.0 publication requires separate Owner approval of the exact
+reviewed stable main commit and version.
+
+## Changes since public v2.1.2
+
+- **Safe interrupted WordPress Disconnect recovery:** Target Details now
+  separates public WordPress reachability, credential/authorization state,
+  unfinished operation, last live probe and historical errors. An interrupted
+  remote revocation cannot silently reactivate credentials or trigger an
+  unproven retry. Proven never-dispatched token slots can be completed
+  without replaying previously acknowledged revocations. A confirmed
+  disconnect leads to guided fresh WordPress authorization.
+- **Strict Owner-only conditional cancellation:** when *zero* revocations
+  were dispatched or acknowledged, the exact credential identity/generation
+  is unchanged, no incompatible OAuth/refresh is pending and the access
+  bearer has more than 30 seconds left, the UI may offer Cancel pending
+  disconnect. The server independently rechecks all safety, role, password
+  and Target gates, then performs a real authenticated read-only WordPress
+  catalog verification. Missing, expired, stale or unknown proof fails closed.
+- **Honest remote-unknown recovery:** pre-upgrade revocation intents are
+  classified as legacy_unknown rather than artificially safe. Unknown or
+  partially applied remote revocation requires reviewed WordPress-side
+  reconciliation and explicit Owner attestations; automatic forced reset,
+  unknown-response replay or blind credential reuse are forbidden.
+- **Owner-only local Target Forget (emergency last resort):** exact Target ID,
+  current Owner password, two independent risk acknowledgments, required
+  atomic Activity audit and transactional local deletion. The remote
+  WordPress/SSH credential or OAuth grant is **NOT revoked or verified** by
+  this action; previously running remote operations cannot be undone.
+  Existing local per-Target ACLs, encrypted credentials, intents and
+  memberships are removed, while independent audit snapshots survive.
+- **Shared Admin resilience:** reusable panel spacing and consistent
+  heading/table direction; long valid Target names no longer expand the
+  document outside the intended horizontal table-scroll boundary. Responsive,
+  light/dark, keyboard/focus and RTL/LTR layout evidence is recorded for
+  the approved effective tree.
+- **Actionable hosting diagnostics:** an Owner-facing outbound DNS
+  compatibility preflight and explicit aaPanel/OpenLiteSpeed PHP LSAPI
+  effective VHost open_basedir file-access guidance. A healthy metadata
+  request remains distinct from authenticated OAuth catalog success.
+  No SSRF, TLS, proxy or access-control safety rule is relaxed.
+
+## Migration and safe upgrade from v2.1.2
+
+The new additive migration
+`2026_10_13_000000_fence_wordpress_disconnect_recovery.php`
+adds WordPress metadata evidence and the durable disconnect revocation
+ledger. Pre-existing pending intents become `legacy_unknown`, never
+"safe to cancel" merely because a database update ran. Its `down()`
+**refuses rollback while any revocation intent remains**; a partial or
+uncertain migration must be reconciled rather than blindly repeated or
+reversed. Do not delete or rewrite pending credentials to make rollback pass.
+
+Before any authorized operator upgrade: take and **test-restore** a consistent
+MariaDB/MySQL database backup, preserve the deployed `.env`, Laravel
+`APP_KEY`, both OAuth/Bridge private signing keypairs, original release
+artifacts and sensitive recovery state, verify available space and a
+roll-forward plan. Use the exact version's checksum-verified
+`mcp-gateway-update-vX.Y.Z.zip` in the existing application root and
+the authenticated `/update/` flow; **never** use the fresh-install ZIP as
+an updater, assume the browser updater's code backup contains the database,
+or rerun a migration after an uncertain result. Confirm Target IDs,
+permissions, audit, credentials and existing WordPress/SSH access afterward
+without disconnecting a healthy live Target.
+
+The published v2.1.2 installation remains unchanged by this source branch.
+The candidate package validation must include **actual published v2.1.2
+fresh-install ZIP as an explicit upgrade and backup-integrity baseline**
+in addition to older releases. Isolated CI/browser evidence does not by
+itself prove aaPanel installed-host compatibility, months-long OAuth
+durability, or completion of Issue #173's production delivery checks.
+See `docs/TARGET-DISCONNECT-RECOVERY.md`,
+`docs/OFFLINE-TARGET-REMOVAL.md`, and `docs/DEPLOYMENT.md`.
+
+---
+
 # MCP Gateway v2.1.2
 
 **Stable 2.1.2 promotion source.** This version promotes the previously
