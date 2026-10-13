@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
 final class TargetManagementAdminTest extends TestCase
@@ -394,6 +395,7 @@ final class TargetManagementAdminTest extends TestCase
         $this->get('/admin/site-checks')->assertNotFound();
     }
 
+    #[Group('database-access')]
     public function test_owner_can_forget_network_failed_wordpress_with_pending_oauth_and_preserve_audit_without_remote_io(): void
     {
         $owner = $this->user('owner', 'all');
@@ -594,6 +596,7 @@ final class TargetManagementAdminTest extends TestCase
         Http::assertNothingSent();
     }
 
+    #[Group('database-access')]
     public function test_offline_removal_also_forgets_ssh_credential_and_paused_connector_without_remote_network(): void
     {
         $owner = $this->user('owner', 'all');
