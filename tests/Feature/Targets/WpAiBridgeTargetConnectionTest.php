@@ -2133,6 +2133,56 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(['alpha-refresh', 'alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
     }
 
+    public function test_expiring_access_token_hides_cancel_and_preserves_service_authority(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->revokeFailureMode = 'pre_dispatch';
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            self::fail('Expected pre-dispatch refusal.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+        }
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->first();
+        self::assertSame('retryable', $intent->phase);
+
+        $owner = $this->user('owner', 'all');
+        $this->actingAs($owner)->get('/admin/targets/alpha')
+            ->assertOk()->assertSee('Cancel pending disconnect');
+
+        // The recorded metadata and encrypted credential both become expired.
+        $this->expire($target);
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())
+            ->update(['access_expires_at' => now()->subMinute()]);
+
+        $this->get('/admin/targets/alpha')
+            ->assertOk()
+            ->assertDontSee('Cancel pending disconnect')
+            ->assertSee('verification token has expired or expires too soon')
+            ->assertSee('Finish disconnect');
+
+        // The same UI refusal also covers tokens expiring within 30 seconds.
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())
+            ->update(['access_expires_at' => now()->addSeconds(25)]);
+        $this->get('/admin/targets/alpha')
+            ->assertOk()
+            ->assertDontSee('Cancel pending disconnect')
+            ->assertSee('verification token has expired or expires too soon');
+
+        // Forged POST is still rejected by the authoritative credential check.
+        $this->post('/admin/targets/alpha/cancel-disconnect', [
+            'intent_id' => $intent->id, 'confirm_target_id' => 'alpha',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'cancel_verification_unavailable');
+        self::assertSame('retryable', DB::table('wp_ai_bridge_revocation_intents')->value('phase'));
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame(0, $this->catalogProbeCalls);
+    }
+
     public function test_partial_acknowledgment_resumes_without_replaying_first_token(): void
     {
         $target = $this->target('alpha');

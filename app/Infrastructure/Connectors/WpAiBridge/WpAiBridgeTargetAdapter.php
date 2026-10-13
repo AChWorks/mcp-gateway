@@ -135,15 +135,21 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
     public function adminDetails(Target $target): array
     {
         $id = $target->getKey();
+        $credential = TargetCredential::query()
+            ->where('target_record_id', $id)->where('connector_type', $this->type())
+            ->where('purpose', 'wordpress_oauth')->first(['id']);
 
         return [
             'wpConfig' => WpAiBridgeTargetConfig::query()->where('target_record_id', $id)->first(),
-            'hasCredential' => TargetCredential::query()
-                ->where('target_record_id', $id)->where('connector_type', $this->type())
-                ->where('purpose', 'wordpress_oauth')->exists(),
+            'hasCredential' => $credential !== null,
+            // Read-only, non-secret expiry and generation help avoid offering
+            // a cancellation action when local proof already makes it impossible.
+            'credentialMetadata' => $credential === null ? null : DB::table('wp_ai_bridge_credential_metadata')
+                ->where('credential_id', $credential->getKey())
+                ->first(['credential_id', 'generation', 'access_expires_at']),
             'revocationIntent' => DB::table('wp_ai_bridge_revocation_intents')
                 ->where('target_record_id', $id)
-                ->first(['id', 'kind', 'phase', 'token_total', 'token_confirmed', 'created_at', 'updated_at']),
+                ->first(['id', 'kind', 'phase', 'credential_id', 'generation', 'token_total', 'token_confirmed', 'created_at', 'updated_at']),
             'revocationPending' => DB::table('wp_ai_bridge_revocation_intents')
                 ->where('target_record_id', $id)->exists(),
             'oauthFlowPending' => DB::table('wp_ai_bridge_oauth_flows')

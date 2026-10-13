@@ -193,6 +193,8 @@ final class TargetController extends Controller
                 $details['refreshPending'] ?? false,
                 $details['hasCredential'] ?? false,
                 $details['wpConfig'] ?? null,
+                $details['credentialMetadata'] ?? null,
+                $details['oauthFlowPending'] ?? false,
             ),
         ]);
     }

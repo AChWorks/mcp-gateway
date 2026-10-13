@@ -12,7 +12,7 @@ use App\Domain\Targets\TargetConnectionState;
 final class TargetRecoveryPresentation
 {
     /**
-     * @return array{title:string,description:string,reachability:string,authorization:string,operation:string,history:?string,tone:string,canFinish:bool,canCancel:bool,needsExternalProof:bool}
+     * @return array{title:string,description:string,reachability:string,authorization:string,operation:string,history:?string,tone:string,canFinish:bool,canCancel:bool,needsExternalProof:bool,cancelGuidance?:string}
      */
     public static function describe(
         Target $target,
@@ -20,6 +20,8 @@ final class TargetRecoveryPresentation
         bool $refreshPending = false,
         bool $hasCredential = false,
         ?object $wpConfig = null,
+        ?object $credentialMetadata = null,
+        bool $oauthFlowPending = false,
     ): array {
         $checkedAt = $wpConfig === null ? null : ($wpConfig->metadata_checked_at ?? null);
         $metadataReachable = $wpConfig === null ? null : ($wpConfig->metadata_reachable ?? null);
@@ -72,7 +74,22 @@ final class TargetRecoveryPresentation
             $count = max(0, (int) ($revocationIntent->token_confirmed ?? 0));
             $total = max(0, (int) ($revocationIntent->token_total ?? 0));
             $canFinish = in_array($phase, ['retryable', 'confirmed'], true);
-            $canCancel = $phase === 'retryable' && $count === 0 && $hasCredential;
+            $accessExpiry = $credentialMetadata === null || $credentialMetadata->access_expires_at === null
+                ? false : strtotime((string) $credentialMetadata->access_expires_at);
+            $cancellationCandidate = $phase === 'retryable' && $count === 0;
+            $canCancel = $cancellationCandidate
+                && (string) ($revocationIntent->kind ?? '') === 'disconnect'
+                && $total > 0 && $hasCredential && $credentialMetadata !== null
+                && (string) ($revocationIntent->credential_id ?? '') === (string) $credentialMetadata->credential_id
+                && (int) ($revocationIntent->generation ?? 0) === (int) $credentialMetadata->generation
+                && $accessExpiry !== false && $accessExpiry > time() + 30
+                && ! $oauthFlowPending;
+            $cancelGuidance = null;
+            if ($cancellationCandidate && ! $canCancel) {
+                $cancelGuidance = $accessExpiry !== false && $accessExpiry <= time() + 30
+                    ? __('Cancel is unavailable because the existing WordPress verification token has expired or expires too soon. Finish the safe disconnect, then authorize WordPress again.')
+                    : __('Cancel is unavailable because Gateway cannot confirm all local verification prerequisites. Finish the safe disconnect; do not restore the existing credential.');
+            }
             $operation = match ($phase) {
                 'retryable' => __('Disconnect paused: next remote revoke was proven not sent; :done of :total acknowledgments recorded.', ['done' => $count, 'total' => $total]),
                 'confirmed' => __('All remote token revocations were acknowledged; final local cleanup remains.'),
@@ -92,6 +109,7 @@ final class TargetRecoveryPresentation
                 'history' => $history, 'tone' => 'caution',
                 'canFinish' => $canFinish,
                 'canCancel' => $canCancel,
+                'cancelGuidance' => $cancelGuidance,
                 'needsExternalProof' => ! $canFinish,
             ];
         }

@@ -54,6 +54,10 @@
                     <p class="target-recovery-warning">{{ __('Do not retry this revoke or restore the old credential: WordPress may have already processed it. The only supported remote recovery is to independently revoke the whole Gateway client authorization in WordPress and attest to that action.') }}</p>
                 @endif
 
+                @if ($recovery['cancelGuidance'] ?? null)
+                    <p class="muted">{{ $recovery['cancelGuidance'] }}</p>
+                @endif
+
                 @if ($recovery['canCancel'])
                     @can('security.manage')
                         @can('targets.connect', $target)
