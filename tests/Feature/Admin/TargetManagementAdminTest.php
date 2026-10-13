@@ -7,6 +7,7 @@ use App\Application\Access\UserAccessManager;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
@@ -393,6 +394,292 @@ final class TargetManagementAdminTest extends TestCase
         $this->get('/admin/site-checks')->assertNotFound();
     }
 
+    public function test_owner_can_forget_network_failed_wordpress_with_pending_oauth_and_preserve_audit_without_remote_io(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $viewer = $this->user('viewer', 'selected');
+        $target = $this->target('unreachable-wp', 'wp_ai_bridge');
+        $target->forceFill([
+            'connection_state' => 'error',
+            'last_error_code' => 'network_failure',
+        ])->save();
+        $recordId = (string) $target->getKey();
+        $credential = TargetCredential::query()->create([
+            'target_record_id' => $recordId,
+            'connector_type' => 'wp_ai_bridge',
+            'purpose' => 'wordpress_oauth',
+            'encrypted_payload' => 'unopened-test-fixture',
+        ]);
+        $now = now();
+        DB::table('wp_ai_bridge_target_configs')->insert([
+            'id' => (string) Str::ulid(),
+            'target_record_id' => $recordId,
+            'base_url' => 'https://wordpress.example.test',
+            'base_url_hash' => hash('sha256', 'https://wordpress.example.test'),
+            'mcp_resource_url' => 'https://wordpress.example.test/wp-json/wp-ai-bridge/v1/mcp',
+            'oauth_issuer_url' => 'https://wordpress.example.test',
+            'oauth_authorization_url' => 'https://wordpress.example.test/wp-ai-bridge/oauth/authorize',
+            'oauth_token_url' => 'https://wordpress.example.test/wp-json/wp-ai-bridge/v1/oauth/token',
+            'oauth_revocation_url' => 'https://wordpress.example.test/wp-json/wp-ai-bridge/v1/oauth/revoke',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('wp_ai_bridge_credential_metadata')->insert([
+            'credential_id' => $credential->getKey(),
+            'client_id' => 'test-gateway',
+            'resource_url' => 'https://wordpress.example.test/wp-json/wp-ai-bridge/v1/mcp',
+            'binding_hash' => hash('sha256', 'bound-credential'),
+            'generation' => 1,
+        ]);
+        DB::table('wp_ai_bridge_refresh_intents')->insert([
+            'id' => (string) Str::ulid(),
+            'target_record_id' => $recordId,
+            'credential_id' => $credential->getKey(),
+            'generation' => 1,
+            'attempts' => 2,
+            'request_timeout_seconds' => 9,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('wp_ai_bridge_revocation_intents')->insert([
+            'id' => (string) Str::ulid(),
+            'target_record_id' => $recordId,
+            'kind' => 'disconnect',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('wp_ai_bridge_oauth_flows')->insert([
+            'id' => (string) Str::ulid(),
+            'target_record_id' => $recordId,
+            'state_hash' => hash('sha256', 'unconsumed-test-flow'),
+            'encrypted_context' => 'opaque-test-context',
+            'expires_at' => now()->addMinutes(10),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('user_target_access')->insert([
+            'user_id' => $viewer->getKey(),
+            'target_record_id' => $recordId,
+            'allowed' => true,
+        ]);
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $viewer->getKey(),
+            'target_record_id' => $recordId,
+            'permission' => 'wordpress.abilities.execute.mutating',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $groupId = (string) Str::ulid();
+        DB::table('target_groups')->insert([
+            'id' => $groupId,
+            'name' => 'Forget test group',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('target_group_targets')->insert([
+            'target_group_id' => $groupId,
+            'target_record_id' => $recordId,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $operationId = (string) Str::uuid();
+        DB::table('target_check_operations')->insert([
+            'id' => $operationId,
+            'creator_user_id' => $owner->getKey(),
+            'idempotency_key' => (string) Str::uuid(),
+            'status' => 'complete',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('target_check_operation_targets')->insert([
+            'id' => (string) Str::ulid(),
+            'operation_id' => $operationId,
+            'target_record_id' => $recordId,
+            'target_id_snapshot' => $target->target_id,
+            'display_name_snapshot' => $target->display_name,
+            'position' => 1,
+            'status' => 'complete',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $this->actingAs($owner);
+        $this->get('/admin/targets/unreachable-wp')->assertOk()
+            ->assertSee('Permanently remove Target locally')
+            ->assertSee('without remote revocation');
+        $this->delete('/admin/targets/unreachable-wp', ['confirm_remove' => 'yes'])
+            ->assertSessionHasErrors('target');
+        self::assertSame(1, Target::query()->whereKey($recordId)->count());
+
+        $this->delete('/admin/targets/unreachable-wp/forget', [
+            'confirm_target_id' => 'unreachable-wp',
+            'confirm_local_only' => 'yes',
+            'confirm_remote_revocation_unknown' => 'yes',
+            'current_password' => 'ThisIsATestSecret!234',
+        ])->assertRedirect('/admin/targets')->assertSessionHas('status');
+
+        self::assertSame(0, Target::query()->whereKey($recordId)->count());
+        foreach ([
+            'target_credentials',
+            'wp_ai_bridge_credential_metadata',
+            'wp_ai_bridge_target_configs',
+            'wp_ai_bridge_refresh_intents',
+            'wp_ai_bridge_revocation_intents',
+            'wp_ai_bridge_oauth_flows',
+            'user_target_access',
+            'user_target_permission_denials',
+            'target_group_targets',
+        ] as $table) {
+            $column = $table === 'wp_ai_bridge_credential_metadata' ? 'credential_id' : 'target_record_id';
+            $lookup = $table === 'wp_ai_bridge_credential_metadata' ? $credential->getKey() : $recordId;
+            self::assertSame(0, DB::table($table)->where($column, $lookup)->count(), $table);
+        }
+        $snapshot = DB::table('target_check_operation_targets')
+            ->where('operation_id', $operationId)->first();
+        self::assertNotNull($snapshot);
+        self::assertNull($snapshot->target_record_id);
+        self::assertSame('unreachable-wp', $snapshot->target_id_snapshot);
+
+        $audit = DB::table('activity_events')
+            ->where('target_id', 'unreachable-wp')->where('operation', 'target-forget-local')->sole();
+        self::assertSame($recordId, $audit->target_record_id);
+        self::assertSame('wp_ai_bridge', $audit->connector_type_snapshot);
+        self::assertSame('success', $audit->outcome);
+        self::assertSame('remote_revocation_unverified', $audit->error_code);
+        Http::assertNothingSent();
+
+        // Reusing the human Target ID creates a different database identity.
+        // Deleted ACLs, OAuth intents and credentials must never carry over.
+        $replacement = $this->target('unreachable-wp', 'wp_ai_bridge');
+        self::assertNotSame($recordId, (string) $replacement->getKey());
+        self::assertSame(0, DB::table('user_target_access')
+            ->where('target_record_id', $replacement->getKey())->count());
+        self::assertSame(0, DB::table('target_credentials')
+            ->where('target_record_id', $replacement->getKey())->count());
+        $this->actingAs($viewer)->get('/admin/targets/unreachable-wp')->assertForbidden();
+    }
+
+    public function test_offline_removal_is_owner_only_and_requires_exact_id_password_and_both_acknowledgments(): void
+    {
+        $target = $this->target('offline-protected', 'wp_ai_bridge');
+        $target->forceFill(['connection_state' => 'connected'])->save();
+        $input = [
+            'confirm_target_id' => 'offline-protected',
+            'confirm_local_only' => 'yes',
+            'confirm_remote_revocation_unknown' => 'yes',
+            'current_password' => 'ThisIsATestSecret!234',
+        ];
+        $path = '/admin/targets/offline-protected/forget';
+        $this->actingAs($this->user('administrator', 'all'));
+        $this->get('/admin/targets/offline-protected')->assertOk()
+            ->assertDontSee('Permanently remove Target locally');
+        $this->delete($path, $input)->assertForbidden();
+        $this->actingAs($this->user('viewer', 'all'))
+            ->delete($path, $input)->assertForbidden();
+        $this->actingAs($this->user('owner', 'all'));
+        $this->delete($path)->assertSessionHasErrors([
+            'confirm_target_id',
+            'confirm_local_only',
+            'confirm_remote_revocation_unknown',
+        ]);
+        $this->delete($path, [...$input, 'confirm_target_id' => 'another-target'])
+            ->assertSessionHasErrors('confirm_target_id');
+        $this->delete($path, [...$input, 'current_password' => 'invalid-owner-password'])
+            ->assertSessionHasErrors('current_password');
+        $this->delete($path, [...$input, 'confirm_remote_revocation_unknown' => 'no'])
+            ->assertSessionHasErrors('confirm_remote_revocation_unknown');
+        self::assertSame(1, Target::query()->whereKey($target->getKey())->count());
+        self::assertSame(0, DB::table('activity_events')
+            ->where('target_id', 'offline-protected')->where('operation', 'target-forget-local')->count());
+        Http::assertNothingSent();
+    }
+
+    public function test_offline_removal_also_forgets_ssh_credential_and_paused_connector_without_remote_network(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $this->actingAs($owner);
+        $ssh = $this->target('offline-ssh', 'ssh_direct');
+        $ssh->forceFill(['connection_state' => 'connected'])->save();
+        $recordId = (string) $ssh->getKey();
+        TargetCredential::query()->create([
+            'target_record_id' => $recordId,
+            'connector_type' => 'ssh_direct',
+            'purpose' => 'ssh_login',
+            'encrypted_payload' => 'unopened-ssh-test-fixture',
+        ]);
+        DB::table('ssh_direct_target_configs')->insert([
+            'id' => (string) Str::ulid(),
+            'target_record_id' => $recordId,
+            'host' => '198.51.100.20',
+            'port' => 22,
+            'username' => 'ssh-test',
+            'auth_method' => 'password',
+            'pinned_host_key' => 'test-only-key',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $input = [
+            'confirm_target_id' => 'offline-ssh',
+            'confirm_local_only' => 'yes',
+            'confirm_remote_revocation_unknown' => 'yes',
+            'current_password' => 'ThisIsATestSecret!234',
+        ];
+        $this->delete('/admin/targets/offline-ssh/forget', $input)->assertRedirect('/admin/targets');
+        self::assertSame(0, Target::query()->whereKey($recordId)->count());
+        self::assertSame(0, DB::table('target_credentials')
+            ->where('target_record_id', $recordId)->count());
+        self::assertSame(0, DB::table('ssh_direct_target_configs')
+            ->where('target_record_id', $recordId)->count());
+
+        $paused = $this->target('offline-paused', 'ai_server_agent');
+        $paused->forceFill(['connection_state' => 'error'])->save();
+        $this->delete('/admin/targets/offline-paused/forget', [
+            ...$input,
+            'confirm_target_id' => 'offline-paused',
+        ])->assertRedirect('/admin/targets');
+        self::assertSame(0, Target::query()->whereKey($paused->getKey())->count());
+        self::assertSame(2, DB::table('activity_events')
+            ->where('operation', 'target-forget-local')->count());
+        Http::assertNothingSent();
+    }
+
+    public function test_local_forget_rolls_back_audit_and_credentials_when_database_delete_fails(): void
+    {
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            $this->markTestSkipped('SQLite fixture injects a deterministic Target delete failure.');
+        }
+
+        $target = $this->target('rollback-forget', 'wp_ai_bridge');
+        $target->forceFill(['connection_state' => 'error'])->save();
+        $id = (string) $target->getKey();
+        TargetCredential::query()->create([
+            'target_record_id' => $id,
+            'connector_type' => 'wp_ai_bridge',
+            'purpose' => 'wordpress_oauth',
+            'encrypted_payload' => 'unopened-failure-fixture',
+        ]);
+
+        DB::statement("CREATE TRIGGER fail_target_local_forget BEFORE DELETE ON targets BEGIN SELECT RAISE(ABORT, 'forced_delete_failure'); END");
+        try {
+            $this->actingAs($this->user('owner', 'all'))
+                ->delete('/admin/targets/rollback-forget/forget', [
+                    'confirm_target_id' => 'rollback-forget',
+                    'confirm_local_only' => 'yes',
+                    'confirm_remote_revocation_unknown' => 'yes',
+                    'current_password' => 'ThisIsATestSecret!234',
+                ])->assertStatus(500);
+        } finally {
+            DB::statement('DROP TRIGGER IF EXISTS fail_target_local_forget');
+        }
+
+        self::assertSame(1, Target::query()->whereKey($id)->count());
+        self::assertSame(1, DB::table('target_credentials')
+            ->where('target_record_id', $id)->count());
+        self::assertSame(0, DB::table('activity_events')
+            ->where('target_id', 'rollback-forget')->where('operation', 'target-forget-local')->count());
+        Http::assertNothingSent();
+    }
+
     public function test_target_admin_lifecycle_routes_remain_authenticated_and_web_csrf_guarded(): void
     {
         foreach (['/admin/targets', '/admin/targets/create', '/admin/activity'] as $path) {
@@ -403,6 +690,7 @@ final class TargetManagementAdminTest extends TestCase
             'admin.targets.store',
             'admin.targets.update',
             'admin.targets.destroy',
+            'admin.targets.forget',
             'admin.targets.connect',
             'admin.targets.reconnect',
             'admin.targets.disconnect',

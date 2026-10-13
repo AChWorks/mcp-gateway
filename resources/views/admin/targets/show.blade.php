@@ -162,7 +162,42 @@
             </div>
         </form>
     @else
-        <p class="muted">{{ __('Disconnect the connector and resolve any pending credential or authorization before removing this Target.') }}</p>
+        <p class="muted">{{ __('Normal removal requires a completed connector disconnect and resolved credentials. If the remote service is permanently unavailable, the Owner may explicitly forget the Target locally instead.') }}</p>
+        @can('security.manage')
+            @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
+                <div class="target-subsection" aria-labelledby="forget-target-title">
+                    <h3 id="forget-target-title">{{ __('Remove locally without remote revocation (Owner only)') }}</h3>
+                    <p class="field-help">{{ __('This permanently deletes the Target, encrypted credentials, pending OAuth/refresh/revocation state and Target-specific access assignments from this Gateway. No WordPress or SSH connection is attempted. Existing remote OAuth authorization or Unix-account access may remain valid, and remote in-flight operations cannot be undone. Revoke access separately at the remote service when possible.') }}</p>
+                    <form method="post" action="{{ route('admin.targets.forget', ['target' => $target->target_id]) }}" class="form-stack">
+                        @csrf
+                        @method('DELETE')
+                        <div class="field">
+                            <label for="forget_target_id">{{ __('Type the exact Target ID to permanently remove locally:') }} <code>{{ $target->target_id }}</code></label>
+                            <input id="forget_target_id" name="confirm_target_id" type="text" maxlength="64" required autocomplete="off" spellcheck="false">
+                            @error('confirm_target_id')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+                        </div>
+                        <label class="target-trust-confirmation">
+                            <input type="checkbox" name="confirm_local_only" value="yes" required>
+                            <span>{{ __('I understand this permanently erases the local Target and its credentials and assignments.') }}</span>
+                        </label>
+                        @error('confirm_local_only')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+                        <label class="target-trust-confirmation">
+                            <input type="checkbox" name="confirm_remote_revocation_unknown" value="yes" required>
+                            <span>{{ __('I understand WordPress OAuth or remote SSH access is NOT revoked or verified by this action.') }}</span>
+                        </label>
+                        @error('confirm_remote_revocation_unknown')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+                        <div class="field">
+                            <label for="forget_owner_password">{{ __('Current Owner password') }}</label>
+                            <input id="forget_owner_password" name="current_password" type="password" required maxlength="255" autocomplete="current-password">
+                            @error('current_password')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+                        </div>
+                        <div class="filter-actions">
+                            <button class="button button-danger" type="submit">{{ __('Permanently remove Target locally') }}</button>
+                        </div>
+                    </form>
+                </div>
+            @endif
+        @endcan
     @endif
     @error('target')
         <p class="form-error" role="alert">{{ $message }}</p>

@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
+use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
+use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -232,6 +234,58 @@ final class TargetController extends Controller
 
         return redirect()->route('admin.targets.index')
             ->with('status', __('Target removed.'));
+    }
+
+    /**
+     * Last-resort Owner action: erase this Target ONLY from Gateway.
+     *
+     * Never attempt a remote revoke or claim its success. Cascading deletes
+     * remove local credentials, intents, configurations and scoped ACLs;
+     * the required activity snapshot survives the deleted Target record.
+     * No provider I/O occurs under the Target lock (or at all).
+     */
+    public function forget(
+        Request $request,
+        Target $target,
+        ActivityRecorder $activity,
+        AdministratorPasswordConfirmation $confirmation,
+    ): RedirectResponse {
+        Gate::authorize(GatewayPermission::TargetsRemove->value, $target);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
+        $user = $request->user();
+        abort_unless($user instanceof User && $user->getRawOriginal('role') === GatewayRole::Owner->value, 403);
+
+        $validated = $request->validate([
+            'confirm_target_id' => ['required', 'string', 'max:64'],
+            'confirm_local_only' => ['required', 'in:yes'],
+            'confirm_remote_revocation_unknown' => ['required', 'in:yes'],
+        ]);
+        if (! hash_equals($target->target_id, (string) $validated['confirm_target_id'])) {
+            throw ValidationException::withMessages([
+                'confirm_target_id' => __('Type the exact Target ID to confirm local removal.'),
+            ]);
+        }
+        $confirmation->confirm($request);
+
+        DB::transaction(static function () use ($target, $activity): void {
+            // Lock the original immutable record, not a potentially reused
+            // public target_id. Deleting/re-enrolling is never permission reuse.
+            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+
+            $activity->recordRequired(
+                CorrelationId::current(),
+                'target-forget-local',
+                'success',
+                $locked,
+                'remote_revocation_unverified',
+            );
+            if (! $locked->delete()) {
+                throw new RuntimeException('target_local_delete_failed');
+            }
+        });
+
+        return redirect()->route('admin.targets.index')
+            ->with('status', __('Target removed from this Gateway. Remote WordPress OAuth authorization or SSH access was NOT revoked. Revoke it separately at the remote service if still applicable.'));
     }
 
     /** @return array<string, mixed> */
