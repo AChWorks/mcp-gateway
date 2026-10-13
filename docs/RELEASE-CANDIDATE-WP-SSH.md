@@ -1,10 +1,12 @@
 # WordPress + SSH Gateway combined release-candidate acceptance
 
 Owner: [Issue #112, Revision 34](https://github.com/AChWorks/mcp-gateway/issues/112).
-This is a **test-candidate runbook**, not a public Release, production
-installation, or authorization to merge/publish. The accepted release remains
-**v2.0.3** until the Owner separately authorizes a specific reviewed main SHA,
-VERSION, and release action.
+This document preserves the **RC8 pre-promotion test-candidate evidence**.
+It is not an operator installation runbook or an authorization to publish or
+deploy. At the RC8 acceptance checkpoint the last public Stable was v2.0.3;
+always verify current published Releases before acting. The planned Stable
+2.1.2 promotion changes VERSION/release documentation only and still requires
+exact-source CI, fresh independent review and an exact-commit publication gate.
 
 ## Release-line reconciliation
 
@@ -200,7 +202,7 @@ bash bin/test-update-backup-integrity.sh /path/to/candidate-update.zip /path/to/
 ```
 
 For operators who already installed a 2.1.0 or 2.1.1 candidate, the
-2.1.2-rc.8 update package must additionally pass the same authenticated
+RC8 prerelease update package was required to pass the same authenticated
 browser-update test against a **verified unaltered candidate fresh-install ZIP**
 from each earlier installed GitHub Actions run (verify its original checksum, provenance
 and hash). The credential/Target/grant preservation assertions must run for

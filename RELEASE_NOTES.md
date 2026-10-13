@@ -1,17 +1,19 @@
 # MCP Gateway v2.1.2
 
-**Planned stable release notes — not publicly published.** Candidate builds now carry distinct
-SemVer prerelease identities (starting at **2.1.2-rc.1**). The current
-**2.1.2-rc.8** candidate supersedes the previously distributed rc.1,
-rc.2, rc.3, rc.4, rc.5, rc.6 and rc.7 test artifacts; the eventual public stable release will use **2.1.2** only after
-separate Owner authorization. Earlier
-**2.1.0** and **2.1.1** test candidates were installed by operators, but neither
-number was published as a stable Release. The updater must continue to reject
-same-version and downgrade attempts. These notes describe candidate functionality; merging source or passing CI does not mean a public release, installed host or production has been changed.
+**Stable 2.1.2 promotion source.** This version promotes the previously
+independently reviewed `2.1.2-rc.8` WordPress + Direct SSH runtime; the
+promotion changes only VERSION and release documentation, not application
+behavior, authorization contracts, migrations or updater code. The separate
+`2.1.2-rc.1` through `2.1.2-rc.8` identities were test candidates, not public
+stable Releases. Earlier `2.1.0` and `2.1.1` were also operator test versions.
+Public publication is a **separately approved manual action against an exact
+reviewed main commit**; a successful PR, VERSION change or CI does not publish,
+install or enable the new version on any operator host. The updater continues
+to reject same-version and downgrade attempts.
 
 ## Changes since v2.0.3
 
-- **Existing WordPress behavior retained:** dynamic native WordPress Abilities, fail-closed classifications, Target-bound OAuth permissions and long-idle offline-credential recovery. These include the v2.0.3 maintenance fixes plus unreleased HTTP deadline/DNS safety refinements.
+- **Existing WordPress behavior retained:** dynamic native WordPress Abilities, fail-closed classifications, Target-bound OAuth permissions and long-idle offline-credential recovery. These include the v2.0.3 maintenance fixes plus newly integrated HTTP deadline/DNS safety refinements.
 - **Direct SSH Targets:** host-key pinning, bounded command execution, SFTP stat/list/range/write, and reusable bounded internal private streams. No implicit permission grants, private-network exception or unrestricted credential bypass.
 - **Optional complete SSH binary upload/download:** authenticated per-Target file-transfer discovery, fixed-size/timeout/concurrency budgets, integrity-checked and guarded atomic publication, separate client-side whole-response digest verification. Feature remains **OFF by default** and must be deliberately enabled on an approved host. The 16 KiB inline call budget and 64 MiB/40-second optional SSH upper bound are not global client/WordPress/Agent file or job limits.
 - **Owner operational controls:** one typed registry for bounded WordPress responses, HTTP connect/request deadlines and optional SSH transfer budgets; retains immutable authorization and network safety rules.
