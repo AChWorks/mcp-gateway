@@ -40,6 +40,30 @@
     </div>
 </div>
 
+<section class="panel panel-wide" aria-labelledby="outbound-dns-preflight-title">
+    <div class="section-heading">
+        <h2 id="outbound-dns-preflight-title">{{ __('Outbound DNS compatibility preflight') }}</h2>
+        @if ($dnsCompatibility['applicable'])
+            <span class="badge badge-{{ $dnsCompatibility['ready'] ? 'success' : 'neutral' }}">{{ $dnsCompatibility['ready'] ? __('PHP files accessible') : __('Check PHP file access') }}</span>
+        @endif
+    </div>
+    @if (! $dnsCompatibility['applicable'])
+        <p>{{ __('This Linux-focused file preflight does not apply to the current host. Follow the platform DNS resolver configuration documentation.') }}</p>
+    @else
+        <p>{{ __('The Gateway HTTPS safety policy uses bounded React DNS and the PHP worker must be able to read its system resolver configuration. This check runs inside PHP with its effective filesystem restrictions; it does not send a DNS query or authenticate WordPress.') }}</p>
+        <dl class="detail-list">
+            <dt><code>/etc/resolv.conf</code></dt><dd>{{ $dnsCompatibility['resolv_conf_readable'] ? __('Readable by PHP') : __('Not readable by PHP') }}</dd>
+            <dt><code>/etc/hosts</code></dt><dd>{{ $dnsCompatibility['hosts_readable'] ? __('Readable by PHP') : __('Not readable by PHP') }}</dd>
+            <dt><code>open_basedir</code></dt><dd>{{ $dnsCompatibility['open_basedir_active'] ? __('Enabled for this PHP worker') : __('Not configured for this PHP worker') }}</dd>
+        </dl>
+        @if (! $dnsCompatibility['ready'])
+            <p class="target-recovery-warning">{{ __('If an OpenLiteSpeed LSAPI VHost uses php_admin_value open_basedir, update the effective VHost allowlist through aaPanel to include only the necessary resolver files (and real symlink targets), not the entire filesystem. Retest after PHP worker reload. Do not turn off open_basedir or bypass TLS/SSRF checks.') }}</p>
+        @else
+            <p class="field-help">{{ __('Readable system files are a prerequisite, not a guarantee of DNS, TLS, outbound network access or WordPress OAuth validity.') }}</p>
+        @endif
+    @endif
+</section>
+
 <section class="panel panel-wide operations-panel" aria-labelledby="operational-limits-title">
     <div class="section-heading operations-heading">
         <div>

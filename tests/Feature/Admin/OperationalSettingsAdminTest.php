@@ -56,6 +56,9 @@ final class OperationalSettingsAdminTest extends TestCase
             ->assertSee('WordPress responses')
             ->assertSee('WordPress connection deadlines')
             ->assertSee('SSH whole-file transfer')
+            ->assertSee('Outbound DNS compatibility preflight')
+            ->assertSee('/etc/resolv.conf')
+            ->assertSee('/etc/hosts')
             ->assertSee('Use default')
             ->assertSee('Settings revision')
             ->getContent();

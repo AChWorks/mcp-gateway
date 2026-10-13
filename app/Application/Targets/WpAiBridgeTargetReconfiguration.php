@@ -104,6 +104,8 @@ final readonly class WpAiBridgeTargetReconfiguration
                     'oauth_authorization_url' => $discovered->authorizationUrl,
                     'oauth_token_url' => $discovered->tokenUrl,
                     'oauth_revocation_url' => $discovered->revocationUrl,
+                    'metadata_checked_at' => now(),
+                    'metadata_reachable' => true,
                 ])->save();
                 $locked->forceFill([
                     'connection_state' => TargetConnectionState::Disconnected,
