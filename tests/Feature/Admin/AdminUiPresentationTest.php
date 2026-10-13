@@ -49,6 +49,33 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(2, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
     }
 
+    public function test_shared_admin_headings_wrap_valid_long_target_names_and_tables_follow_direction(): void
+    {
+        $name = str_repeat('L', 160);
+        Target::query()->create([
+            'target_id' => 'long-heading',
+            'display_name' => $name,
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+        $this->actingAs($this->owner())
+            ->get('/admin/targets/long-heading')
+            ->assertOk()
+            ->assertSee('<h1>'.$name.'</h1>', false);
+
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertMatchesRegularExpression(
+            '/\.page-heading\s*>\s*:first-child,\s*\.section-heading\s*>\s*:first-child\s*\{\s*min-width:\s*0;\s*\}/',
+            $css,
+        );
+        self::assertMatchesRegularExpression(
+            '/h1,\s*h2\s*\{[^}]*overflow-wrap:\s*anywhere;/s',
+            $css,
+        );
+        self::assertMatchesRegularExpression('/th,\s*td\s*\{[^}]*text-align:\s*start;/s', $css);
+        self::assertMatchesRegularExpression('/\.table-action\s*\{\s*text-align:\s*end;/s', $css);
+    }
+
     public function test_permission_controls_explain_title_scope_and_effective_behavior(): void
     {
         $response = $this->actingAs($this->owner())

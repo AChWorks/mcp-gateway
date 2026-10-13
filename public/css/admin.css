@@ -112,6 +112,13 @@ code {
     max-width: 48rem;
 }
 
+/* Flex headings must let long localized titles shrink and wrap, rather than
+   stretching the entire Admin document past the viewport. */
+.page-heading > :first-child,
+.section-heading > :first-child {
+    min-width: 0;
+}
+
 .content-grid,
 .form-grid,
 .stats-grid {
@@ -195,6 +202,7 @@ code {
 h1,
 h2 {
     line-height: 1.2;
+    overflow-wrap: anywhere;
 }
 
 h1 {
@@ -674,7 +682,7 @@ th,
 td {
     padding: 0.85rem 0.75rem;
     border-bottom: 1px solid var(--ui-border);
-    text-align: left;
+    text-align: start;
     vertical-align: middle;
 }
 
@@ -717,7 +725,7 @@ td input[type="checkbox"] {
 }
 
 .table-action {
-    text-align: right;
+    text-align: end;
 }
 
 .badge {
