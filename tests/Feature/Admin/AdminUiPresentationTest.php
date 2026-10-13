@@ -27,7 +27,7 @@ final class AdminUiPresentationTest extends TestCase
             );
     }
 
-    public function test_ai_client_panels_have_scoped_spacing_and_revoke_form_styles(): void
+    public function test_adjacent_admin_panels_use_shared_spacing_without_page_specific_card_fixes(): void
     {
         $this->actingAs($this->owner())
             ->get('/admin/oauth-clients')
@@ -36,8 +36,55 @@ final class AdminUiPresentationTest extends TestCase
 
         $css = file_get_contents(public_path('css/admin.css'));
         self::assertIsString($css);
-        self::assertStringContainsString('.ai-client-authorizations {', $css);
+        self::assertStringContainsString('--ui-panel-stack-gap: 1.25rem;', $css);
+        self::assertMatchesRegularExpression(
+            '/\.main-content\s*>\s*\.panel\s*\+\s*\.panel\s*\{\s*margin-block-start:\s*var\(--ui-panel-stack-gap\);\s*\}/',
+            $css,
+        );
+        self::assertStringNotContainsString('.ai-client-authorizations {', $css);
         self::assertStringContainsString('.client-grant-revoke-form {', $css);
+
+        $targetEditor = file_get_contents(resource_path('views/admin/targets/edit.blade.php'));
+        self::assertIsString($targetEditor);
+        self::assertSame(2, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
+    }
+
+    public function test_shared_admin_headings_wrap_valid_long_target_names_and_tables_follow_direction(): void
+    {
+        $name = str_repeat('L', 160);
+        Target::query()->create([
+            'target_id' => 'long-heading',
+            'display_name' => $name,
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+        $owner = $this->owner();
+        $this->actingAs($owner)
+            ->get('/admin/targets/long-heading')
+            ->assertOk()
+            ->assertSee('<h1>'.$name.'</h1>', false);
+        $this->actingAs($owner)
+            ->get('/admin/targets')
+            ->assertOk()
+            ->assertSee($name)
+            ->assertSee('<span class="sr-only">Actions</span>', false)
+            ->assertSee('class="table-wrap"', false);
+
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertMatchesRegularExpression(
+            '/\.page-heading\s*>\s*:first-child,\s*\.section-heading\s*>\s*:first-child\s*\{\s*min-width:\s*0;\s*\}/',
+            $css,
+        );
+        self::assertMatchesRegularExpression(
+            '/h1,\s*h2\s*\{[^}]*overflow-wrap:\s*anywhere;/s',
+            $css,
+        );
+        self::assertMatchesRegularExpression(
+            '/\.table-wrap\s*\{[^}]*position:\s*relative;[^}]*overflow-x:\s*auto;/s',
+            $css,
+        );
+        self::assertMatchesRegularExpression('/th,\s*td\s*\{[^}]*text-align:\s*start;/s', $css);
+        self::assertMatchesRegularExpression('/\.table-action\s*\{\s*text-align:\s*end;/s', $css);
     }
 
     public function test_permission_controls_explain_title_scope_and_effective_behavior(): void

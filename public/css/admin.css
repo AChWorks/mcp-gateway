@@ -14,6 +14,7 @@
     --ui-selected-bg: #eef4ff;
     --ui-selected-border: #8cace6;
     --ui-control-height: 2.8rem;
+    --ui-panel-stack-gap: 1.25rem;
     color: #18202a;
     background: #f4f6f8;
 }
@@ -111,6 +112,13 @@ code {
     max-width: 48rem;
 }
 
+/* Flex headings must let long localized titles shrink and wrap, rather than
+   stretching the entire Admin document past the viewport. */
+.page-heading > :first-child,
+.section-heading > :first-child {
+    min-width: 0;
+}
+
 .content-grid,
 .form-grid,
 .stats-grid {
@@ -158,9 +166,10 @@ code {
     width: 100%;
 }
 
-/* The AI client page contains two separate panels, not one joined card. */
-.ai-client-authorizations {
-    margin-top: 1.25rem;
+/* Independent top-level Admin panels need one shared vertical rhythm.
+   Fix the layout contract here, not with page-specific card margins. */
+.main-content > .panel + .panel {
+    margin-block-start: var(--ui-panel-stack-gap);
 }
 
 .panel-danger {
@@ -193,6 +202,7 @@ code {
 h1,
 h2 {
     line-height: 1.2;
+    overflow-wrap: anywhere;
 }
 
 h1 {
@@ -655,7 +665,10 @@ a:focus-visible {
     margin: 0;
 }
 
+/* Keep off-screen screen-reader labels inside the horizontal scroll boundary:
+   without a positioned ancestor their absolute boxes can enlarge the document. */
 .table-wrap {
+    position: relative;
     width: 100%;
     overflow-x: auto;
     border: 1px solid var(--ui-border);
@@ -672,7 +685,7 @@ th,
 td {
     padding: 0.85rem 0.75rem;
     border-bottom: 1px solid var(--ui-border);
-    text-align: left;
+    text-align: start;
     vertical-align: middle;
 }
 
@@ -715,7 +728,7 @@ td input[type="checkbox"] {
 }
 
 .table-action {
-    text-align: right;
+    text-align: end;
 }
 
 .badge {
