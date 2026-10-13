@@ -34,6 +34,7 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::put('/targets/{target:target_id}', [TargetController::class, 'update'])->name('targets.update');
     Route::put('/targets/{target:target_id}/configuration', [TargetConfigurationController::class, 'update'])->name('targets.configuration.update');
     Route::delete('/targets/{target:target_id}', [TargetController::class, 'destroy'])->name('targets.destroy');
+    Route::delete('/targets/{target:target_id}/forget', [TargetController::class, 'forget'])->name('targets.forget');
     Route::post('/targets/{target:target_id}/connect', [TargetConnectionController::class, 'connect'])->name('targets.connect');
     Route::post('/targets/{target:target_id}/reconnect', [TargetConnectionController::class, 'reconnect'])->name('targets.reconnect');
     Route::post('/targets/{target:target_id}/disconnect', [TargetConnectionController::class, 'disconnect'])->name('targets.disconnect');
