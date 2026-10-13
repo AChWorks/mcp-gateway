@@ -1,6 +1,6 @@
-# Whole-file binary data plane — Issue #147 (source-integrated, not released)
+# Whole-file binary data plane — Issue #147 (released in v2.1.2; OFF by default)
 
-**Integration evidence:** [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) was merged after exact-HEAD four-workflow CI, independent **HIGH_ASSURANCE APPROVE**, and explicit Owner merge authorization. This is a **source integration**, not a new published release or proof of production deployment. The public `v2.0.3` release does not contain the feature. The default `SSH_FILE_TRANSFER_ENABLED=false` keeps this optional HTTP route **OFF**; actual public enablement depends on separate host/proxy/resource and operational acceptance. Source-supported binary-capable clients are not synonymous with native ChatGPT model file handoff.
+**Public release status:** [v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) includes the implementation from independently HIGH_ASSURANCE-approved [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). This is a **published code/package capability, not a production installation or default enablement**. `SSH_FILE_TRANSFER_ENABLED=false` keeps the optional HTTP route **OFF** until a separately authorized real-host security/proxy/resource check enables it. Independent PHP/Python clients proved bidirectional bytes and SHA-256 on disposable installed fixtures; this does **not** prove native ChatGPT model file handoff. The earlier v2.0.3 maintenance release did not contain the route.
 
 ## Proven contract and what it does not claim
 
@@ -268,8 +268,7 @@ private keys, MariaDB files or test users into GitHub.
 
 ## Integration and operational readiness boundaries
 
-The optional HTTP wire/security contract was accepted for **source
-integration** through independently reviewed [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and Owner-authorized merge. **It remains OFF by default** and is not in the public maintenance release. Before enabling it on a *specific* supported hosting profile, follow the single [deployment pre-enablement checklist](DEPLOYMENT.md#optional-ssh-whole-file-data-plane-host-acceptance-not-yet-shipped): request-body/worker/proxy timeouts, temporary-disk and concurrent-upload budgets, verified TLS, remote private SFTP staging, and client-side full-file verification must be measured, not assumed.
+The optional HTTP wire/security contract was accepted in independently reviewed [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and **released as disabled-by-default code in v2.1.2**. It is not evidence of a production deployment. Before enabling it on a *specific* supported hosting profile, follow the [deployment pre-enablement checklist](DEPLOYMENT.md#optional-ssh-whole-file-data-plane-released-but-disabled-host-acceptance-pending): request-body/worker/proxy timeouts, temporary-disk and concurrent-upload budgets, verified TLS, remote private SFTP staging, and client-side full-file verification must be measured, not assumed.
 
 **Ingress resource boundary (independent review OPTIONAL O1):** inbound HTTP
 bytes can occupy one PHP temporary spool *before* the per-Target SFTP

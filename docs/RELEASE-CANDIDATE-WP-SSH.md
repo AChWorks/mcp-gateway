@@ -1,16 +1,19 @@
 # WordPress + SSH Gateway combined release-candidate acceptance
 
 Owner: [Issue #112, Revision 34](https://github.com/AChWorks/mcp-gateway/issues/112).
-This document preserves the **RC8 pre-promotion test-candidate evidence**.
-It is not an operator installation runbook or an authorization to publish or
-deploy. At the RC8 acceptance checkpoint the last public Stable was v2.0.3;
-always verify current published Releases before acting. The planned Stable
-2.1.2 promotion changes VERSION/release documentation only and still requires
-exact-source CI, fresh independent review and an exact-commit publication gate.
+**Historical acceptance record:** this document preserves the pre-release
+RC8 test-candidate evidence. At that checkpoint, public Stable was v2.0.3;
+the independently reviewed VERSION/documentation-only promotion was subsequently
+integrated and publicly issued as [v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2)
+at commit `75d0b2284d0ec7dc918795ae3f16198a86e1e656`.
+All candidate-stage `pending` statements below are **historical**, not current
+release blockers. For installation and upgrades, use [README](../README.md)
+and [Deployment](DEPLOYMENT.md), not prerelease ZIPs. Publication does not
+install software on operator hosts or close ongoing #97/#135/#147/#153/#154 tests.
 
 ## Release-line reconciliation
 
-- The v2.0.3 maintenance branch is not a direct ancestor of the unreleased
+- Historical pre-release topology: the v2.0.3 maintenance branch was not a direct ancestor of the then-unreleased
   WordPress/SSH main branch. Its maintenance-fix commits include browser-updater
   host-worker permission diagnostics, manual finalization progress, WordPress
   catalog error classification, and bounded idle OAuth refresh. Do not reset
@@ -19,7 +22,7 @@ exact-source CI, fresh independent review and an exact-commit publication gate.
   identity**, strictly newer than previous deployed test candidates 2.1.0,
   2.1.1 and GitHub-distributed 2.1.2-rc.1 / 2.1.2-rc.2 / 2.1.2-rc.3 / 2.1.2-rc.4 / 2.1.2-rc.5 / 2.1.2-rc.6 / 2.1.2-rc.7 artifacts. CI
   correctly rejected reusing rc.1 across two different PR HEADs, proving the
-  immutable candidate-identity gate. Planned public stable is **2.1.2**, never assigned
+  immutable candidate-identity gate. The subsequent public stable **2.1.2** was not assigned
   to a test candidate.
   Later test rounds must increase `-rc.N` rather than reuse a deployed VERSION.
   PHP `version_compare` maintains the order `2.1.1 < 2.1.2-rc.1 <
