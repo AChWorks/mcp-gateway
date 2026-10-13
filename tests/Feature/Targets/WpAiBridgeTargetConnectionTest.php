@@ -9,6 +9,7 @@ use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\OutboundRequestException;
@@ -35,6 +36,21 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
     use RefreshDatabase;
 
     private bool $failRevocation = false;
+
+    /** @var list<string> Only in-memory test fixture, never logs. */
+    private array $revocationTokenAttempts = [];
+
+    private ?string $revokeFailureMode = null;
+
+    private bool $tryConcurrentRevoke = false;
+
+    private bool $concurrentRevokeBlocked = false;
+
+    private bool $allowProtectedCatalogProbe = false;
+
+    private bool $rejectProtectedCatalogProbe = false;
+
+    private int $catalogProbeCalls = 0;
 
     private bool $failTokenExchange = false;
 
@@ -205,7 +221,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         );
     }
 
-    public function test_disconnect_requires_confirmed_remote_revocation_and_supports_safe_retry(): void
+    public function test_uncertain_disconnect_cannot_replay_and_requires_wordpress_side_attestation(): void
     {
         $alpha = $this->target('alpha');
         $service = app(WpAiBridgeTargetConnectionService::class);
@@ -241,7 +257,24 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         }
 
         $this->failRevocation = false;
-        $service->disconnect($alpha);
+        $intentId = (string) DB::table('wp_ai_bridge_revocation_intents')->value('id');
+        $attempts = $this->revocationTokenAttempts;
+        try {
+            $service->disconnect($alpha, $intentId);
+            self::fail('A WordPress HTTP 400 revoke was blindly replayed.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('revocation_uncertain', $exception->reason);
+        }
+        self::assertSame($attempts, $this->revocationTokenAttempts);
+        // This models the Owner's separate saved WordPress client-approval
+        // removal. The Gateway intentionally cannot verify that change.
+        DB::table('wp_ai_bridge_revocation_intents')->where('id', $intentId)
+            ->update(['updated_at' => now()->subMinutes(3)]);
+        $service->reconcileRevokedDisconnect($alpha, $intentId, static function (Target $locked): void {
+            app(ActivityRecorder::class)
+                ->recordRequired((string) Str::uuid(), 'wordpress-disconnect-remote-revocation-attested',
+                    'operator-attested', $locked);
+        });
         self::assertSame(TargetConnectionState::Disconnected, $alpha->refresh()->connection_state);
         self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
         self::assertSame(0, DB::table('target_credentials')->count());
@@ -2073,6 +2106,375 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         return $dns;
     }
 
+    public function test_predispatch_retry_completes_only_same_intent_and_prevents_double_submit(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->revokeFailureMode = 'pre_dispatch';
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            self::fail('Expected pre-dispatch refusal.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+            self::assertTrue($exception->diagnostics['pre_dispatch']);
+        }
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->first();
+        self::assertSame('retryable', $intent->phase);
+        self::assertSame(0, (int) $intent->token_confirmed);
+        $this->actingAs($this->user('owner', 'all'))->get('/admin/targets/alpha')
+            ->assertOk()->assertSee('Finish disconnect')->assertSee('Cancel pending disconnect');
+        $this->revokeFailureMode = null;
+        $this->post('/admin/targets/alpha/finish-disconnect', ['intent_id' => $intent->id])
+            ->assertRedirect('/admin/targets/alpha')->assertSessionHas('status');
+        self::assertSame(['alpha-refresh', 'alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
+        self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
+        $this->post('/admin/targets/alpha/finish-disconnect', ['intent_id' => $intent->id])
+            ->assertSessionHasErrors('target');
+        self::assertSame(['alpha-refresh', 'alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
+    }
+
+    public function test_expiring_access_token_hides_cancel_and_preserves_service_authority(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->revokeFailureMode = 'pre_dispatch';
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            self::fail('Expected pre-dispatch refusal.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+        }
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->first();
+        self::assertSame('retryable', $intent->phase);
+
+        $owner = $this->user('owner', 'all');
+        $this->actingAs($owner)->get('/admin/targets/alpha')
+            ->assertOk()->assertSee('Cancel pending disconnect');
+
+        // The recorded metadata and encrypted credential both become expired.
+        $this->expire($target);
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())
+            ->update(['access_expires_at' => now()->subMinute()]);
+
+        $this->get('/admin/targets/alpha')
+            ->assertOk()
+            ->assertDontSee('Cancel pending disconnect')
+            ->assertSee('verification token has expired or expires too soon')
+            ->assertSee('Finish disconnect');
+
+        // The same UI refusal also covers tokens expiring within 30 seconds.
+        DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $this->credential($target)->getKey())
+            ->update(['access_expires_at' => now()->addSeconds(25)]);
+        $this->get('/admin/targets/alpha')
+            ->assertOk()
+            ->assertDontSee('Cancel pending disconnect')
+            ->assertSee('verification token has expired or expires too soon');
+
+        // Forged POST is still rejected by the authoritative credential check.
+        $this->post('/admin/targets/alpha/cancel-disconnect', [
+            'intent_id' => $intent->id, 'confirm_target_id' => 'alpha',
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'cancel_verification_unavailable');
+        self::assertSame('retryable', DB::table('wp_ai_bridge_revocation_intents')->value('phase'));
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame(0, $this->catalogProbeCalls);
+    }
+
+    public function test_partial_acknowledgment_resumes_without_replaying_first_token(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->revokeFailureMode = 'second_pre_dispatch';
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            self::fail('Expected second-token refusal.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+        }
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->first();
+        self::assertSame('retryable', $intent->phase);
+        self::assertSame(1, (int) $intent->token_confirmed);
+        $this->revokeFailureMode = null;
+        app(WpAiBridgeTargetConnectionService::class)->disconnect($target, (string) $intent->id);
+        self::assertSame(['alpha-refresh', 'alpha-access', 'alpha-access'], $this->revocationTokenAttempts);
+        self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
+    }
+
+    public function test_lost_revoke_response_never_allows_cancel_or_replay_after_public_metadata_success(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->revokeFailureMode = 'response_lost';
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            self::fail('Response loss must not become confirmed revocation.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+            self::assertFalse($exception->diagnostics['pre_dispatch']);
+        }
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->first();
+        self::assertSame('unknown', $intent->phase);
+        $this->revokeFailureMode = null;
+        app(WpAiBridgeTargetConnectionService::class)->testConnection($target);
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame(1, DB::table('target_credentials')->count());
+        $this->actingAs($this->user('owner', 'all'))->get('/admin/targets/alpha')
+            ->assertOk()->assertSee('WordPress-side recovery for uncertain revocation')
+            ->assertDontSee('Cancel pending disconnect')
+            ->assertSee('Public metadata verified')
+            ->assertSee('Blocked: the existing WordPress credential cannot be used.');
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->cancelNeverSentDisconnect(
+                $target, (string) $intent->id,
+                static function (): void {
+                    self::fail('Invalid cancel attempted remote verification.');
+                },
+                static function (): void {
+                    self::fail('Invalid cancel wrote audit.');
+                },
+            );
+            self::fail('Unknown revocation was cancelled.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('cancel_not_safe', $exception->reason);
+        }
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target, (string) $intent->id);
+            self::fail('Unknown revoke was replayed.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('revocation_uncertain', $exception->reason);
+        }
+        self::assertSame(['alpha-refresh'], $this->revocationTokenAttempts);
+    }
+
+    public function test_concurrent_disconnect_is_rejected_before_duplicate_remote_request(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->tryConcurrentRevoke = true;
+        app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+        self::assertTrue($this->concurrentRevokeBlocked);
+        self::assertSame(['alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
+        self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
+    }
+
+    public function test_owner_cancel_requires_authenticated_catalog_and_audits_only_verified_success(): void
+    {
+        $target = $this->target('alpha');
+        $owner = $this->user('owner', 'all');
+        $this->pair($target);
+        $this->revokeFailureMode = 'pre_dispatch';
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            self::fail('Expected refusal before remote dispatch.');
+        } catch (WpAiBridgeTargetConnectionException) {
+        }
+        $id = (string) DB::table('wp_ai_bridge_revocation_intents')->value('id');
+        $this->revokeFailureMode = null;
+        $this->allowProtectedCatalogProbe = true;
+        $this->rejectProtectedCatalogProbe = true;
+        $payload = [
+            'intent_id' => $id,
+            'confirm_target_id' => 'alpha',
+            'current_password' => 'CorrectHorse!234',
+        ];
+
+        $this->actingAs($owner)->post('/admin/targets/alpha/cancel-disconnect', $payload)
+            ->assertSessionHasErrors('target')->assertSessionHas('diagnostic_code', 'cancel_verification_failed');
+        self::assertSame('retryable', DB::table('wp_ai_bridge_revocation_intents')->value('phase'));
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame(1, DB::table('target_credentials')->count());
+
+        $this->rejectProtectedCatalogProbe = false;
+        $this->post('/admin/targets/alpha/cancel-disconnect', $payload)
+            ->assertRedirect('/admin/targets/alpha')->assertSessionHas('status');
+        self::assertSame(1, $this->catalogProbeCalls);
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertNull($target->last_error_code);
+        self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
+        self::assertSame(1, DB::table('target_credentials')->count());
+        $this->assertDatabaseHas('activity_events', [
+            'target_id' => 'alpha', 'operation' => 'wordpress-disconnect-cancel-verified',
+            'outcome' => 'success',
+        ]);
+        self::assertSame(['alpha-refresh'], $this->revocationTokenAttempts);
+    }
+
+    public function test_disconnect_recovery_rejects_operator_stale_intent_wrong_target_and_password(): void
+    {
+        $alpha = $this->target('alpha');
+        $beta = $this->target('beta');
+        $this->pair($alpha);
+        $this->pair($beta);
+        $this->revokeFailureMode = 'pre_dispatch';
+        foreach ([$alpha, $beta] as $target) {
+            try {
+                app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            } catch (WpAiBridgeTargetConnectionException) {
+            }
+        }
+        $alphaId = (string) DB::table('wp_ai_bridge_revocation_intents')
+            ->where('target_record_id', $alpha->getKey())->value('id');
+        $payload = [
+            'intent_id' => $alphaId,
+            'confirm_target_id' => 'alpha',
+            'current_password' => 'CorrectHorse!234',
+        ];
+
+        $this->actingAs($this->user('operator', 'all'))
+            ->post('/admin/targets/alpha/cancel-disconnect', $payload)->assertForbidden();
+        $this->post('/admin/targets/alpha/reconcile-disconnect', [
+            ...$payload, 'wordpress_client_revoked' => 'yes', 'other_clients_affected' => 'yes',
+        ])->assertForbidden();
+        $this->actingAs($this->user('owner', 'all'))
+            ->post('/admin/targets/alpha/cancel-disconnect',
+                [...$payload, 'current_password' => 'incorrect'])->assertSessionHasErrors('current_password');
+        $this->post('/admin/targets/alpha/cancel-disconnect',
+            [...$payload, 'confirm_target_id' => 'beta'])->assertSessionHasErrors('confirm_target_id');
+        $this->post('/admin/targets/alpha/cancel-disconnect',
+            [...$payload, 'intent_id' => (string) Str::ulid()])->assertSessionHasErrors('target');
+        $this->post('/admin/targets/beta/finish-disconnect', ['intent_id' => $alphaId])
+            ->assertSessionHasErrors('target');
+        self::assertSame(2, DB::table('wp_ai_bridge_revocation_intents')->count());
+        self::assertSame(2, DB::table('target_credentials')->count());
+        self::assertSame(['alpha-refresh', 'beta-refresh'], $this->revocationTokenAttempts);
+    }
+
+    public function test_pre_upgrade_disconnect_intent_does_not_inherit_replay_authorization(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $id = (string) Str::ulid();
+        DB::table('wp_ai_bridge_revocation_intents')->insert([
+            'id' => $id, 'target_record_id' => $target->getKey(),
+            'kind' => 'disconnect', 'created_at' => now()->subHour(), 'updated_at' => now()->subHour(),
+        ]);
+        self::assertSame('legacy_unknown', DB::table('wp_ai_bridge_revocation_intents')->value('phase'));
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target, $id);
+            self::fail('Legacy intent was replayed.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('revocation_conflict', $exception->reason);
+        }
+        $this->actingAs($this->user('owner', 'all'))->get('/admin/targets/alpha')
+            ->assertSee('WordPress-side recovery for uncertain revocation')
+            ->assertDontSee('Cancel pending disconnect');
+        self::assertSame([], $this->revocationTokenAttempts);
+    }
+
+    public function test_attestation_waits_for_inflight_settlement_and_rolls_back_on_audit_failure(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->failRevocation = true;
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+        } catch (WpAiBridgeTargetConnectionException) {
+        }
+        $id = (string) DB::table('wp_ai_bridge_revocation_intents')->value('id');
+        $payload = [
+            'intent_id' => $id,
+            'confirm_target_id' => 'alpha',
+            'wordpress_client_revoked' => 'yes',
+            'other_clients_affected' => 'yes',
+            'current_password' => 'CorrectHorse!234',
+        ];
+        $this->actingAs($this->user('owner', 'all'))
+            ->post('/admin/targets/alpha/reconcile-disconnect', $payload)
+            ->assertSessionHasErrors('target')->assertSessionHas('diagnostic_code', 'refresh_settling');
+        self::assertSame(1, DB::table('target_credentials')->count());
+
+        DB::table('wp_ai_bridge_revocation_intents')->where('id', $id)
+            ->update(['updated_at' => now()->subMinutes(3)]);
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->reconcileRevokedDisconnect(
+                $target, $id, static function (): void {
+                    throw new \RuntimeException('Audit storage unavailable');
+                },
+            );
+            self::fail('Failed audit committed local delete.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('Audit storage unavailable', $exception->getMessage());
+        }
+        self::assertSame(1, DB::table('target_credentials')->count());
+        self::assertSame(1, DB::table('wp_ai_bridge_revocation_intents')->count());
+        $this->post('/admin/targets/alpha/reconcile-disconnect', $payload)
+            ->assertRedirect('/admin/targets/alpha')->assertSessionHas('status');
+        $this->assertDatabaseHas('activity_events', [
+            'operation' => 'wordpress-disconnect-remote-revocation-attested',
+            'outcome' => 'operator-attested',
+        ]);
+        self::assertSame(0, DB::table('target_credentials')->count());
+        self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
+    }
+
+    public function test_disconnect_replay_fence_migration_prevents_downgrade_with_unresolved_intents(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        DB::table('wp_ai_bridge_revocation_intents')->insert([
+            'id' => (string) Str::ulid(), 'target_record_id' => $target->getKey(),
+            'kind' => 'disconnect', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $migration = require database_path('migrations/2026_10_13_000000_fence_wordpress_disconnect_recovery.php');
+        try {
+            $migration->down();
+            self::fail('Unsafe schema downgrade passed an unresolved intent.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('Cannot roll back', $exception->getMessage());
+        }
+        self::assertTrue(Schema::hasColumn('wp_ai_bridge_revocation_intents', 'phase'));
+    }
+
+    public function test_db_audit_failure_after_all_remote_acks_preserves_confirmed_intent_without_revoke_replay(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        DB::unprepared('CREATE TRIGGER fail_confirmed BEFORE INSERT ON activity_events '.
+            "WHEN NEW.operation = 'wordpress-disconnect-confirmed' ".
+            "BEGIN SELECT RAISE(ABORT, 'test required audit unavailable'); END");
+        $this->actingAs($this->user('owner', 'all'))
+            ->post('/admin/targets/alpha/disconnect')
+            ->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHas('diagnostic_code', 'operation_unconfirmed');
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->first();
+        self::assertSame('confirmed', $intent->phase);
+        self::assertSame(2, (int) $intent->token_confirmed);
+        self::assertSame(1, DB::table('target_credentials')->count());
+        self::assertSame(['alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
+        $this->get('/admin/targets/alpha')
+            ->assertOk()->assertSee('Finish confirmed disconnect');
+        DB::unprepared('DROP TRIGGER fail_confirmed');
+        $this->post('/admin/targets/alpha/finish-disconnect', ['intent_id' => $intent->id])
+            ->assertRedirect('/admin/targets/alpha')->assertSessionHas('status');
+        self::assertSame(['alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
+        self::assertSame(0, DB::table('target_credentials')->count());
+        self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
+        $this->assertDatabaseHas('activity_events', [
+            'operation' => 'wordpress-disconnect-confirmed', 'outcome' => 'success',
+        ]);
+    }
+
+    public function test_failed_required_intent_audit_never_dispatches_remote_revocation(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        DB::unprepared('CREATE TRIGGER fail_intent BEFORE INSERT ON activity_events '.
+            "WHEN NEW.operation = 'wordpress-disconnect-intent' ".
+            "BEGIN SELECT RAISE(ABORT, 'test intent audit unavailable'); END");
+        $this->actingAs($this->user('owner', 'all'))
+            ->post('/admin/targets/alpha/disconnect')
+            ->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHas('diagnostic_code', 'operation_unconfirmed');
+        self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
+        self::assertSame(1, DB::table('target_credentials')->count());
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame([], $this->revocationTokenAttempts);
+        DB::unprepared('DROP TRIGGER fail_intent');
+    }
+
     private function expire(Target $target): void
     {
         $vault = app(WpAiBridgeTargetVault::class);
@@ -2237,7 +2639,59 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             ], 200);
         }
         if ($path === '/wp-json/wp-ai-bridge/v1/oauth/revoke') {
+            $this->revocationTokenAttempts[] = (string) ($request->data()['token'] ?? '');
+            if ($this->tryConcurrentRevoke) {
+                $this->tryConcurrentRevoke = false;
+                $target = Target::query()->where('target_id', explode('.', $host)[0])->firstOrFail();
+                $intentId = (string) DB::table('wp_ai_bridge_revocation_intents')
+                    ->where('target_record_id', $target->getKey())->value('id');
+                try {
+                    app(WpAiBridgeTargetConnectionService::class)->disconnect($target, $intentId);
+                    self::fail('Concurrent remote revoke dispatch was permitted.');
+                } catch (WpAiBridgeTargetConnectionException $exception) {
+                    $this->concurrentRevokeBlocked = $exception->reason === 'revocation_uncertain';
+                }
+            }
+            if ($this->revokeFailureMode === 'pre_dispatch'
+                || ($this->revokeFailureMode === 'second_pre_dispatch' && count($this->revocationTokenAttempts) === 2)) {
+                return Http::failedConnection('cURL error 7: connection refused')($request);
+            }
+            if ($this->revokeFailureMode === 'response_lost') {
+                return Create::rejectionFor(new GuzzleNetworkTimeoutException(
+                    'Response timed out after revoke request bytes were sent.',
+                    $request->toPsrRequest(),
+                ));
+            }
+
             return $this->failRevocation ? Http::response(['error' => 'invalid_client'], 400) : Http::response('', 200);
+        }
+        if ($path === '/wp-json/wp-ai-bridge/v1/mcp' && $this->allowProtectedCatalogProbe) {
+            if ($request->method() === 'DELETE') {
+                return Http::response('', 200);
+            }
+            $rpc = $request->data();
+            if ($this->rejectProtectedCatalogProbe) {
+                return Http::response(['error' => 'invalid_token'], 401);
+            }
+            if (($rpc['method'] ?? null) === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0', 'id' => 1,
+                    'result' => ['protocolVersion' => '2025-11-25', 'capabilities' => []],
+                ], 200, ['Mcp-Session-Id' => 'verified-test-session']);
+            }
+            if (($rpc['method'] ?? null) === 'tools/call'
+                && ($rpc['params']['arguments']['ability_name'] ?? null) === 'wp-ai-bridge/abilities-read'
+                && $request->hasHeader('Authorization', 'Bearer '.explode('.', $host)[0].'-access')) {
+                $this->catalogProbeCalls++;
+
+                return Http::response([
+                    'jsonrpc' => '2.0', 'id' => 2,
+                    'result' => ['structuredContent' => ['success' => true,
+                        'data' => ['items' => [['name' => 'wp-ai-bridge/test']]]]],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'unrecognized_rpc'], 400);
         }
 
         return Http::response(['error' => 'missing'], 404);

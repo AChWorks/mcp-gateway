@@ -15,6 +15,8 @@ final class TargetTransitionMigrationTest extends TestCase
 
     private const NETWORK_TIMEOUT_MIGRATION = '2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php';
 
+    private const RECOVERY_FENCE_MIGRATION = '2026_10_13_000000_fence_wordpress_disconnect_recovery.php';
+
     private bool $rebuildMariaDbTestSchema = false;
 
     protected function setUp(): void
@@ -72,6 +74,12 @@ final class TargetTransitionMigrationTest extends TestCase
         self::assertTrue(Schema::hasColumn('activity_events', 'connector_type_snapshot'));
         self::assertFalse(Schema::hasColumn('targets', 'mcp_resource_url'));
         self::assertFalse(Schema::hasColumn('targets', 'base_url_hash'));
+        // The replay-safety extension is only legal AFTER the breaking Target
+        // transition has created the connector tables. Historical pre-Target
+        // fixtures must never try to apply it before that point.
+        (require database_path('migrations/'.self::RECOVERY_FENCE_MIGRATION))->up();
+        self::assertTrue(Schema::hasColumn('wp_ai_bridge_revocation_intents', 'phase'));
+        self::assertTrue(Schema::hasColumn('wp_ai_bridge_target_configs', 'metadata_reachable'));
     }
 
     public function test_live_target_data_must_have_explicit_reset_and_database_backup_acknowledgment_before_any_ddl(): void
@@ -270,7 +278,7 @@ final class TargetTransitionMigrationTest extends TestCase
             // The fixture models a pre-Target database, so neither the
             // breaking Target transition nor its later in-place refresh-
             // intent/network-settings extension exists at this point.
-            if (in_array(basename($file), [self::MIGRATION, self::NETWORK_TIMEOUT_MIGRATION], true)) {
+            if (in_array(basename($file), [self::MIGRATION, self::NETWORK_TIMEOUT_MIGRATION, self::RECOVERY_FENCE_MIGRATION], true)) {
                 continue;
             }
             (require $file)->up();

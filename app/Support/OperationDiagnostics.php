@@ -75,6 +75,9 @@ final class OperationDiagnostics
             'revocation_pending', 'disconnect_pending' => __('WordPress credential revocation has not been confirmed. The existing credential remains blocked, not forgotten.'),
             'revocation_failed' => __('WordPress did not confirm the OAuth credential revocation.'),
             'revocation_conflict' => __('The credential or revocation state changed while the operation was running.'),
+            'revocation_uncertain' => __('A previous WordPress token revoke may have reached the server; no safe replay or cancellation proof exists.'),
+            'cancel_not_safe', 'cancel_verification_failed', 'cancel_verification_unavailable' => __('The old WordPress authorization has not been independently verified and the pending disconnect remains in force.'),
+            'operation_unconfirmed' => __('Gateway could not confirm durable completion. The remote operation may already have executed.'),
             'refresh_unavailable' => __('WordPress credential renewal is temporarily unavailable. Remote authorization has not necessarily been lost.'),
             'refresh_ambiguous', 'refresh_pending' => __('The outcome of a remote token rotation is uncertain; automatic replay is unsafe.'),
             'credential_unavailable' => __('The stored credential could not be opened with the current Gateway encryption configuration.'),
@@ -97,12 +100,14 @@ final class OperationDiagnostics
     public static function nextStep(string $code): string
     {
         return match ($code) {
-            'network_failure' => __('From the actual Gateway host, check public DNS (A/AAAA), outbound TCP 443, TLS handshake, WordPress firewall/WAF and HTTPS request timeout. Compare the log failure stage; do not assume geographic blocking without host evidence.'),
+            'network_failure' => __('Check the failure stage and the Owner Operations → Outbound DNS compatibility preflight. On OpenLiteSpeed LSAPI, a VHost php_admin_value open_basedir may block /etc/resolv.conf or /etc/hosts even if WordPress is healthy. Otherwise check public A/AAAA DNS, outbound TCP 443, TLS, WAF and timeout. Never disable SSRF/TLS protections.'),
             'tls_failure' => __('Check certificate validity, hostname/SNI and full certificate chain from the Gateway host. Do not disable TLS verification.'),
             'unsafe_target' => __('Use a public HTTPS origin and review its DNS records and the Gateway outbound policy. Do not bypass SSRF protections.'),
             'missing_bridge' => __('Check that WP AI Bridge is installed, active and exposes its well-known OAuth metadata routes.'),
             'incompatible_metadata' => __('Compare the WordPress Bridge version, advertised OAuth endpoints and exact issuer/resource metadata.'),
-            'revocation_pending', 'disconnect_pending', 'revocation_failed' => __('Do not erase local credentials or retry blindly. Confirm WordPress reachability and retry safe remote revocation; preserve the pending state until revocation is proven.'),
+            'revocation_pending', 'disconnect_pending', 'revocation_failed', 'revocation_uncertain' => __('Open Target Details → Connection and recovery. Resume only a step explicitly marked proven-not-sent. For unknown results, the Owner must remove the Gateway client approval in WordPress and complete attested reconciliation. A green Metadata check does not change this.'),
+            'cancel_not_safe', 'cancel_verification_failed', 'cancel_verification_unavailable' => __('Do not assume Cancel succeeded. The Owner can finish a proven-not-sent revoke or independently reconcile the authorization at WordPress.'),
+            'operation_unconfirmed' => __('Reload Target Details to inspect the durable intent phase and use only the action offered there. Do not blindly resubmit remote operations.'),
             'revocation_conflict' => __('Reload current Target details and reconcile the existing pending operation before another attempt.'),
             'refresh_unavailable' => __('Check the Gateway signing configuration and remote HTTPS reachability, then retry after the defined backoff.'),
             'refresh_ambiguous', 'refresh_pending' => __('Do not rotate the old token again. Follow the documented Owner-only remote-revocation and recovery procedure.'),

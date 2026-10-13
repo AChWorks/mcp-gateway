@@ -18,6 +18,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
+use App\Support\TargetRecoveryPresentation;
 use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -46,8 +47,30 @@ final class TargetController extends Controller
         $search = $this->trimmed($validated['search'] ?? null);
         $state = $this->trimmed($validated['connection_state'] ?? null);
 
+        $pageData = $inventory->adminPage($user, $page, $search, $state);
+        $wpIds = array_map(static fn (Target $target): string => (string) $target->getKey(),
+            array_filter($pageData['items'], static fn (Target $target): bool => $target->connector_type === 'wp_ai_bridge'));
+        $revokeById = $wpIds === [] ? collect() : DB::table('wp_ai_bridge_revocation_intents')
+            ->whereIn('target_record_id', $wpIds)->get()->keyBy('target_record_id');
+        $refreshIds = $wpIds === [] ? [] : DB::table('wp_ai_bridge_refresh_intents')
+            ->whereIn('target_record_id', $wpIds)->pluck('target_record_id')->all();
+        $configById = $wpIds === [] ? collect() : DB::table('wp_ai_bridge_target_configs')
+            ->whereIn('target_record_id', $wpIds)
+            ->get(['target_record_id', 'metadata_checked_at', 'metadata_reachable'])
+            ->keyBy('target_record_id');
+        $recoveries = [];
+        foreach ($pageData['items'] as $item) {
+            $recoveries[$item->target_id] = TargetRecoveryPresentation::describe(
+                $item, $revokeById->get($item->getKey()),
+                in_array($item->getKey(), $refreshIds, true),
+                false,
+                $configById->get($item->getKey()),
+            );
+        }
+
         return view('admin.targets.index', [
-            'inventory' => $inventory->adminPage($user, $page, $search, $state),
+            'inventory' => $pageData,
+            'recoveries' => $recoveries,
             'filters' => ['search' => $search, 'connection_state' => $state],
             'connectionStates' => TargetConnectionState::cases(),
             'baseQuery' => array_filter([
@@ -161,10 +184,20 @@ final class TargetController extends Controller
             'sshHasCredential' => false,
             'hasCredential' => false,
             'revocationPending' => false,
+            'revocationIntent' => null,
             'refreshIntent' => null,
             'refreshPending' => false,
             'canRemoveSafely' => $canRemoveSafely,
-            ...($adapter?->adminDetails($target) ?? []),
+            ...($details = $adapter?->adminDetails($target) ?? []),
+            'recovery' => TargetRecoveryPresentation::describe(
+                $target,
+                $details['revocationIntent'] ?? null,
+                $details['refreshPending'] ?? false,
+                $details['hasCredential'] ?? false,
+                $details['wpConfig'] ?? null,
+                $details['credentialMetadata'] ?? null,
+                $details['oauthFlowPending'] ?? false,
+            ),
         ]);
     }
 

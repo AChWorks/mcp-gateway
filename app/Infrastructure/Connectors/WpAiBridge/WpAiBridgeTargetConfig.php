@@ -21,6 +21,8 @@ final class WpAiBridgeTargetConfig extends Model
         'oauth_authorization_url',
         'oauth_token_url',
         'oauth_revocation_url',
+        'metadata_checked_at',
+        'metadata_reachable',
     ];
 
     /** @return BelongsTo<Target, $this> */

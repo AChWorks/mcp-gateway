@@ -52,6 +52,25 @@ final readonly class WpAiBridgeMcpClient
         return $result;
     }
 
+    /**
+     * Probe the CURRENT stored access bearer against the protected WordPress
+     * MCP catalog without invoking credential refresh or generation rotation.
+     * Metadata reachability alone is never accepted as authorization proof.
+     *
+     * @param  array{resource_url:string,access_token:string}  $routing
+     */
+    public function verifyExistingAuthorization(array $routing, string $correlationId): void
+    {
+        $catalog = $this->callAbilityOnRouting(
+            $routing, self::CATALOG_ABILITY,
+            ['action' => 'list', 'page' => 1, 'per_page' => 1],
+            false, $correlationId,
+        );
+        if (! is_array($catalog) || ! is_array($catalog['items'] ?? null)) {
+            throw new WpAiBridgeMcpException('protocol_error', 'Authenticated WordPress catalog confirmation is invalid.');
+        }
+    }
+
     public function classifyAbility(
         Target $target,
         string $ability,
