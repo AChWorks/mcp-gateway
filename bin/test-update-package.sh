@@ -222,9 +222,11 @@ if [[ "$old_version" == "1.2.1" ]]; then
   echo "Seeded actual published v1.2.1 WordPress connection, Target scope/group, ChatGPT OAuth grant/access/refresh and unrelated identity/Activity."
 fi
 
-# Published v2.0.x and distributed v2.1.0/v2.1.1 test-candidate upgrades
-# must preserve Target-era identities, group ACLs, credentials and OAuth grants.
-if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[01])$ ]]; then
+# Published v2.0.x, v2.1.2 and distributed v2.1.0/v2.1.1 test-candidate
+# upgrades must preserve Target identities, ACLs, credentials and OAuth grants.
+# The published v2.1.2 case also seeds an unresolved legacy revoke, which
+# MUST NOT gain new dispatch/cancellation proof from a schema migration.
+if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[0-2])$ ]]; then
   (
     cd "$target"
     php -r '
@@ -239,9 +241,11 @@ if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[01])$ ]]; then
         "password" => "CorrectHorse!234", "role" => "operator",
         "target_scope_mode" => "selected", "access_enabled" => true,
       ]);
+      $isPublished212 = trim((string) file_get_contents("VERSION")) === "2.1.2";
       $existing = App\Domain\Targets\Target::query()->create([
         "target_id" => "v200-wordpress", "display_name" => "Existing WordPress",
-        "connector_type" => "wp_ai_bridge", "connection_state" => "disconnected",
+        "connector_type" => "wp_ai_bridge",
+        "connection_state" => $isPublished212 ? "error" : "disconnected",
       ]);
       $group = App\Domain\Targets\TargetGroup::query()->create(["name" => "Existing v2 group"]);
       $credential = App\Domain\Targets\TargetCredential::query()->create([
@@ -250,6 +254,34 @@ if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[01])$ ]]; then
         "encrypted_payload" => Illuminate\Support\Facades\Crypt::encryptString("v200-test-credential"),
       ]);
       $now = now();
+      if ($isPublished212) {
+        $origin = "https://v212-recovery.example.test";
+        $db::table("wp_ai_bridge_target_configs")->insert([
+          "id" => (string) Illuminate\Support\Str::ulid(),
+          "target_record_id" => $existing->getKey(),
+          "base_url" => $origin, "base_url_hash" => hash("sha256", $origin),
+          "mcp_resource_url" => $origin."/wp-json/mcp",
+          "oauth_issuer_url" => $origin,
+          "oauth_authorization_url" => $origin."/authorize",
+          "oauth_token_url" => $origin."/token",
+          "oauth_revocation_url" => $origin."/revoke",
+          "created_at" => $now, "updated_at" => $now,
+        ]);
+        $db::table("wp_ai_bridge_credential_metadata")->insert([
+          "credential_id" => $credential->getKey(),
+          "client_id" => "pre-upgrade-client",
+          "resource_url" => $origin."/wp-json/mcp",
+          "binding_hash" => hash("sha256", "v212-binding"),
+          "generation" => 5,
+          "access_expires_at" => $now->copy()->addHour(),
+        ]);
+        $db::table("wp_ai_bridge_revocation_intents")->insert([
+          "id" => (string) Illuminate\Support\Str::ulid(),
+          "target_record_id" => $existing->getKey(),
+          "kind" => "disconnect",
+          "created_at" => $now, "updated_at" => $now,
+        ]);
+      }
       $db::table("target_group_targets")->insert([
         "target_group_id" => $group->getKey(), "target_record_id" => $existing->getKey(),
         "created_at" => $now, "updated_at" => $now,
@@ -291,7 +323,7 @@ if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[01])$ ]]; then
       }
     '
   )
-  echo "Seeded Target-era $old_version Target, credential, Target Group, user rules, denials and ChatGPT authorization for upgrade preservation."
+  echo "Seeded Target-era $old_version Target, credential, Target Group, user rules, denials and ChatGPT grant; published v2.1.2 also holds a legacy unknown revocation and metadata."
 fi
 
 candidate="$tmp/candidate"
@@ -737,10 +769,10 @@ if [[ "$old_version" == "1.2.1" ]]; then
   )
   echo "Seeded v1.2.1 reset boundary: old WordPress/ChatGPT credentials removed; users/roles/global denies and unrelated Activity preserved."
 fi
-if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[01])$ ]]; then
+if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[0-2])$ ]]; then
   (
     cd "$target"
-    php -r '
+    OLD_RELEASE_VERSION="$old_version" php -r '
       require "vendor/autoload.php";
       $app = require "bootstrap/app.php";
       $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
@@ -769,6 +801,34 @@ if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[01])$ ]]; then
         $checks["encrypted_credential_preserved"] = is_string($encrypted)
           && Illuminate\Support\Facades\Crypt::decryptString($encrypted) === "v200-test-credential";
       }
+      if (getenv("OLD_RELEASE_VERSION") === "2.1.2") {
+        $config = $target !== null ? $db::table("wp_ai_bridge_target_configs")
+          ->where("target_record_id", $target->id)->first() : null;
+        $intent = $target !== null ? $db::table("wp_ai_bridge_revocation_intents")
+          ->where("target_record_id", $target->id)->first() : null;
+        $credential = $target !== null ? $db::table("target_credentials")
+          ->where("target_record_id", $target->id)->where("purpose", "wordpress_oauth")->first() : null;
+        $metadata = $credential !== null ? $db::table("wp_ai_bridge_credential_metadata")
+          ->where("credential_id", $credential->id)->first() : null;
+        $checks["v212_origin_preserved"] = $config !== null
+          && $config->base_url === "https://v212-recovery.example.test";
+        $checks["v212_new_metadata_evidence_unknown"] = $config !== null
+          && $config->metadata_checked_at === null && $config->metadata_reachable === null;
+        $checks["v212_credential_generation_preserved"] = $metadata !== null
+          && (int) $metadata->generation === 5 && $metadata->client_id === "pre-upgrade-client";
+        $checks["v212_existing_revocation_fenced"] = $intent !== null
+          && $intent->kind === "disconnect" && $intent->phase === "legacy_unknown"
+          && $intent->credential_id === null && $intent->generation === null
+          && $intent->token_total === null && (int) $intent->token_confirmed === 0;
+        $checks["v212_pending_revocation_blocks_rollback"] = false;
+        $migration = require "database/migrations/2026_10_13_000000_fence_wordpress_disconnect_recovery.php";
+        try {
+          $migration->down();
+        } catch (RuntimeException $e) {
+          $checks["v212_pending_revocation_blocks_rollback"] =
+            str_contains($e->getMessage(), "Cannot roll back WordPress disconnect fencing");
+        }
+      }
       $failed = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
       if ($failed !== []) {
         fwrite(STDERR, "Target-era upgrade state preservation failed: ".implode(", ", $failed)."\n");
@@ -776,7 +836,7 @@ if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[01])$ ]]; then
       }
     '
   )
-  echo "Target-era $old_version upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant remain intact."
+  echo "Target-era $old_version upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant intact; published 2.1.2 also proves legacy revocation fencing, metadata unknown and rollback guard."
 fi
 [[ ! -e "$target/app/obsolete-update-test.txt" ]] || { echo "Stale managed file survived update." >&2; exit 1; }
 [[ "$(sha256sum "$target/.env" | awk '{print $1}')" == "$env_hash_before" ]] || { echo ".env changed during update." >&2; exit 1; }
