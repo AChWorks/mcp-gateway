@@ -665,7 +665,10 @@ a:focus-visible {
     margin: 0;
 }
 
+/* Keep off-screen screen-reader labels inside the horizontal scroll boundary:
+   without a positioned ancestor their absolute boxes can enlarge the document. */
 .table-wrap {
+    position: relative;
     width: 100%;
     overflow-x: auto;
     border: 1px solid var(--ui-border);

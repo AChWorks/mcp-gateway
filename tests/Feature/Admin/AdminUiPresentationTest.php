@@ -57,10 +57,17 @@ final class AdminUiPresentationTest extends TestCase
             'display_name' => $name,
             'connector_type' => 'wp_ai_bridge',
         ]);
-        $this->actingAs($this->owner())
+        $owner = $this->owner();
+        $this->actingAs($owner)
             ->get('/admin/targets/long-heading')
             ->assertOk()
             ->assertSee('<h1>'.$name.'</h1>', false);
+        $this->actingAs($owner)
+            ->get('/admin/targets')
+            ->assertOk()
+            ->assertSee($name)
+            ->assertSee('<span class="sr-only">Actions</span>', false)
+            ->assertSee('class="table-wrap"', false);
 
         $css = file_get_contents(public_path('css/admin.css'));
         self::assertIsString($css);
@@ -70,6 +77,10 @@ final class AdminUiPresentationTest extends TestCase
         );
         self::assertMatchesRegularExpression(
             '/h1,\s*h2\s*\{[^}]*overflow-wrap:\s*anywhere;/s',
+            $css,
+        );
+        self::assertMatchesRegularExpression(
+            '/\.table-wrap\s*\{[^}]*position:\s*relative;[^}]*overflow-x:\s*auto;/s',
             $css,
         );
         self::assertMatchesRegularExpression('/th,\s*td\s*\{[^}]*text-align:\s*start;/s', $css);
