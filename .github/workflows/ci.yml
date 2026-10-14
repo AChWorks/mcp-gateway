@@ -72,6 +72,9 @@ jobs:
       - name: Verify published-release upgrade coverage is consistent
         run: python3 bin/test-released-baseline-parity.py
 
+      - name: Verify fail-closed manual publication guards
+        run: python3 bin/test_release_publication_guard.py
+
       - name: Validate release-note identity and rendered GitHub body
         shell: bash
         run: bash bin/test-github-release-notes.sh

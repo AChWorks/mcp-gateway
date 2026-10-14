@@ -1,6 +1,6 @@
 # MCP Gateway v2.2.1
 
-**Corrective source candidate `2.2.1-rc.5` — NOT PUBLISHED.**
+**Corrective source candidate `2.2.1-rc.7` — NOT PUBLISHED.**
 The public release remains `v2.2.0` until independently reviewed,
 exact-head accepted, Owner-approved stable integration and manual publication.
 Neither this VERSION/notes change nor green CI authorizes production rollout.
@@ -73,15 +73,33 @@ vendor metadata** from the official GitHub artifact; it is not claimed to be
 byte-identical to the official CI ZIP. No operator-host deployment, live
 WordPress Target/OAuth action or production readiness is inferred.
 
-The rc.6 corrective delta aligns the **manual stable release workflow**
-with the same **nine published upgrade baselines** already validated by the
-Update Package workflow. It also adds an automated cross-workflow parity
-check against the preceding stable release listed in these notes to stop
-future release-only omissions. The rc.6 VERSION/notes/CI change requires
-its own exact-HEAD checks and an author-separated delta review. Earlier
-runtime browser evidence remains scoped to the unchanged rc.5 application
-implementation until separately reconfirmed for rc.6; neither prerelease
-has yet been merged or published as a stable release.
+The rc.6 candidate at `60635ebbad4bc7bb8efc6fe66f9d47b058fc0ff0`
+aligned the manual stable Release workflow's nine historical baseline
+upgrade/download/integrity loops with the Update Package CI, and introduced
+a parity regression check. All rc.6 Quality, Update Package and Configuration
+Reference workflows succeeded; a separate disposable OpenLiteSpeed/LSAPI/
+Chromium test executed a real authenticated `v2.2.0 -> 2.2.1-rc.6`
+browser upgrade, finishing with HTTP 200, retained secrets/host files and
+normal ready endpoints. Earlier interruption/multi-tab/uncertain-response
+and Owner-local recovery exercises used the **byte-identical rc.5 PHP
+updater implementation**, not distinct rc.6 executions. See [rc.6 evidence](https://github.com/AChWorks/mcp-gateway/issues/135#issuecomment-6171573743).
+
+The fresh independent rc.6 reviewer confirmed the application runtime and
+these test boundaries but reported REQUIRED corrections to the stale
+release-note candidate identity and unsafe success of pre-existing GitHub
+Releases, plus missing pre-/post-publication immutable-state verification.
+
+This unique **rc.7** source candidate fixes both publication-readiness issues:
+the first release-note candidate identity matches VERSION, and manual stable
+publication now refuses any pre-existing tag/Release, checks that approved
+main remains unchanged immediately before creation, and verifies the
+resulting stable tag, metadata, four downloaded ZIP/checksum assets and exact
+approved bytes after creation. Isolated positive/negative tests cover
+preexisting releases/tags, stale approved SHA, invalid publication metadata,
+partial/tampered assets and successful exact byte verification. These
+changes are to release automation and documentation, **not the PHP updater**.
+RC.7 still requires its own exact-head CI and fresh independent review;
+this source change is not a public release or authorization to deploy.
 
 New stable Release, integration and actual operator-host updates require their
 own explicit Owner authorization. See Issue #135, PR #178 and
