@@ -844,7 +844,10 @@ php -r '
 # The first phase is usable with JavaScript disabled, while modern browsers
 # should initiate exactly one asynchronous finish request with visible status.
 grep -F 'id="continue-update"' "$tmp/stage.html" >/dev/null || { echo "Missing final-step form." >&2; exit 1; }
-grep -F 'fetch(form.action' "$tmp/stage.html" >/dev/null || { echo "Automatic final-step handoff is absent." >&2; exit 1; }
+grep -F "fetch('/update/'" "$tmp/stage.html" >/dev/null || { echo "Automatic final-step handoff must use an explicit same-origin URL; form.action is shadowed by the hidden action input." >&2; exit 1; }
+if grep -F 'fetch(form.action' "$tmp/stage.html" >/dev/null; then
+  echo "Automatic handoff still uses a DOM-clobbered form.action (action input)." >&2; exit 1
+fi
 grep -F 'id="manual-continue"' "$tmp/stage.html" >/dev/null || { echo "Script-disabled continuation fallback is absent." >&2; exit 1; }
 grep -F 'If the Continue update button is still visible after this page loads' "$tmp/stage.html" >/dev/null || { echo "Finalizing page lacks actionable manual fallback instructions." >&2; exit 1; }
 grep -F 'Ready to begin the final database and health checks' "$tmp/stage.html" >/dev/null || { echo "Redirected resume page misleadingly claims checks have started before automatic continuation." >&2; exit 1; }

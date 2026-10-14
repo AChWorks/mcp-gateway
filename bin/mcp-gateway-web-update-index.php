@@ -109,7 +109,9 @@ function updaterAutoFinishScript(): string
     const progress = document.getElementById('progress-message');
     if (progress) progress.textContent =
         'Final database and health checks have been requested. Waiting for the server response; do not refresh or start another update.';
-    fetch(form.action, {method: 'POST', body: new FormData(form),
+    // The form contains an input named action; form.action would resolve to
+    // that HTMLInputElement, not the URL (named-control shadowing).
+    fetch('/update/', {method: 'POST', body: new FormData(form),
         credentials: 'same-origin', cache: 'no-store', redirect: 'error'})
         .then(async response => {
             const html = await response.text();
