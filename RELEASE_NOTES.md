@@ -1,13 +1,13 @@
 # MCP Gateway v2.2.1
 
-**Corrective source candidate `2.2.1-rc.4` — NOT PUBLISHED.**
+**Corrective source candidate `2.2.1-rc.5` — NOT PUBLISHED.**
 The public release remains `v2.2.0` until independently reviewed,
 exact-head accepted, Owner-approved stable integration and manual publication.
 Neither this VERSION/notes change nor green CI authorizes production rollout.
 
 ## Browser update and verified recovery (Issue #135)
 
-This rc.4 also remediates the four REQUIRED findings of the fresh
+The rc.4 source baseline remediated the four REQUIRED findings of the fresh
 author-separated rc.3 review: malformed/absent continuation TTL now fails
 closed in GET and Finish; the updater journals its migration/recovery boundary
 using a same-directory atomic rename, file fsync and directory fsync before
@@ -53,13 +53,28 @@ No *new* database schema migration is introduced by this correction over
 backup, original code backup, `.env`, APP_KEY and signing credentials.
 No rollback of possibly started migrations is automated.
 
-Disposable source E2E and OpenLiteSpeed 1.8.4 + LSAPI PHP 8.4 + MariaDB
-browser acceptance exercise staged files, one-time continuation,
-pre-migration restoration, actual HTTP readiness and retained secrets.
-They are **not** proof of production aaPanel availability or authenticated
-`ut-alumni-bonyadut` Target/OAuth acceptance. New stable Release,
-integration and production updates each require their own explicit
-Owner authorization. See Issue #135, PR #178, and `docs/DEPLOYMENT.md`.
+**Exact-candidate acceptance provenance (source versus hosting):**
+The rc.4 source/PHP 8.4 and disposable MariaDB acceptance exercised published
+`v2.1.2` and `v2.2.0` upgrade baselines, browser continuation failure
+guards, verified backups, code-only recovery and retention of private state.
+The independent rc.4 review found that the authoritative GitHub Update Package
+workflow did not include public `v2.2.0`; this rc.5 workflow adds `v2.2.0`
+to the published-artifact checksum, browser upgrade and backup-integrity gates.
+A green rc.5 exact-HEAD run is required to claim its completion.
+
+**Earlier OpenLiteSpeed 1.8.4, LSAPI PHP 8.4 and real Chromium exercises were
+on a PRE-remediation runtime, not the rc.4/rc.5 executable.** They are
+historical diagnostic evidence only. Until exact rc.5 OpenLiteSpeed/LSAPI/
+MariaDB/real-Chromium acceptance is performed and bound to the candidate
+artifact identity in Issue #135, **that hosting-specific gate remains
+UNVERIFIED**. Do not describe historic browser results or a source-only
+HTTP fixture as rc.5 hosting/browser acceptance. Passing any isolated
+candidate test cannot prove production aaPanel reachability or authenticated
+`ut-alumni-bonyadut` Target/OAuth health.
+
+New stable Release, integration and actual operator-host updates require their
+own explicit Owner authorization. See Issue #135, PR #178 and
+`docs/DEPLOYMENT.md`.
 
 ---
 
