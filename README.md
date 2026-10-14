@@ -1,9 +1,27 @@
 
 # MCP Gateway
 
-MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The public **v2.1.2** release contains both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
+MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The currently published stable line **v2.2.0** includes both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The browser-updater correction is a separately gated `2.2.1-rc.2` source candidate, **not** a published Release. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
 
 A Target has a stable `target_id`, explicit Gateway user/client/Target access checks and connector-owned credentials. For WordPress, the authenticated WordPress principal and WP AI Bridge access groups remain authoritative; Gateway does not widen their permissions.
+
+## Browser updater reliability and recovery (corrective source candidate)
+
+The source-only `2.2.1-rc.2` candidate repairs the authenticated
+Stage → 303 GET → Finish browser handoff and the named-input
+`form.action` collision. The candidate normalizes only temporary public
+updater permissions so the OpenLiteSpeed front-end can read the entry even
+when it runs under a different Unix identity than LSAPI PHP.
+
+A detached, expired, or missing browser continuation never grants recovery
+authority. An Owner with a local authenticated shell may run the **private**
+`php update/Recover.php --check` as the same unprivileged PHP worker;
+`--recover` is permitted only with an exact valid pre-migration code
+backup, matching migration ledger and no concurrent updater. Keep backups
+and recovery evidence, verify actual HTTP readiness and WordPress Target
+health, and never blindly roll back possibly started database migrations.
+**These candidate actions are not approved for public release or an
+operator host.** See `docs/DEPLOYMENT.md` and Issue #135.
 
 ## Current release highlights
 
@@ -305,7 +323,7 @@ After a successful update, the temporary root `update/` directory, `public/updat
 
 Only the three newest updater-created code backups are retained. Recovery is deliberately state-dependent. If backup creation or its initial integrity check fails **before maintenance mode**, the update aborts before managed application files are changed and no restore is needed. After maintenance begins:
 
-- **Credible backup + another pre-migration failure:** the updater revalidates the backup and attempts automatic restore. If restore completes, updater state is cleared and the previous managed runtime returns to service. If the guarded restore itself cannot complete, migration still does not start; maintenance mode, updater state, and recovery evidence are retained for manual recovery.
+- **Credible backup + another pre-migration failure:** the updater revalidates the backup and attempts automatic code restore. Even when managed files are successfully restored, the state remains retained and HTTP availability **is not yet verified**. An Owner must reconcile runtime readiness with the private recovery procedure. If the guarded restore itself cannot complete, migration still does not start; maintenance, updater state and backups are retained for manual reconciliation.
 - **Recovery backup is rejected when recovery or the final pre-migration check needs it:** database migration does not start and the updater does **not** restore from that rejected backup. Maintenance mode, updater state, and recovery evidence are retained for manual reconciliation. Do not assume the previous runtime was restored; depending on the failure point, the managed tree may be the complete candidate or a partially replaced tree.
 - **Database migration may have started:** the updater intentionally does **not** attempt a blind code/database rollback. Maintenance mode and recovery evidence are retained until schema/data state is reconciled and a release-specific rollback or roll-forward procedure is chosen.
 

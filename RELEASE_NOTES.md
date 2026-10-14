@@ -1,3 +1,56 @@
+# MCP Gateway v2.2.1
+
+**Corrective source candidate `2.2.1-rc.2` — NOT PUBLISHED.**
+The public release remains `v2.2.0` until independently reviewed,
+exact-head accepted, Owner-approved stable integration and manual publication.
+Neither this VERSION/notes change nor green CI authorizes production rollout.
+
+## Browser update and verified recovery (Issue #135)
+
+- **Deterministic browser handoff:** authenticated Stage finishes with a
+  `303 See Other` redirect to a fresh read-only `GET /update/`, allowing
+  the browser to persist the renewed Secure/HttpOnly one-time cookie before
+  Finish. JavaScript posts to the literal same-origin `/update/` path;
+  it cannot use `form.action`, which is shadowed by the hidden input named
+  `action`. Replayed old Stage POSTs redirect to state rather than
+  misreporting broken administrator authentication.
+- **Safe private Owner recovery:** the installation-bundled
+  `php update/Recover.php --check|--recover` is CLI-only, never a public
+  unauthenticated URL. It requires the real non-root site PHP worker, a
+  verified original code snapshot, matching pre-upgrade migration ledger,
+  completed file staging and an idle update lock. It keeps originals and
+  an additional protected archive and refuses corrupted or missing backup,
+  concurrent restore, partially replaced runtime and any possible
+  database-migration/postflight uncertainty. Only Gateway-managed code
+  may be restored; neither SQL nor Targets/OAuth/keypairs are reset.
+- **Web-worker readiness and file permissions:** the temporary public
+  Updater directory and entry are built with `0755`/`0644` permissions
+  independent of packaging umask, without exposing private staging.
+  Restored Laravel Artisan housekeeping executes as the unprivileged
+  LSAPI PHP worker; non-secret generated manifests remain web-readable
+  while private `config.php` and application secrets remain restricted.
+  Restored HTTP health must pass real GET checks before completion is
+  claimed. A failed readiness retains journal/backup evidence for
+  operator reconciliation.
+
+## Compatibility and delivery boundary
+
+No *new* database schema migration is introduced by this correction over
+`v2.2.0`. An installation still on `v2.1.2` will encounter the existing
+`v2.2.0` migration when updated: retain a separately tested MariaDB
+backup, original code backup, `.env`, APP_KEY and signing credentials.
+No rollback of possibly started migrations is automated.
+
+Disposable source E2E and OpenLiteSpeed 1.8.4 + LSAPI PHP 8.4 + MariaDB
+browser acceptance exercise staged files, one-time continuation,
+pre-migration restoration, actual HTTP readiness and retained secrets.
+They are **not** proof of production aaPanel availability or authenticated
+`ut-alumni-bonyadut` Target/OAuth acceptance. New stable Release,
+integration and production updates each require their own explicit
+Owner authorization. See Issue #135, PR #178, and `docs/DEPLOYMENT.md`.
+
+---
+
 # MCP Gateway v2.2.0
 
 **Stable v2.2.0 promotion source.** This version promotes the independently
