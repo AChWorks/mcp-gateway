@@ -1,6 +1,6 @@
 # Offline Target removal — local-only Owner recovery
 
-**Status:** source-integrated and independently security-reviewed under [Target lifecycle Issue #109](https://github.com/AChWorks/mcp-gateway/issues/109), but **not included in public v2.1.2**. Its availability on an installed Gateway still requires a separately Owner-approved public release and operator upgrade. This is a deliberate irreversible exception to normal connector disconnect, not a DNS/OAuth/network troubleshooting shortcut. Never delete an operator's Target in place without explicit instruction and backup.
+**Version availability:** source-integrated and independently security-reviewed under [Target lifecycle Issue #109](https://github.com/AChWorks/mcp-gateway/issues/109), but **not included in v2.1.2**. Check the approved public Release and exact installed Gateway version before assuming this action is available; publication does not perform an operator upgrade. This is a deliberate irreversible exception to normal connector disconnect, not a DNS/OAuth/network troubleshooting shortcut. Never delete an operator's Target in place without explicit instruction and backup.
 
 ## Two distinct operations
 
@@ -27,4 +27,4 @@ The local-only form is shown only when **normal safe removal is blocked**, only 
 
 **Validation:** in addition to ordinary Target-management regressions, cover a disconnected-but-pending and network-failed WordPress Target with encrypted credential/refresh/revocation/OAuth state, fail-closed password/role/ID/ack refusals, FK cleanup/audit preservation, paused/SSH connector cases, no remote HTTP traffic and rollback when a database deletion fails. Source PHPUnit assertions are not a production host integration test.
 
-**Release boundary:** The source feature does not update an installed `v2.1.2` Gateway or fix the original `dns_lookup` incident. Separate exact-candidate independent security review, Owner merge approval and explicit public-release/operator deployment gates still apply.
+**Release and delivery boundary:** The feature's original source security review and integration are complete, but it is **not in v2.1.2**, and a source merge does not fix the original `dns_lookup` incident on an installed host. Check the exact public Release and the host's installed version before using it: public publication and a separately authorized operator upgrade are distinct actions, neither of which itself revokes remote credentials. Future source changes require fresh exact-candidate independent review and the applicable Owner integration approval.

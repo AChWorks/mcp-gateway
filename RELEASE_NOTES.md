@@ -1,11 +1,13 @@
 # MCP Gateway v2.2.0
 
-**WordPress recovery and Admin reliability release line after public v2.1.2.**
-The 2.2.0-rc.2 build is a **non-public owner-test candidate**: successful
-CI or candidate artifact creation is not a published GitHub Release, an
-operator-host upgrade, or permission to change a production OAuth grant.
-Public v2.2.0 publication requires separate Owner approval of the exact
-reviewed stable main commit and version.
+**Stable v2.2.0 promotion source.** This version promotes the independently
+reviewed v2.2.0-rc.2 WordPress recovery and Admin reliability runtime.
+The promotion changes VERSION and documentation only; application runtime,
+authorization, migration and browser-update behavior are unchanged.
+A GitHub source merge or CI run does not publish a release or install it
+on an operator host. Public stable publication is a separately Owner-approved
+manual action bound to the exact integrated main SHA and VERSION; deployment
+and any live production OAuth/Target operation require separate authorization.
 
 ## Changes since public v2.1.2
 
