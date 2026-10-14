@@ -411,9 +411,9 @@ Do not include access tokens, refresh tokens, authorization codes, client assert
 
 ### Production diagnostics runbook
 
-### Candidate-wide structured diagnostics and safe support references
+### Structured diagnostics and safe support references
 
-On the *unreleased candidate*, operational failures across the Admin panel,
+In public v2.1.2 and later, operational failures across the Admin panel,
 WordPress and Direct SSH Target lifecycle, MCP tool results, optional SSH file
 exchange, OAuth callbacks, and HTTP request handling use bounded machine error
 codes and an actionable explanation rather than only a generic red alert.
@@ -608,14 +608,17 @@ These external references were checked while establishing this baseline. Reposit
 
 V1 production-like readiness evidence was completed under Issue #8 and is preserved in the repository/GitHub history. Future releases must revalidate only deployment assumptions materially changed by that release.
 
-## Owner operational settings — integrated source; release/installation pending (#153)
+## Owner operational settings — available since public v2.1.2 (#153)
 
-After the operational-settings migrations and a separately authorized
-release/update, the Owner-only `/admin/operations` page can edit **four finite
-WordPress downstream resource settings** without editing `.env` or restarting
-PHP workers. Current default values remain the original environment/source
-settings. Leaving a value empty removes its override and restores the
-normalized source setting in the next request/CLI maintenance invocation.
+Public v2.1.2 includes the Owner-only `/admin/operations` page, which can edit
+**four finite WordPress downstream resource settings** without editing `.env`
+or restarting PHP workers. On any particular host, the controls become available
+only after an applicable release is actually installed and its required
+migrations are applied; publication alone never updates an installation.
+
+Current default values remain the original environment/source settings.
+Leaving a value empty removes its override and restores the normalized source
+setting in the next request/CLI maintenance invocation.
 
 | Operational setting | Default source setting | Owner override range |
 | --- | --- | --- |
