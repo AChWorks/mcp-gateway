@@ -2,8 +2,10 @@
 """Fail-closed GitHub stable-release identity guard.
 
 "before" refuses any existing tag or Release; no implicit idempotent success.
+"reserve" creates the approved Git tag *atomically if absent*, then verifies
+its exact target. A competing writer/ambiguous outcome is never auto-retried.
 "after" checks exact published tag, metadata, assets and downloaded bytes.
-A re-run after an uncertain gh release create must reconcile state manually.
+Any partial publication or reserved-only tag requires manual reconciliation.
 """
 from __future__ import annotations
 
@@ -114,6 +116,58 @@ def api_release(tag: str, token: str) -> dict | None:
     return result
 
 
+def create_tag_once(tag: str, approved: str, token: str) -> None:
+    """Atomically create a lightweight GitHub tag, without overwrite/retry.
+
+    The REST Create a Reference endpoint is create-only: if another writer
+    wins the tag name (409/422), no subsequent Release is attempted.
+    """
+    ref = f"refs/tags/{tag}"
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{REPOSITORY}/git/refs",
+        data=json.dumps({"ref": ref, "sha": approved}, separators=(",", ":")).encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            require(response.status == 201, "Uncertain tag reservation response; manual reconciliation required.")
+            body = response.read(128 * 1024)
+    except urllib.error.HTTPError as error:
+        if error.code in (409, 422):
+            raise PublicationStateError(
+                "Atomic tag reservation was rejected or lost a concurrent writer race; "
+                "do not publish or retry; reconcile the existing tag/Release."
+            ) from error
+        raise PublicationStateError(
+            "GitHub tag reservation failed; state may be partial; reconcile without retry."
+        ) from error
+    except (OSError, urllib.error.URLError, TimeoutError) as error:
+        raise PublicationStateError(
+            "GitHub tag reservation outcome unknown; check remote tag/Release manually, "
+            "never auto-retry the create."
+        ) from error
+    try:
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise PublicationStateError(
+            "Tag reservation response invalid after possible creation; reconcile manually."
+        ) from error
+    require(
+        isinstance(data, dict)
+        and data.get("ref") == ref
+        and isinstance(data.get("object"), dict)
+        and data["object"].get("type") == "commit"
+        and data["object"].get("sha") == approved,
+        "Tag creation response not proven to bind the approved commit; reconcile manually.",
+    )
+
+
 def local_assets(version: str) -> dict[str, tuple[Path, str, int]]:
     base = f"mcp-gateway-v{version}.zip"
     update = f"mcp-gateway-update-v{version}.zip"
@@ -157,15 +211,29 @@ def verify_remote_assets(release: dict, tag: str, version: str, repo: str) -> No
 
 
 def execute(phase: str) -> None:
-    require(phase in ("before", "after"), "Expected release guard phase: before | after.")
+    require(phase in ("before", "reserve", "after"), "Expected release guard phase: before | reserve | after.")
     version, approved, repo, token = source_envelope()
     tag = f"v{version}"
     raw, peeled = remote_tag(tag)
     release = api_release(tag, token)
-    if phase == "before":
+    if phase in ("before", "reserve"):
         require(raw is None and peeled is None, "Release tag already exists; reconcile before publication.")
         require(release is None, "Same-tag Release already exists; never silently treat it as published.")
-        print(f"PASS: {tag} has no existing remote tag/Release and main equals approved SHA.")
+        if phase == "before":
+            print(f"PASS: {tag} has no existing remote tag/Release and main equals approved SHA.")
+            return
+
+        # The only tag-creation operation in this workflow. GitHub's POST
+        # /git/refs rejects an existing ref atomically (never updates it).
+        # Do not retry on ambiguous failure: a tag-only reservation is
+        # intentional partial state that requires explicit reconciliation.
+        create_tag_once(tag, approved, token)
+        raw, peeled = remote_tag(tag)
+        require(raw == approved and peeled is None,
+                "Reserved Git tag does not resolve directly to approved SHA; do not publish.")
+        require(api_release(tag, token) is None,
+                "A Release appeared during tag reservation; refuse publication.")
+        print(f"PASS: reserved {tag} exclusively at approved SHA; Release still absent.")
         return
 
     require(raw is not None, "Published release tag is missing.")
@@ -182,7 +250,7 @@ def execute(phase: str) -> None:
 
 def main() -> None:
     try:
-        require(len(sys.argv) == 2, "Usage: release_publication_guard.py before|after")
+        require(len(sys.argv) == 2, "Usage: release_publication_guard.py before|reserve|after")
         execute(sys.argv[1])
     except (PublicationStateError, OSError) as error:
         print(f"Release publication guard FAILED: {error}", file=sys.stderr)

@@ -1,6 +1,6 @@
 # MCP Gateway v2.2.1
 
-**Corrective source candidate `2.2.1-rc.7` — NOT PUBLISHED.**
+**Corrective source candidate `2.2.1-rc.8` — NOT PUBLISHED.**
 The public release remains `v2.2.0` until independently reviewed,
 exact-head accepted, Owner-approved stable integration and manual publication.
 Neither this VERSION/notes change nor green CI authorizes production rollout.
@@ -89,17 +89,37 @@ these test boundaries but reported REQUIRED corrections to the stale
 release-note candidate identity and unsafe success of pre-existing GitHub
 Releases, plus missing pre-/post-publication immutable-state verification.
 
-This unique **rc.7** source candidate fixes both publication-readiness issues:
-the first release-note candidate identity matches VERSION, and manual stable
-publication now refuses any pre-existing tag/Release, checks that approved
-main remains unchanged immediately before creation, and verifies the
-resulting stable tag, metadata, four downloaded ZIP/checksum assets and exact
-approved bytes after creation. Isolated positive/negative tests cover
-preexisting releases/tags, stale approved SHA, invalid publication metadata,
-partial/tampered assets and successful exact byte verification. These
-changes are to release automation and documentation, **not the PHP updater**.
-RC.7 still requires its own exact-head CI and fresh independent review;
-this source change is not a public release or authorization to deploy.
+The **rc.7** candidate at `d9f57337a7f9490909d50ca2ba8069aa9259c393`
+corrected the prerelease identity, rejected pre-existing Releases/Tags,
+rechecked approved source before publication and verified published assets
+and exact downloaded bytes after completion. Its three exact-head CI
+workflows passed and 16 isolated publication-guard tests passed. A fresh
+author-separated rc.7 review found its runtime and these controls sound
+but identified one remaining REQUIRED publication TOCTOU defect: an
+unrelated writer could create the requested tag between the final
+absence check and `gh release create`, which ignores `--target` when a
+matching tag already exists. Post-publication checks would detect but
+not prevent an incorrectly targeted public Release.
+
+This unique **rc.8** candidate closes that mutation boundary by using
+GitHub's create-only Git Reference API to atomically reserve the stable
+tag at the Owner-approved SHA after the final source review/CI/baseline
+checks. A conflicting existing tag (HTTP 409/422) fails before publication,
+including concurrent same-name tag creation; unknown request outcomes
+fail closed without automatic retry. The resulting lightweight tag is
+independently checked against the exact approved SHA before proceeding,
+and `gh release create --verify-tag` refuses implicit tag creation. A
+reserved tag with failed/partial Release publishing is intentionally
+retained for manual reconciliation; it must not be moved/deleted or
+silently replayed. All rc.7 post-publication checksum, tag-target and
+downloaded-byte verification remains intact.
+
+The rc.8 delta updates only the manual publication gate, hermetic
+regressions, VERSION and documentation. No PHP application/updater/
+recovery runtime has changed from previously reviewed rc.7. The rc.8
+candidate requires its own exact-head CI and author-separated delta
+review before stable 2.2.1 promotion; this is not a public Release,
+production deployment or authorization to mutate a live operator host.
 
 New stable Release, integration and actual operator-host updates require their
 own explicit Owner authorization. See Issue #135, PR #178 and

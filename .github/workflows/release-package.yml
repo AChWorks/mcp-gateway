@@ -208,14 +208,18 @@ jobs:
 
           No production server is deployed or modified by publishing this release.
           EOF_NOTES
-          # Refresh main, tag and Release immediately before publication.
-          python3 bin/release_publication_guard.py before
+          # Atomic create-if-absent tag reservation binds publication to the
+          # exact approved SHA. Conflicting tags fail *before* public Release.
+          # A tag-only reservation on later failure is manual reconciliation;
+          # never delete/move or automatically retry that tag.
+          python3 bin/release_publication_guard.py reserve
           gh release create "$TAG" \
             "dist/$PACKAGE.zip" \
             "dist/$PACKAGE.zip.sha256" \
             "dist/$UPDATE_PACKAGE.zip" \
             "dist/$UPDATE_PACKAGE.zip.sha256" \
             --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
             --target "$APPROVED_SHA" \
             --title "MCP Gateway $TAG" \
             --notes-file dist/release-notes.md
