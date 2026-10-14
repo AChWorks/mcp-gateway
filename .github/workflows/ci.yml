@@ -69,6 +69,9 @@ jobs:
         shell: bash
         run: bash bin/test-version-policy.sh
 
+      - name: Verify published-release upgrade coverage is consistent
+        run: python3 bin/test-released-baseline-parity.py
+
       - name: Validate release-note identity and rendered GitHub body
         shell: bash
         run: bash bin/test-github-release-notes.sh

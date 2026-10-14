@@ -53,24 +53,35 @@ No *new* database schema migration is introduced by this correction over
 backup, original code backup, `.env`, APP_KEY and signing credentials.
 No rollback of possibly started migrations is automated.
 
-**Exact-candidate acceptance provenance (source versus hosting):**
-The rc.4 source/PHP 8.4 and disposable MariaDB acceptance exercised published
-`v2.1.2` and `v2.2.0` upgrade baselines, browser continuation failure
-guards, verified backups, code-only recovery and retention of private state.
-The independent rc.4 review found that the authoritative GitHub Update Package
-workflow did not include public `v2.2.0`; this rc.5 workflow adds `v2.2.0`
-to the published-artifact checksum, browser upgrade and backup-integrity gates.
-A green rc.5 exact-HEAD run is required to claim its completion.
+**Acceptance provenance — exact SHA and delivery environment:**
+The rc.5 candidate at `9b9138792dc25ec0a91f1c051c5d5afce94ec985`
+passed the official Quality, Update Package and Configuration Reference
+workflows. The Update Package workflow downloaded and verified released
+`v2.1.2` and `v2.2.0` ZIP checksums and exercised each upgrade and backup
+integrity guard. A distinct disposable OpenLiteSpeed 1.8.4 + LSAPI PHP 8.4.15
++ MariaDB 12.3.3 + Chromium 149 installation ran **authenticated** Stage →
+303 GET → Finish, Finish aborted before network send then resumed, concurrent
+two-tab Finish, a rejected malformed continuation expiry, and a successful
+server Finish whose HTTP response was lost to the browser. Actual code-only
+Owner recovery from a failed candidate bootstrap was also proven under the
+unprivileged PHP worker with HTTP readiness checks. See [Issue #135 browser
+checkpoint](https://github.com/AChWorks/mcp-gateway/issues/135#issuecomment-6171029165).
 
-**Earlier OpenLiteSpeed 1.8.4, LSAPI PHP 8.4 and real Chromium exercises were
-on a PRE-remediation runtime, not the rc.4/rc.5 executable.** They are
-historical diagnostic evidence only. Until exact rc.5 OpenLiteSpeed/LSAPI/
-MariaDB/real-Chromium acceptance is performed and bound to the candidate
-artifact identity in Issue #135, **that hosting-specific gate remains
-UNVERIFIED**. Do not describe historic browser results or a source-only
-HTTP fixture as rc.5 hosting/browser acceptance. Passing any isolated
-candidate test cannot prove production aaPanel reachability or authenticated
-`ut-alumni-bonyadut` Target/OAuth health.
+The rc.5 browser test used a locally rebuilt, manifest-verified runtime
+package with the **same source revision but different Composer-generated
+vendor metadata** from the official GitHub artifact; it is not claimed to be
+byte-identical to the official CI ZIP. No operator-host deployment, live
+WordPress Target/OAuth action or production readiness is inferred.
+
+The rc.6 corrective delta aligns the **manual stable release workflow**
+with the same **nine published upgrade baselines** already validated by the
+Update Package workflow. It also adds an automated cross-workflow parity
+check against the preceding stable release listed in these notes to stop
+future release-only omissions. The rc.6 VERSION/notes/CI change requires
+its own exact-HEAD checks and an author-separated delta review. Earlier
+runtime browser evidence remains scoped to the unchanged rc.5 application
+implementation until separately reconfirmed for rc.6; neither prerelease
+has yet been merged or published as a stable release.
 
 New stable Release, integration and actual operator-host updates require their
 own explicit Owner authorization. See Issue #135, PR #178 and
