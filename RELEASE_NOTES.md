@@ -1,11 +1,23 @@
 # MCP Gateway v2.2.1
 
-**Corrective source candidate `2.2.1-rc.3` — NOT PUBLISHED.**
+**Corrective source candidate `2.2.1-rc.4` — NOT PUBLISHED.**
 The public release remains `v2.2.0` until independently reviewed,
 exact-head accepted, Owner-approved stable integration and manual publication.
 Neither this VERSION/notes change nor green CI authorizes production rollout.
 
 ## Browser update and verified recovery (Issue #135)
+
+This rc.4 also remediates the four REQUIRED findings of the fresh
+author-separated rc.3 review: malformed/absent continuation TTL now fails
+closed in GET and Finish; the updater journals its migration/recovery boundary
+using a same-directory atomic rename, file fsync and directory fsync before
+crossing it; private Owner recovery validates the authenticated **previous**
+runtime and original migration ledger without bootstrapping the staged
+candidate; and the recovery page identifies automatic vs Owner-local origins,
+with missing legacy provenance reported as unknown. Configuration reference,
+administrator/user idle-session guidance and an automated .env documentation
+coverage guard are included. All these changes require fresh exact-head
+tests and a new independent review; no rc.3 approval carries forward.
 
 - **Deterministic browser handoff:** authenticated Stage finishes with a
   `303 See Other` redirect to a fresh read-only `GET /update/`, allowing

@@ -12,8 +12,9 @@ declare(strict_types=1);
  * Run as the actual, unprivileged LSAPI vhost PHP UID (NOT root).
  */
 
-use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
+use Dotenv\Dotenv;
 use McpGatewayUpdate\WebUpdater;
+use Pdo\Mysql;
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -55,18 +56,167 @@ try {
     }
 
     chdir($basePath);
-    require $basePath.'/vendor/autoload.php';
-    $app = require $basePath.'/bootstrap/app.php';
-    $app->make(ConsoleKernel::class)->bootstrap();
     require $basePath.'/update/WebUpdater.php';
-    $updater = new WebUpdater($basePath, $basePath.'/update');
+
+    // The newly staged managed vendor/bootstrap files might be unusable on
+    // this host. Do NOT load them even for --check: that is precisely the
+    // stranded pre-migration condition this private Owner path must handle.
+    //
+    // WebUpdater validates the full old snapshot, manifest, expected package,
+    // state, maintenance marker and lock BEFORE calling this closure. Only
+    // then may it use the authenticated old vendor's dotenv parser (without
+    // starting either application's Laravel kernel).
+    $recoveryEnvironment = null;
+    $readEnvironment = static function (string $backup) use ($basePath, &$recoveryEnvironment): array {
+        if (is_array($recoveryEnvironment)) {
+            return $recoveryEnvironment;
+        }
+        $autoload = $backup.'/files/vendor/autoload.php';
+        if (! is_file($autoload) || is_link($autoload)) {
+            throw new RuntimeException('Authenticated previous runtime has no safe Composer autoloader.');
+        }
+        require_once $autoload;
+        $envPath = $basePath.'/.env';
+        if (is_link($envPath) || ! is_file($envPath) || ! is_readable($envPath)) {
+            throw new RuntimeException('Original private .env is missing or unreadable.');
+        }
+        $raw = file_get_contents($envPath);
+        if (! is_string($raw) || ! class_exists(Dotenv::class)) {
+            throw new RuntimeException('Previous-runtime environment parser is unavailable.');
+        }
+        $values = Dotenv::parse($raw);
+        if (! is_array($values)) {
+            throw new RuntimeException('Previous-runtime environment is invalid.');
+        }
+
+        // Refuse an ambiguous database identity when process-level overrides
+        // could have made the running app use a different DB than private .env.
+        foreach (['DB_URL', 'DB_CONNECTION', 'DB_HOST', 'DB_PORT', 'DB_SOCKET',
+            'DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'MYSQL_ATTR_SSL_CA',
+            'APP_URL', 'APP_ENV'] as $name) {
+            $configured = $values[$name] ?? null;
+            if ($configured !== null && ! is_string($configured)) {
+                throw new RuntimeException('Recovery configuration contains a non-string critical value.');
+            }
+            foreach ([getenv($name), $_ENV[$name] ?? false, $_SERVER[$name] ?? false] as $override) {
+                if ($override !== false && (string) $override !== (string) $configured) {
+                    throw new RuntimeException('Environment overrides the private recovery identity; reconcile without code rollback.');
+                }
+            }
+        }
+
+        // If the PREVIOUS installed runtime had a Laravel config cache,
+        // it (not a possibly later .env edit) determined the original DB.
+        // Require that authenticated old-cache identity matches preserved
+        // private .env before any recovery ledger query. Never execute the
+        // currently staged candidate's generated configuration.
+        $oldCache = $backup.'/files/bootstrap/cache/config.php';
+        if (file_exists($oldCache)) {
+            if (is_link($oldCache) || ! is_file($oldCache)) {
+                throw new RuntimeException('Original configuration cache has an unsafe filesystem type.');
+            }
+            $cached = require $oldCache;
+            if (! is_array($cached) || ! is_array($cached['database'] ?? null)
+                || ! is_array($cached['app'] ?? null)) {
+                throw new RuntimeException('Original runtime configuration cache is invalid.');
+            }
+            $driver = (string) ($values['DB_CONNECTION'] ?? 'mariadb');
+            $originalDriver = $cached['database']['default'] ?? null;
+            $connection = $cached['database']['connections'][$driver] ?? null;
+            if (! is_string($originalDriver) || $originalDriver !== $driver
+                || ! is_array($connection)
+                || isset($connection['read']) || isset($connection['write'])) {
+                throw new RuntimeException('Original runtime database identity cannot be reconciled.');
+            }
+            foreach ([
+                'DB_HOST' => ['host', '127.0.0.1'],
+                'DB_PORT' => ['port', '3306'],
+                'DB_DATABASE' => ['database', ''],
+                'DB_USERNAME' => ['username', ''],
+                'DB_PASSWORD' => ['password', ''],
+                'DB_SOCKET' => ['unix_socket', ''],
+                'DB_URL' => ['url', ''],
+            ] as $name => [$field, $fallback]) {
+                $actual = $connection[$field] ?? '';
+                $expected = $values[$name] ?? $fallback;
+                if (! is_scalar($actual) || (string) $actual !== (string) $expected) {
+                    throw new RuntimeException('Original runtime database identity differs from preserved configuration.');
+                }
+            }
+            if (($cached['app']['url'] ?? null) !== ($values['APP_URL'] ?? null)
+                || ($cached['app']['env'] ?? null) !== ($values['APP_ENV'] ?? 'production')) {
+                throw new RuntimeException('Original runtime HTTP identity differs from preserved configuration.');
+            }
+        }
+
+        // The staged candidate may have a malformed bootstrap/cache/config.php.
+        // It MUST NOT block proof against the verified previous snapshot;
+        // no part of that candidate cache is executed or trusted.
+        $recoveryEnvironment = $values;
+
+        return $values;
+    };
+
+    $readOldMigrationLedger = static function (string $backup) use ($readEnvironment): array {
+        $env = $readEnvironment($backup);
+        $get = static fn (string $name, string $fallback = ''): string => (string) ($env[$name] ?? $fallback);
+        $driver = $get('DB_CONNECTION', 'mariadb');
+        if (! in_array($driver, ['mysql', 'mariadb'], true) || $get('DB_URL') !== '') {
+            throw new RuntimeException('Standalone Owner recovery only accepts a verified direct MariaDB/MySQL configuration.');
+        }
+        $host = $get('DB_HOST', '127.0.0.1');
+        $port = $get('DB_PORT', '3306');
+        $database = $get('DB_DATABASE');
+        $username = $get('DB_USERNAME');
+        $password = $get('DB_PASSWORD');
+        $socket = $get('DB_SOCKET');
+        $sslCa = $get('MYSQL_ATTR_SSL_CA');
+        if ($database === '' || $username === '' || $host === ''
+            || preg_match('/^[0-9]{1,5}$/D', $port) !== 1 || (int) $port < 1 || (int) $port > 65535
+            || strpbrk($database, ";\r\n\0") !== false
+            || strpbrk($host, ";\r\n\0") !== false
+            || ($socket !== '' && ($socket[0] !== '/' || strpbrk($socket, ";\r\n\0") !== false))) {
+            throw new RuntimeException('Recovery database connection identity is incomplete or unsupported.');
+        }
+
+        $dsn = $socket !== ''
+            ? 'mysql:unix_socket='.$socket.';dbname='.$database.';charset=utf8mb4'
+            : 'mysql:host='.$host.';port='.$port.';dbname='.$database.';charset=utf8mb4';
+        $options = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_TIMEOUT => 5, PDO::ATTR_EMULATE_PREPARES => false];
+        if ($sslCa !== '') {
+            if (! is_file($sslCa) || is_link($sslCa)) {
+                throw new RuntimeException('The configured database TLS CA cannot be verified.');
+            }
+            $options[Mysql::ATTR_SSL_CA] = $sslCa;
+        }
+
+        try {
+            $pdo = new PDO($dsn, $username, $password, $options);
+            if ($pdo->query('SELECT DATABASE()')->fetchColumn() !== $database) {
+                throw new RuntimeException('Recovery database identity does not match private configuration.');
+            }
+            $rows = $pdo->query('SELECT migration FROM migrations')->fetchAll(PDO::FETCH_COLUMN);
+            if (! is_array($rows) || ! array_is_list($rows)
+                || count(array_filter($rows, 'is_string')) !== count($rows)) {
+                throw new RuntimeException('Recovery migration ledger returned an invalid result.');
+            }
+
+            return $rows;
+        } catch (PDOException $exception) {
+            // Never put DSNs, query details or credentials into output/logs.
+            throw new RuntimeException('Could not independently verify the previous database migration ledger.', 0, $exception);
+        }
+    };
+
+    $updater = new WebUpdater($basePath, $basePath.'/update', null, $readOldMigrationLedger);
 
     $plan = $updater->preMigrationRecoveryStatus();
     printf("PRE_MIGRATION_PROOF=PASS phase=%s from=%s to=%s\n",
         $plan['phase'], $plan['from'], $plan['to']);
 
     if ($mode === '--check') {
-        echo "CHECK_ONLY=PASS No updater stage, database migration, managed-code replacement, or maintenance transition requested; framework bootstrap may refresh package cache.\n";
+        echo "CHECK_ONLY=PASS No candidate Laravel bootstrap, updater stage, database migration, managed-code replacement, or maintenance transition requested.\n";
         exit(0);
     }
 
@@ -126,14 +276,18 @@ try {
 
     // Read only public, non-destructive endpoints at the configured origin.
     // Loopback plaintext is allowed solely in explicitly disposable test env.
-    $origin = rtrim((string) config('app.url'), '/');
+    // This was loaded from the authenticated old snapshot + unchanged .env,
+    // not from the broken staged candidate or its generated config cache.
+    $env = $readEnvironment($plan['backup']);
+    $appEnvironment = (string) ($env['APP_ENV'] ?? 'production');
+    $origin = rtrim((string) ($env['APP_URL'] ?? ''), '/');
     $parts = parse_url($origin);
     if (! is_array($parts)
         || ! in_array(strtolower((string) ($parts['scheme'] ?? '')), ['https', 'http'], true)
         || ! is_string($parts['host'] ?? null)
         || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])
         || (strtolower((string) $parts['scheme']) !== 'https'
-            && ! (config('app.env') === 'testing' && in_array($parts['host'], ['127.0.0.1', 'localhost'], true)))) {
+            && ! ($appEnvironment === 'testing' && in_array($parts['host'], ['127.0.0.1', 'localhost'], true)))) {
         throw new RuntimeException('Configured APP_URL is not an approved HTTP readiness origin.');
     }
     if (! function_exists('curl_init')) {
@@ -146,7 +300,7 @@ try {
         // Strictly scoped to disposable testing; production HTTP readiness
         // always uses the installation's configured HTTPS APP_URL.
         $fixture = parse_url($fixtureOrigin);
-        if (config('app.env') !== 'testing' || ! is_array($fixture)
+        if ($appEnvironment !== 'testing' || ! is_array($fixture)
             || ($fixture['scheme'] ?? null) !== 'http'
             || ($fixture['host'] ?? null) !== '127.0.0.1'
             || ! is_int($fixture['port'] ?? null) || $fixture['port'] < 1024
@@ -157,7 +311,7 @@ try {
         $requestOrigin = $fixtureOrigin;
         $readinessHeaders[] = 'Host: '.$parts['host'];
         $readinessHeaders[] = 'X-Forwarded-Proto: https';
-    } elseif (config('app.env') === 'testing' && $parts['scheme'] === 'http'
+    } elseif ($appEnvironment === 'testing' && $parts['scheme'] === 'http'
         && in_array($parts['host'], ['127.0.0.1', 'localhost'], true)) {
         $readinessHeaders[] = 'X-Forwarded-Proto: https';
     }

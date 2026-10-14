@@ -1,13 +1,13 @@
 
 # MCP Gateway
 
-MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The currently published stable line **v2.2.0** includes both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The browser-updater correction is a separately gated `2.2.1-rc.3` source candidate, **not** a published Release. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
+MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The currently published stable line **v2.2.0** includes both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The browser-updater correction is a separately gated `2.2.1-rc.4` source candidate, **not** a published Release. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
 
 A Target has a stable `target_id`, explicit Gateway user/client/Target access checks and connector-owned credentials. For WordPress, the authenticated WordPress principal and WP AI Bridge access groups remain authoritative; Gateway does not widen their permissions.
 
 ## Browser updater reliability and recovery (corrective source candidate)
 
-The source-only `2.2.1-rc.3` candidate repairs the authenticated
+The source-only `2.2.1-rc.4` candidate repairs the authenticated
 Stage → 303 GET → Finish browser handoff and the named-input
 `form.action` collision. The candidate normalizes only temporary public
 updater permissions so the OpenLiteSpeed front-end can read the entry even

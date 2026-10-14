@@ -96,6 +96,16 @@ $test = fixture();
 try {
     $base = $test['base'];
     $private = $base.'/storage/app/private';
+    // The upgraded journal now requires the containing directory to be
+    // writable in order to durably commit an atomic rename. A retained
+    // *already-committed* completion record is truthful if the directory
+    // subsequently becomes read-only before final housekeeping. A bare
+    // migrate record must instead be presented as postflight-unverified
+    // (covered in the next fixture).
+    $completed = $test['state'];
+    $completed['phase'] = 'completed';
+    (new ReflectionMethod(WebUpdater::class, 'writeState'))
+        ->invoke($test['updater'], $completed);
     chmod($private, 0500);
     $warning = finalize($test['updater'], $test['state']);
     verify(is_string($warning) && str_contains($warning, 'Private updater state could not be removed'), 'state unlink failure warning');

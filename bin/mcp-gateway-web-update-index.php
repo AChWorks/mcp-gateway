@@ -266,7 +266,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
     }
     if ($postedStatus['expired']) {
         updaterRender('MCP Gateway Update Session Expired',
-            '<div class="attention" role="alert">The one-time continuation expired. Database migration was not started by this request. Use the local operator recovery check; do not modify tokens or rerun migrations.</div>',
+            '<div class="attention" role="alert">The one-time continuation expired or is invalid. Database migration was not started by this request. Use the local operator recovery check; do not modify tokens or rerun migrations.</div>',
             409);
     }
     if (! $postedStatus['running'] && ($postedStatus['phase'] !== 'files-replaced'
@@ -337,9 +337,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
 
         if (in_array($phase, ['recovery-restoring', 'recovery-files-restored', 'recovery-http-unverified', 'recovery-completed'], true)) {
-            updaterRender('MCP Gateway Operator Recovery',
+            $recoveryDescription = match ($status['recoveryOrigin']) {
+                'automatic' => 'The updater automatically attempted a code-only restore after a pre-migration failure.',
+                'owner-local' => 'An Owner with local shell access initiated guarded code-only recovery.',
+                default => 'Code-only recovery state exists, but this journal does not establish whether the restore was automatic or Owner-initiated.',
+            };
+            updaterRender('MCP Gateway Recovery Status',
                 updaterSteps($phase === 'recovery-completed' ? 'complete' : 'postflight')
-                .'<div class="notice" role="status">An Owner-controlled code-only recovery was started. Current phase: <strong>'.updaterEscape($phase).'</strong>.</div>'
+                .'<div class="notice" role="status">'.updaterEscape($recoveryDescription).' Current phase: <strong>'.updaterEscape($phase).'</strong>.</div>'
                 .'<p>Do not retry Stage or Finish. Reconcile the retained private state and backup. Verify public HTTP and authenticated WordPress/OAuth health before accepting recovery.</p>',
                 $phase === 'recovery-completed' ? 200 : 503);
         }
@@ -380,7 +385,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
 
         $explanation = $status['expired']
-            ? 'The browser continuation session expired before the final step.'
+            ? 'The browser continuation expired or its expiry could not be verified before the final step.'
             : 'The update stopped in a state that cannot be resumed automatically.';
         updaterRender('MCP Gateway Update Needs Attention',
             updaterSteps($phase === 'replace-files' ? 'files' : 'postflight')

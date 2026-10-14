@@ -412,6 +412,13 @@ if [[ "$old_version" == "2.1.2" ]]; then
   (cd "$recovery_target" && sha256sum storage/app/private/oauth/private.key storage/app/private/bridge-client/private.key) > "$tmp/recovery-private-keys.before.sha256"
   recovery_database="$(cd "$recovery_target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')"
   recovery_artisan="$(sha256sum "$recovery_target/artisan" | awk '{print $1}')"
+  # The previous runtime may have had an enabled Laravel config cache.
+  # Preserve its authenticated original cached DB identity in the snapshot;
+  # recovery must not trust a possibly broken candidate config cache.
+  (cd "$recovery_target" && php artisan config:cache --no-interaction >/dev/null)
+  [[ -f "$recovery_target/bootstrap/cache/config.php" ]] || {
+    echo "Could not create original-runtime cached configuration fixture." >&2; exit 1;
+  }
   cp "$update_zip" "$recovery_target/mcp-gateway-update-v$new_version.zip"
   unzip -q "$update_zip" -d "$recovery_target"
   [[ -f "$recovery_target/update/Recover.php" && ! -e "$recovery_target/public/update/Recover.php" ]] || {
@@ -433,6 +440,37 @@ if [[ "$old_version" == "2.1.2" ]]; then
 
   # A misleading old POST or lost cookie never authorizes migration.
   recovery_state="$recovery_target/storage/app/private/update-state.json"
+  # The candidate is fully staged, but Laravel bootstrap cannot execute.
+  # Browser Finish must not cross the migration boundary and the private
+  # Owner-local --check must work independently of candidate bootstrap.
+  cat > "$recovery_target/bootstrap/cache/config.php" <<'PHP_BROKEN_CANDIDATE_BOOTSTRAP'
+<?php
+throw new RuntimeException('Disposable candidate bootstrap failure before DDL.');
+PHP_BROKEN_CANDIDATE_BOOTSTRAP
+  if (cd "$recovery_target" && php artisan about --no-interaction >/dev/null 2>&1); then
+    echo "Candidate bootstrap-failure fixture did not fail." >&2; exit 1;
+  fi
+  (cd "$recovery_target" && php update/Recover.php --check) >"$tmp/recovery-staged-broken-bootstrap-check.log" 2>&1 || {
+    cat "$tmp/recovery-staged-broken-bootstrap-check.log" >&2
+    echo "Owner recovery could not verify a stranded fully staged candidate." >&2; exit 1;
+  }
+  grep -F 'PRE_MIGRATION_PROOF=PASS phase=files-replaced' "$tmp/recovery-staged-broken-bootstrap-check.log" >/dev/null || {
+    echo "Stranded candidate lacked independent DB and original-snapshot proof." >&2; exit 1;
+  }
+  php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??null)!=="files-replaced" || ($s["migration_started"]??null)!==false) exit(1);' "$recovery_state" || {
+    echo "Candidate bootstrap failure crossed migration boundary." >&2; exit 1;
+  }
+  rm "$recovery_target/bootstrap/cache/config.php"
+
+  # A changed private .env cannot be used to redirect a standalone ledger
+  # check away from the database authenticated by the old config cache.
+  cp "$recovery_target/.env" "$tmp/recovery-original-env"
+  sed -i 's/^DB_DATABASE=.*/DB_DATABASE=mcp_gateway_incorrect_recovery_fixture/' "$recovery_target/.env"
+  if (cd "$recovery_target" && php update/Recover.php --check >"$tmp/recovery-mismatched-env.log" 2>&1); then
+    echo "Standalone Owner recovery trusted a changed DB identity." >&2; exit 1;
+  fi
+  cp "$tmp/recovery-original-env" "$recovery_target/.env"
+
   php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["migration_started"]=true; $s["phase"]="migrate"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
   if (cd "$recovery_target" && php update/Recover.php --check >"$tmp/recovery-migrate-rejected.log" 2>&1); then
     echo "Migration-started state was incorrectly treated as recoverable." >&2; exit 1
@@ -498,6 +536,25 @@ if [[ "$old_version" == "2.1.2" ]]; then
     file_put_contents($statePath,json_encode($state,JSON_THROW_ON_ERROR));
     file_put_contents($base."/app/interrupted-recovery-test.txt","mixed candidate");
   ' "$recovery_target" "$new_version" "$old_version"
+
+  # Production-shaped pre-migration bootstrap incompatibility: the signed
+  # candidate files still match their package, but its generated Laravel
+  # configuration cannot bootstrap. The private Owner recovery MUST be able
+  # to validate old-code/DB evidence without starting candidate Laravel.
+  cat > "$recovery_target/bootstrap/cache/config.php" <<'PHP_INVALID_CANDIDATE_CONFIG'
+<?php
+throw new RuntimeException('Disposable candidate config-cache bootstrap failure.');
+PHP_INVALID_CANDIDATE_CONFIG
+  if (cd "$recovery_target" && php artisan about --no-interaction >/dev/null 2>&1); then
+    echo "Disposable recovery fixture did not reproduce candidate-bootstrap failure." >&2; exit 1;
+  fi
+  (cd "$recovery_target" && php update/Recover.php --check) >"$tmp/recovery-broken-bootstrap-check.log" 2>&1 || {
+    cat "$tmp/recovery-broken-bootstrap-check.log" >&2
+    echo "Owner recovery incorrectly depended on the staged candidate bootstrap." >&2; exit 1;
+  }
+  grep -F 'PRE_MIGRATION_PROOF=PASS' "$tmp/recovery-broken-bootstrap-check.log" >/dev/null || {
+    echo "Broken-candidate bootstrap lacked verified independent recovery proof." >&2; exit 1;
+  }
 
   cat > "$tmp/operator-recovery-router.php" <<'PHP_RECOVERY_ROUTER'
 <?php
@@ -875,14 +932,41 @@ grep -F 'Resume MCP Gateway Update' "$tmp/resume.html" >/dev/null || { echo "Saf
 grep -F 'If the Continue update button is still visible after this page loads' "$tmp/resume.html" >/dev/null || { echo "Resume page lacks actionable manual fallback instructions." >&2; exit 1; }
 grep -F 'Ready to begin the final database and health checks' "$tmp/resume.html" >/dev/null || { echo "Resume page misleadingly claims checks have started before continuation." >&2; exit 1; }
 
-# Expired, formerly valid browser continuation is NOT a migration grant.
+# Invalid continuation metadata must never change the real database ledger.
+browser_migrations_before="$(cd "$target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')"
+# Malformed or expired browser continuation metadata must NEVER authorize
+# Finish/DDL, even with the correct browser cookie and continuation token.
 state_file="$target/storage/app/private/update-state.json"
-php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["continuation_expires_at"]=time()-1; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
-expired_get_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/expired-get.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$expired_get_code" == "503" ]] || { echo "Expired browser GET did not request safe operator recovery (HTTP $expired_get_code)." >&2; exit 1; }
-grep -F 'browser continuation session expired' "$tmp/expired-get.html" >/dev/null || { echo "Expired continuation was not differentiated." >&2; exit 1; }
-expired_finish_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" --data-urlencode 'action=finish' --data-urlencode "continuation=$continuation" -o "$tmp/expired-finish.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$expired_finish_code" == "409" ]] || { echo "Expired Finish incorrectly entered migration (HTTP $expired_finish_code)." >&2; exit 1; }
+for expiry_case in removed string float object null expired far-future; do
+  php -r '
+    $p=$argv[1]; $case=$argv[2];
+    $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR);
+    switch ($case) {
+      case "removed": unset($s["continuation_expires_at"]); break;
+      case "string": $s["continuation_expires_at"]=(string)(time()+120); break;
+      case "float": $s["continuation_expires_at"]=time()+120.75; break;
+      case "object": $s["continuation_expires_at"]=["unexpected"=>"object"]; break;
+      case "null": $s["continuation_expires_at"]=null; break;
+      case "expired": $s["continuation_expires_at"]=time()-1; break;
+      case "far-future": $s["continuation_expires_at"]=time()+36000; break;
+      default: exit(3);
+    }
+    file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR|JSON_PRESERVE_ZERO_FRACTION));
+  ' "$state_file" "$expiry_case"
+  invalid_get_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header"     -o "$tmp/invalid-$expiry_case-get.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$invalid_get_code" == "503" ]] || { echo "Invalid $expiry_case GET offered continuation (HTTP $invalid_get_code)." >&2; exit 1; }
+  grep -F 'continuation expired or its expiry could not be verified' "$tmp/invalid-$expiry_case-get.html" >/dev/null || {
+    echo "Invalid $expiry_case continuation lacked accurate recovery guidance." >&2; exit 1;
+  }
+  invalid_finish_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header"     --data-urlencode 'action=finish' --data-urlencode "continuation=$continuation"     -o "$tmp/invalid-$expiry_case-finish.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$invalid_finish_code" == "409" ]] || { echo "Invalid $expiry_case Finish crossed expiry gate (HTTP $invalid_finish_code)." >&2; exit 1; }
+  php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??null)!=="files-replaced" || ($s["migration_started"]??null)!==false) exit(1);' "$state_file" || {
+    echo "Invalid $expiry_case changed migration boundary state." >&2; exit 1;
+  }
+done
+[[ "$(cd "$target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')" == "$browser_migrations_before" ]] || {
+  echo "Invalid browser continuation altered migration ledger." >&2; exit 1;
+}
 php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["continuation_expires_at"]=time()+1800; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
 
 # An active finish request must not permit a second POST to enter migrations.

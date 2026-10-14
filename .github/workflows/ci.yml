@@ -62,6 +62,9 @@ jobs:
       - name: Validate configuration reference matches .env.example
         run: python3 bin/test-configuration-docs.py
 
+      - name: Check updater continuation and crash-journal guards
+        run: php bin/test-update-state-guards.php
+
       - name: Validate immutable prerelease and public version policy
         shell: bash
         run: bash bin/test-version-policy.sh

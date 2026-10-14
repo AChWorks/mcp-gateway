@@ -49,6 +49,9 @@ final class WebUpdater
         private readonly string $basePath,
         private readonly string $packagePath,
         private readonly ?\Closure $clock = null,
+        // Private local Owner recovery can read the old migration ledger
+        // without loading any class from the newly staged candidate runtime.
+        private readonly ?\Closure $recoveryLedgerReader = null,
     ) {}
 
     /** @return array{installed:string,target:string,checks:array<string,bool>} */
@@ -264,6 +267,18 @@ final class WebUpdater
         } catch (Throwable $exception) {
             if ($filesMutated && is_string($backup)) {
                 try {
+                    // The first replacement might have only partly completed.
+                    // Journal the *automatic* destructive restore BEFORE
+                    // changing files; a crash cannot masquerade as a fully
+                    // staged, safely resumable pre-migration update.
+                    $this->writeState([
+                        'from' => $from, 'to' => $to, 'backup' => $backup,
+                        'phase' => 'failed-before-migration-restore',
+                        'migration_started' => false,
+                        'recovery_origin' => 'automatic',
+                        'browser_token_hash' => hash('sha256', $browserToken),
+                        'continuation_token' => $continuation,
+                    ]);
                     $this->restoreFiles($backup, $from, $to);
                 } catch (Throwable $restoreException) {
                     $this->tryWriteState([
@@ -295,6 +310,7 @@ final class WebUpdater
                 $this->writeState([
                     'from' => $from, 'to' => $to, 'backup' => $backup,
                     'phase' => 'recovery-files-restored', 'migration_started' => false,
+                    'recovery_origin' => 'automatic',
                     'browser_token_hash' => hash('sha256', $browserToken),
                     'continuation_token' => $continuation,
                 ]);
@@ -384,9 +400,16 @@ final class WebUpdater
                 }
 
                 try {
+                    // A migration has NOT begun. Persist a fail-closed
+                    // recovery marker before the first destructive rollback
+                    // so a crash cannot leave a false files-replaced grant.
+                    $state['phase'] = 'failed-before-migration-restore';
+                    $state['recovery_origin'] = 'automatic';
+                    $this->writeState($state);
                     $this->restoreFiles($backup, $from, $to);
                     $state['phase'] = 'recovery-files-restored';
                     $state['migration_started'] = false;
+                    $state['recovery_origin'] = 'automatic';
                     $this->writeState($state);
                     $this->tryResumeApplication();
                 } catch (Throwable $restoreException) {
@@ -479,7 +502,7 @@ final class WebUpdater
     /**
      * Private state for the matching browser only. No backup paths are exposed.
      *
-     * @return array{phase:string,running:bool,expired:bool,continuation:?string}|null
+     * @return array{phase:string,running:bool,expired:bool,continuation:?string,recoveryOrigin:string}|null
      */
     public function browserUpdateStatus(string $browserToken): ?array
     {
@@ -507,14 +530,18 @@ final class WebUpdater
             if ($phase === 'migrate' && ! $running) {
                 $phase = 'postflight-unverified';
             }
-            $expiry = $state['continuation_expires_at'] ?? null;
-            $expired = $phase === 'files-replaced' && is_int($expiry) && $this->now() > $expiry;
+            $expired = $phase === 'files-replaced'
+                && ! $this->validContinuationExpiry($state['continuation_expires_at'] ?? null);
             $token = $state['continuation_token'] ?? null;
             $continuation = $phase === 'files-replaced' && ! $running && ! $expired
                 && is_string($token) && preg_match('/^[a-f0-9]{64}$/D', $token) === 1
                 ? $token : null;
+            // Older journals do not prove whether recovery was automatic
+            // or explicitly requested by a local Owner. Never invent it.
+            $recoveryOrigin = in_array($state['recovery_origin'] ?? null, ['automatic', 'owner-local'], true)
+                ? $state['recovery_origin'] : 'unknown';
 
-            return compact('phase', 'running', 'expired', 'continuation');
+            return compact('phase', 'running', 'expired', 'continuation', 'recoveryOrigin');
         } catch (Throwable) {
             return null;
         }
@@ -591,7 +618,8 @@ final class WebUpdater
             }
 
             $state['phase'] = 'recovery-restoring';
-            $this->writeState($state); // Durable BEFORE the first destructive file change.
+            $state['recovery_origin'] = 'owner-local';
+            $this->writeState($state); // Crash-durable BEFORE the first destructive file change.
             $this->restoreFiles($plan['backup'], $plan['from'], $plan['to']);
             $this->assertRestoredRuntimeMatchesBackup($plan['backup']);
 
@@ -678,7 +706,7 @@ final class WebUpdater
         // The original source's migration files define the exact pre-upgrade
         // ledger. If DDL may have begun without ledger completion, the
         // updater's write-ahead migration_started=true forbids this path.
-        if (! Schema::hasTable('migrations')) {
+        if ($this->recoveryLedgerReader === null && ! Schema::hasTable('migrations')) {
             throw new RuntimeException('Migration ledger is absent; operator reconciliation required.');
         }
         $expected = [];
@@ -688,7 +716,9 @@ final class WebUpdater
             }
             $expected[] = basename($path, '.php');
         }
-        $actual = DB::table('migrations')->pluck('migration')->all();
+        $actual = $this->recoveryLedgerReader !== null
+            ? ($this->recoveryLedgerReader)($backup)
+            : DB::table('migrations')->pluck('migration')->all();
         if ($expected === [] || ! is_array($actual) || count($actual) !== count(array_unique($actual))) {
             throw new RuntimeException('Migration ledger cannot prove the original schema state.');
         }
@@ -1332,14 +1362,77 @@ final class WebUpdater
         return ! $available;
     }
 
-    /** @param array<string,mixed> $state */
+    /**
+     * Commit private updater state atomically and crash-durably. Migration
+     * and recovery may cross their irreversible boundary ONLY after this
+     * file AND its containing directory have both been fsync'd.
+     *
+     * A torn/uncommitted journal is never a recovery grant. The execution
+     * lock serializes writers, while same-directory rename makes readers
+     * observe either the old complete journal or the new complete journal.
+     *
+     * @param  array<string,mixed>  $state
+     */
     private function writeState(array $state): void
     {
-        $encoded = json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        if (file_put_contents($this->statePath(), $encoded."\n", LOCK_EX) === false) {
-            throw new RuntimeException('Could not persist updater state.');
+        $encoded = json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n";
+        $path = $this->statePath();
+        $directory = dirname($path);
+        if (is_link($path) || is_link($directory) || ! is_dir($directory)) {
+            throw new RuntimeException('Private updater state location is not safe.');
         }
-        @chmod($this->statePath(), 0600);
+
+        $temporary = @tempnam($directory, '.update-state-');
+        if (! is_string($temporary) || dirname($temporary) !== $directory) {
+            throw new RuntimeException('Could not create a private temporary updater journal.');
+        }
+
+        try {
+            $handle = @fopen($temporary, 'c+b');
+            if ($handle === false) {
+                throw new RuntimeException('Could not open private temporary updater journal.');
+            }
+            try {
+                if (! @chmod($temporary, 0600)) {
+                    throw new RuntimeException('Could not secure private updater journal permissions.');
+                }
+                $bytes = strlen($encoded);
+                $written = 0;
+                while ($written < $bytes) {
+                    $count = @fwrite($handle, substr($encoded, $written));
+                    if (! is_int($count) || $count < 1) {
+                        throw new RuntimeException('Could not persist updater journal bytes.');
+                    }
+                    $written += $count;
+                }
+                if (! @fflush($handle) || ! function_exists('fsync') || ! @fsync($handle)) {
+                    throw new RuntimeException('Could not durably flush private updater journal.');
+                }
+            } finally {
+                fclose($handle);
+            }
+
+            if (! @rename($temporary, $path)) {
+                throw new RuntimeException('Could not atomically commit private updater journal.');
+            }
+            // Linux/PHP 8.4 permits a read-only directory stream. Failure to
+            // durably commit the rename aborts before DDL or file recovery.
+            $parent = @fopen($directory, 'rb');
+            if ($parent === false) {
+                throw new RuntimeException('Could not open updater journal directory for durability barrier.');
+            }
+            try {
+                if (! @fsync($parent)) {
+                    throw new RuntimeException('Could not durably commit updater journal directory.');
+                }
+            } finally {
+                fclose($parent);
+            }
+        } finally {
+            if (is_file($temporary)) {
+                @unlink($temporary);
+            }
+        }
     }
 
     /** @param array<string,mixed> $state */
@@ -1389,14 +1482,25 @@ final class WebUpdater
         if (! $this->browserTokenMatches($state, $browserToken)) {
             throw new RuntimeException('The browser update session is invalid or expired.');
         }
-        $expiresAt = $state['continuation_expires_at'] ?? null;
-        if (is_int($expiresAt) && $this->now() > $expiresAt) {
-            throw new RuntimeException('The continuation has expired. Preserve update state and follow recovery guidance.');
+        if (! $this->validContinuationExpiry($state['continuation_expires_at'] ?? null)) {
+            throw new RuntimeException('The continuation is expired or its expiry cannot be verified. Preserve update state and follow recovery guidance.');
         }
         $expected = $state['continuation_token'] ?? null;
         if (! is_string($expected) || ! preg_match('/^[a-f0-9]{64}$/', $expected) || ! hash_equals($expected, $continuation)) {
             throw new RuntimeException('The update continuation token is invalid or expired.');
         }
+    }
+
+    /**
+     * A missing, malformed, stale or implausibly far-future expiry is never
+     * valid. Both read-only GET and mutation-enabling Finish use this gate.
+     */
+    private function validContinuationExpiry(mixed $expiresAt): bool
+    {
+        $now = $this->now();
+
+        return is_int($expiresAt) && $expiresAt > $now
+            && $expiresAt <= $now + self::BROWSER_SESSION_TTL_SECONDS;
     }
 
     /** @param array<string,mixed> $state */
