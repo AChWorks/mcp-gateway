@@ -57,6 +57,21 @@ Composer 2 and Git are **not required on the target host** when using the recomm
 
 Normal operation does **not** require Redis, Docker, Node.js, a queue worker, a message broker, or a separate MCP daemon.
 
+## Configuration and login-session duration
+
+The complete operator-facing [`.env` configuration reference](docs/CONFIGURATION.md) explains every setting in `.env.example`, units, security boundaries, defaults and how to apply changes safely without reinstalling. The web installer creates the production `.env`; edits to that **existing private file** do not change the public GitHub Release or automatically update any host.
+
+By default, both **administrator and ordinary Gateway web-user logins** use the **same** `SESSION_LIFETIME=120` **minutes of inactivity**. To allow eight idle hours, set:
+
+```dotenv
+SESSION_LIFETIME=480
+SESSION_EXPIRE_ON_CLOSE=false
+```
+
+`SESSION_EXPIRE_ON_CLOSE=true` requests browser-close expiration, subject to browser session-restore behavior. These controls do **not** provide separate administrator/user timeouts or a strict absolute maximum login age. They do **not** control OAuth access/refresh tokens, legacy MCP sessions, WP AI Bridge credential expiry or the updater's separate 30-minute browser continuation.
+
+If Laravel's configuration cache is active, changing `.env` alone is insufficient: apply the change using the host's **unprivileged application/PHP account** and verified configuration-reload procedure, then recheck actual login behavior. Never use root-owned Artisan cache files, relax private permissions, rotate `APP_KEY` or regenerate signing keys to change a timeout. See [safe change procedure](docs/CONFIGURATION.md#make-configuration-changes-safely).
+
 ## Installation
 
 ### Recommended: deployment ZIP + web installer
@@ -176,6 +191,8 @@ DB_USERNAME=mcp_gateway
 DB_PASSWORD=<server-secret>
 
 SESSION_DRIVER=file
+SESSION_LIFETIME=120
+SESSION_EXPIRE_ON_CLOSE=false
 SESSION_ENCRYPT=true
 SESSION_SECURE_COOKIE=true
 SESSION_HTTP_ONLY=true
@@ -397,6 +414,7 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 - [Connector integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md) — implementing connectors, durable idle authorization, renewal, stale health and error recovery.
 - [Real installed mixed WordPress + SSH acceptance](docs/INSTALLED-MIXED-WP-SSH-ACCEPTANCE.md) — disposable end-to-end Gateway, WordPress Bridge, signed SDK client and host-key-pinned SFTP validation.
 - [Master spec](docs/MASTER-SPEC.md) and [architecture](docs/ARCHITECTURE.md) — target contracts, including clearly identified future/not-yet-shipped connectors.
+- [Configuration and sessions](docs/CONFIGURATION.md) — `.env` reference, login idle timeout, OAuth/MCP TTL distinctions and safe settings changes.
 - [Deployment](docs/DEPLOYMENT.md), [development](docs/DEVELOPMENT.md) and [project map](docs/PROJECT-MAP.md) — operations and maintainer navigation.
 
 ## Release status

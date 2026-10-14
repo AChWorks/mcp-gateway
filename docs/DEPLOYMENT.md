@@ -2,7 +2,7 @@
 
 This document defines the supported **current deployment and validation baseline** for MCP Gateway on PHP 8.4 + MariaDB 10.11 (primary) or MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory.
 
-GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide.
+GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide. The [operator configuration reference](CONFIGURATION.md) inventories `.env.example` and explains login-session, OAuth/MCP timing and safe live configuration reloads.
 
 ## v2.1.2 release and migration inventory
 
@@ -193,6 +193,8 @@ DB_USERNAME=mcp_gateway
 DB_PASSWORD=<server-secret>
 
 SESSION_DRIVER=file
+SESSION_LIFETIME=120
+SESSION_EXPIRE_ON_CLOSE=false
 SESSION_ENCRYPT=true
 SESSION_SECURE_COOKIE=true
 SESSION_HTTP_ONLY=true
@@ -215,6 +217,8 @@ OAUTH_PUBLIC_KEY_PATH=storage/app/private/oauth/public.key
 BRIDGE_CLIENT_PRIVATE_KEY_PATH=storage/app/private/bridge-client/private.key
 BRIDGE_CLIENT_PUBLIC_KEY_PATH=storage/app/private/bridge-client/public.key
 ```
+
+The default browser `web` guard shares one `SESSION_LIFETIME=120` **minute idle timeout** across Gateway administrators and ordinary users. `SESSION_EXPIRE_ON_CLOSE` is optional and `false` by default. Neither extends OAuth access/refresh tokens, the separate legacy MCP session, nor the browser updater's fixed continuation deadline. Config cache can hide edits to `.env`; see [Configuration](CONFIGURATION.md#make-configuration-changes-safely) before changing live settings and never regenerate encryption/signing keys to tune a session timeout.
 
 Important boundaries:
 
