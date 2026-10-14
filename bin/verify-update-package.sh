@@ -57,12 +57,14 @@ root="$tmp/extracted"
 [[ -d "$root/update/payload" ]] || { echo "Extracted private update payload is missing." >&2; exit 1; }
 [[ -f "$root/public/update/index.php" ]] || { echo "Temporary browser updater entrypoint is missing." >&2; exit 1; }
 [[ -f "$root/update/WebUpdater.php" ]] || { echo "Browser update engine is missing." >&2; exit 1; }
+[[ -f "$root/update/Recover.php" ]] || { echo "Private recovery CLI is missing." >&2; exit 1; }
 [[ -f "$root/update/UPDATE_VERSION" ]] || { echo "UPDATE_VERSION is missing." >&2; exit 1; }
 [[ -f "$root/update/PUBLIC_ENTRY_SHA256" ]] || { echo "PUBLIC_ENTRY_SHA256 is missing." >&2; exit 1; }
 [[ -f "$root/update/MANAGED_PUBLIC_PATHS" ]] || { echo "MANAGED_PUBLIC_PATHS is missing." >&2; exit 1; }
 [[ -f "$root/update/manifest.sha256" ]] || { echo "Update manifest is missing." >&2; exit 1; }
 
 php -l "$root/update/WebUpdater.php" >/dev/null
+php -l "$root/update/Recover.php" >/dev/null
 php -l "$root/public/update/index.php" >/dev/null
 
 if find "$root/update" "$root/public/update" -type l -print | grep . >/dev/null; then

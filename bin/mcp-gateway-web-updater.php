@@ -289,13 +289,24 @@ final class WebUpdater
                 }
             }
 
-            @unlink($this->statePath());
+            if ($filesMutated) {
+                // Do not silently discard a recovery journal or claim HTTP
+                // readiness solely because code restoration completed.
+                $this->writeState([
+                    'from' => $from, 'to' => $to, 'backup' => $backup,
+                    'phase' => 'recovery-files-restored', 'migration_started' => false,
+                    'browser_token_hash' => hash('sha256', $browserToken),
+                    'continuation_token' => $continuation,
+                ]);
+            } else {
+                @unlink($this->statePath());
+            }
             $this->tryResumeApplication();
 
             throw new RuntimeException(
                 $filesMutated
-                    ? 'The update failed before database migration. Application files were restored automatically. '.$exception->getMessage()
-                    : 'The update failed before application files were changed. The application was returned to service. '.$exception->getMessage(),
+                    ? 'The update failed before database migration. Gateway-managed files were restored, but public HTTP readiness has NOT been verified. Retained recovery state requires Owner reconciliation. '.$exception->getMessage()
+                    : 'The update failed before application files were changed. Maintenance exit was attempted; verify HTTP health. '.$exception->getMessage(),
                 0,
                 $exception,
             );
@@ -374,7 +385,9 @@ final class WebUpdater
 
                 try {
                     $this->restoreFiles($backup, $from, $to);
-                    @unlink($this->statePath());
+                    $state['phase'] = 'recovery-files-restored';
+                    $state['migration_started'] = false;
+                    $this->writeState($state);
                     $this->tryResumeApplication();
                 } catch (Throwable $restoreException) {
                     $state['phase'] = 'failed-before-migration-restore';
@@ -389,7 +402,7 @@ final class WebUpdater
                 }
 
                 throw new RuntimeException(
-                    'The update failed before database migration. Application files were restored automatically and the application was returned to service. '.$exception->getMessage(),
+                    'The update failed before database migration. Gateway-managed files were restored, but HTTP readiness is NOT verified; private recovery state is retained. '.$exception->getMessage(),
                     0,
                     $exception,
                 );
@@ -482,7 +495,8 @@ final class WebUpdater
             if (! is_string($phase) || ! in_array($phase, [
                 'replace-files', 'files-replaced', 'migrate', 'completed',
                 'failed-before-migration-backup', 'failed-before-migration-restore',
-                'failed-after-migration-start',
+                'failed-after-migration-start', 'recovery-restoring', 'recovery-files-restored',
+                'recovery-http-unverified', 'recovery-completed',
             ], true)) {
                 $phase = 'unknown';
             }
@@ -528,6 +542,206 @@ final class WebUpdater
         }
 
         return null;
+    }
+
+    /**
+     * Operator-local, strictly pre-migration CODE recovery. The caller must
+     * provide an authenticated OS shell running as the same unprivileged UID
+     * that created the maintenance marker. Never expose this action via HTTP.
+     *
+     * A detached browser is not authorization to mutate code or database.
+     * Preview performs no updater write, migration, or managed-code swap;
+     * Laravel bootstrap may regenerate non-secret cache manifests.
+     *
+     * @return array{phase:string,from:string,to:string,backup:string,ready:bool}
+     */
+    public function preMigrationRecoveryStatus(): array
+    {
+        if ($this->executionInProgress()) {
+            throw new UpdateBusyException('An updater worker currently holds the update lock.');
+        }
+
+        return $this->preMigrationRecoveryPlan($this->readState());
+    }
+
+    /**
+     * Restore only Gateway-managed code, preserving private state and the
+     * original backup. A separate fresh PHP process must verify the restored
+     * runtime before removing maintenance mode.
+     *
+     * @return array{phase:string,from:string,to:string,backup:string,ready:bool}
+     */
+    public function recoverPreMigrationFiles(): array
+    {
+        return $this->withExecutionLock(function (): array {
+            $state = $this->readState();
+            $plan = $this->preMigrationRecoveryPlan($state);
+
+            if (in_array($plan['phase'], ['recovery-files-restored', 'recovery-http-unverified', 'recovery-completed'], true)) {
+                return $plan;
+            }
+
+            if (! in_array($plan['phase'], ['recovery-restoring'], true)) {
+                // This second independently checksummed snapshot is retained
+                // for forensics and interrupted recovery; never prune here.
+                $archive = $this->createBackup($plan['to'], $plan['from']);
+                $this->assertBackupCredible($archive, $plan['to'], $plan['from']);
+                $state['recovery_archive'] = $archive;
+                $state['recovery_started_at'] = $this->now();
+            }
+
+            $state['phase'] = 'recovery-restoring';
+            $this->writeState($state); // Durable BEFORE the first destructive file change.
+            $this->restoreFiles($plan['backup'], $plan['from'], $plan['to']);
+            $this->assertRestoredRuntimeMatchesBackup($plan['backup']);
+
+            $state['phase'] = 'recovery-files-restored';
+            $state['recovery_files_restored_at'] = $this->now();
+            $this->writeState($state);
+
+            return [...$plan, 'phase' => 'recovery-files-restored'];
+        });
+    }
+
+    /**
+     * The health step runs AFTER a new PHP subprocess bootstraps the restored
+     * runtime, and may be repeated safely if the HTTP verification fails.
+     */
+    public function markPreMigrationRecoveryStatus(string $phase): void
+    {
+        if (! in_array($phase, ['recovery-http-unverified', 'recovery-completed'], true)) {
+            throw new RuntimeException('Unsupported recovery completion status.');
+        }
+
+        $this->withExecutionLock(function () use ($phase): void {
+            $state = $this->readState();
+            $plan = $this->preMigrationRecoveryPlan($state);
+            if (! in_array($plan['phase'], ['recovery-files-restored', 'recovery-http-unverified', 'recovery-completed'], true)) {
+                throw new RuntimeException('Recovery files are not fully restored.');
+            }
+            $this->assertRestoredRuntimeMatchesBackup($plan['backup'], true);
+            if ($phase === 'recovery-completed' && $plan['phase'] !== 'recovery-completed') {
+                $state['recovery_http_verified_at'] = $this->now();
+            }
+            $state['phase'] = $phase;
+            $this->writeState($state);
+        });
+    }
+
+    /**
+     * Private snapshot, staged-file identity and committed migration ledger
+     * MUST agree. A migration marker with true/unknown, a possibly advanced
+     * ledger or a missing backup requires manual reconciliation, NEVER restore.
+     *
+     * @param array<string,mixed> $state
+     * @return array{phase:string,from:string,to:string,backup:string,ready:bool}
+     */
+    private function preMigrationRecoveryPlan(array $state): array
+    {
+        $phase = $this->requireStateString($state, 'phase');
+        // Partially copied/reverted managed code is NOT safe for this narrow
+        // automatic snapshot model. Require separate manual reconciliation
+        // rather than claiming the pre-restore archive identifies one version.
+        $allowed = [
+            'files-replaced', 'recovery-restoring', 'recovery-files-restored',
+            'recovery-http-unverified', 'recovery-completed',
+        ];
+        if (($state['migration_started'] ?? null) !== false) {
+            throw new RuntimeException('Database migration may have started or the updater state is unknown; code rollback is forbidden.');
+        }
+        if (! in_array($phase, $allowed, true)) {
+            throw new RuntimeException('The updater did not prove a complete pre-migration staged runtime, or postflight is uncertain. Reconcile before attempting code recovery.');
+        }
+        if (! is_file($this->basePath.'/storage/framework/down')) {
+            if (! in_array($phase, ['recovery-files-restored', 'recovery-http-unverified', 'recovery-completed'], true)) {
+                throw new RuntimeException('Maintenance marker is missing; reconcile externally before any recovery mutation.');
+            }
+        }
+
+        $from = $this->requireStateString($state, 'from');
+        $to = $this->requireStateString($state, 'to');
+        $backup = $this->requireStateString($state, 'backup');
+        $root = realpath($this->basePath.'/storage/app/private/update-backups');
+        $resolved = realpath($backup);
+        if ($root === false || $resolved === false || dirname($resolved) !== $root || $backup !== $resolved
+            || is_link($backup)) {
+            throw new RuntimeException('Recovery backup is outside the dedicated, non-symlinked private backup directory.');
+        }
+        if ($this->readVersion($this->packagePath.'/UPDATE_VERSION', 'Recovery UPDATE_VERSION') !== $to) {
+            throw new RuntimeException('The staged recovery package version does not match the retained state.');
+        }
+
+        $this->assertPackageIntegrity();
+        $this->assertBackupCredible($backup, $from, $to);
+        $this->assertManagedMutationPreflight();
+
+        // The original source's migration files define the exact pre-upgrade
+        // ledger. If DDL may have begun without ledger completion, the
+        // updater's write-ahead migration_started=true forbids this path.
+        if (! Schema::hasTable('migrations')) {
+            throw new RuntimeException('Migration ledger is absent; operator reconciliation required.');
+        }
+        $expected = [];
+        foreach (glob($backup.'/files/database/migrations/*.php') ?: [] as $path) {
+            if (is_link($path) || ! is_file($path)) {
+                throw new RuntimeException('Backup contains an invalid migration path.');
+            }
+            $expected[] = basename($path, '.php');
+        }
+        $actual = DB::table('migrations')->pluck('migration')->all();
+        if ($expected === [] || ! is_array($actual) || count($actual) !== count(array_unique($actual))) {
+            throw new RuntimeException('Migration ledger cannot prove the original schema state.');
+        }
+        sort($expected, SORT_STRING);
+        sort($actual, SORT_STRING);
+        if ($actual !== $expected) {
+            throw new RuntimeException('Database migration ledger differs from the old runtime. No automatic code rollback is permitted.');
+        }
+
+        if ($phase === 'files-replaced') {
+            $this->assertInstalledRuntimeMatchesPackage($to);
+        } elseif (in_array($phase, ['recovery-files-restored', 'recovery-http-unverified', 'recovery-completed'], true)) {
+            $this->assertRestoredRuntimeMatchesBackup($backup, true);
+        } elseif ($phase === 'recovery-restoring') {
+            $archive = $state['recovery_archive'] ?? null;
+            if (! is_string($archive) || realpath($archive) === false
+                || dirname((string) realpath($archive)) !== $root) {
+                throw new RuntimeException('Interrupted recovery lacks its protected pre-restore archive.');
+            }
+            $this->assertBackupCredible($archive, $to, $from);
+        }
+
+        return ['phase' => $phase, 'from' => $from, 'to' => $to, 'backup' => $backup,
+            'ready' => true];
+    }
+
+    private function assertRestoredRuntimeMatchesBackup(string $backup, bool $allowGeneratedCache = false): void
+    {
+        if (! is_file($backup.'/'.self::BACKUP_MANIFEST_FILE)) {
+            throw new RuntimeException('Restored runtime verification is missing its original backup.');
+        }
+        $lines = file($backup.'/'.self::BACKUP_MANIFEST_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines === false) {
+            throw new RuntimeException('Cannot verify restored runtime.');
+        }
+        foreach ($lines as $line) {
+            if (! preg_match('/^([a-f0-9]{64})  files\/(.+)$/', $line, $match)) {
+                continue;
+            }
+            $relative = $match[2];
+            // Artisan may regenerate non-authoritative bootstrap/cache files
+            // during the fresh-process readiness step. Do not treat its
+            // correctly generated manifests as unauthorized code changes.
+            if ($allowGeneratedCache && str_starts_with($relative, 'bootstrap/cache/')
+                && $relative !== 'bootstrap/cache/.gitignore') {
+                continue;
+            }
+            $target = $this->basePath.'/'.$relative;
+            if (! is_file($target) || is_link($target)
+                || ! hash_equals($match[1], (string) hash_file('sha256', $target))) {
+                throw new RuntimeException('Restored Gateway-managed files do not match the authenticated pre-upgrade code snapshot.');
+            }
+        }
     }
 
     private function assertBaseLayout(): void
@@ -648,13 +862,13 @@ final class WebUpdater
 
     private function assertPackageIntegrity(): void
     {
-        foreach (['UPDATE_VERSION', 'PUBLIC_ENTRY_SHA256', self::MANAGED_PUBLIC_PATHS_FILE, 'manifest.sha256', 'payload', 'WebUpdater.php'] as $required) {
+        foreach (['UPDATE_VERSION', 'PUBLIC_ENTRY_SHA256', self::MANAGED_PUBLIC_PATHS_FILE, 'manifest.sha256', 'payload', 'WebUpdater.php', 'Recover.php'] as $required) {
             if (! file_exists($this->packagePath.'/'.$required)) {
                 throw new RuntimeException('The extracted update package is incomplete; missing '.$required.'.');
             }
         }
 
-        $expectedPackageTop = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', self::MANAGED_PUBLIC_PATHS_FILE, 'WebUpdater.php', 'manifest.sha256', 'payload'];
+        $expectedPackageTop = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', self::MANAGED_PUBLIC_PATHS_FILE, 'WebUpdater.php', 'Recover.php', 'manifest.sha256', 'payload'];
         $actualPackageTop = $this->directoryNames($this->packagePath);
         sort($expectedPackageTop);
         sort($actualPackageTop);
@@ -730,7 +944,7 @@ final class WebUpdater
             }
         }
 
-        $requiredManifest = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', self::MANAGED_PUBLIC_PATHS_FILE, 'WebUpdater.php'];
+        $requiredManifest = ['PUBLIC_ENTRY_SHA256', 'UPDATE_VERSION', self::MANAGED_PUBLIC_PATHS_FILE, 'WebUpdater.php', 'Recover.php'];
         foreach ($this->recursiveFiles($this->packagePath.'/payload', 'payload') as $relative) {
             $requiredManifest[] = $relative;
         }
@@ -1342,6 +1556,9 @@ final class WebUpdater
             }
             if (! copy($source, $target)) {
                 throw new RuntimeException('Could not copy update file to: '.$target.'.');
+            }
+            if (str_ends_with($target, '/bootstrap/cache/config.php') && ! chmod($target, 0600)) {
+                throw new RuntimeException('Cannot preserve private Laravel configuration-cache permissions.');
             }
 
             return;

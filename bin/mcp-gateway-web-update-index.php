@@ -237,12 +237,42 @@ $browserToken = is_string($_COOKIE['mcp_gateway_update_session'] ?? null)
 $action = is_string($_POST['action'] ?? null) ? $_POST['action'] : '';
 $continuation = is_string($_POST['continuation'] ?? null) ? $_POST['continuation'] : '';
 
+// A refreshed Stage POST is not a new administrator login request. During
+// maintenance, send it to the read-only, browser-bound GET status handler.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action !== 'finish'
+    && is_file($basePath.'/storage/app/private/update-state.json')) {
+    header('Cache-Control: no-store');
+    header('Location: /update/', true, 303);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ! in_array($action, ['start', 'finish'], true)) {
+    updaterRender('MCP Gateway Update', '<p class="error">Unsupported update action. Open the update page to inspect its current status.</p>', 405);
+}
+
 $app = require $basePath.'/bootstrap/app.php';
 $updater = new WebUpdater($basePath, $packagePath);
 
 // After the first phase the application is in maintenance mode. Finish the
 // update directly with the private browser token + one-time continuation token.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'finish') {
+    $postedStatus = $updater->browserUpdateStatus($browserToken);
+    if ($postedStatus === null) {
+        updaterRender('Update Session Cannot Be Verified',
+            '<div class="attention" role="alert">No matching browser continuation session was received. Database migration was not started by this request. Check this update from the original browser, or ask the local Owner to reconcile recovery.</div>',
+            403);
+    }
+    if ($postedStatus['expired']) {
+        updaterRender('MCP Gateway Update Session Expired',
+            '<div class="attention" role="alert">The one-time continuation expired. Database migration was not started by this request. Use the local operator recovery check; do not modify tokens or rerun migrations.</div>',
+            409);
+    }
+    if (! $postedStatus['running'] && ($postedStatus['phase'] !== 'files-replaced'
+        || ! is_string($postedStatus['continuation'])
+        || ! hash_equals($postedStatus['continuation'], $continuation))) {
+        header('Location: /update/', true, 303);
+        exit;
+    }
     try {
         $app->make(ConsoleKernel::class)->bootstrap();
         $result = $updater->finish($browserToken, $continuation);
@@ -304,6 +334,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 200);
         }
 
+        if (in_array($phase, ['recovery-restoring', 'recovery-files-restored', 'recovery-http-unverified', 'recovery-completed'], true)) {
+            updaterRender('MCP Gateway Operator Recovery',
+                updaterSteps($phase === 'recovery-completed' ? 'complete' : 'postflight')
+                .'<div class="notice" role="status">An Owner-controlled code-only recovery was started. Current phase: <strong>'.updaterEscape($phase).'</strong>.</div>'
+                .'<p>Do not retry Stage or Finish. Reconcile the retained private state and backup. Verify public HTTP and authenticated WordPress/OAuth health before accepting recovery.</p>',
+                $phase === 'recovery-completed' ? 200 : 503);
+        }
+
         if ($phase === 'postflight-unverified') {
             updaterRender('MCP Gateway Postflight Status Unverified',
                 updaterSteps('postflight')
@@ -352,7 +390,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     if (is_file($basePath.'/storage/app/private/update-state.json')) {
         updaterRender('Update Session Cannot Be Verified',
             '<div class="attention" role="alert">An update or recovery state exists, but this browser is not authorized to resume it.</div>'
-            .'<p>Return to the original update browser session. Do not start another update, change cookies or bypass administrator authentication.</p>',
+            .'<p>'.($browserToken === ''
+                ? 'No update-session cookie was received. Return to the original browser profile; if it is gone, use the verified operator-local recovery procedure.'
+                : 'This browser session does not match the staged update. Return to the original browser profile or ask the local operator to reconcile recovery.').'</p>'
+            .'<p>Do not restart or manipulate tokens, change OAuth credentials or force database migrations. A local Owner can check the private <code>php update/Recover.php --check</code> procedure as the site PHP worker.</p>',
             403);
     }
 }
@@ -398,7 +439,12 @@ try {
     updaterRender('MCP Gateway Update', '<p class="error">Could not initialize the authenticated update session.</p><p>Server error-log reference: <code>'.$reference.'</code></p>', 500);
 }
 
-if ($browserToken === '' || ! preg_match('/^[a-f0-9]{64}$/', $browserToken)) {
+if ($browserToken === '' || ! preg_match('/^[a-f0-9]{64}$/D', $browserToken)) {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        updaterRender('Browser Update Session Not Ready',
+            '<div class="attention" role="alert">The browser did not return the secure update cookie issued on GET. No files were changed. Open this page again in the same browser and enable HTTPS cookies before starting.</div>',
+            409);
+    }
     $browserToken = bin2hex(random_bytes(32));
     updaterCookie($browserToken);
 }
@@ -428,18 +474,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
             'confirmed_target_version' => is_string($_POST['confirmed_target_version'] ?? null) ? $_POST['confirmed_target_version'] : '',
             'package_sha256' => is_string($_POST['package_sha256'] ?? null) ? $_POST['package_sha256'] : '',
         ]);
-        // Set expiry when stage actually finishes, not when the potentially
-        // long backup/file-replacement request began.
+        // A 303 makes the browser apply the refreshed HttpOnly update cookie
+        // and perform a fresh GET from the newly installed PHP runtime before
+        // it initiates Finish. Refreshing the original POST cannot replay Stage.
+        // If the cookie is lost, the GET fails closed rather than running DDL.
+        unset($result);
         updaterCookie($browserToken);
-        updaterRender('Finalizing MCP Gateway Update',
-            updaterSteps('postflight')
-            .'<p>Backup and managed-file replacement completed. Database/cache migrations and health checks are the next server-side step.</p>'
-            .'<form id="continue-update" method="post" action="/update/"><input type="hidden" name="action" value="finish"><input type="hidden" name="continuation" value="'.updaterEscape($result['continuation']).'">'
-            .'<div class="busy" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><p id="progress-message">Ready to begin database and health checks. This browser will try to continue automatically.</p></div>'
-            .'<div class="actions"><button id="manual-continue" type="submit">Continue update</button></div></form>'
-            .updaterManualFinishGuidance()
-            .'<p id="recovery-link" class="notice" hidden>Completion cannot be confirmed. <a href="/update/">Check this update in the same browser</a> or <a href="/admin">verify the administrator panel</a>. Do not retry an uncertain migration.</p>',
-            200, updaterAutoFinishScript());
+        header('Cache-Control: no-store');
+        header('Location: /update/', true, 303);
+        exit;
     } catch (UpdateBusyException) {
         updaterRender('Another Update Step Is Running',
             updaterSteps('files').'<div class="notice" role="status">This request did not start a second update. Return to the original browser tab; do not submit again.</div>',
