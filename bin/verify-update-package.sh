@@ -10,7 +10,7 @@ zip_path="$1"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ -f "$zip_path" ]] || { echo "Update ZIP does not exist: $zip_path" >&2; exit 1; }
 
-for command in unzip php find sort diff awk grep mktemp sha256sum basename dirname; do
+for command in unzip php find sort diff awk grep mktemp sha256sum basename dirname stat; do
   command -v "$command" >/dev/null 2>&1 || { echo "Required verification command is unavailable: $command" >&2; exit 1; }
 done
 
@@ -65,6 +65,12 @@ root="$tmp/extracted"
 
 php -l "$root/update/WebUpdater.php" >/dev/null
 php -l "$root/update/Recover.php" >/dev/null
+# OpenLiteSpeed itself must traverse the public update directory and read its
+# entry point even when the LSAPI worker owns the application code.
+[[ "$(stat -c '%a' "$root/public/update")" == '755'     && "$(stat -c '%a' "$root/public/update/index.php")" == '644' ]] || {
+  echo "Public browser-updater permissions are not portable: require 0755 directory and 0644 entry, without changing private staging." >&2
+  exit 1
+}
 php -l "$root/public/update/index.php" >/dev/null
 
 if find "$root/update" "$root/public/update" -type l -print | grep . >/dev/null; then
