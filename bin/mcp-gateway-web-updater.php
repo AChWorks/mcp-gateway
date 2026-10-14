@@ -633,7 +633,7 @@ final class WebUpdater
      * MUST agree. A migration marker with true/unknown, a possibly advanced
      * ledger or a missing backup requires manual reconciliation, NEVER restore.
      *
-     * @param array<string,mixed> $state
+     * @param  array<string,mixed>  $state
      * @return array{phase:string,from:string,to:string,backup:string,ready:bool}
      */
     private function preMigrationRecoveryPlan(array $state): array

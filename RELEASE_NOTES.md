@@ -1,6 +1,6 @@
 # MCP Gateway v2.2.1
 
-**Corrective source candidate `2.2.1-rc.2` — NOT PUBLISHED.**
+**Corrective source candidate `2.2.1-rc.3` — NOT PUBLISHED.**
 The public release remains `v2.2.0` until independently reviewed,
 exact-head accepted, Owner-approved stable integration and manual publication.
 Neither this VERSION/notes change nor green CI authorizes production rollout.
