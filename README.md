@@ -42,7 +42,27 @@ See `docs/DEPLOYMENT.md` and Issue #135.
 - HTTPS/DNS/redirect protections, `php artisan gateway:check` diagnostics, and PHP 8.4 + MariaDB 10.11 primary deployment compatibility.
 - Clean deployment ZIP/web installer and guarded browser-update ZIP for aaPanel and compatible hosting.
 
-**Upgrade compatibility (public v2.1.2):** existing Target-era v2.0.0–v2.0.3 deployments and previously distributed 2.1.0/2.1.1/2.1.2-rc.N test installations must use the **matching `mcp-gateway-update-v2.1.2.zip`** browser-update asset, not the fresh-install ZIP. The isolated authenticated updater regressions verify published-baseline and RC8-to-Stable upgrades; they do **not** establish successful upgrades on every operator host. Before any actual upgrade, capture and test an independently restorable **database backup**, preserve `.env`, APP_KEY and OAuth/Bridge signing keys, check pending operations, and follow the updater's safe rollback/roll-forward state. **Four additive schema migrations** shipped between public v2.0.3 and v2.1.2 (SSH Target configuration, operational settings, WordPress refresh timeout snapshot, SSH transfer limits); the VERSION/docs-only Stable promotion PR itself introduced no migrations. An updater *code backup* is **not** a database backup, and SQL migrations are not necessarily safe to reverse after effects have occurred. Earlier **Site-era v1.x → Target v2.x** upgrades remain breaking and require the explicitly documented Target transition/reset and permission/consent recovery; do not treat them as nonbreaking. See [Deployment and migration inventory](docs/DEPLOYMENT.md#v212-release-and-migration-inventory), [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md), and [release notes](RELEASE_NOTES.md).
+**Upgrade compatibility (stable v2.2.1):** for an existing deployment-ZIP
+installation, download **`mcp-gateway-update-v2.2.1.zip`** and its matching
+`.sha256` from the [v2.2.1 GitHub Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.2.1)
+when published; never substitute an old v2.1.2 update ZIP, generic source
+archive, or fresh-install ZIP. The official isolated release tests covered
+direct browser-update and backup-integrity checks to v2.2.1 from all nine
+published baselines, including Target-era v2.0.0–v2.0.3, v2.1.2 and
+v2.2.0. Those tests are **not** proof of successful upgrade on each operator
+host, and previously distributed v2.1.0/v2.1.1 or v2.1.2-rc.N test
+installations need their own installed-state compatibility assessment.
+Before any real upgrade, take and test-restore a consistent **database
+backup**, preserve `.env`, `APP_KEY`, both signing-key pairs and current code,
+and follow the updater's safe recovery/roll-forward rules. **Four additive
+schema migrations** shipped from public v2.0.3 to v2.1.2, and an
+additional guarded WordPress disconnect-recovery migration shipped in
+v2.2.0. An updater *code backup* does **not** include SQL; do not blindly
+reverse or retry uncertain migrations. **Earlier Site-era v1.x → Target
+v2.x transitions remain breaking**, even when disposable browser-update
+tests complete: consult [deployment and migration inventory](docs/DEPLOYMENT.md#v212-release-and-migration-inventory),
+the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md),
+and [release notes](RELEASE_NOTES.md) for version-specific requirements.
 
 **Released but disabled by default — [#147](https://github.com/AChWorks/mcp-gateway/issues/147):** v2.1.2 includes OAuth-authenticated, permission-filtered SSH whole-file binary HTTP upload/download plus `target-context` capability discovery from [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). `SSH_FILE_TRANSFER_ENABLED=false` remains the safe default. Independent PHP and Python clients passed isolated installed end-to-end transfer, byte-count/SHA-256 and denial tests. This does **not** prove native ChatGPT attachment/model file ingestion, live operator-host compatibility or permission to enable this route in production. See [whole-file exchange contract](docs/WHOLE-FILE-EXCHANGE.md).
 
@@ -284,20 +304,32 @@ After a breaking Site → Target upgrade and fresh OAuth consent, start a **new 
 
 ## Gateway MCP tools
 
-The released public tool catalog contains **exactly four** tools:
+The current stable Gateway MCP catalog registers **nine tools**: four
+shared/WordPress tools and five Direct SSH tools. Available operations
+remain constrained by the authenticated client, Gateway user and exact
+Target access permissions.
 
 | Tool | Purpose |
 | --- | --- |
 | `targets-list` | List authorized Targets without credentials. |
 | `target-context` | Read non-secret context for one explicitly authorized `target_id`. |
 | `wordpress-abilities-read` | Inspect WordPress Ability metadata on one authorized WordPress Target. |
-| `wordpress-ability-execute` | Execute a schema-valid Ability for an explicit authorized WordPress Target, subject to effect-class and downstream permissions. |
+| `wordpress-ability-execute` | Execute a schema-valid Ability for an explicitly authorized WordPress Target, subject to effect-class and downstream permissions. |
+| `ssh-command-run` | Run a bounded non-interactive command on an explicitly authorized, host-key-verified Direct SSH Target, within its OS privileges and Gateway permission policy. |
+| `ssh-file-stat` | Inspect metadata for one authorized SSH Target SFTP path. |
+| `ssh-file-list` | List a bounded directory on an authorized SSH Target using SFTP. |
+| `ssh-file-read` | Read a bounded byte range from an authorized SSH Target SFTP file. |
+| `ssh-file-write` | Create or conditionally overwrite a bounded SSH Target SFTP file, subject to explicit write authorization. |
 
 **New WordPress plugin Abilities are not individually registered in Gateway.** When WP AI Bridge exposes a new Ability in the authorized Target's catalog, discover its live name/schema and call the existing `wordpress-ability-execute` tool; no Gateway release or extra public tool is required. The Gateway enforces the existing user/client/Target execution permission (including an explicitly grantable `unclassified` class when classification metadata is absent) and WordPress/Bridge enforces its own permissions. An unavailable *new MCP protocol feature* is a separate negotiated SDK/client capability, not a WordPress Ability rejected merely for being new.
 
 Typical flow: call `targets-list`, select an exact `target_id`, read `target-context` and the selected Ability's schema, then execute only the required authorized operation. Never infer an implicit Target from conversation history. Read-only metadata does not authorize writes, and a client-profile display label never grants Target access.
 
-SSH/Agent tool names and runtimes are **not available** in the current release.
+The five **Direct SSH** MCP tools listed above are shipped in the stable
+release, but remain subject to explicit per-Target permissions, verified
+SSH host keys and the remote OS account's privileges. The independent
+**AI Server Agent** Target connector is **Owner-paused and not shipped**;
+its future tool family is not part of this release.
 
 
 ## Administration
