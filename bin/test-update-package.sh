@@ -17,12 +17,17 @@ done
 
 tmp="$(mktemp -d)"
 server_pid=""
+recovery_server_pid=""
 needs_sudo_cleanup=0
 protected_public_enforced=0
 cleanup() {
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" >/dev/null 2>&1 || true
     wait "$server_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$recovery_server_pid" ]]; then
+    kill "$recovery_server_pid" >/dev/null 2>&1 || true
+    wait "$recovery_server_pid" 2>/dev/null || true
   fi
   if [[ "$needs_sudo_cleanup" -eq 1 ]] && command -v sudo >/dev/null 2>&1; then
     sudo -n rm -rf "$tmp" >/dev/null 2>&1 || true
@@ -372,7 +377,7 @@ php -r '
     fwrite(STDERR, "Forced pre-migration failure unexpectedly completed.\n");
     exit(1);
   } catch (Throwable $e) {
-    if (!str_contains($e->getMessage(), "restored automatically")) {
+    if (!str_contains($e->getMessage(), "Gateway-managed files were restored")) {
       fwrite(STDERR, $e->getMessage()."\n");
       exit(2);
     }
@@ -385,12 +390,246 @@ php -r '
 [[ "$(sha256sum "$rollback_target/public/css/host-managed.txt" | awk '{print $1}')" == "$rollback_host_file_hash" ]] || { echo "Pre-migration restore changed an unknown file inside a shared public directory." >&2; exit 1; }
 [[ "$(cd "$rollback_target" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')" == "$rollback_migrations_before" ]] || { echo "Database migration state changed during the forced pre-migration restore regression." >&2; exit 1; }
 [[ ! -e "$rollback_target/storage/framework/down" ]] || { echo "Application remained in maintenance mode after successful pre-migration restore." >&2; exit 1; }
-[[ ! -e "$rollback_target/storage/app/private/update-state.json" ]] || { echo "Updater state remained after successful pre-migration restore." >&2; exit 1; }
+php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??null)!=="recovery-files-restored" || ($s["migration_started"]??null)!==false) exit(1);' "$rollback_target/storage/app/private/update-state.json" || { echo "Verified rollback discarded the required HTTP-unverified recovery journal." >&2; exit 1; }
 
 if [[ "$needs_sudo_cleanup" -eq 1 ]]; then
   sudo -n rm -rf "$rollback_target"
 else
   rm -rf "$rollback_target"
+fi
+
+# Owner-local recovery of a stranded v2.1.2 -> candidate update uses the
+# real published old runtime and the candidate's exact private Recover.php.
+# Keep the main successful-upgrade fixture isolated and unchanged.
+if [[ "$old_version" == "2.1.2" ]]; then
+  recovery_target="$tmp/operator-recovery-target"
+  cp -a "$target" "$recovery_target"
+  recovery_port="${UPDATE_TEST_RECOVERY_HTTP_PORT:-18752}"
+  protect_host_public_state "$recovery_target"
+  recovery_user_ini="$(sha256sum "$recovery_target/public/.user.ini" | awk '{print $1}')"
+  recovery_private="$(sha256sum "$recovery_target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')"
+  recovery_env="$(sha256sum "$recovery_target/.env" | awk '{print $1}')"
+  (cd "$recovery_target" && sha256sum storage/app/private/oauth/private.key storage/app/private/bridge-client/private.key) > "$tmp/recovery-private-keys.before.sha256"
+  recovery_database="$(cd "$recovery_target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')"
+  recovery_artisan="$(sha256sum "$recovery_target/artisan" | awk '{print $1}')"
+  # The previous runtime may have had an enabled Laravel config cache.
+  # Preserve its authenticated original cached DB identity in the snapshot;
+  # recovery must not trust a possibly broken candidate config cache.
+  (cd "$recovery_target" && php artisan config:cache --no-interaction >/dev/null)
+  [[ -f "$recovery_target/bootstrap/cache/config.php" ]] || {
+    echo "Could not create original-runtime cached configuration fixture." >&2; exit 1;
+  }
+  cp "$update_zip" "$recovery_target/mcp-gateway-update-v$new_version.zip"
+  unzip -q "$update_zip" -d "$recovery_target"
+  [[ -f "$recovery_target/update/Recover.php" && ! -e "$recovery_target/public/update/Recover.php" ]] || {
+    echo "Operator recovery entry is not private." >&2; exit 1;
+  }
+
+  php -r '
+    $base=$argv[1]; chdir($base);
+    require $base."/vendor/autoload.php";
+    $app=require $base."/bootstrap/app.php";
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    require $base."/update/WebUpdater.php";
+    $updater=new McpGatewayUpdate\WebUpdater($base,$base."/update");
+    $updater->stage(str_repeat("a",64));
+  ' "$recovery_target"
+  [[ "$(tr -d '[:space:]' < "$recovery_target/VERSION")" == "$new_version" ]] || {
+    echo "Recovery fixture was not staged." >&2; exit 1;
+  }
+
+  # A misleading old POST or lost cookie never authorizes migration.
+  recovery_state="$recovery_target/storage/app/private/update-state.json"
+  # The candidate is fully staged, but Laravel bootstrap cannot execute.
+  # Browser Finish must not cross the migration boundary and the private
+  # Owner-local --check must work independently of candidate bootstrap.
+  cat > "$recovery_target/bootstrap/cache/config.php" <<'PHP_BROKEN_CANDIDATE_BOOTSTRAP'
+<?php
+throw new RuntimeException('Disposable candidate bootstrap failure before DDL.');
+PHP_BROKEN_CANDIDATE_BOOTSTRAP
+  if (cd "$recovery_target" && php artisan about --no-interaction >/dev/null 2>&1); then
+    echo "Candidate bootstrap-failure fixture did not fail." >&2; exit 1;
+  fi
+  (cd "$recovery_target" && php update/Recover.php --check) >"$tmp/recovery-staged-broken-bootstrap-check.log" 2>&1 || {
+    cat "$tmp/recovery-staged-broken-bootstrap-check.log" >&2
+    echo "Owner recovery could not verify a stranded fully staged candidate." >&2; exit 1;
+  }
+  grep -F 'PRE_MIGRATION_PROOF=PASS phase=files-replaced' "$tmp/recovery-staged-broken-bootstrap-check.log" >/dev/null || {
+    echo "Stranded candidate lacked independent DB and original-snapshot proof." >&2; exit 1;
+  }
+  php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??null)!=="files-replaced" || ($s["migration_started"]??null)!==false) exit(1);' "$recovery_state" || {
+    echo "Candidate bootstrap failure crossed migration boundary." >&2; exit 1;
+  }
+  rm "$recovery_target/bootstrap/cache/config.php"
+
+  # A changed private .env cannot be used to redirect a standalone ledger
+  # check away from the database authenticated by the old config cache.
+  cp "$recovery_target/.env" "$tmp/recovery-original-env"
+  sed -i 's/^DB_DATABASE=.*/DB_DATABASE=mcp_gateway_incorrect_recovery_fixture/' "$recovery_target/.env"
+  if (cd "$recovery_target" && php update/Recover.php --check >"$tmp/recovery-mismatched-env.log" 2>&1); then
+    echo "Standalone Owner recovery trusted a changed DB identity." >&2; exit 1;
+  fi
+  cp "$tmp/recovery-original-env" "$recovery_target/.env"
+
+  php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["migration_started"]=true; $s["phase"]="migrate"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
+  if (cd "$recovery_target" && php update/Recover.php --check >"$tmp/recovery-migrate-rejected.log" 2>&1); then
+    echo "Migration-started state was incorrectly treated as recoverable." >&2; exit 1
+  fi
+  php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["migration_started"]=false; $s["phase"]="files-replaced"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
+
+  # An incomplete filesystem stage or advanced migration ledger never
+  # authorizes code rollback without explicit operator reconciliation.
+  php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["phase"]="replace-files"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
+  if (cd "$recovery_target" && php update/Recover.php --check > "$tmp/recovery-incomplete-stage.log" 2>&1); then
+    echo "Partially replaced managed code was marked safe for rollback." >&2; exit 1;
+  fi
+  php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["phase"]="files-replaced"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
+  (cd "$recovery_target" && php -r 'require "vendor/autoload.php"; $app=require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); Illuminate\Support\Facades\DB::table("migrations")->insert(["migration"=>"9999_99_99_999999_unauthorized_extra","batch"=>999]);')
+  if (cd "$recovery_target" && php update/Recover.php --check > "$tmp/recovery-ledger-diverged.log" 2>&1); then
+    echo "Changed migration ledger was incorrectly marked safe for code rollback." >&2; exit 1;
+  fi
+  (cd "$recovery_target" && php -r 'require "vendor/autoload.php"; $app=require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); Illuminate\Support\Facades\DB::table("migrations")->where("migration","9999_99_99_999999_unauthorized_extra")->delete();')
+
+  original_backup="$(php -r '$s=json_decode(file_get_contents($argv[1]),true); echo $s["backup"];' "$recovery_state")"
+  mv "$original_backup/BACKUP_MANIFEST.sha256" "$original_backup/BACKUP_MANIFEST.sha256.hidden"
+  if (cd "$recovery_target" && php update/Recover.php --recover >"$tmp/recovery-bad-manifest.log" 2>&1); then
+    echo "Corrupt/missing backup manifest permitted recovery." >&2; exit 1
+  fi
+  mv "$original_backup/BACKUP_MANIFEST.sha256.hidden" "$original_backup/BACKUP_MANIFEST.sha256"
+  [[ "$(tr -d '[:space:]' < "$recovery_target/VERSION")" == "$new_version" ]] || {
+    echo "Unsafe backup attempted code rollback." >&2; exit 1;
+  }
+  (cd "$recovery_target" && php update/Recover.php --check) > "$tmp/recovery-check.log"
+  grep -F 'PRE_MIGRATION_PROOF=PASS' "$tmp/recovery-check.log" >/dev/null || {
+    echo "Operator code-only preflight failed unexpectedly." >&2; exit 1;
+  }
+
+  recovery_lock="$recovery_target/storage/app/private/update-execution.lock"
+  php -r '$f=fopen($argv[1],"c"); if (!$f || !flock($f,LOCK_EX|LOCK_NB)) exit(1); file_put_contents($argv[2],"locked"); sleep(3);' "$recovery_lock" "$tmp/recovery-lock-held" &
+  recovery_lock_pid=$!
+  for attempt in $(seq 1 30); do
+    [[ -f "$tmp/recovery-lock-held" ]] && break
+    sleep 0.1
+  done
+  [[ -f "$tmp/recovery-lock-held" ]] || { echo "Could not simulate an active updater lock." >&2; exit 1; }
+  if (cd "$recovery_target" && php update/Recover.php --recover > "$tmp/recovery-busy.log" 2>&1); then
+    echo "Concurrent updater lock allowed operator recovery." >&2; exit 1;
+  fi
+  wait "$recovery_lock_pid"
+
+  # Crash after durable recovery-restoring journal; verify safe resume from
+  # the immutable original backup and the retained pre-restore archive.
+  php -r '
+    $base=$argv[1]; chdir($base);
+    require "vendor/autoload.php";
+    $app=require "bootstrap/app.php";
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    require "update/WebUpdater.php";
+    $updater=new McpGatewayUpdate\WebUpdater($base,$base."/update");
+    $create=new ReflectionMethod(McpGatewayUpdate\WebUpdater::class,"createBackup");
+    $archive=$create->invoke($updater,$argv[2],$argv[3]);
+    $statePath=$base."/storage/app/private/update-state.json";
+    $state=json_decode(file_get_contents($statePath),true,512,JSON_THROW_ON_ERROR);
+    $state["phase"]="recovery-restoring";
+    $state["recovery_archive"]=$archive;
+    $state["recovery_started_at"]=time();
+    file_put_contents($statePath,json_encode($state,JSON_THROW_ON_ERROR));
+    file_put_contents($base."/app/interrupted-recovery-test.txt","mixed candidate");
+  ' "$recovery_target" "$new_version" "$old_version"
+
+  # Production-shaped pre-migration bootstrap incompatibility: the signed
+  # candidate files still match their package, but its generated Laravel
+  # configuration cannot bootstrap. The private Owner recovery MUST be able
+  # to validate old-code/DB evidence without starting candidate Laravel.
+  cat > "$recovery_target/bootstrap/cache/config.php" <<'PHP_INVALID_CANDIDATE_CONFIG'
+<?php
+throw new RuntimeException('Disposable candidate config-cache bootstrap failure.');
+PHP_INVALID_CANDIDATE_CONFIG
+  if (cd "$recovery_target" && php artisan about --no-interaction >/dev/null 2>&1); then
+    echo "Disposable recovery fixture did not reproduce candidate-bootstrap failure." >&2; exit 1;
+  fi
+  (cd "$recovery_target" && php update/Recover.php --check) >"$tmp/recovery-broken-bootstrap-check.log" 2>&1 || {
+    cat "$tmp/recovery-broken-bootstrap-check.log" >&2
+    echo "Owner recovery incorrectly depended on the staged candidate bootstrap." >&2; exit 1;
+  }
+  grep -F 'PRE_MIGRATION_PROOF=PASS' "$tmp/recovery-broken-bootstrap-check.log" >/dev/null || {
+    echo "Broken-candidate bootstrap lacked verified independent recovery proof." >&2; exit 1;
+  }
+
+  cat > "$tmp/operator-recovery-router.php" <<'PHP_RECOVERY_ROUTER'
+<?php
+$public = $_SERVER['DOCUMENT_ROOT'];
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
+$physical = rtrim($public, '/').$path;
+if ($path !== '/' && (is_file($physical) || is_dir($physical))) return false;
+require $public.'/index.php';
+PHP_RECOVERY_ROUTER
+  php -S "127.0.0.1:$recovery_port" -t "$recovery_target/public" "$tmp/operator-recovery-router.php" >"$tmp/operator-recovery-server.log" 2>&1 &
+  recovery_server_pid=$!
+  for attempt in $(seq 1 30); do
+    curl -fsS "http://127.0.0.1:$recovery_port/up" >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  # A lost/unreachable HTTP result after a correct code restore must NOT
+  # be reported as recovered. The retained phase permits a safe repeat.
+  if (cd "$recovery_target" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:18753" php update/Recover.php --recover >"$tmp/recovery-http-failed.log" 2>&1); then
+    echo "Recovery incorrectly accepted unreachable HTTP readiness." >&2; exit 1
+  fi
+  grep -F 'RECOVERY_NOT_VERIFIED' "$tmp/recovery-http-failed.log" >/dev/null || { echo "Failed HTTP readiness lacked an explicit non-success status." >&2; exit 1; }
+  php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??"")!=="recovery-http-unverified" || ($s["migration_started"]??null)!==false) exit(1);' "$recovery_state" || { echo "Failed readiness did not retain safe pre-migration evidence." >&2; exit 1; }
+  [[ "$(tr -d '[:space:]' < "$recovery_target/VERSION")" == "2.1.2" ]] || { echo "Failed readiness changed the restored runtime." >&2; exit 1; }
+  (cd "$recovery_target" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:$recovery_port" php update/Recover.php --recover) > "$tmp/recovery-success.log" 2>&1 || {
+    cat "$tmp/recovery-success.log" >&2
+    if [[ -f "$recovery_target/storage/logs/laravel.log" ]]; then
+      grep -m 2 -E '^\[[^]]+\] .*\.ERROR:' "$recovery_target/storage/logs/laravel.log" >&2 || true
+    fi
+    echo "Owner-local pre-migration code recovery failed." >&2; exit 1;
+  }
+  grep -F 'RECOVERY_COMPLETE=PASS' "$tmp/recovery-success.log" >/dev/null || {
+    echo "Owner-local recovery did not pass HTTP readiness." >&2; exit 1;
+  }
+  [[ "$(tr -d '[:space:]' < "$recovery_target/VERSION")" == "2.1.2" ]] || {
+    echo "Operator recovery did not restore the original version." >&2; exit 1;
+  }
+  [[ "$(sha256sum "$recovery_target/artisan" | awk '{print $1}')" == "$recovery_artisan" ]] || {
+    echo "Operator recovery did not restore old managed source." >&2; exit 1;
+  }
+  [[ "$(sha256sum "$recovery_target/public/.user.ini" | awk '{print $1}')" == "$recovery_user_ini" ]] || {
+    echo "Operator recovery modified host-managed public/.user.ini." >&2; exit 1;
+  }
+  [[ "$(sha256sum "$recovery_target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')" == "$recovery_private" ]] || {
+    echo "Operator recovery modified protected private storage." >&2; exit 1;
+  }
+  [[ "$(sha256sum "$recovery_target/.env" | awk '{print $1}')" == "$recovery_env" ]] || {
+    echo "Operator recovery modified .env." >&2; exit 1;
+  }
+  (cd "$recovery_target" && sha256sum --check --strict "$tmp/recovery-private-keys.before.sha256" >/dev/null) || {
+    echo "Operator recovery modified OAuth/Bridge signing keys." >&2; exit 1;
+  }
+  [[ ! -f "$recovery_target/app/interrupted-recovery-test.txt" ]] || {
+    echo "Interrupted recovery left a stale managed file." >&2; exit 1;
+  }
+  [[ "$(cd "$recovery_target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')" == "$recovery_database" ]] || {
+    echo "Operator code-only recovery altered the migration ledger." >&2; exit 1;
+  }
+  php -r '
+    $s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
+    if (($s["phase"]??"")!=="recovery-completed" || !is_dir($s["recovery_archive"]??"")
+      || !is_file($s["backup"]."/BACKUP_MANIFEST.sha256")) exit(1);
+  ' "$recovery_state" || { echo "Operator recovery evidence was not retained." >&2; exit 1; }
+  (cd "$recovery_target" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:$recovery_port" php update/Recover.php --recover) > "$tmp/recovery-repeat.log" 2>&1 || {
+    cat "$tmp/recovery-repeat.log" >&2; echo "Repeated operator recovery was unsafe." >&2; exit 1;
+  }
+  echo "Operator-only stranded pre-migration recovery PASS: revoked migration path refused; corrupt backup refused; old code+DB/private/host-public retained; HTTP readiness PASS; repeated recovery safe."
+
+  kill "$recovery_server_pid" >/dev/null 2>&1 || true
+  wait "$recovery_server_pid" 2>/dev/null || true
+  recovery_server_pid=""
+  if [[ "$needs_sudo_cleanup" -eq 1 ]]; then
+    sudo -n rm -rf "$recovery_target"
+  else
+    rm -rf "$recovery_target"
+  fi
 fi
 
 protect_host_public_state "$target"
@@ -615,11 +854,26 @@ if [[ "$old_version" == "1.2.1" ]]; then
   [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" && ! -f "$target/storage/app/private/update-state.json" ]] || { echo "Incorrect package acknowledgment mutated the installation." >&2; exit 1; }
 fi
 
-curl -fsS -H "$https_header" -H "Cookie: $cookie_header" \
+# Fail CLOSED before maintenance if the browser does not send back its
+# HttpOnly continuation cookie on the authenticated Stage request.
+missing_cookie_code="$(curl -sS -H "$https_header" -H "Cookie: $admin_cookie_header" \
+  --data-urlencode "_token=$update_csrf" --data-urlencode 'action=start' \
+  -o "$tmp/missing-cookie.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$missing_cookie_code" == "409" ]] || { echo "Start accepted a missing browser-bound cookie (HTTP $missing_cookie_code)." >&2; exit 1; }
+grep -F 'No files were changed' "$tmp/missing-cookie.html" >/dev/null || { echo "Missing-cookie refusal lacked an actionable explanation." >&2; exit 1; }
+[[ ! -f "$target/storage/app/private/update-state.json" ]] || { echo "Missing-cookie Stage changed private updater state." >&2; exit 1; }
+
+stage_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
   --data-urlencode "_token=$update_csrf" \
   --data-urlencode 'action=start' "${reset_post[@]}" \
-  -D "$tmp/stage.headers" \
-  "$base_url/update/" > "$tmp/stage.html"
+  -D "$tmp/stage.headers" -o "$tmp/stage-post.html" -w '%{http_code}' \
+  "$base_url/update/")"
+[[ "$stage_code" == "303" ]] || { echo "Stage did not return one-time POST/Redirect/GET handoff (HTTP $stage_code)." >&2; exit 1; }
+grep -i '^Location: /update/' "$tmp/stage.headers" >/dev/null || { echo "Stage redirect was not same-origin." >&2; exit 1; }
+# Real browsers commit Set-Cookie on 303 before issuing a new GET. Fetch the
+# response without executing JavaScript so the test can assert each phase.
+get_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/stage.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$get_code" == "200" ]] || { echo "Stage redirected GET was not browser-bound (HTTP $get_code)." >&2; exit 1; }
 continuation="$(grep -o 'name="continuation" value="[a-f0-9]*"' "$tmp/stage.html" | head -n 1 | sed 's/.*value="\([a-f0-9]*\)"/\1/')"
 [[ "$continuation" =~ ^[a-f0-9]{64}$ ]] || { cat "$tmp/stage.html" >&2; echo "Browser updater did not return a valid continuation token." >&2; exit 1; }
 # A previously valid but nearly expired preflight cookie must be renewed at
@@ -647,11 +901,28 @@ php -r '
 # The first phase is usable with JavaScript disabled, while modern browsers
 # should initiate exactly one asynchronous finish request with visible status.
 grep -F 'id="continue-update"' "$tmp/stage.html" >/dev/null || { echo "Missing final-step form." >&2; exit 1; }
-grep -F 'fetch(form.action' "$tmp/stage.html" >/dev/null || { echo "Automatic final-step handoff is absent." >&2; exit 1; }
+grep -F "fetch('/update/'" "$tmp/stage.html" >/dev/null || { echo "Automatic final-step handoff must use an explicit same-origin URL; form.action is shadowed by the hidden action input." >&2; exit 1; }
+if grep -F 'fetch(form.action' "$tmp/stage.html" >/dev/null; then
+  echo "Automatic handoff still uses a DOM-clobbered form.action (action input)." >&2; exit 1
+fi
 grep -F 'id="manual-continue"' "$tmp/stage.html" >/dev/null || { echo "Script-disabled continuation fallback is absent." >&2; exit 1; }
 grep -F 'If the Continue update button is still visible after this page loads' "$tmp/stage.html" >/dev/null || { echo "Finalizing page lacks actionable manual fallback instructions." >&2; exit 1; }
-grep -F 'Ready to begin database and health checks' "$tmp/stage.html" >/dev/null || { echo "Finalizing page misleadingly claims checks have started before automatic continuation." >&2; exit 1; }
+grep -F 'Ready to begin the final database and health checks' "$tmp/stage.html" >/dev/null || { echo "Redirected resume page misleadingly claims checks have started before automatic continuation." >&2; exit 1; }
 grep -F 'Final database and health checks have been requested' "$tmp/stage.html" >/dev/null || { echo "Automatic continuation lacks a truthful submitted state." >&2; exit 1; }
+
+# The previous Stage POST cannot be replayed by refreshing an old tab.
+# Redirect-to-GET happens before Laravel /admin authentication or mutation.
+old_post_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
+  --data-urlencode "_token=$update_csrf" --data-urlencode 'action=start' \
+  -D "$tmp/replayed-stage.headers" -o /dev/null -w '%{http_code}' "$base_url/update/")"
+[[ "$old_post_code" == "303" ]] || { echo "Replayed Stage POST was not idempotently redirected (HTTP $old_post_code)." >&2; exit 1; }
+grep -i '^Location: /update/' "$tmp/replayed-stage.headers" >/dev/null || { echo "Replayed Stage sent the browser to an unexpected URL." >&2; exit 1; }
+unbound_get_code="$(curl -sS -H "$https_header" -o "$tmp/unbound.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$unbound_get_code" == "403" ]] || { echo "Unbound browser gained recovery state (HTTP $unbound_get_code)." >&2; exit 1; }
+grep -F 'No update-session cookie was received' "$tmp/unbound.html" >/dev/null || { echo "Unbound browser lacked the missing-cookie diagnosis." >&2; exit 1; }
+unbound_finish_code="$(curl -sS -H "$https_header" --data-urlencode 'action=finish' \
+  --data-urlencode "continuation=$continuation" -o "$tmp/unbound-finish.html" -w '%{http_code}' "$base_url/update/")"
+[[ "$unbound_finish_code" == "403" ]] || { echo "Unbound Finish was not rejected without migration (HTTP $unbound_finish_code)." >&2; exit 1; }
 
 # Reload after stage must resume safely without asking Laravel to authenticate
 # an already maintenance-bound browser session.
@@ -660,6 +931,43 @@ resume_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/
 grep -F 'Resume MCP Gateway Update' "$tmp/resume.html" >/dev/null || { echo "Safe resume form missing." >&2; exit 1; }
 grep -F 'If the Continue update button is still visible after this page loads' "$tmp/resume.html" >/dev/null || { echo "Resume page lacks actionable manual fallback instructions." >&2; exit 1; }
 grep -F 'Ready to begin the final database and health checks' "$tmp/resume.html" >/dev/null || { echo "Resume page misleadingly claims checks have started before continuation." >&2; exit 1; }
+
+# Invalid continuation metadata must never change the real database ledger.
+browser_migrations_before="$(cd "$target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')"
+# Malformed or expired browser continuation metadata must NEVER authorize
+# Finish/DDL, even with the correct browser cookie and continuation token.
+state_file="$target/storage/app/private/update-state.json"
+for expiry_case in removed string float object null expired far-future; do
+  php -r '
+    $p=$argv[1]; $case=$argv[2];
+    $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR);
+    switch ($case) {
+      case "removed": unset($s["continuation_expires_at"]); break;
+      case "string": $s["continuation_expires_at"]=(string)(time()+120); break;
+      case "float": $s["continuation_expires_at"]=time()+120.75; break;
+      case "object": $s["continuation_expires_at"]=["unexpected"=>"object"]; break;
+      case "null": $s["continuation_expires_at"]=null; break;
+      case "expired": $s["continuation_expires_at"]=time()-1; break;
+      case "far-future": $s["continuation_expires_at"]=time()+36000; break;
+      default: exit(3);
+    }
+    file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR|JSON_PRESERVE_ZERO_FRACTION));
+  ' "$state_file" "$expiry_case"
+  invalid_get_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header"     -o "$tmp/invalid-$expiry_case-get.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$invalid_get_code" == "503" ]] || { echo "Invalid $expiry_case GET offered continuation (HTTP $invalid_get_code)." >&2; exit 1; }
+  grep -F 'continuation expired or its expiry could not be verified' "$tmp/invalid-$expiry_case-get.html" >/dev/null || {
+    echo "Invalid $expiry_case continuation lacked accurate recovery guidance." >&2; exit 1;
+  }
+  invalid_finish_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header"     --data-urlencode 'action=finish' --data-urlencode "continuation=$continuation"     -o "$tmp/invalid-$expiry_case-finish.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$invalid_finish_code" == "409" ]] || { echo "Invalid $expiry_case Finish crossed expiry gate (HTTP $invalid_finish_code)." >&2; exit 1; }
+  php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??null)!=="files-replaced" || ($s["migration_started"]??null)!==false) exit(1);' "$state_file" || {
+    echo "Invalid $expiry_case changed migration boundary state." >&2; exit 1;
+  }
+done
+[[ "$(cd "$target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')" == "$browser_migrations_before" ]] || {
+  echo "Invalid browser continuation altered migration ledger." >&2; exit 1;
+}
+php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["continuation_expires_at"]=time()+1800; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
 
 # An active finish request must not permit a second POST to enter migrations.
 lockfile="$target/storage/app/private/update-execution.lock"

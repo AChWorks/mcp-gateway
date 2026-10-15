@@ -63,6 +63,9 @@ jobs:
           composer validate --strict
           composer audit --locked
           composer check
+          python3 bin/test-released-baseline-parity.py
+          python3 bin/test_release_publication_guard.py
+          bash bin/test-github-release-notes.sh
 
       - name: Verify explicit immutable publication envelope
         env:
@@ -93,57 +96,41 @@ jobs:
           echo "package=mcp-gateway-v$version" >> "$GITHUB_OUTPUT"
           echo "update_package=mcp-gateway-update-v$version" >> "$GITHUB_OUTPUT"
 
-      - name: Check release state
-        id: publish
+      # An existing or partial Release never implies success.
+      - name: Require new release/tag before packaging
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; package publication is already complete."
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists without a matching release; refusing to move or replace it." >&2
-            exit 1
-          fi
-          echo "needed=true" >> "$GITHUB_OUTPUT"
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          APPROVED_VERSION: ${{ inputs.approved_version }}
+        run: python3 bin/release_publication_guard.py before
 
       - name: Build fresh-install deployment ZIP
-        if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
         run: bash bin/build-release-package.sh "$PACKAGE"
 
       - name: Verify fresh-install deployment ZIP
-        if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
         run: bash bin/verify-release-package.sh "dist/$PACKAGE.zip" "$PACKAGE"
 
       - name: Build browser update ZIP
-        if: steps.publish.outputs.needed == 'true'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
         run: bash bin/build-update-package.sh "$UPDATE_PACKAGE" "dist/$PACKAGE"
 
       - name: Verify browser update ZIP
-        if: steps.publish.outputs.needed == 'true'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
         run: bash bin/verify-update-package.sh "dist/$UPDATE_PACKAGE.zip"
 
       - name: Download released deployment baselines
-        if: steps.publish.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2 2.2.0; do
             gh release download "v$version" \
               --pattern "mcp-gateway-v$version.zip*" \
               --dir dist/baseline
@@ -154,7 +141,6 @@ jobs:
           done
 
       - name: Verify released-baseline browser updates
-        if: steps.publish.outputs.needed == 'true'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
           UPDATE_TEST_DB_HOST: 127.0.0.1
@@ -164,14 +150,13 @@ jobs:
           UPDATE_TEST_DB_PASSWORD: test-password
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2 2.2.0; do
             bash bin/test-update-package.sh \
               "dist/$UPDATE_PACKAGE.zip" \
               "dist/baseline/mcp-gateway-v$version.zip"
           done
 
       - name: Verify released-baseline backup integrity fail-safe
-        if: steps.publish.outputs.needed == 'true'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
           UPDATE_TEST_DB_HOST: 127.0.0.1
@@ -180,20 +165,21 @@ jobs:
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2; do
+          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2 2.2.0; do
             bash bin/test-update-backup-integrity.sh \
               "dist/$UPDATE_PACKAGE.zip" \
               "dist/baseline/mcp-gateway-v$version.zip"
           done
 
       - name: Publish GitHub release
-        if: steps.publish.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
           PACKAGE: ${{ steps.release.outputs.package }}
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          APPROVED_VERSION: ${{ inputs.approved_version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -222,11 +208,26 @@ jobs:
 
           No production server is deployed or modified by publishing this release.
           EOF_NOTES
+          # Atomic create-if-absent tag reservation binds publication to the
+          # exact approved SHA. Conflicting tags fail *before* public Release.
+          # A tag-only reservation on later failure is manual reconciliation;
+          # never delete/move or automatically retry that tag.
+          python3 bin/release_publication_guard.py reserve
           gh release create "$TAG" \
             "dist/$PACKAGE.zip" \
             "dist/$PACKAGE.zip.sha256" \
             "dist/$UPDATE_PACKAGE.zip" \
             "dist/$UPDATE_PACKAGE.zip.sha256" \
-            --target "$GITHUB_SHA" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --target "$APPROVED_SHA" \
             --title "MCP Gateway $TAG" \
             --notes-file dist/release-notes.md
+
+      # Independently download and compare the four published assets by byte.
+      - name: Verify published tag and exact release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          APPROVED_VERSION: ${{ inputs.approved_version }}
+        run: python3 bin/release_publication_guard.py after

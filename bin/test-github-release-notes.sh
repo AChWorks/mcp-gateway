@@ -8,6 +8,22 @@ trap 'rm -rf "$temp"' EXIT
 renderer="$repo_root/bin/render-github-release-notes.sh"
 version="$(tr -d '[:space:]' < "$repo_root/VERSION")"
 
+# The current candidate/stable identity must agree with tracked VERSION,
+# not merely the public stable H1 boundary.
+headline="$(sed -n '3p' "$repo_root/RELEASE_NOTES.md")"
+if [[ "$version" == *-rc.* ]]; then
+  printf -v expected '**Corrective source candidate `%s` — NOT PUBLISHED.**' "$version"
+  [[ "$headline" == "$expected" ]] || {
+    echo "Current release notes identity differs from VERSION $version." >&2
+    exit 1
+  }
+else
+  [[ "$headline" == "**Stable v$version"* && "$headline" != *"source candidate"* ]] || {
+    echo "Stable release notes must identify v$version, not an RC." >&2
+    exit 1
+  }
+fi
+
 # The tracked VERSION can be a candidate, but GitHub's public Release
 # renderer is explicitly stable-only. Validate planned stable notes now
 # without turning this prerelease into a public Release identity.

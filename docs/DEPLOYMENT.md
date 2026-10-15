@@ -2,7 +2,7 @@
 
 This document defines the supported **current deployment and validation baseline** for MCP Gateway on PHP 8.4 + MariaDB 10.11 (primary) or MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory.
 
-GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide.
+GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide. The [operator configuration reference](CONFIGURATION.md) inventories `.env.example` and explains login-session, OAuth/MCP timing and safe live configuration reloads.
 
 ## v2.1.2 release and migration inventory
 
@@ -116,6 +116,56 @@ mcp-gateway-vX.Y.Z.zip
 
 Do not use GitHub's generic **Source code (zip)** archive; that archive does not contain production `vendor/` dependencies. The named deployment ZIP contains only the application/runtime files required for installation and operation.
 
+### Stable GitHub Release tag immutability (Owner/admin gate)
+
+Before attempting the manual stable Release workflow, the repository
+Owner/admin must establish a **GitHub-enforced** tag policy in
+`AChWorks/mcp-gateway` (GitHub **Settings → Rulesets → New tag ruleset**):
+
+- **Enforcement status:** `Active`.
+- **Target tags:** include pattern `v*` (REST `refs/tags/v*`), with
+  **no exclusions**. This protects current and historical stable tags.
+- **Restrict updates:** enabled (ordinary writers cannot move the tag).
+- **Restrict deletions:** enabled (ordinary writers cannot delete it).
+- **Restrict creations:** disabled, so the official workflow can reserve a
+  previously nonexistent tag with the create-only Git Reference API.
+- **Bypass list:** empty; do not give ordinary Write/Maintain actors,
+  repository roles or the Release workflow token an update/delete bypass.
+
+The release publication guard automatically verifies an ACTIVE,
+repository-level tag ruleset covering `refs/tags/v*`, restricting updates
+and deletions, and allowing creation. It checks the policy using the
+least-privilege GitHub workflow token before packaging, immediately before
+reserving the tag, and after publication. Missing, disabled, mistargeted,
+incomplete or inaccessible policy fails closed. There is no need to copy
+ruleset IDs, timestamps or extra confirmations into each release dispatch.
+
+**One-time Owner/admin responsibility:** configure the ruleset with an
+**empty bypass list** and independently verify its complete settings in
+GitHub. GitHub may hide `bypass_actors` from the read-only workflow
+token. If a nonempty bypass list is visible, the guard rejects it;
+otherwise it relies on the Owner's one-time configuration. Only an
+administrator can subsequently add bypasses or change the ruleset;
+deliberate administrator policy changes are a separate governance risk
+and should be reviewed through normal repository administration, not
+per-release attestation. Do not give the release CI token administrator
+permissions just to read a hidden field.
+
+The workflow's two Owner approval inputs remain only the exact reviewed
+`approved_sha` and `approved_version`. Ruleset settings are a prerequisite,
+**not automatically provisioned by CI**. Do not run manual
+`gh release create` as a workaround if the platform policy is absent.
+Current hermetic tests exercise the fail-closed decisions; they do not
+prove GitHub has activated or is enforcing the actual ruleset.
+
+The reservation procedure retains its create-only 201/SHA check,
+rejects concurrent 409/422 and ambiguous API outcomes without retry,
+preserves a tag-only partial publication for manual reconciliation,
+uses `gh release create --verify-tag`, and independently verifies the
+published lightweight tag plus all four downloaded package/checksum
+asset bytes. Any unexpected tag/Release state requires explicit Owner
+reconciliation; never force-move, delete or recreate a reserved tag.
+
 ### Release package hygiene invariant
 
 The named deployment ZIP is a production artifact, not a filtered repository archive. Every current and future release must be built and verified through the repository-owned `bin/build-release-package.sh` and `bin/verify-release-package.sh` path.
@@ -193,6 +243,8 @@ DB_USERNAME=mcp_gateway
 DB_PASSWORD=<server-secret>
 
 SESSION_DRIVER=file
+SESSION_LIFETIME=120
+SESSION_EXPIRE_ON_CLOSE=false
 SESSION_ENCRYPT=true
 SESSION_SECURE_COOKIE=true
 SESSION_HTTP_ONLY=true
@@ -215,6 +267,8 @@ OAUTH_PUBLIC_KEY_PATH=storage/app/private/oauth/public.key
 BRIDGE_CLIENT_PRIVATE_KEY_PATH=storage/app/private/bridge-client/private.key
 BRIDGE_CLIENT_PUBLIC_KEY_PATH=storage/app/private/bridge-client/public.key
 ```
+
+The default browser `web` guard shares one `SESSION_LIFETIME=120` **minute idle timeout** across Gateway administrators and ordinary users. `SESSION_EXPIRE_ON_CLOSE` is optional and `false` by default. Neither extends OAuth access/refresh tokens, the separate legacy MCP session, nor the browser updater's fixed continuation deadline. Config cache can hide edits to `.env`; see [Configuration](CONFIGURATION.md#make-configuration-changes-safely) before changing live settings and never regenerate encryption/signing keys to tune a session timeout.
 
 Important boundaries:
 
@@ -527,9 +581,9 @@ For an authorized upgrade:
 5. Open `https://gateway.example.com/update/` over HTTPS.
 6. Authenticate with the existing Gateway administrator account if prompted. The temporary updater reuses the normal administrator session and CSRF boundary.
 7. Confirm the installed/target versions and all preflight checks, then choose **Update MCP Gateway**.
-8. Keep the browser page open. The UI displays honest phases (not estimated percentages), starts the authorized final POST automatically with JavaScript, and offers a single manual **Continue update** fallback when JavaScript is disabled. After success, repeat the safe HTTP verification from this document.
+8. Keep the browser page open. The authenticated Stage uses a **303 See Other** transition to a fresh `GET /update/` after file replacement. This commits the renewed HttpOnly/Secure cookie before the newly installed runtime presents the browser-bound continuation form. JavaScript submits Finish once; with JavaScript disabled, choose **Continue update** once. Do not refresh a POST or start again. After success, repeat HTTP verification from this document.
 
-The authenticated Start renews its browser-bound update cookie, including an already-valid cookie from an old preflight page. Stage renews the cookie again after backup and file replacement; the 30-minute continuation lifetime begins only when files are marked ready for final checks. A running request must not be submitted twice. With JavaScript disabled, follow the visible instructions to check the same updater URL manually after the running operation finishes.
+The preflight GET must establish an update cookie that the browser actually returns on Start. **Start refuses a missing/invalid update cookie before maintenance or file changes.** The authenticated Start and completed Stage renew the cookie; the one-time continuation lifetime begins only after files are staged. The built update artifact normalizes only the temporary public updater directory/entry to modes `0755`/`0644`, so an OpenLiteSpeed front-end can serve `/update/` even when its Unix user differs from LSAPI; private updater state and backup modes must remain restrictive. Never fix this using broad permission changes on an installed site. A repeated old Stage POST is redirected to read-only status, not Laravel admin authentication; missing/invalid cookies never grant access to Finish. Cookie refusal is not proof of migration failure or success. Check the original browser profile and the operator recovery gate below.
 
 Once database migration, Gateway health validation and maintenance exit have completed, any failure to prune older code backups or remove temporary updater files is **cleanup-only** and must appear as success-with-warning, not as database migration failure. If the private updater state cannot be removed, the authenticated browser is retained for read-only recovery; do not retry the update until the operator safely reconciles that state. If completion-state persistence also fails, an idle retained `migrate` record is classified as **postflight-unverified** rather than proof of migration failure: the record cannot distinguish an interrupted migration from a successful finish with failed housekeeping. Preserve the state and backups, verify installed version/health/maintenance and sanitized logs, and do not attempt blind migration recovery.
 
@@ -562,12 +616,29 @@ Once maintenance mode and managed-file replacement begin, "pre-migration failure
 
 | State | Automatic action | Operator-visible result |
 | --- | --- | --- |
-| Recovery backup is credible, a different failure occurs before migration starts, and guarded restore completes | Revalidate the backup immediately before restore, restore the previous Gateway-managed application files, clear updater state, and resume the application | Previous managed runtime is restored; migration state is unchanged |
+| Recovery backup is credible, a different failure occurs before migration starts, and guarded restore completes | Revalidate the backup immediately before restore, restore only Gateway-managed application files, retain a pre-migration recovery journal and attempt maintenance exit | Previous managed files restored; migration unchanged; public HTTP/Owner acceptance **still required** |
 | Recovery backup is credible but the guarded restore itself cannot complete | Stop automatic recovery; do not start migration | Keep maintenance mode active and retain updater state plus backup evidence. The managed runtime may be partially restored/replaced and requires manual recovery |
 | Recovery backup is rejected when an automatic restore or the final pre-migration boundary needs it | **Do not restore from the rejected backup and do not start migration** | Keep maintenance mode active and retain updater state plus backup evidence for manual reconciliation. Do not infer that old code was restored: after a completed stage the candidate runtime remains installed, while an earlier replacement failure may leave a partially replaced managed tree |
 | Database migration may have started | **Do not perform blind code/database rollback** | Keep maintenance mode active and retain recovery evidence until schema/data state is reconciled and a release-specific roll-forward or rollback procedure is selected |
 
 For either retained-maintenance pre-migration failure, do not re-extract, start another update, delete updater state, or discard the retained backup merely because migration did not start. A failed backup-integrity check means automatic restore is intentionally unavailable; a failed guarded restore means automatic recovery did not complete. Treat the current managed runtime as recovery-required until its exact state is verified. The retained code backup is evidence/recovery material, not proof that a database rollback or code restore is safe.
+
+#### Owner-local recovery of an interrupted pre-migration update
+
+**No public recovery endpoint is exposed.** A missing/expired browser continuation is **not** an authorization grant. The safely recoverable case is limited to an original code backup with exact cryptographic manifest, unchanged pre-upgrade migration ledger, `migration_started=false`, retained maintenance marker and no active execution lock. If the updater wrote `migrate`, `failed-after-migration-start` or `postflight-unverified`, **DO NOT run code-only recovery**: a DDL/postflight outcome is uncertain and must be reconciled using separate Owner-approved plans. Never restore a database using this code-only procedure.
+
+The update ZIP contains a **private** `update/Recover.php` command for an Owner with an authenticated local shell. Execute as the actual **unprivileged LSAPI PHP worker** (the UID that owns `storage/app/private/update-state.json` and `storage/framework/down`), **never root**. Use the matching PHP 8.4 CLI. For example, from the installation root, after verifying the aaPanel VHost worker identity and using your panel's approved account switching mechanism:
+
+```bash
+php update/Recover.php --check
+php update/Recover.php --recover
+```
+
+`--check` is a read-only updater preflight that deliberately **does not bootstrap the staged candidate Laravel runtime**. It validates the private package and authenticated previous-code snapshot, then uses the previous snapshot's library parser plus a bounded read-only PDO migration-ledger query with the preserved private database configuration. If database identity cannot be independently established, it fails closed; no candidate config cache is executed. It refuses busy locks, changed/missing or symlinked backups, mismatched archive identity/package hashes, unknown/possibly started migrations or a migration ledger not equal to the previous release. `--recover` repeats the same checks under the exclusive updater lock, creates and verifies a **separate protected copy of the replaced code**, writes and fsyncs a temporary private `recovery-restoring` journal file, atomically renames it and fsyncs its parent directory **before** changing managed files, restores only Gateway-managed paths from the authenticated pre-upgrade backup and verifies their hashes. Original state, backup, recovery archive, DB, `.env`, APP_KEY, private `storage/`, OAuth credentials/keys, Targets, aaPanel `.user.ini` and unknown public files are retained.
+
+The command boots the **restored** Laravel runtime in new unprivileged PHP subprocesses for `optimize:clear`, `gateway:check` and `up`. It verifies `bootstrap/cache` and only the non-secret generated `packages.php` / `services.php` readability; generated `config.php` remains mode `0600` if present. It then makes five non-destructive HTTP GET readiness requests against the configured `APP_URL` (`/up`, `/admin/login` and the three OAuth metadata endpoints). Missing readiness is reported as `recovery-http-unverified`, **not success**; original evidence remains for reconciliation. A repeated command may retry the safe verification phase without re-running database migrations. `recovery-completed` proves restored public HTTP bootstrap only: independently test authenticated Admin and read-only Target/OAuth behavior before accepting installed-site recovery. Do **not** automatically delete private state or the archive after recovery; reconcile it under an explicit operator cleanup decision.
+
+Never invoke root Artisan with restrictive `umask 077`, broadly change permissions/ownership or declare recovery from CLI-only `gateway:check`. If CLI cannot bootstrap, rollback was interrupted in an unknown place, migration data differs, the backup is corrupted or HTTP remains 500, stop and inspect a sanitized first Laravel/LSAPI error. Keep unrelated PRs, worktrees, release artifacts and installed WordPress authorizations untouched.
 
 #### Public ownership boundary
 

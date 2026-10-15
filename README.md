@@ -1,9 +1,33 @@
 
 # MCP Gateway
 
-MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The public **v2.1.2** release contains both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
+MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The stable **v2.2.1** source includes **WP AI Bridge** (WordPress), independent **Direct SSH** Target connectors, and the independently reviewed browser-updater recovery correction. Release publication is a separately controlled manual action. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
 
 A Target has a stable `target_id`, explicit Gateway user/client/Target access checks and connector-owned credentials. For WordPress, the authenticated WordPress principal and WP AI Bridge access groups remain authoritative; Gateway does not widen their permissions.
+
+## Browser updater reliability and recovery (v2.2.1)
+
+The reviewed v2.2.1 correction repairs the authenticated
+Stage → 303 GET → Finish browser handoff and the named-input
+`form.action` collision. The release normalizes only temporary public
+updater permissions so the OpenLiteSpeed front-end can read the entry even
+when it runs under a different Unix identity than LSAPI PHP.
+
+A detached, expired, or missing browser continuation never grants recovery
+authority. An Owner with a local authenticated shell may run the **private**
+`php update/Recover.php --check` as the same unprivileged PHP worker;
+`--recover` is permitted only with an exact valid pre-migration code
+backup, matching migration ledger and no concurrent updater. Keep backups
+and recovery evidence, verify actual HTTP readiness and WordPress Target
+health, and never blindly roll back possibly started database migrations.
+**Publishing a Release does not authorize an upgrade on a real operator
+host.** Stable release publication requires an **active GitHub tag
+Ruleset** restricting updates/deletions of `refs/tags/v*`, with tag
+creation permitted and no bypass actors. The Owner/admin established
+and verified [Ruleset #25136025](https://github.com/AChWorks/mcp-gateway/rules/25136025);
+the workflow rechecks it without extra manual attestations. Live host
+updates require separate backup, approval, and installed-host acceptance.
+See `docs/DEPLOYMENT.md` and Issue #135.
 
 ## Current release highlights
 
@@ -18,7 +42,27 @@ A Target has a stable `target_id`, explicit Gateway user/client/Target access ch
 - HTTPS/DNS/redirect protections, `php artisan gateway:check` diagnostics, and PHP 8.4 + MariaDB 10.11 primary deployment compatibility.
 - Clean deployment ZIP/web installer and guarded browser-update ZIP for aaPanel and compatible hosting.
 
-**Upgrade compatibility (public v2.1.2):** existing Target-era v2.0.0–v2.0.3 deployments and previously distributed 2.1.0/2.1.1/2.1.2-rc.N test installations must use the **matching `mcp-gateway-update-v2.1.2.zip`** browser-update asset, not the fresh-install ZIP. The isolated authenticated updater regressions verify published-baseline and RC8-to-Stable upgrades; they do **not** establish successful upgrades on every operator host. Before any actual upgrade, capture and test an independently restorable **database backup**, preserve `.env`, APP_KEY and OAuth/Bridge signing keys, check pending operations, and follow the updater's safe rollback/roll-forward state. **Four additive schema migrations** shipped between public v2.0.3 and v2.1.2 (SSH Target configuration, operational settings, WordPress refresh timeout snapshot, SSH transfer limits); the VERSION/docs-only Stable promotion PR itself introduced no migrations. An updater *code backup* is **not** a database backup, and SQL migrations are not necessarily safe to reverse after effects have occurred. Earlier **Site-era v1.x → Target v2.x** upgrades remain breaking and require the explicitly documented Target transition/reset and permission/consent recovery; do not treat them as nonbreaking. See [Deployment and migration inventory](docs/DEPLOYMENT.md#v212-release-and-migration-inventory), [Target transition and recovery](docs/TARGET-TRANSITION-RUNBOOK.md), and [release notes](RELEASE_NOTES.md).
+**Upgrade compatibility (stable v2.2.1):** for an existing deployment-ZIP
+installation, download **`mcp-gateway-update-v2.2.1.zip`** and its matching
+`.sha256` from the [v2.2.1 GitHub Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.2.1)
+when published; never substitute an old v2.1.2 update ZIP, generic source
+archive, or fresh-install ZIP. The official isolated release tests covered
+direct browser-update and backup-integrity checks to v2.2.1 from all nine
+published baselines, including Target-era v2.0.0–v2.0.3, v2.1.2 and
+v2.2.0. Those tests are **not** proof of successful upgrade on each operator
+host, and previously distributed v2.1.0/v2.1.1 or v2.1.2-rc.N test
+installations need their own installed-state compatibility assessment.
+Before any real upgrade, take and test-restore a consistent **database
+backup**, preserve `.env`, `APP_KEY`, both signing-key pairs and current code,
+and follow the updater's safe recovery/roll-forward rules. **Four additive
+schema migrations** shipped from public v2.0.3 to v2.1.2, and an
+additional guarded WordPress disconnect-recovery migration shipped in
+v2.2.0. An updater *code backup* does **not** include SQL; do not blindly
+reverse or retry uncertain migrations. **Earlier Site-era v1.x → Target
+v2.x transitions remain breaking**, even when disposable browser-update
+tests complete: consult [deployment and migration inventory](docs/DEPLOYMENT.md#v212-release-and-migration-inventory),
+the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md),
+and [release notes](RELEASE_NOTES.md) for version-specific requirements.
 
 **Released but disabled by default — [#147](https://github.com/AChWorks/mcp-gateway/issues/147):** v2.1.2 includes OAuth-authenticated, permission-filtered SSH whole-file binary HTTP upload/download plus `target-context` capability discovery from [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). `SSH_FILE_TRANSFER_ENABLED=false` remains the safe default. Independent PHP and Python clients passed isolated installed end-to-end transfer, byte-count/SHA-256 and denial tests. This does **not** prove native ChatGPT attachment/model file ingestion, live operator-host compatibility or permission to enable this route in production. See [whole-file exchange contract](docs/WHOLE-FILE-EXCHANGE.md).
 
@@ -38,6 +82,21 @@ Required runtime:
 Composer 2 and Git are **not required on the target host** when using the recommended deployment ZIP. They are only required for the advanced source/CLI installation path.
 
 Normal operation does **not** require Redis, Docker, Node.js, a queue worker, a message broker, or a separate MCP daemon.
+
+## Configuration and login-session duration
+
+The complete operator-facing [`.env` configuration reference](docs/CONFIGURATION.md) explains every setting in `.env.example`, units, security boundaries, defaults and how to apply changes safely without reinstalling. The web installer creates the production `.env`; edits to that **existing private file** do not change the public GitHub Release or automatically update any host.
+
+By default, both **administrator and ordinary Gateway web-user logins** use the **same** `SESSION_LIFETIME=120` **minutes of inactivity**. To allow eight idle hours, set:
+
+```dotenv
+SESSION_LIFETIME=480
+SESSION_EXPIRE_ON_CLOSE=false
+```
+
+`SESSION_EXPIRE_ON_CLOSE=true` requests browser-close expiration, subject to browser session-restore behavior. These controls do **not** provide separate administrator/user timeouts or a strict absolute maximum login age. They do **not** control OAuth access/refresh tokens, legacy MCP sessions, WP AI Bridge credential expiry or the updater's separate 30-minute browser continuation.
+
+If Laravel's configuration cache is active, changing `.env` alone is insufficient: apply the change using the host's **unprivileged application/PHP account** and verified configuration-reload procedure, then recheck actual login behavior. Never use root-owned Artisan cache files, relax private permissions, rotate `APP_KEY` or regenerate signing keys to change a timeout. See [safe change procedure](docs/CONFIGURATION.md#make-configuration-changes-safely).
 
 ## Installation
 
@@ -158,6 +217,8 @@ DB_USERNAME=mcp_gateway
 DB_PASSWORD=<server-secret>
 
 SESSION_DRIVER=file
+SESSION_LIFETIME=120
+SESSION_EXPIRE_ON_CLOSE=false
 SESSION_ENCRYPT=true
 SESSION_SECURE_COOKIE=true
 SESSION_HTTP_ONLY=true
@@ -243,20 +304,32 @@ After a breaking Site → Target upgrade and fresh OAuth consent, start a **new 
 
 ## Gateway MCP tools
 
-The released public tool catalog contains **exactly four** tools:
+The current stable Gateway MCP catalog registers **nine tools**: four
+shared/WordPress tools and five Direct SSH tools. Available operations
+remain constrained by the authenticated client, Gateway user and exact
+Target access permissions.
 
 | Tool | Purpose |
 | --- | --- |
 | `targets-list` | List authorized Targets without credentials. |
 | `target-context` | Read non-secret context for one explicitly authorized `target_id`. |
 | `wordpress-abilities-read` | Inspect WordPress Ability metadata on one authorized WordPress Target. |
-| `wordpress-ability-execute` | Execute a schema-valid Ability for an explicit authorized WordPress Target, subject to effect-class and downstream permissions. |
+| `wordpress-ability-execute` | Execute a schema-valid Ability for an explicitly authorized WordPress Target, subject to effect-class and downstream permissions. |
+| `ssh-command-run` | Run a bounded non-interactive command on an explicitly authorized, host-key-verified Direct SSH Target, within its OS privileges and Gateway permission policy. |
+| `ssh-file-stat` | Inspect metadata for one authorized SSH Target SFTP path. |
+| `ssh-file-list` | List a bounded directory on an authorized SSH Target using SFTP. |
+| `ssh-file-read` | Read a bounded byte range from an authorized SSH Target SFTP file. |
+| `ssh-file-write` | Create or conditionally overwrite a bounded SSH Target SFTP file, subject to explicit write authorization. |
 
 **New WordPress plugin Abilities are not individually registered in Gateway.** When WP AI Bridge exposes a new Ability in the authorized Target's catalog, discover its live name/schema and call the existing `wordpress-ability-execute` tool; no Gateway release or extra public tool is required. The Gateway enforces the existing user/client/Target execution permission (including an explicitly grantable `unclassified` class when classification metadata is absent) and WordPress/Bridge enforces its own permissions. An unavailable *new MCP protocol feature* is a separate negotiated SDK/client capability, not a WordPress Ability rejected merely for being new.
 
 Typical flow: call `targets-list`, select an exact `target_id`, read `target-context` and the selected Ability's schema, then execute only the required authorized operation. Never infer an implicit Target from conversation history. Read-only metadata does not authorize writes, and a client-profile display label never grants Target access.
 
-SSH/Agent tool names and runtimes are **not available** in the current release.
+The five **Direct SSH** MCP tools listed above are shipped in the stable
+release, but remain subject to explicit per-Target permissions, verified
+SSH host keys and the remote OS account's privileges. The independent
+**AI Server Agent** Target connector is **Owner-paused and not shipped**;
+its future tool family is not part of this release.
 
 
 ## Administration
@@ -305,7 +378,7 @@ After a successful update, the temporary root `update/` directory, `public/updat
 
 Only the three newest updater-created code backups are retained. Recovery is deliberately state-dependent. If backup creation or its initial integrity check fails **before maintenance mode**, the update aborts before managed application files are changed and no restore is needed. After maintenance begins:
 
-- **Credible backup + another pre-migration failure:** the updater revalidates the backup and attempts automatic restore. If restore completes, updater state is cleared and the previous managed runtime returns to service. If the guarded restore itself cannot complete, migration still does not start; maintenance mode, updater state, and recovery evidence are retained for manual recovery.
+- **Credible backup + another pre-migration failure:** the updater revalidates the backup and attempts automatic code restore. Even when managed files are successfully restored, the state remains retained and HTTP availability **is not yet verified**. An Owner must reconcile runtime readiness with the private recovery procedure. If the guarded restore itself cannot complete, migration still does not start; maintenance, updater state and backups are retained for manual reconciliation.
 - **Recovery backup is rejected when recovery or the final pre-migration check needs it:** database migration does not start and the updater does **not** restore from that rejected backup. Maintenance mode, updater state, and recovery evidence are retained for manual reconciliation. Do not assume the previous runtime was restored; depending on the failure point, the managed tree may be the complete candidate or a partially replaced tree.
 - **Database migration may have started:** the updater intentionally does **not** attempt a blind code/database rollback. Maintenance mode and recovery evidence are retained until schema/data state is reconciled and a release-specific rollback or roll-forward procedure is chosen.
 
@@ -379,6 +452,7 @@ For deployment details and security boundaries, see [`docs/DEPLOYMENT.md`](docs/
 - [Connector integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md) — implementing connectors, durable idle authorization, renewal, stale health and error recovery.
 - [Real installed mixed WordPress + SSH acceptance](docs/INSTALLED-MIXED-WP-SSH-ACCEPTANCE.md) — disposable end-to-end Gateway, WordPress Bridge, signed SDK client and host-key-pinned SFTP validation.
 - [Master spec](docs/MASTER-SPEC.md) and [architecture](docs/ARCHITECTURE.md) — target contracts, including clearly identified future/not-yet-shipped connectors.
+- [Configuration and sessions](docs/CONFIGURATION.md) — `.env` reference, login idle timeout, OAuth/MCP TTL distinctions and safe settings changes.
 - [Deployment](docs/DEPLOYMENT.md), [development](docs/DEVELOPMENT.md) and [project map](docs/PROJECT-MAP.md) — operations and maintainer navigation.
 
 ## Release status

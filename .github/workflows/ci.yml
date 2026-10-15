@@ -59,9 +59,21 @@ jobs:
       - name: Validate Composer metadata
         run: composer validate --strict
 
+      - name: Validate configuration reference matches .env.example
+        run: python3 bin/test-configuration-docs.py
+
+      - name: Check updater continuation and crash-journal guards
+        run: php bin/test-update-state-guards.php
+
       - name: Validate immutable prerelease and public version policy
         shell: bash
         run: bash bin/test-version-policy.sh
+
+      - name: Verify published-release upgrade coverage is consistent
+        run: python3 bin/test-released-baseline-parity.py
+
+      - name: Verify fail-closed manual publication guards
+        run: python3 bin/test_release_publication_guard.py
 
       - name: Validate release-note identity and rendered GitHub body
         shell: bash

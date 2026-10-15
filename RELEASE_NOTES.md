@@ -1,3 +1,183 @@
+# MCP Gateway v2.2.1
+
+**Stable v2.2.1 source promotion from independently approved `2.2.1-rc.10`.**
+This promotion changes only VERSION and release documentation; no PHP
+updater/recovery runtime, authorization, migration, or publication guard is
+changed from the author-separated HIGH_ASSURANCE-approved RC.10 candidate.
+The public release and four ZIP/checksum assets are published separately
+by the explicit Owner-authorized GitHub workflow on the final integrated
+main SHA. Publishing does not install or modify any operator host.
+
+## Browser update and verified recovery (Issue #135)
+
+The rc.4 source baseline remediated the four REQUIRED findings of the fresh
+author-separated rc.3 review: malformed/absent continuation TTL now fails
+closed in GET and Finish; the updater journals its migration/recovery boundary
+using a same-directory atomic rename, file fsync and directory fsync before
+crossing it; private Owner recovery validates the authenticated **previous**
+runtime and original migration ledger without bootstrapping the staged
+candidate; and the recovery page identifies automatic vs Owner-local origins,
+with missing legacy provenance reported as unknown. Configuration reference,
+administrator/user idle-session guidance and an automated .env documentation
+coverage guard are included. All these changes require fresh exact-head
+tests and a new independent review; no rc.3 approval carries forward.
+
+- **Deterministic browser handoff:** authenticated Stage finishes with a
+  `303 See Other` redirect to a fresh read-only `GET /update/`, allowing
+  the browser to persist the renewed Secure/HttpOnly one-time cookie before
+  Finish. JavaScript posts to the literal same-origin `/update/` path;
+  it cannot use `form.action`, which is shadowed by the hidden input named
+  `action`. Replayed old Stage POSTs redirect to state rather than
+  misreporting broken administrator authentication.
+- **Safe private Owner recovery:** the installation-bundled
+  `php update/Recover.php --check|--recover` is CLI-only, never a public
+  unauthenticated URL. It requires the real non-root site PHP worker, a
+  verified original code snapshot, matching pre-upgrade migration ledger,
+  completed file staging and an idle update lock. It keeps originals and
+  an additional protected archive and refuses corrupted or missing backup,
+  concurrent restore, partially replaced runtime and any possible
+  database-migration/postflight uncertainty. Only Gateway-managed code
+  may be restored; neither SQL nor Targets/OAuth/keypairs are reset.
+- **Web-worker readiness and file permissions:** the temporary public
+  Updater directory and entry are built with `0755`/`0644` permissions
+  independent of packaging umask, without exposing private staging.
+  Restored Laravel Artisan housekeeping executes as the unprivileged
+  LSAPI PHP worker; non-secret generated manifests remain web-readable
+  while private `config.php` and application secrets remain restricted.
+  Restored HTTP health must pass real GET checks before completion is
+  claimed. A failed readiness retains journal/backup evidence for
+  operator reconciliation.
+
+## Compatibility and delivery boundary
+
+No *new* database schema migration is introduced by this correction over
+`v2.2.0`. An installation still on `v2.1.2` will encounter the existing
+`v2.2.0` migration when updated: retain a separately tested MariaDB
+backup, original code backup, `.env`, APP_KEY and signing credentials.
+No rollback of possibly started migrations is automated.
+
+**Acceptance provenance — exact SHA and delivery environment:**
+The rc.5 candidate at `9b9138792dc25ec0a91f1c051c5d5afce94ec985`
+passed the official Quality, Update Package and Configuration Reference
+workflows. The Update Package workflow downloaded and verified released
+`v2.1.2` and `v2.2.0` ZIP checksums and exercised each upgrade and backup
+integrity guard. A distinct disposable OpenLiteSpeed 1.8.4 + LSAPI PHP 8.4.15
++ MariaDB 12.3.3 + Chromium 149 installation ran **authenticated** Stage →
+303 GET → Finish, Finish aborted before network send then resumed, concurrent
+two-tab Finish, a rejected malformed continuation expiry, and a successful
+server Finish whose HTTP response was lost to the browser. Actual code-only
+Owner recovery from a failed candidate bootstrap was also proven under the
+unprivileged PHP worker with HTTP readiness checks. See [Issue #135 browser
+checkpoint](https://github.com/AChWorks/mcp-gateway/issues/135#issuecomment-6171029165).
+
+The rc.5 browser test used a locally rebuilt, manifest-verified runtime
+package with the **same source revision but different Composer-generated
+vendor metadata** from the official GitHub artifact; it is not claimed to be
+byte-identical to the official CI ZIP. No operator-host deployment, live
+WordPress Target/OAuth action or production readiness is inferred.
+
+The rc.6 candidate at `60635ebbad4bc7bb8efc6fe66f9d47b058fc0ff0`
+aligned the manual stable Release workflow's nine historical baseline
+upgrade/download/integrity loops with the Update Package CI, and introduced
+a parity regression check. All rc.6 Quality, Update Package and Configuration
+Reference workflows succeeded; a separate disposable OpenLiteSpeed/LSAPI/
+Chromium test executed a real authenticated `v2.2.0 -> 2.2.1-rc.6`
+browser upgrade, finishing with HTTP 200, retained secrets/host files and
+normal ready endpoints. Earlier interruption/multi-tab/uncertain-response
+and Owner-local recovery exercises used the **byte-identical rc.5 PHP
+updater implementation**, not distinct rc.6 executions. See [rc.6 evidence](https://github.com/AChWorks/mcp-gateway/issues/135#issuecomment-6171573743).
+
+The fresh independent rc.6 reviewer confirmed the application runtime and
+these test boundaries but reported REQUIRED corrections to the stale
+release-note candidate identity and unsafe success of pre-existing GitHub
+Releases, plus missing pre-/post-publication immutable-state verification.
+
+The **rc.7** candidate at `d9f57337a7f9490909d50ca2ba8069aa9259c393`
+corrected the prerelease identity, rejected pre-existing Releases/Tags,
+rechecked approved source before publication and verified published assets
+and exact downloaded bytes after completion. Its three exact-head CI
+workflows passed and 16 isolated publication-guard tests passed. A fresh
+author-separated rc.7 review found its runtime and these controls sound
+but identified one remaining REQUIRED publication TOCTOU defect: an
+unrelated writer could create the requested tag between the final
+absence check and `gh release create`, which ignores `--target` when a
+matching tag already exists. Post-publication checks would detect but
+not prevent an incorrectly targeted public Release.
+
+The **rc.8** candidate closed the concurrent tag-*creation* boundary
+by using GitHub's create-only Git Reference API to atomically reserve
+the stable tag at the Owner-approved SHA after the final source
+review/CI/baseline checks. A conflicting existing tag (HTTP 409/422) fails before publication,
+including concurrent same-name tag creation; unknown request outcomes
+fail closed without automatic retry. The resulting lightweight tag is
+independently checked against the exact approved SHA before proceeding,
+and `gh release create --verify-tag` refuses implicit tag creation. A
+reserved tag with failed/partial Release publishing is intentionally
+retained for manual reconciliation; it must not be moved/deleted or
+silently replayed. All rc.7 post-publication checksum, tag-target and
+downloaded-byte verification remains intact.
+
+The rc.8 delta updated only the manual publication gate, hermetic
+regressions, VERSION and documentation, without PHP runtime changes.
+Its fresh author-separated HIGH_ASSURANCE review returned
+**CHANGES_REQUIRED**: even after reserving a tag correctly, a repository
+writer could force-move the unprotected tag before the public Release
+consumed it. Checking again in the workflow would leave another
+time-of-check/time-of-use gap.
+
+The unique **rc.9** source candidate requires an **ACTIVE GitHub repository
+tag Ruleset** applying to `refs/tags/v*`, with `Restrict updates` and
+`Restrict deletions`, **no creation restriction**, and **no bypass actors**.
+The publication guard reads the effective repository ruleset list and
+full ruleset details, rejecting an absent/disabled/evaluate/mis-targeted
+policy, missing restrictions, visible bypasses, uncertain API replies or
+Owner-attestation identity drift before reservation or Release. GitHub
+can hide bypass actors from the least-privilege workflow token, so the
+Owner must first inspect the complete ruleset and attest its exact
+GitHub-managed ID/updated_at (with the empty bypass list) at dispatch;
+a subsequent ruleset revision invalidates that attestation. It rechecks
+during the reservation and post-publication phases. The final tag
+identity check now requires the exact lightweight commit ref written by
+the create-only Git Reference API (not an annotated replacement that
+peels to the same commit). Existing no-retry, partial-tag preservation,
+and four-asset byte verification remain intact.
+
+The **rc.10** source candidate simplifies the RC.9 policy check without
+removing the GitHub-enforced tag immutability requirement: the Owner sets
+and verifies an active `refs/tags/v*` no-bypass update/deletion restriction
+**once**, and the workflow reads the current effective rule directly.
+There are no per-release ruleset ID, timestamp or bypass-checkbox inputs;
+the Owner only supplies the exact approved commit SHA and stable version.
+Because GitHub withholds bypass details from read-only workflow tokens,
+a deliberate administrator edit to the Ruleset is treated as a
+repository-governance change instead of requiring an administrator
+credential or repeated manual attestation on each release. Visible
+nonempty bypasses, absent/inactive protection or GitHub API failure
+remain fail-closed. No updater/recovery PHP runtime changed in rc.10.
+The established atomic reservation, immutable lightweight tag identity,
+partial-publication safety and four-asset downloaded-byte verification
+are preserved.
+
+**Live stable-tag prerequisite satisfied:** repository Ruleset
+[#25136025](https://github.com/AChWorks/mcp-gateway/rules/25136025)
+was independently verified ACTIVE on `refs/tags/v*`, disallowing
+tag updates/deletions while allowing creation, with an empty bypass list.
+The precise RC.10 implementation passed live read-only Ruleset verification.
+An author-separated HIGH_ASSURANCE review returned COMPLETE / APPROVE for
+RC.10 HEAD `d5aa86af6f0a8dbd03cfe242b14ed117953244a7`.
+Quality, Update Package and Configuration Reference CI passed at that SHA;
+the nine published-baseline upgrade and backup-integrity tests passed.
+The stable VERSION/docs-only promotion must still use its own exact source
+identity for integration/publication. These checks do not prove production
+aaPanel installation; real host acceptance and backups remain separate.
+
+The Owner authorized source integration and separately requested stable
+publication, but neither the source Merge nor GitHub Release automatically
+changes an installed site. See Issue #135, PR #178 and
+`docs/DEPLOYMENT.md`.
+
+---
+
 # MCP Gateway v2.2.0
 
 **Stable v2.2.0 promotion source.** This version promotes the independently
