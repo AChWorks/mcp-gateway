@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
+use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -29,6 +30,7 @@ final readonly class SshCommandRuntime
         private SshVerifiedTransport $transport,
         private SshCommandAdmission $admission,
         private AccessControl $access,
+        private OperationalSettings $settings,
     ) {}
 
     /** @return array<string,mixed> */
@@ -38,8 +40,10 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('unsupported_connector');
         }
         // No shell filtering: OS account and its sudo policy control command authority.
-        if ($command === '' || trim($command) === '' || strlen($command) > 8192
-            || str_contains($command, "\0") || $timeoutSeconds < 1 || $timeoutSeconds > 15) {
+        $limits = $this->settings->sshCommandLimits();
+        if ($command === '' || trim($command) === '' || strlen($command) > $limits['max_bytes']
+            || str_contains($command, "\0") || $timeoutSeconds < 1
+            || $timeoutSeconds > $limits['max_seconds']) {
             throw new SshTargetConnectionException('invalid_input');
         }
 

@@ -69,10 +69,10 @@ final class OperationalSettingsAdminTest extends TestCase
         libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($dom);
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@class,"operations-form")])'));
-        self::assertSame(3, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
-        self::assertSame(6, (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
-        self::assertSame(6, (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
-        self::assertSame(6, (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
+        self::assertSame(4, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
+        self::assertSame(8, (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
+        self::assertSame(8, (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
+        self::assertSame(8, (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//input[@type="password"][@name="current_password"][@required])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//input[@type="hidden"][@name="version"])'));
         foreach (array_keys(OperationalSettings::allowed()) as $key) {
@@ -510,6 +510,85 @@ final class OperationalSettingsAdminTest extends TestCase
         ])->assertRedirect();
         self::assertSame(['max_bytes' => 8388608, 'max_seconds' => 30],
             (new OperationalSettings)->sshTransferLimits());
+        self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
+    }
+
+    public function test_ssh_command_budgets_preserve_defaults_and_previous_admin_forms(): void
+    {
+        $owner = $this->account('owner');
+        $this->actingAs($owner);
+        self::assertSame(['max_bytes' => 8192, 'max_seconds' => 15],
+            (new OperationalSettings)->sshCommandLimits());
+        $this->get('/admin/operations')->assertOk()
+            ->assertSee('SSH commands')
+            ->assertSee('ssh_command_timeout_seconds')
+            ->assertSee('ssh_command_max_kib');
+
+        $this->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '',
+                'ssh_transfer_max_seconds' => '',
+                'ssh_command_timeout_seconds' => '30',
+                'ssh_command_max_kib' => '64',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 65536, 'max_seconds' => 30],
+            (new OperationalSettings)->sshCommandLimits());
+        self::assertSame([], json_decode((string) DB::table('operational_settings')->value('overrides'), true));
+        self::assertEqualsCanonicalizing(
+            ['ssh_command_timeout_seconds', 'ssh_command_max_kib'],
+            DB::table('operational_setting_changes')->pluck('setting_key')->all(),
+        );
+
+        // A previous six-key UI must not erase new command limits.
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '',
+                'ssh_transfer_max_seconds' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 65536, 'max_seconds' => 30],
+            (new OperationalSettings)->sshCommandLimits());
+
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'ssh_command_timeout_seconds' => '31',
+                'ssh_command_max_kib' => '65',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors(['values.ssh_command_timeout_seconds', 'values.ssh_command_max_kib']);
+
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '',
+                'ssh_transfer_max_seconds' => '',
+                'ssh_command_timeout_seconds' => '',
+                'ssh_command_max_kib' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 8192, 'max_seconds' => 15],
+            (new OperationalSettings)->sshCommandLimits());
         self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
     }
 

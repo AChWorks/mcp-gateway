@@ -722,6 +722,8 @@ setting in the next request/CLI maintenance invocation.
 | WordPress HTTPS connection timeout | `BRIDGE_REMOTE_CONNECT_TIMEOUT_SECONDS` (2 s) | 1–15 seconds |
 | WordPress HTTPS total request timeout | `BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS` (5 s) | 2–30 seconds |
 
+**Development candidate #181 (not part of the published v2.2.1):** the same Owner Settings page adds `ssh_command_timeout_seconds` (default maximum 15 seconds; selectable 15–30) and `ssh_command_max_kib` (default 8 KiB; selectable 8–64). A new additive nullable-column migration, `2026_10_15_000000_add_ssh_command_operational_limits.php`, is required before enabling the candidate. Older Owner forms must not erase these two overrides; the legacy WordPress JSON setting map is unchanged. SSH timeout refers to an individual synchronous exec phase, not a total PHP/proxy request SLA or a retained background job budget.
+
 The connect timeout cannot exceed the total request timeout. The total request
 deadline is shared by DNS A+AAAA validation and pinned HTTPS dispatch; it is
 not a file/object size, overall logical job lifetime, or PHP/CDN/LSAPI worker

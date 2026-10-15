@@ -6,6 +6,7 @@ use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -27,10 +28,12 @@ final readonly class GatewayMcpEndpoint
         private WordpressTargetMcpToolHandlers $wordpress,
         private SshCommandMcpToolHandlers $sshCommands,
         private SshFileMcpToolHandlers $sshFiles,
+        private OperationalSettings $settings,
     ) {}
 
     public function handle(Request $request): Response
     {
+        $commandLimits = $this->settings->sshCommandLimits();
         // Expose only operationally implemented tool families. Connector
         // execution tools will be enabled after their runtime/credentials land.
         $server = Server::builder()
@@ -161,8 +164,10 @@ final readonly class GatewayMcpEndpoint
                     'type' => 'object',
                     'properties' => [
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
-                        'command' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 8192],
-                        'timeout_seconds' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 15, 'default' => 10],
+                        // JSON Schema maxLength is Unicode characters; runtime
+                        // independently enforces the actual UTF-8 byte budget.
+                        'command' => ['type' => 'string', 'minLength' => 1, 'maxLength' => $commandLimits['max_bytes']],
+                        'timeout_seconds' => ['type' => 'integer', 'minimum' => 1, 'maximum' => $commandLimits['max_seconds'], 'default' => 10],
                     ],
                     'required' => ['target_id', 'command'],
                     'additionalProperties' => false,
