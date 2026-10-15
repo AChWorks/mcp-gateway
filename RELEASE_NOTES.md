@@ -1,9 +1,12 @@
 # MCP Gateway v2.2.1
 
-**Corrective source candidate `2.2.1-rc.10` — NOT PUBLISHED.**
-The public release remains `v2.2.0` until independently reviewed,
-exact-head accepted, Owner-approved stable integration and manual publication.
-Neither this VERSION/notes change nor green CI authorizes production rollout.
+**Stable v2.2.1 source promotion from independently approved `2.2.1-rc.10`.**
+This promotion changes only VERSION and release documentation; no PHP
+updater/recovery runtime, authorization, migration, or publication guard is
+changed from the author-separated HIGH_ASSURANCE-approved RC.10 candidate.
+The public release and four ZIP/checksum assets are published separately
+by the explicit Owner-authorized GitHub workflow on the final integrated
+main SHA. Publishing does not install or modify any operator host.
 
 ## Browser update and verified recovery (Issue #135)
 
@@ -155,16 +158,22 @@ The established atomic reservation, immutable lightweight tag identity,
 partial-publication safety and four-asset downloaded-byte verification
 are preserved.
 
-**Platform prerequisite is not yet claimed satisfied.** A repository
-Owner/admin must activate and independently verify the no-bypass ruleset.
-Hermetic tests model the GitHub restriction but do not race a live
-protected tag. No automatic Release, Merge or production deployment
-is authorized. See `docs/DEPLOYMENT.md`. RC.10 requires new exact-head
-CI and a fresh author-separated delta review, then separate Owner
-approval gates.
+**Live stable-tag prerequisite satisfied:** repository Ruleset
+[#25136025](https://github.com/AChWorks/mcp-gateway/rules/25136025)
+was independently verified ACTIVE on `refs/tags/v*`, disallowing
+tag updates/deletions while allowing creation, with an empty bypass list.
+The precise RC.10 implementation passed live read-only Ruleset verification.
+An author-separated HIGH_ASSURANCE review returned COMPLETE / APPROVE for
+RC.10 HEAD `d5aa86af6f0a8dbd03cfe242b14ed117953244a7`.
+Quality, Update Package and Configuration Reference CI passed at that SHA;
+the nine published-baseline upgrade and backup-integrity tests passed.
+The stable VERSION/docs-only promotion must still use its own exact source
+identity for integration/publication. These checks do not prove production
+aaPanel installation; real host acceptance and backups remain separate.
 
-New stable Release, integration and actual operator-host updates require their
-own explicit Owner authorization. See Issue #135, PR #178 and
+The Owner authorized source integration and separately requested stable
+publication, but neither the source Merge nor GitHub Release automatically
+changes an installed site. See Issue #135, PR #178 and
 `docs/DEPLOYMENT.md`.
 
 ---

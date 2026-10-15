@@ -1,15 +1,15 @@
 
 # MCP Gateway
 
-MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The currently published stable line **v2.2.0** includes both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The browser-updater correction is a separately gated `2.2.1-rc.10` source candidate, **not** a published Release. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
+MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The stable **v2.2.1** source includes **WP AI Bridge** (WordPress), independent **Direct SSH** Target connectors, and the independently reviewed browser-updater recovery correction. Release publication is a separately controlled manual action. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
 
 A Target has a stable `target_id`, explicit Gateway user/client/Target access checks and connector-owned credentials. For WordPress, the authenticated WordPress principal and WP AI Bridge access groups remain authoritative; Gateway does not widen their permissions.
 
-## Browser updater reliability and recovery (corrective source candidate)
+## Browser updater reliability and recovery (v2.2.1)
 
-The source-only `2.2.1-rc.10` candidate repairs the authenticated
+The reviewed v2.2.1 correction repairs the authenticated
 Stage → 303 GET → Finish browser handoff and the named-input
-`form.action` collision. The candidate normalizes only temporary public
+`form.action` collision. The release normalizes only temporary public
 updater permissions so the OpenLiteSpeed front-end can read the entry even
 when it runs under a different Unix identity than LSAPI PHP.
 
@@ -20,13 +20,13 @@ authority. An Owner with a local authenticated shell may run the **private**
 backup, matching migration ledger and no concurrent updater. Keep backups
 and recovery evidence, verify actual HTTP readiness and WordPress Target
 health, and never blindly roll back possibly started database migrations.
-**These candidate actions are not approved for public release or an
-operator host.** Stable release publication also requires an **active
-GitHub tag Ruleset** restricting updates/deletions of `refs/tags/v*`,
-with creation allowed and no bypass actors; the release workflow refuses
-publication without that platform-enforced protection. The Owner/admin
-configures and verifies this policy once; no per-release ruleset IDs or
-timestamps are required. CI alone cannot create or prove that policy.
+**Publishing a Release does not authorize an upgrade on a real operator
+host.** Stable release publication requires an **active GitHub tag
+Ruleset** restricting updates/deletions of `refs/tags/v*`, with tag
+creation permitted and no bypass actors. The Owner/admin established
+and verified [Ruleset #25136025](https://github.com/AChWorks/mcp-gateway/rules/25136025);
+the workflow rechecks it without extra manual attestations. Live host
+updates require separate backup, approval, and installed-host acceptance.
 See `docs/DEPLOYMENT.md` and Issue #135.
 
 ## Current release highlights
