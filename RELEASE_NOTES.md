@@ -20,9 +20,21 @@ approved and published with exact-source and verified package assets.
   may outlive the PHP request. It is not an Agent deployment or queue worker.
   Unsupported hosts fail closed. An hourly scheduler performs conservative
   cleanup of terminal jobs; unknown executions require reconciliation.
+- Recovery hardening after independent review: stale pre-dispatch `preparing`
+  intents are fenced against a late PHP launch and safely abandoned; expired
+  uncertain admission leases no longer permanently consume a user's Job
+  capacity. Journal/identity remain durable without automatic re-execution.
+  An exact-binding, local deployment-operator attestation command handles
+  orphaned/rotated/revoked SSH Job cleanup after **independent original-host
+  verification**; operator retirement never claims a confirmed remote exit.
+- The existing Owner-only, password-confirmed Operational Settings screen
+  controls Job concurrency (default 2; 1–1024), maximum Job runtime
+  (default 300 seconds; adjustable up to seven days), terminal-result retention
+  (default 24 hours; 1–8760), pre-dispatch crash grace and post-runtime
+  reconciliation grace. No cumulative historical Job-count cap is imposed.
 - Real OpenSSH/systemd user CI executed a >15-second job with retained
   stdout/stderr and real exit status, safe cancel and no-linger rejection
-  ([workflow #38771039526](https://github.com/AChWorks/mcp-gateway/actions/runs/38771039526)).
+  ([pre-remediation workflow #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531)); new remediation-head acceptance is still pending.
   Host-specific resource, service-manager and operator browser UX remain
   subject to explicit installed-environment validation.
 
@@ -42,7 +54,8 @@ approved and published with exact-source and verified package assets.
 ## Upgrade, security and rollback
 
 - New additive migrations: nullable SSH command operational limits and a
-  durable `ssh_command_jobs` journal. **A consistent, test-restored DB backup
+  durable `ssh_command_jobs` journal and a third additive lifecycle-policy
+  migration for typed limits, admission leases and operator attestations. **A consistent, test-restored DB backup
   is required before an eventual operator upgrade.** The journal's rollback
   guard refuses dropping it while any job record remains; do not erase
   unknown jobs to force migration rollback. Browser-updater code backups do

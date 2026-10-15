@@ -19,7 +19,7 @@ return new class extends Migration
             $table->char('target_binding_hash', 64);
             $table->string('unit_mode', 8)->nullable();
             $table->string('status', 32);
-            $table->unsignedSmallInteger('runtime_seconds');
+            $table->unsignedInteger('runtime_seconds');
             $table->unsignedTinyInteger('exit_code')->nullable();
             $table->string('terminal_reason', 32)->nullable();
             $table->timestamp('expires_at');

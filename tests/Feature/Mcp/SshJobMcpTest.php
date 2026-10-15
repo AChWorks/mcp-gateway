@@ -3,6 +3,7 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Mcp\SshJobMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshJobCoordinator;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\Target;
@@ -242,9 +243,31 @@ final class SshJobMcpTest extends TestCase
             self::assertTrue($byName->has($name));
         }
         self::assertSame(16384, $byName['ssh-job-start']['inputSchema']['properties']['script']['maxLength']);
+        self::assertSame(300, $byName['ssh-job-start']['inputSchema']['properties']['max_runtime_seconds']['maximum']);
         self::assertFalse($byName['ssh-job-start']['annotations']['readOnlyHint']);
         self::assertTrue($byName['ssh-job-status']['annotations']['readOnlyHint']);
         self::assertTrue($byName['ssh-job-cancel']['annotations']['destructiveHint']);
+
+        // New MCP requests publish the current Owner-configured maximum,
+        // never a hardcoded 300s schema that contradicts real runtime.
+        DB::table('operational_settings')->where('id', 1)
+            ->update(['ssh_job_max_runtime_seconds' => 7200]);
+        // The test directly invokes the endpoint twice in one Laravel
+        // container; in real HTTP handling scoped settings reset per request.
+        $this->app->forgetInstance(OperationalSettings::class);
+        $next = Request::create('/mcp', 'POST', [], [], [], $headers, json_encode([
+            'jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/list', 'params' => (object) [],
+        ], JSON_THROW_ON_ERROR));
+        $next->attributes->set('oauth_user', $owner);
+        $next->attributes->set('oauth_client_id', 'client-test');
+        $next->attributes->set('oauth_client_profile_key', 'chatgpt');
+        $updated = app(GatewayMcpEndpoint::class)->handle($next);
+        ob_start();
+        $updated->sendContent();
+        $updatedData = json_decode((string) ob_get_clean(), true, 32, JSON_THROW_ON_ERROR);
+        self::assertSame(200, $updated->getStatusCode());
+        $changed = collect($updatedData['result']['tools'])->keyBy('name');
+        self::assertSame(7200, $changed['ssh-job-start']['inputSchema']['properties']['max_runtime_seconds']['maximum']);
     }
 
     private function user(string $role): User
