@@ -18,7 +18,7 @@ Use the source that owns the kind of truth you need:
 - [Koinon (`AChWorks/koinon`)](https://github.com/AChWorks/koinon) — ecosystem-level governance, discovery, and generic cross-project contracts; it is not an MCP Gateway runtime dependency.
 - [Connector integration and durability guide](./CONNECTOR-INTEGRATION-GUIDE.md) — implementer steps for future connectors, identity, permissions, durable idle authorization, Stale health, finite credential renewal and safe recovery.
 - [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
-- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — delivered Target/client-neutral foundation and its historical program acceptance; consult [Releases](https://github.com/AChWorks/mcp-gateway/releases) for shipped versions, and current Issues for any outstanding host/client acceptance. Agent #111 remains owner-paused.
+- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — delivered Target/client-neutral foundation and its historical program acceptance; consult [Releases](https://github.com/AChWorks/mcp-gateway/releases) for shipped versions, and current Issues for any outstanding host/client acceptance. The canceled Agent connector #111 is historical only.
 - [Program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.
 - Pull requests and commits — implementation identity, review history, and integrated changes.
 - GitHub Actions / CI — validation evidence tied to exact commits.
@@ -35,12 +35,11 @@ The initial WordPress connector compatibility work was established through:
 
 These closed Issues are historical contract provenance, not active task owners. If the Bridge/Gateway connector contract changes materially, recover the current code/release evidence in both repositories and create/update the natural current Issue rather than treating closed Issue #4 as live state.
 
-The Direct SSH connector is shipped; the separate AI Server Agent connector remains owner-paused:
+The Direct SSH connector is shipped. The previously proposed Agent connector was canceled (historical [#111](https://github.com/AChWorks/mcp-gateway/issues/111)); it is not an active dependency:
 
 - [`mcp-gateway#106`](https://github.com/AChWorks/mcp-gateway/issues/106) — Gateway-side breaking Target foundation and connector program;
 - [`mcp-gateway#117`](https://github.com/AChWorks/mcp-gateway/issues/117) — client-neutral MCP authorization edge; ChatGPT remains the first supported profile while future clients can be added without another core auth rewrite;
 - [`mcp-gateway#97`](https://github.com/AChWorks/mcp-gateway/issues/97) — post-integration WordPress OAuth refresh durability and real installed-host/cron proof, not generic lifecycle redesign.
-- [`ai-server-agent#47`](https://github.com/ach1992/ai-server-agent/issues/47) — Agent-side optional Gateway integration, independent credential lifecycle, preserved direct modes, and Agent-authoritative safety.
 - [`mcp-gateway#123`](https://github.com/AChWorks/mcp-gateway/issues/123) — shipped SSH Target without Agent installation; password/key and OS-authorized commands, with separately owned host/edge acceptance evidence.
 - [`mcp-gateway#122`](https://github.com/AChWorks/mcp-gateway/issues/122) — completed finite oversize-response foundation; do not reopen for generic file transfer.
 - [`mcp-gateway#130`](https://github.com/AChWorks/mcp-gateway/issues/130) — existing WordPress direct-versus-Gateway Ability parity; not general file ingress.
@@ -59,7 +58,7 @@ A replacement Master or developer should recover in this order:
 2. Read `docs/ARCHITECTURE.md` for the current integrated implementation boundaries.
 3. Use `docs/TARGET-CONNECTOR-FOUNDATION.md` and the appropriate `docs/DIRECT-SSH-CONNECTOR.md` / `docs/REMOTE-IO-CONTRACT.md` sections only for the current connector/transfer work. The canonical capability-evolution policy is in Master Spec §4.9 and Architecture §4; historical sequencing in long Issue bodies is not today's source state.
 4. Inspect current open GitHub Issues for active work, dependencies and acceptance; first read each issue's latest controlling status and current code/PR/release evidence. Older dated `NEXT`/`BLOCKED` notes are historical unless explicitly still current. Use closed Program #1 only for V1 provenance.
-5. Read only the relevant current Issue/Task Contract and its direct dependencies, including AI Server Agent #47 when working on that connector and #117 when working on client-facing MCP/OAuth identity.
+5. Read only the relevant current Issue/Task Contract and its direct dependencies, including #117 when working on client-facing MCP/OAuth identity.
 6. Inspect the corresponding branch/PR/commit and exact CI evidence before changing or integrating implementation.
 7. Use `docs/DEPLOYMENT.md` plus the applicable GitHub Release and deployment evidence when installation, upgrade, or delivery becomes relevant.
 

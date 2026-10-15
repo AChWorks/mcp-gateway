@@ -108,10 +108,10 @@ final readonly class UserAccessManager
             // denials merely because the form omitted newly introduced permissions.
             $this->replaceGlobalDenials($lockedUser, $role, [
                 ...$deniedPermissions,
-                // Existing Agent denials survive edits. An explicit, freshly
-                // authenticated Owner confirmation on Selected scope is the
-                // only way to change any of the three default-denied SSH tools.
-                ...array_filter($this->existingConnectorDenials($lockedUser),
+                // Historic, inactive permission keys remain intact in storage.
+                // A confirmed Owner on Selected scope is the only path that
+                // can alter live SSH denials.
+                ...array_filter($this->existingSshDenials($lockedUser),
                     static fn (string $permission): bool => ! $allowSshPermissionChanges
                         || ! str_starts_with($permission, 'ssh.')),
                 ...($currentRole !== $role ? array_filter(
@@ -159,10 +159,13 @@ final readonly class UserAccessManager
             $permissions = $this->normalizedDenials(
                 $this->role($lockedUser), $deniedPermissions, true,
             );
-            $requestedDenials = array_map(
-                static fn (GatewayPermission $permission): string => $permission->value,
-                $permissions,
-            );
+            $requestedDenials = [
+                ...array_map(static fn (GatewayPermission $permission): string => $permission->value, $permissions),
+                // Keep historical, unrecognized permission IDs in the revision
+                // and database without admitting them into current policy.
+                ...array_values(array_filter($existing['denied_permissions'],
+                    static fn (string $value): bool => GatewayPermission::tryFrom($value) === null)),
+            ];
             $existingRevision = AuthorizationRevision::targetRule($existing);
             $requestedRevision = AuthorizationRevision::targetRule([
                 'access_rule' => $accessRule, 'denied_permissions' => $requestedDenials,
@@ -203,7 +206,11 @@ final readonly class UserAccessManager
                 );
             }
 
-            DB::table('user_target_permission_denials')->where($identity)->delete();
+            DB::table('user_target_permission_denials')->where($identity)
+                ->whereIn('permission', array_map(
+                    static fn (GatewayPermission $permission): string => $permission->value,
+                    GatewayPermission::cases(),
+                ))->delete();
 
             $rows = array_map(
                 static fn (GatewayPermission $permission): array => [
@@ -321,29 +328,19 @@ final readonly class UserAccessManager
             return [];
         }
 
-        $allowedByDefault = [
-            GatewayPermission::AgentEnvironmentRead,
-            GatewayPermission::AgentCommandRun,
-        ];
-
         return array_values(array_map(
             static fn (GatewayPermission $permission): string => $permission->value,
-            array_filter($role->permissions(), static fn (GatewayPermission $permission): bool => (str_starts_with($permission->value, 'agent.')
-                    && ! in_array($permission, $allowedByDefault, true))
-                || str_starts_with($permission->value, 'ssh.'),
-            ),
+            array_filter($role->permissions(),
+                static fn (GatewayPermission $permission): bool => str_starts_with($permission->value, 'ssh.')),
         ));
     }
 
     /** @return list<string> */
-    private function existingConnectorDenials(User $user): array
+    private function existingSshDenials(User $user): array
     {
         return DB::table('user_permission_denials')
             ->where('user_id', $user->getKey())
-            ->where(function ($query): void {
-                $query->where('permission', 'like', 'agent.%')
-                    ->orWhere('permission', 'like', 'ssh.%');
-            })
+            ->where('permission', 'like', 'ssh.%')
             ->pluck('permission')
             ->map(static fn (mixed $value): string => (string) $value)
             ->all();
@@ -355,9 +352,14 @@ final readonly class UserAccessManager
         GatewayRole $role,
         array $deniedPermissions,
     ): void {
+        // Only replace active permissions; never erase inactive historical
+        // denials merely because an editor omits unsupported permission keys.
         DB::table('user_permission_denials')
             ->where('user_id', $user->getKey())
-            ->delete();
+            ->whereIn('permission', array_map(
+                static fn (GatewayPermission $permission): string => $permission->value,
+                GatewayPermission::cases(),
+            ))->delete();
 
         $permissions = $this->normalizedDenials($role, $deniedPermissions);
         if ($permissions === []) {
@@ -414,9 +416,15 @@ final readonly class UserAccessManager
 
         $user->forceFill(['target_scope_mode' => TargetScopeMode::All->value])->save();
 
-        DB::table('user_permission_denials')->where('user_id', $user->getKey())->delete();
+        $activePermissions = array_map(
+            static fn (GatewayPermission $permission): string => $permission->value,
+            GatewayPermission::cases(),
+        );
+        DB::table('user_permission_denials')->where('user_id', $user->getKey())
+            ->whereIn('permission', $activePermissions)->delete();
         DB::table('user_target_access')->where('user_id', $user->getKey())->delete();
-        DB::table('user_target_permission_denials')->where('user_id', $user->getKey())->delete();
+        DB::table('user_target_permission_denials')->where('user_id', $user->getKey())
+            ->whereIn('permission', $activePermissions)->delete();
         DB::table('target_group_users')->where('user_id', $user->getKey())->delete();
     }
 

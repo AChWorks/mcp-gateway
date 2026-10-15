@@ -12,7 +12,7 @@ This is the implementer/operator contract for connecting a new Target to MCP Gat
 | Existing SSH password/key server | The ssh_direct connector with verified pinned server host key; NO OAuth token-rotation scheduler |
 | A new downstream MCP-over-HTTPS service | Connector-owned credential/lifecycle and shared HTTP MCP transport where appropriate; WordPress-specific OAuth is not a universal requirement |
 
-Current source connector types are declared in app/Application/Targets/TargetConnectorRegistry.php. Only wp_ai_bridge and ssh_direct are implemented; the ai_server_agent integration remains Owner-paused (#111). An architecture entry does not mean a released or deployed capability.
+Current source connector types are declared in app/Application/Targets/TargetConnectorRegistry.php. Only wp_ai_bridge and ssh_direct are implemented; the historical `ai_server_agent` record type has no available adapter or registration flow. An architecture entry does not mean a released or deployed capability.
 
 ## 2. Implement an integrated Target connector
 

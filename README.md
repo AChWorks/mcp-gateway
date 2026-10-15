@@ -2,7 +2,7 @@
 
 MCP Gateway is a self-hosted PHP application that connects an authenticated MCP client to the specific servers and WordPress sites you authorize. Add each connection as a **Target**, control who can use it, and manage access from one web Admin panel.
 
-**Available in v2.2.1:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported client profiles (including ChatGPT). The **AI Server Agent Target connector is not included** in this release.
+**Available in v2.2.1:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported client profiles (including ChatGPT).
 
 ## What you can do
 

@@ -142,9 +142,8 @@ final class AdminUiPresentationTest extends TestCase
                 ->assertSee('Direct SSH')
                 ->assertSee('Checked = DENY')
                 ->assertSee('Active')
-                ->assertSee('AI Server Agent')
-                ->assertSee('Paused')
-                ->assertSee('View paused Agent permission identifiers (read-only)')
+                ->assertDontSee('AI Server Agent')
+                ->assertDontSee('View paused Agent permission identifiers (read-only)')
                 ->assertDontSee('SSH settings require an authorized Owner editor');
         }
 
@@ -171,7 +170,9 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame('targets', GatewayPermission::TargetsView->adminGroup());
         self::assertSame('wordpress', GatewayPermission::WordpressAbilitiesInspect->adminGroup());
         self::assertSame('ssh', GatewayPermission::SshCommandRun->adminGroup());
-        self::assertSame('agent', GatewayPermission::AgentCommandRun->adminGroup());
+        self::assertNull(GatewayPermission::tryFrom('agent.command.run'));
+        self::assertTrue(collect(GatewayPermission::cases())->every(
+            static fn (GatewayPermission $permission): bool => ! str_starts_with($permission->value, 'agent.')));
     }
 
     public function test_specific_wordpress_target_hides_other_connector_permissions_but_preserves_old_denials(): void

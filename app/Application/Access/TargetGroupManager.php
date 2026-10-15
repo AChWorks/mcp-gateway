@@ -273,9 +273,13 @@ final readonly class TargetGroupManager
     /** @param list<string> $values */
     private function replacePermissionDenials(TargetGroup $group, array $values): void
     {
+        // Historical unsupported denial IDs are retained as inert evidence.
         DB::table('target_group_permission_denials')
             ->where('target_group_id', $group->getKey())
-            ->delete();
+            ->whereIn('permission', array_map(
+                static fn (GatewayPermission $permission): string => $permission->value,
+                GatewayPermission::cases(),
+            ))->delete();
 
         $supported = GatewayPermission::targetScoped();
         $permissions = [];

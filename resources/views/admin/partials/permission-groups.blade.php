@@ -27,7 +27,7 @@
         ],
         'wordpress' => [
             'title' => __('WordPress (WP AI Bridge)'),
-            'help' => __('These permissions act only on WordPress Targets. They never grant access to SSH or Agent Targets.'),
+            'help' => __('These permissions act only on WordPress Targets. They never grant access to other connector types.'),
             'status' => __('Available'),
             'future' => false,
         ],
@@ -37,24 +37,17 @@
             'status' => ($sshPermissionsEditable ?? false) ? $sshStatus : __('Requires Owner edit'),
             'future' => ! ($sshPermissionsEditable ?? false),
         ],
-        'agent' => [
-            'title' => __('AI Server Agent'),
-            'help' => __('Agent integration is paused. These identifiers are reserved and do not enable Agent operations; existing denials are retained.'),
-            'status' => __('Paused'),
-            'future' => true,
-        ],
     ];
     $selectedDenials = is_array($selectedDenials ?? null) ? $selectedDenials : [];
     $connectorGroup = match ($connectorType ?? null) {
         'wp_ai_bridge' => 'wordpress',
         'ssh_direct' => 'ssh',
-        'ai_server_agent' => 'agent',
         default => null,
     };
     $visiblePermissions = collect($permissions);
     $preservedOtherDenials = [];
     if ($connectorGroup !== null) {
-        $otherConnectorPermission = static fn ($permission): bool => in_array($permission->adminGroup(), ['wordpress', 'ssh', 'agent'], true)
+        $otherConnectorPermission = static fn ($permission): bool => in_array($permission->adminGroup(), ['wordpress', 'ssh'], true)
             && $permission->adminGroup() !== $connectorGroup;
         $preservedOtherDenials = $visiblePermissions->filter(static fn ($permission): bool => $otherConnectorPermission($permission)
             && in_array($permission->value, $selectedDenials, true))->values()->all();
@@ -89,7 +82,7 @@
                     <input type="hidden" name="denied_permissions[]" value="{{ $permission->value }}">
                 @endforeach
                 <details class="permission-category-collapsible" @if ($retained->isNotEmpty()) open @endif>
-                    <summary>{{ $group === 'ssh' ? __('SSH settings require an authorized Owner editor') : __('View paused Agent permission identifiers (read-only)') }}@if ($retained->isNotEmpty()) ({{ __(':count existing denials retained', ['count' => $retained->count()]) }})@endif</summary>
+                    <summary>{{ __('SSH settings require an authorized Owner editor') }}@if ($retained->isNotEmpty()) ({{ __(':count existing denials retained', ['count' => $retained->count()]) }})@endif</summary>
                     <ul class="permission-reserved-list">
                         @foreach ($items as $permission)
                             <li>

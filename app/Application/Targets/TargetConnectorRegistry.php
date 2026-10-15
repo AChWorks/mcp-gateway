@@ -32,8 +32,8 @@ final class TargetConnectorRegistry
     }
 
     /**
-     * Historical stored types remain inventory-filterable even when their
-     * implementation is paused or not available for enrollment.
+     * Historical stored types remain inventory-filterable without implying
+     * that unsupported connectors can be registered or executed.
      *
      * @return list<string>
      */

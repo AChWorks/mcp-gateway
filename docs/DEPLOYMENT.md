@@ -347,7 +347,7 @@ versioned effective host/client limits and measurement evidence;
 and installed-host go/no-go; [#147](https://github.com/AChWorks/mcp-gateway/issues/147)
 owns supported transport/client delivery gaps. These are separate from
 ordinary WordPress response size settings and from a future Owner-paused
-AI Server Agent connector [#111](https://github.com/AChWorks/mcp-gateway/issues/111).
+
 
 ### Activity retention scheduling
 
@@ -782,4 +782,4 @@ these newer per-intent fences on its own.
 Do not represent v2.1.2's released code as **installed or host-verified**
 without an approved deployment and actual PHP-FPM/CLI/cron/WordPress Bridge
 checks establishing that. #147 remains the
-owner of client-visible bidirectional file bytes; #111 Agent is paused.
+owner of client-visible bidirectional file bytes;

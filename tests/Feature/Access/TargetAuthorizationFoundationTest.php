@@ -3,6 +3,7 @@
 namespace Tests\Feature\Access;
 
 use App\Application\Access\AccessControl;
+use App\Application\Access\TargetGroupManager;
 use App\Application\Access\UserAccessManager;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
@@ -20,7 +21,7 @@ final class TargetAuthorizationFoundationTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_new_nonowner_requires_explicit_ssh_and_privileged_agent_enablement(): void
+    public function test_new_nonowner_defaults_deny_ssh_without_active_agent_permissions(): void
     {
         $manager = app(UserAccessManager::class);
         $administrator = $manager->create($this->attributes('administrator'), []);
@@ -36,18 +37,13 @@ final class TargetAuthorizationFoundationTest extends TestCase
             }
         }
 
-        foreach (['agent.root_command.run', 'agent.file.write', 'agent.job.start', 'agent.browser.run'] as $permission) {
-            self::assertContains($permission, $denials($administrator));
+        foreach ([$administrator, $operator, $viewer] as $user) {
+            self::assertSame([], array_values(array_filter($denials($user),
+                static fn (string $value): bool => str_starts_with($value, 'agent.'))));
         }
-        self::assertNotContains('agent.command.run', $denials($administrator));
-        self::assertNotContains('agent.command.run', $denials($operator));
-        self::assertNotContains('agent.environment.read', $denials($viewer));
 
-        $access = app(AccessControl::class);
-        $target = $this->target('lab-agent', 'ai_server_agent');
-        self::assertFalse($access->allows($administrator, GatewayPermission::AgentRootCommandRun, $target));
-        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
-        self::assertFalse($access->allows($viewer, GatewayPermission::SshCommandRun, $target));
+        $legacy = $this->target('legacy-agent', 'ai_server_agent');
+        self::assertFalse(app(AccessControl::class)->allows($administrator, GatewayPermission::SshCommandRun, $legacy));
     }
 
     public function test_unrelated_user_edit_does_not_erase_existing_connector_denials(): void
@@ -65,9 +61,45 @@ final class TargetAuthorizationFoundationTest extends TestCase
 
         $denied = $manager->globalDenials($user->fresh());
         self::assertContains('ssh.command.run', $denied);
-        self::assertContains('agent.root_command.run', $denied);
+        self::assertNotContains('agent.root_command.run', $denied);
         self::assertContains('agent.command.run', $denied);
         self::assertSame('Renamed operator', $user->fresh()->name);
+    }
+
+    public function test_legacy_agent_denials_remain_inert_and_survive_target_and_group_edits(): void
+    {
+        $manager = app(UserAccessManager::class);
+        $operator = $manager->create($this->attributes('operator'), []);
+        $wp = $this->target('legacy-wp', 'wp_ai_bridge');
+        $legacy = $this->target('legacy-record', 'ai_server_agent');
+        $group = TargetGroup::query()->create(['name' => 'Legacy group']);
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $wp->getKey(),
+            'permission' => 'agent.command.run',
+        ]);
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $group->getKey(),
+            'permission' => 'agent.file.read',
+        ]);
+
+        $manager->updateTargetRule($operator, $wp, 'allow',
+            [GatewayPermission::WordpressAbilitiesInspect->value]);
+        self::assertContains('agent.command.run', $manager->targetRule($operator, $wp)['denied_permissions']);
+        self::assertContains(GatewayPermission::WordpressAbilitiesInspect->value,
+            $manager->targetRule($operator, $wp)['denied_permissions']);
+
+        app(TargetGroupManager::class)->update($group, 'Renamed group',
+            [GatewayPermission::WordpressAbilitiesExecuteMutating->value]);
+        self::assertContains('agent.file.read',
+            app(TargetGroupManager::class)->permissionDenials($group));
+        self::assertContains(GatewayPermission::WordpressAbilitiesExecuteMutating->value,
+            app(TargetGroupManager::class)->permissionDenials($group));
+
+        self::assertFalse(app(AccessControl::class)->allows(
+            $operator, GatewayPermission::WordpressAbilitiesInspect, $legacy));
+        self::assertFalse(app(AccessControl::class)->allows(
+            $operator, GatewayPermission::SshCommandRun, $legacy));
     }
 
     public function test_selected_target_access_requires_membership_and_direct_deny_wins(): void
@@ -183,7 +215,7 @@ final class TargetAuthorizationFoundationTest extends TestCase
         $access = app(AccessControl::class);
 
         self::assertFalse($access->allows($owner, GatewayPermission::SshCommandRun, $wp));
-        self::assertFalse($access->allows($owner, GatewayPermission::AgentCommandRun, $ssh));
+        self::assertFalse($access->allows($owner, GatewayPermission::SshCommandRun, $agent));
         self::assertFalse($access->allows($owner, GatewayPermission::WordpressAbilitiesInspect, $agent));
         self::assertTrue($access->allows($owner, GatewayPermission::SshCommandRun, $ssh));
 
