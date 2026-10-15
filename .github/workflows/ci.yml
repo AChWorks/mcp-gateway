@@ -136,3 +136,39 @@ jobs:
         if: always()
         shell: bash
         run: bash tests/Support/ssh-fixture.sh stop
+
+  ssh-job-real-systemd:
+    # Separate, disposable real-transport proof for SSH Job code.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring, openssl, pdo_sqlite, sodium
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare disposable, loopback-only SSH fixture
+        run: |
+          if ! command -v sshd >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
+          fi
+          bash tests/Support/ssh-fixture.sh start "$GITHUB_ENV"
+
+      - name: Real agentless systemd Job and unsupported-host acceptance
+        run: bash tests/Support/ssh-job-ci-fixture.sh
+
+      - name: Clean isolated SSH fixture
+        if: always()
+        run: bash tests/Support/ssh-fixture.sh stop

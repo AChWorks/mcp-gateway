@@ -162,7 +162,7 @@ final readonly class SshJobCoordinator
 
         $unit = $this->unit($id);
         $launch = $this->managerEnvironment($mode).'systemd-run '.($mode === 'user' ? '--user ' : '')
-            .'--collect --unit='.escapeshellarg($unit)
+            .'--unit='.escapeshellarg($unit)
             .' --property='.escapeshellarg('RuntimeMaxSec='.$runtimeSeconds)
             .' --property='.escapeshellarg('LimitFSIZE=1048576')
             .' --property='.escapeshellarg('KillMode=control-group')
@@ -189,20 +189,32 @@ final readonly class SshJobCoordinator
             $exit = $this->exitCode($user, $target, $jobId);
             if ($exit !== null) {
                 $this->transition($jobId, (string) $row->status,
-                    $exit === 0 ? 'completed' : 'failed', ['exit_code' => $exit]);
+                    $exit === 0 ? 'completed' : 'failed',
+                    ['exit_code' => $exit, 'terminal_reason' => 'script_exit']);
             } elseif ($row->unit_mode === 'user' || $row->unit_mode === 'system') {
                 $running = $this->safeCommand($user, $target,
                     $this->managerEnvironment((string) $row->unit_mode).'systemctl '.($row->unit_mode === 'user' ? '--user ' : '')
                     .'show '.escapeshellarg($this->unit($jobId))
-                    .' --property=ActiveState --value',
+                    .' --property=ActiveState --property=Result --no-pager',
                     8);
+                $state = trim((string) ($running['stdout'] ?? ''));
                 if ($this->successful($running)
-                    && in_array(trim((string) ($running['stdout'] ?? '')), ['active', 'activating'], true)) {
+                    && preg_match('/(?:^|\n)ActiveState=(?:active|activating)(?:\n|$)/D', $state) === 1) {
                     if ($row->status === 'launch_unknown') {
                         $this->transition($jobId, 'launch_unknown', 'running');
                     }
+                } elseif ($this->successful($running)
+                    && preg_match('/(?:^|\n)ActiveState=failed(?:\n|$)/D', $state) === 1
+                    && preg_match('/(?:^|\n)Result=(timeout|exit-code|signal|core-dump|resources|watchdog|start-limit-hit)(?:\n|$)/D', $state, $match) === 1) {
+                    // No fabricated process exit code: systemd's retained
+                    // failed-unit result is authoritative for terminal failure.
+                    // Omitting --collect keeps failed units inspectable until
+                    // bounded post-retention cleanup, even after disconnect.
+                    $this->transition($jobId, (string) $row->status, 'failed',
+                        ['terminal_reason' => 'systemd_'.$match[1]]);
                 } elseif ($row->status === 'running') {
-                    // An absent unit without exit evidence is NOT "completed".
+                    // An absent/inaccessible unit without exit evidence is
+                    // NOT proof of completion or a safe re-launch.
                     $this->transition($jobId, 'running', 'launch_unknown');
                 }
             }
@@ -255,6 +267,15 @@ final readonly class SshJobCoordinator
         if (in_array($row->status, ['completed', 'failed', 'canceled', 'unsupported'], true)) {
             return $this->summary($row);
         }
+        // Reconcile an already-finished unit before issuing a stop, avoiding
+        // mislabeling a prior systemd failure as a cancellation.
+        $reconciled = $this->status($user, $targetId, $clientHash, $jobId);
+        if (in_array($reconciled['status'], ['completed', 'failed', 'canceled', 'unsupported'], true)) {
+            return $reconciled;
+        }
+        // Status may change launch_unknown -> running or vice versa.
+        // Never apply a stale expected-state condition after reconciliation.
+        $row = DB::table('ssh_command_jobs')->where('id', $jobId)->first();
         if (! in_array($row->unit_mode, ['system', 'user'], true)) {
             // A unit was never confirmed available; never pretend its
             // cancellation proves any post-dispatch process was terminated.
@@ -287,7 +308,8 @@ final readonly class SshJobCoordinator
                 // won the race. Its durable exit marker outranks a cancel.
                 $exit = $this->exitCode($user, $target, $jobId);
                 $final = $exit === null ? 'canceled' : ($exit === 0 ? 'completed' : 'failed');
-                $this->transition($jobId, 'cancel_requested', $final, ['exit_code' => $exit]);
+                $this->transition($jobId, 'cancel_requested', $final,
+                    ['exit_code' => $exit, 'terminal_reason' => $exit === null ? 'canceled' : 'script_exit']);
                 $this->record($target, 'ssh-job-cancel', 'success', null);
 
                 return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first());
@@ -496,6 +518,7 @@ final readonly class SshJobCoordinator
             'job_id' => $row->id,
             'status' => $row->status,
             'exit_code' => $row->exit_code,
+            'terminal_reason' => $row->terminal_reason,
             'max_runtime_seconds' => $row->runtime_seconds,
             'expires_at' => $row->expires_at,
             'complete' => in_array($row->status, ['completed', 'failed', 'canceled'], true),

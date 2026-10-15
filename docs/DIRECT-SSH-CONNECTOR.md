@@ -66,7 +66,7 @@ Agent, a Gateway queue daemon, Redis, PTY or an IDE runtime.
 | MCP tool | Parameters and result |
 | --- | --- |
 | `ssh-job-start` | Exact `target_id`, caller-generated UUID `request_id`, UTF-8 `script` up to 16 KiB, `max_runtime_seconds` 16–300 (default 60); returns a stable 26-character `job_id`, status and retry guidance |
-| `ssh-job-status` | Exact `target_id` and `job_id`; reconciles remote exit marker or authenticated systemd active state; `failed` carries actual OS exit code |
+| `ssh-job-status` | Exact `target_id` and `job_id`; reconciles remote exit marker or authenticated systemd active state; `failed` includes actual exit code when a script marker exists; systemd failures have an explicit reason without a fabricated exit code |
 | `ssh-job-output` | Job ID and `stdout` or `stderr` with bounded 1–16 KiB Base64 window, explicit offset, size and EOF; use multiple reads without re-execution |
 | `ssh-job-cancel` | Best-effort stop of the exact unit; only reports `canceled` after independently verifying inactive/failed state and no live MainPID/ControlPID; otherwise `cancel_requested` is honest |
 
@@ -90,7 +90,7 @@ configured SSH OS account is root. Missing support fails closed before
 staging. The same verified SSH path creates one remote private `0700`
 directory under `/var/tmp/.mcp-gateway-job-<job_id>`, stages both the script
 and wrapper via existing atomic SFTP single-window writes (mode `0600`),
-and launches a transient `systemd-run --collect` unit with finite lifetime,
+and launches a transient `systemd-run` unit (failed units retained until safe cleanup) with finite lifetime,
 file-size and control-group constraints. The wrapper writes bounded
 `stdout`, `stderr` and a durable exit-code marker. A job may outlive the
 browser session or Gateway PHP request; each later poll creates an
@@ -107,17 +107,14 @@ migration rollback while present; do not manually drop the table or delete
 pending records. An Owner must deliberately reconcile stuck jobs before
 retention data can be cleared.
 
-**Isolated acceptance evidence:** a disposable loopback OpenSSH account with
-out-of-band pinned host key, RSA private-key authentication and linger-enabled
-systemd user manager passed a 19-second retained script, 20,000-byte stdout
-read as two Base64 windows, stderr, exit status `7`, duplicate-start
-deduplication, verified cancellation and safe cleanup. With linger disabled,
-the same real SSH account refused job staging and launch as unsupported.
-A separate systemd-system-manager test also verified a 17-second non-zero
-script and transient unit stopping. The manually gated test harness is
-`tests/Support/ssh-job-manual-fixture.sh`; it is **not** run by default CI.
-Published/production compatibility, author-separated security review and
-Owner-gated integration remain separate acceptance obligations.
+**Acceptance boundary:** The disposable real systemd-user/SSH test is
+implemented in `tests/Feature/Mcp/SshJobFixtureTest.php` and the GitHub
+Actions runner-only `tests/Support/ssh-job-ci-fixture.sh`, which reuses the
+existing isolated loopback OpenSSH fixture and temporarily enables/disables
+linger for that disposable OS user. Passing mocked security regressions is
+not proof that the systemd Job works; real CI and independent review must
+pass before merging or publishing. No test alters an operator Target or
+production SSH service.
 
 ## SFTP file I/O — released in v2.1.2
 

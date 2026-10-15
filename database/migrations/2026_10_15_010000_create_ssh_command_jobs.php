@@ -21,6 +21,7 @@ return new class extends Migration
             $table->string('status', 32);
             $table->unsignedSmallInteger('runtime_seconds');
             $table->unsignedTinyInteger('exit_code')->nullable();
+            $table->string('terminal_reason', 32)->nullable();
             $table->timestamp('expires_at');
             $table->timestamps();
 

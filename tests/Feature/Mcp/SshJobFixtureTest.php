@@ -53,7 +53,8 @@ final class SshJobFixtureTest extends TestCase
             'no-linger-fixture', 'No linger', 'fixture.example.test',
             (int) getenv('SSH_JOB_FIXTURE_PORT'), (string) getenv('SSH_JOB_FIXTURE_USER'),
             trim((string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_HOST_KEY'))),
-            'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')), null,
+            'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+            getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
         );
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
 
@@ -87,7 +88,8 @@ final class SshJobFixtureTest extends TestCase
             'job-fixture', 'Disposable SSH job', 'fixture.example.test',
             (int) getenv('SSH_JOB_FIXTURE_PORT'), (string) getenv('SSH_JOB_FIXTURE_USER'),
             trim((string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_HOST_KEY'))),
-            'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')), null,
+            'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+            getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
         );
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         $client = hash('sha256', 'separate-fixture-client');
@@ -99,9 +101,13 @@ final class SshJobFixtureTest extends TestCase
         self::assertSame('running', $start['result']['status']);
         $id = $start['result']['job_id'];
 
+        // Re-resolve a fresh facade after a simulated client disconnect.
+        // No process/job handles are held in Gateway PHP memory.
+        unset($tools);
+        $resumed = app(SshJobMcpToolHandlers::class);
         $status = null;
         for ($n = 0; $n < 30; $n++) {
-            $status = $tools->status($owner, $target->target_id, $client, $id);
+            $status = $resumed->status($owner, $target->target_id, $client, $id);
             if (($status['result']['status'] ?? '') === 'failed') {
                 break;
             }
@@ -110,8 +116,8 @@ final class SshJobFixtureTest extends TestCase
         self::assertSame('failed', $status['result']['status'] ?? null, json_encode($status));
         self::assertSame(7, $status['result']['exit_code']);
 
-        $a = $tools->output($owner, $target->target_id, $client, $id, 'stdout', 0, 16384);
-        $b = $tools->output($owner, $target->target_id, $client, $id, 'stdout', 16384, 16384);
+        $a = $resumed->output($owner, $target->target_id, $client, $id, 'stdout', 0, 16384);
+        $b = $resumed->output($owner, $target->target_id, $client, $id, 'stdout', 16384, 16384);
         self::assertTrue($a['ok'], json_encode($a));
         self::assertTrue($b['ok'], json_encode($b));
         self::assertSame(16384, $a['result']['length']);
@@ -119,19 +125,19 @@ final class SshJobFixtureTest extends TestCase
         self::assertTrue($b['result']['end_of_file']);
         self::assertSame(str_pad('7', 20000, '0', STR_PAD_LEFT),
             base64_decode($a['result']['data'], true).base64_decode($b['result']['data'], true));
-        $err = $tools->output($owner, $target->target_id, $client, $id, 'stderr');
+        $err = $resumed->output($owner, $target->target_id, $client, $id, 'stderr');
         self::assertSame('err-job', base64_decode($err['result']['data'], true));
 
-        $duplicate = $tools->start($owner, $target->target_id, $client, $requestId, $script, 60);
+        $duplicate = $resumed->start($owner, $target->target_id, $client, $requestId, $script, 60);
         self::assertSame($id, $duplicate['result']['job_id']);
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
 
-        $cancel = $tools->start($owner, $target->target_id, $client, (string) Str::uuid(),
+        $cancel = $resumed->start($owner, $target->target_id, $client, (string) Str::uuid(),
             'sleep 120; printf "unexpected"; exit 0', 180);
         self::assertTrue($cancel['ok'], json_encode($cancel));
         $cancelId = $cancel['result']['job_id'];
         sleep(1);
-        $stop = $tools->cancel($owner, $target->target_id, $client, $cancelId);
+        $stop = $resumed->cancel($owner, $target->target_id, $client, $cancelId);
         self::assertSame('canceled', $stop['result']['status'] ?? null, json_encode($stop));
         self::assertTrue($stop['result']['complete']);
 
