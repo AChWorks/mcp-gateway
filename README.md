@@ -134,7 +134,7 @@ New WordPress plugin Abilities are discovered through the existing WordPress too
 - **AI client disconnected:** verify Gateway health and OAuth discovery first; inspect and reconnect the correct client authorization when appropriate, without resetting healthy WordPress credentials.
 - **Updater stalled/failed:** preserve backup and recovery evidence. Do not assume Laravel CLI readiness proves actual HTTP availability or that migrations can be reversed.
 
-Use [Deployment](docs/DEPLOYMENT.md) and [Configuration](docs/CONFIGURATION.md) for detailed diagnostics, session lifetime (default `SESSION_LIFETIME=120` minutes of inactivity), PHP-worker permissions and safe recovery. Do not publish passwords, tokens, `.env` or private keys in issue reports.
+Use [Deployment](docs/DEPLOYMENT.md) and [Configuration](docs/CONFIGURATION.md) for detailed diagnostics, session lifetime (default `SESSION_LIFETIME=120` minutes of inactivity, `SESSION_EXPIRE_ON_CLOSE=false`), PHP-worker permissions and safe recovery. Do not publish passwords, tokens, `.env` or private keys in issue reports.
 
 ## Documentation
 
