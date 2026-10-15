@@ -4,7 +4,7 @@ This document defines the supported **current deployment and validation baseline
 
 GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide. The [operator configuration reference](CONFIGURATION.md) inventories `.env.example` and explains login-session, OAuth/MCP timing and safe live configuration reloads.
 
-## Unpublished v2.3.0-rc.6 candidate (#181 / #182 / #189)
+## Unpublished v2.3.0-rc.7 candidate (#181 / #182 / #189)
 
 **Not a GitHub Release or installed operator version.** This candidate retains both current WordPress and Direct SSH connectors, removes the obsolete AI Server Agent-branded UI/permissions while preserving inert legacy records, adds Owner-tunable synchronous SSH limits, a disabled-by-default authenticated browser SSH file picker, and durable agentless SSH Jobs. GitHub Issue [#181](https://github.com/AChWorks/mcp-gateway/issues/181) and [#182](https://github.com/AChWorks/mcp-gateway/issues/182) track the acceptance and authorization gates; historical connector claims do not imply production availability.
 
@@ -34,7 +34,9 @@ reconciled terminal records. Remote systemd user-manager support and approved
 linger are remote-host prerequisites, **not** Gateway installer steps.
 
 The exact rc.5 source passed [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks)
-and merged into main. New rc.6 Target pause behavior requires a **fresh**
+and merged into main. The rc.6 source candidate's security review identified
+an Admin existence-disclosure boundary and two missing pause regressions; rc.7
+addresses those findings and requires a **fresh**
 exact-candidate CI/security review; prior green checks do not approve
 changed source.
 An earlier disposable loopback OpenSSH/systemd fixture did complete >15-second
@@ -766,7 +768,7 @@ setting in the next request/CLI maintenance invocation.
 | WordPress HTTPS connection timeout | `BRIDGE_REMOTE_CONNECT_TIMEOUT_SECONDS` (2 s) | 1–15 seconds |
 | WordPress HTTPS total request timeout | `BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS` (5 s) | 2–30 seconds |
 
-**Unpublished v2.3.0-rc.6 candidate #181:** the same Owner Settings page adds `ssh_command_timeout_seconds` (default maximum 15 seconds; selectable 15–30) and `ssh_command_max_kib` (default 8 KiB; selectable 8–64). A new additive nullable-column migration, `2026_10_15_000000_add_ssh_command_operational_limits.php`, is required before enabling the candidate. Older Owner forms must not erase these two overrides; the legacy WordPress JSON setting map is unchanged. SSH timeout refers to an individual synchronous exec phase, not a total PHP/proxy request SLA or a retained background job budget.
+**Unpublished v2.3.0-rc.7 candidate #181:** the same Owner Settings page adds `ssh_command_timeout_seconds` (default maximum 15 seconds; selectable 15–30) and `ssh_command_max_kib` (default 8 KiB; selectable 8–64). A new additive nullable-column migration, `2026_10_15_000000_add_ssh_command_operational_limits.php`, is required before enabling the candidate. Older Owner forms must not erase these two overrides; the legacy WordPress JSON setting map is unchanged. SSH timeout refers to an individual synchronous exec phase, not a total PHP/proxy request SLA or a retained background job budget.
 
 The connect timeout cannot exceed the total request timeout. The total request
 deadline is shared by DNS A+AAAA validation and pinned HTTPS dispatch; it is

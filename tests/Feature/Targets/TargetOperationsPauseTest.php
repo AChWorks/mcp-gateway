@@ -75,10 +75,17 @@ final class TargetOperationsPauseTest extends TestCase
     {
         $wp = $this->target('wp-c', 'wp_ai_bridge');
         $operator = $this->user('operator');
-        $this->actingAs($operator)->post(route('admin.targets.operations.update', $wp), ['state' => 'paused'])
-            ->assertForbidden();
+        // No implicit Target lookup may occur before the Owner check:
+        // the same non-Owner sees 403 regardless of whether an ID exists.
+        $existing = route('admin.targets.operations.update', ['target' => $wp->target_id]);
+        $missing = route('admin.targets.operations.update', ['target' => 'nonexistent-target']);
+        $this->actingAs($operator)->post($existing, ['state' => 'paused'])->assertForbidden();
+        $this->post($missing, ['state' => 'paused'])->assertForbidden();
         $this->get(route('admin.targets.show', $wp))->assertForbidden();
         self::assertFalse($wp->fresh()->operations_paused);
+        self::assertSame(0, DB::table('activity_events')->whereIn('operation', [
+            'target-operations-pause', 'target-operations-resume',
+        ])->count());
 
         $this->actingAs($this->user('owner'));
         $this->post(route('admin.targets.operations.update', $wp), ['state' => 'invalid'])

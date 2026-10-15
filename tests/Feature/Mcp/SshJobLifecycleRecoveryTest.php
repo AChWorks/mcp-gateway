@@ -439,6 +439,100 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             'ssh_command_jobs', 'preparing_expires_at'));
     }
 
+    public function test_pause_after_simulated_job_staging_fences_later_sftp_and_systemd_launch_without_replay(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        $config = SshTargetConfig::query()
+            ->where('target_record_id', $target->getKey())->firstOrFail();
+        $binding = SshTargetBinding::hash($target, $config);
+        $requestId = (string) Str::uuid();
+        $script = 'echo must-not-run-after-pause';
+        $tools = app(SshJobMcpToolHandlers::class);
+
+        // A local no-egress probe creates a durable journal row. Advance its
+        // verified identity/lease through the same coordinator CAS used after
+        // a successful probe, simulating completed mkdir/script staging.
+        // No daemon, real host, remote file or extra test-only product seam.
+        $first = $tools->start($user, $target->target_id, $client, $requestId, $script);
+        self::assertSame('unsupported', $first['result']['status']);
+        $id = $first['result']['job_id'];
+        DB::table('ssh_command_jobs')->where('id', $id)->update([
+            'status' => 'preparing',
+            'unit_mode' => null,
+            'terminal_reason' => null,
+            'preparing_expires_at' => now()->addMinute(),
+            'admission_expires_at' => now()->addHour(),
+        ]);
+        $transition = new \ReflectionMethod(SshJobCoordinator::class, 'transition');
+        self::assertTrue($transition->invoke(app(SshJobCoordinator::class),
+            $id, 'preparing', 'launch_unknown', ['unit_mode' => 'user']));
+        self::assertSame('launch_unknown', DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+
+        // The Owner pauses AFTER the first stage, before a later SFTP write
+        // and the final remote systemd-run command are attempted.
+        $this->actingAs($user)->post(route('admin.targets.operations.update', [
+            'target' => $target->target_id,
+        ]), ['state' => 'paused'])->assertRedirect();
+        $policy = new class implements SshDialAddressPolicy
+        {
+            public int $attempts = 0;
+
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                $this->attempts++;
+
+                throw new SshTargetConnectionException('egress_denied');
+            }
+        };
+        $this->app->instance(SshDialAddressPolicy::class, $policy);
+        $commands = app(SshCommandRuntime::class);
+        $files = app(SshFileRuntime::class);
+        $directory = '/var/tmp/.mcp-gateway-job-'.$id;
+
+        // All these calls are actual retained-Job stage runtime entrypoints.
+        // A stale hydrated Target must re-read Pause BEFORE credential use
+        // or any network dial; the final systemd-run must never be issued.
+        foreach ([
+            'post-probe-mkdir' => 'mkdir -m 700 -- '.escapeshellarg($directory),
+            'final-systemd-run' => 'systemd-run --user --unit=test -- /bin/sh '.$directory.'/wrapper.sh',
+        ] as $phase => $command) {
+            try {
+                $commands->run($user, $target, $command, 8, $binding);
+                self::fail('The paused Target must block '.$phase.' before remote exec.');
+            } catch (SshTargetConnectionException $exception) {
+                self::assertSame('target_paused', $exception->reason, $phase);
+            }
+        }
+
+        foreach ([
+            'staged-script' => [$directory.'/script.sh', base64_encode($script)],
+            'staged-wrapper' => [$directory.'/wrapper.sh', base64_encode('#!/bin/sh')],
+        ] as $phase => [$path, $content]) {
+            try {
+                $files->write($user, $target, $path, $content, expectedTargetBinding: $binding);
+                self::fail('The paused Target must block '.$phase.' before SFTP.');
+            } catch (SshTargetConnectionException $exception) {
+                self::assertSame('target_paused', $exception->reason, $phase);
+            }
+        }
+        self::assertSame(0, $policy->attempts, 'No staged file or systemd-run request reached outbound SSH.');
+
+        // Pause does not invent remote exit, cancellation or a new Job ID.
+        $journal = DB::table('ssh_command_jobs')->where('id', $id)->first();
+        self::assertSame('launch_unknown', $journal->status);
+        self::assertNull($journal->terminal_reason);
+        self::assertNull($journal->exit_code);
+        self::assertSame($binding, $journal->target_binding_hash);
+        self::assertSame('target_paused', $tools->start(
+            $user, $target->target_id, $client, $requestId, $script,
+        )['error']['code']);
+        self::assertSame('target_paused', $tools->status(
+            $user, $target->target_id, $client, $id,
+        )['error']['code']);
+        self::assertSame(1, DB::table('ssh_command_jobs')->count(), 'An old Job must not be relaunched or erased.');
+        self::assertSame('launch_unknown', DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+    }
+
     public function test_rebound_target_cannot_receive_later_job_phase_commands_or_sftp(): void
     {
         [$user, $target, $client] = $this->fixture();

@@ -1,11 +1,18 @@
 # MCP Gateway v2.3.0
 
-**Corrective source candidate `2.3.0-rc.6` — NOT PUBLISHED.**
-This follows independently approved/merged rc.5 for Issues #181/#182;
-rc.6 adds Owner-requested per-Target Pause/Resume (#189) and proportionate
-source-level mixed Target/OAuth/SSH acceptance (#112). The earlier rc.5
-independent security review does not approve these new runtime changes.
-Published stable remains v2.2.1 until separate approval and Release.
+**Corrective source candidate `2.3.0-rc.7` — NOT PUBLISHED.**
+This follows independently approved/merged rc.5 for Issues #181/#182.
+rc.6 introduced Owner-requested per-Target Pause/Resume (#189) and proportionate
+source-level mixed Target/OAuth/SSH acceptance (#112). Independent review of
+PR #190's rc.6 returned CHANGES_REQUIRED: the new Admin POST resolved a Target
+before checking Owner identity, and specific old-OAuth-bearer and mid-stage SSH
+Job regression tests were missing. rc.7 checks Owner identity before any Target
+lookup, verifies uniform non-Owner 403 for existing/missing IDs, and adds two
+small deterministic regressions proving a previously issued OAuth bearer
+cannot bypass Pause and a paused Job cannot stage/launch further remote work.
+Previous rc.6 CI and review do NOT approve rc.7; exact-candidate CI and a
+fresh author-separated independent delta re-review are required. Published
+stable remains v2.2.1 until separately approved integration and Release.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -72,7 +79,7 @@ Published stable remains v2.2.1 until separate approval and Release.
   unauthorized Targets. Safe local management and credential recovery remain.
 - An additive migration enables old/new Targets by default; Owner POST action
   is idempotent, audited and protected by existing web/CSRF boundaries.
-  Independent security review of rc.6 and exact candidate checks are pending.
+  Independent delta re-review of rc.7 and exact candidate checks are pending.
 
 ## SSH file exchange and connector presentation
 
@@ -104,7 +111,7 @@ Published stable remains v2.2.1 until separate approval and Release.
   package. Changes to an actual installed host require a separate authorized
   deployment and compatibility/rollback checks.
 - rc.5's approved source is already integrated via [PR #187](https://github.com/AChWorks/mcp-gateway/pull/187).
-  For rc.6, separately verify current exact-source CI and obtain fresh
+  For rc.7, separately verify current exact-source CI and obtain fresh
   independent author-separated security review before its own integration.
   Stable VERSION promotion and approved Release publication remain separate;
   this prerelease is not shipped.
