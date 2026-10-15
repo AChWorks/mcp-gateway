@@ -178,7 +178,7 @@ Changed IP, DNS answers, TCP destination or host key must be rechecked under reg
 
 ## Transport and trust
 
-- Use a narrowly scoped SSH adapter (evaluate maintained phpseclib compatible with pinned PHP/Composer) and SFTP adapter; **SSH is not an MCP server**, so the common MCP-over-HTTP adapter used for WP AI Bridge and Agent is not applicable to SSH wire framing.
+- Use a narrowly scoped SSH adapter (evaluate maintained phpseclib compatible with pinned PHP/Composer) and SFTP adapter; **SSH is not an MCP server**, so the common MCP-over-HTTP adapter used for WordPress and future explicitly supported MCP-native Targets is not applicable to SSH wire framing.
 - Remote endpoint identity is the operator-approved host/port and verified host-key binding; do not invent an Agent-style `instance_id`. Store connector-only metadata separately from `targets`. Endpoint and username changes require revalidation/reconnection as appropriate, never silent credential or identity reassignment.
 - SSH TCP egress has its own enforceable address/port/DNS/rebinding policy; reuse shared principles, **not HTTPS-only checks**. Default to explicit admin-registered public destinations. Explicitly allow a private/VPN destination only through an operator-approved scoped network policy for that deployment/Target, rechecking resolved/connected addresses; never create a blanket internal-network scanner/SSRF proxy through MCP inputs.
 - No automatic credential forwarding to other hosts, no transparent jumps/agent forwarding, no unsafe unknown host-key acceptance, no unbounded ports/redirects.
@@ -208,7 +208,7 @@ Do not add a required daemon/queue/SSH binary/PHP SSH extension to the ordinary 
 5. Public/private approved-target egress boundaries, DNS/port controls, host-key mismatch and cross-Target secret isolation are tested.
 6. Output flood, timeout, disconnect, cancellation and repeated-call behavior preserve caps and `outcome_unknown` (no blind retry).
 7. SFTP stat/list/ranged read/small write and bounded basic transfer succeed where supported; malformed path, permission denial, changing source, partial upload and binary data are handled without leakage/corruption.
-8. Both existing WordPress and Agent connector behavior, shared-host release packaging and client auth/target routing remain intact.
+8. The existing WordPress connector behavior, shared-host release packaging and client auth/Target routing remain intact; the canceled Agent connector is not a live acceptance dependency.
 9. Normalized IPv4/IPv6 (including bracket formatting), verified effective DNS-connected IP versus unknown/stale IP states, and `name + username@IP:port + target_id` appear in authorized Admin/picker/MCP selection and connection context. Local IP search handles shared-IP/multi-account ambiguity, unauthorized access returns no endpoint metadata, and command/SFTP cannot route by arbitrary IP.
 
 ## Not in first delivery
