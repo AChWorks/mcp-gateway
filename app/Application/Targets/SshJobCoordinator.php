@@ -185,7 +185,20 @@ final readonly class SshJobCoordinator
     public function status(User $user, string $targetId, string $clientHash, string $jobId): array
     {
         [$target, $row] = $this->existing($user, $targetId, $clientHash, $jobId, false);
-        if (! in_array($row->status, ['completed', 'failed', 'canceled', 'unsupported'], true)) {
+        if ($row->status === 'failed' && $row->exit_code === null
+            && $row->terminal_reason === 'systemd_exit-code') {
+            // systemd may report the failed exit before the bounded SFTP
+            // read is admitted (e.g. transient per-Target SFTP rate limit).
+            // Never freeze a null exit code: retry ONLY reading the exact
+            // existing marker. This does not redispatch/restart the script.
+            $recoveredExit = $this->exitCode($user, $target, $jobId);
+            if ($recoveredExit !== null) {
+                DB::table('ssh_command_jobs')->where('id', $jobId)
+                    ->where('status', 'failed')->whereNull('exit_code')
+                    ->update(['exit_code' => $recoveredExit,
+                        'terminal_reason' => 'script_exit', 'updated_at' => now()]);
+            }
+        } elseif (! in_array($row->status, ['completed', 'failed', 'canceled', 'unsupported'], true)) {
             $exit = $this->exitCode($user, $target, $jobId);
             if ($exit !== null) {
                 $this->transition($jobId, (string) $row->status,

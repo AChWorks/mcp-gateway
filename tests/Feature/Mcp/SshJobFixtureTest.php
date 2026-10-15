@@ -106,15 +106,20 @@ final class SshJobFixtureTest extends TestCase
         unset($tools);
         $resumed = app(SshJobMcpToolHandlers::class);
         $status = null;
-        for ($n = 0; $n < 30; $n++) {
+        // Real CI can finish the systemd unit before a later rate-limited
+        // SFTP exit-marker read. Poll with a sensible remote-SSH interval,
+        // and require the exact script exit code, not merely a generic
+        // systemd failure status with nullable exit evidence.
+        for ($n = 0; $n < 40; $n++) {
             $status = $resumed->status($owner, $target->target_id, $client, $id);
-            if (($status['result']['status'] ?? '') === 'failed') {
+            if (($status['result']['status'] ?? '') === 'failed'
+                && ($status['result']['exit_code'] ?? null) === 7) {
                 break;
             }
-            sleep(1);
+            sleep(3);
         }
         self::assertSame('failed', $status['result']['status'] ?? null, json_encode($status));
-        self::assertSame(7, $status['result']['exit_code']);
+        self::assertSame(7, $status['result']['exit_code'] ?? null, json_encode($status));
 
         $a = $resumed->output($owner, $target->target_id, $client, $id, 'stdout', 0, 16384);
         $b = $resumed->output($owner, $target->target_id, $client, $id, 'stdout', 16384, 16384);

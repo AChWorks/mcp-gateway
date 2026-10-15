@@ -66,7 +66,7 @@ Agent, a Gateway queue daemon, Redis, PTY or an IDE runtime.
 | MCP tool | Parameters and result |
 | --- | --- |
 | `ssh-job-start` | Exact `target_id`, caller-generated UUID `request_id`, UTF-8 `script` up to 16 KiB, `max_runtime_seconds` 16–300 (default 60); returns a stable 26-character `job_id`, status and retry guidance |
-| `ssh-job-status` | Exact `target_id` and `job_id`; reconciles remote exit marker or authenticated systemd active state; `failed` includes actual exit code when a script marker exists; systemd failures have an explicit reason without a fabricated exit code |
+| `ssh-job-status` | Exact `target_id` and `job_id`; reconciles remote exit marker or authenticated systemd active state; `failed` includes actual exit code when a script marker is readable; systemd failures have an explicit reason without a fabricated exit code. If systemd reports `exit-code` first and a bounded SFTP read cannot obtain the marker, a later status poll can recover the numeric exit without re-running the job |
 | `ssh-job-output` | Job ID and `stdout` or `stderr` with bounded 1–16 KiB Base64 window, explicit offset, size and EOF; use multiple reads without re-execution |
 | `ssh-job-cancel` | Best-effort stop of the exact unit; only reports `canceled` after independently verifying inactive/failed state and no live MainPID/ControlPID; otherwise `cancel_requested` is honest |
 
