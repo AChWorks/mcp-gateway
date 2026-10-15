@@ -36,6 +36,7 @@ final readonly class GatewayMcpEndpoint
     public function handle(Request $request): Response
     {
         $commandLimits = $this->settings->sshCommandLimits();
+        $jobLimits = $this->settings->sshJobLimits();
         // Expose only operationally implemented tool families. Connector
         // execution tools will be enabled after their runtime/credentials land.
         $server = Server::builder()
@@ -192,7 +193,7 @@ final readonly class GatewayMcpEndpoint
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                         'request_id' => ['type' => 'string', 'format' => 'uuid'],
                         'script' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 16384],
-                        'max_runtime_seconds' => ['type' => 'integer', 'minimum' => 16, 'maximum' => 300, 'default' => 60],
+                        'max_runtime_seconds' => ['type' => 'integer', 'minimum' => 16, 'maximum' => $jobLimits['max_runtime_seconds'], 'default' => 60],
                     ],
                     'required' => ['target_id', 'request_id', 'script'],
                     'additionalProperties' => false,

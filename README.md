@@ -2,7 +2,7 @@
 
 MCP Gateway is a self-hosted PHP application that connects an authenticated MCP client to the specific servers and WordPress sites you authorize. Add each connection as a **Target**, control who can use it, and manage access from one web Admin panel.
 
-**v2.3.0 source:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). The v2.3.0 line adds Owner-adjustable SSH command limits, authorized browser file selection, retained agentless SSH Jobs on supported hosts, and removal of Agent-specific UI. Public Release publication and any installed-host upgrade are separate, explicit operations.
+**v2.3.0 source (stable promotion in review, not yet a published installation):** WordPress via WP AI Bridge, Direct SSH, Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). This version adds Owner-adjustable SSH command and retained Job limits, authorized browser file selection, agentless systemd SSH Jobs on supported hosts and removal of Agent-specific UI. The latest currently published Release is v2.2.1 until the separately approved GitHub Release workflow succeeds.
 
 ## What you can do
 
@@ -72,7 +72,7 @@ A successful WordPress metadata check does **not** prove that an outstanding cre
 2. Verify and trust the server's **SSH host-key fingerprint** using an independent trusted source before connecting; investigate unexpected key changes rather than bypassing host-key verification.
 3. Assign the specific users and SSH permissions they need. Test with a read-only command or SFTP `stat` before allowing mutations.
 
-SSH command execution is non-interactive and is constrained by Gateway access checks **and** the remote account's real OS privileges. SFTP is bounded; large binary file exchange requires the separately supported and explicitly enabled transfer path. In v2.3.0, the Owner can open **Admin → Operational Settings** to adjust the maximum command timeout (15–30 seconds; default ceiling 15) and command length (8–64 KiB; default 8 KiB), effective for new commands without restarting PHP. A longer-lived Job is not a longer synchronous HTTP request.
+SSH command execution is non-interactive and is constrained by Gateway access checks **and** the remote account's real OS privileges. SFTP is bounded; large binary file exchange requires the separately supported and explicitly enabled transfer path. In the v2.3.0 candidate, the Owner can open **Admin → Operational Settings** to adjust the maximum command timeout (15–30 seconds; default ceiling 15) and command length (8–64 KiB; default 8 KiB), effective for new commands without restarting PHP. A longer-lived Job is not a longer synchronous HTTP request. The same Owner screen provides separate **Detached SSH Jobs** limits: concurrently admitted Jobs per user (default 2, adjustable 1–1024), maximum duration per Job (default 300 seconds, adjustable up to seven days), result retention (default 24 hours), and safe crash/reconciliation grace periods. There is no cumulative historical Job-count ceiling. Expiration of admission never reruns a script or proves a remote process stopped.
 
 For actual file selection in that candidate, visit **Targets → [Direct SSH Target] → SSH file upload and download**, choose a file, enter its absolute remote destination and an already provisioned private `0700` staging directory, and submit. For a download, enter the remote absolute path and save the returned attachment; verify the supplied SHA-256 and byte length. The site operator must independently approve and enable `SSH_FILE_TRANSFER_ENABLED=true` only after validating PHP/proxy upload size, temporary storage and timeouts. The option is disabled by default. A ChatGPT chat attachment is **not automatically available** to these forms or MCP tools. See [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md).
 
@@ -88,7 +88,7 @@ Use **AI clients** (`/admin/oauth-clients`) to manage application profiles and g
 
 ## Available MCP tools
 
-The **v2.3.0** MCP catalog registers **13 tools**, including four agentless SSH Job tools (the prior v2.2.1 line had nine), shown below. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs require the v2.3.0 code and migrations on the Gateway and a supported remote systemd host.
+The **published v2.2.1** MCP catalog contains nine tools. The **v2.3.0 source (publication pending)** registers 13, including four agentless SSH Job tools, shown below. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs are available only after that version is installed and migrated on a supported host.
 
 | Tool | Purpose |
 | --- | --- |
@@ -131,7 +131,7 @@ New WordPress plugin Abilities are discovered through the existing WordPress too
 
 **Do not blindly retry failed updates.** If a migration may have started, code-only rollback is not a database rollback. Keep backup, private recovery state and logs, then follow the [deployment/recovery procedures](docs/DEPLOYMENT.md) before any further action. The private Owner-local recovery CLI is not an unauthenticated web recovery endpoint.
 
-**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. v2.3.0 adds nullable SSH command operational-limit columns and a durable SSH Job journal; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
+**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. The v2.3.0 candidate adds nullable SSH command operational-limit columns, a durable SSH Job journal and a third additive migration for configurable Job lifecycle/resource budgets and operator attestation; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
 
 ## Troubleshooting
 

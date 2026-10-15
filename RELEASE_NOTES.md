@@ -1,10 +1,13 @@
 # MCP Gateway v2.3.0
 
-**Stable v2.3.0 source promotion from CI-verified `2.3.0-rc.1`.**
-This source integrates Issue #181 and #182's reviewed-by-CI Direct SSH
-features and Agent-specific presentation cleanup. Public GitHub Release
-publication remains an explicit separate action; source promotion does not
-install or modify any operator host or enable optional file-transfer mode.
+**Stable v2.3.0 source promotion — NOT YET PUBLISHED.**
+This version collects Issues #181 and #182, including Owner-configurable
+retained SSH Job resource/lifecycle limits and high-assurance reconciliation.
+The preceding versioned integration RC is `2.3.0-rc.2`, candidate HEAD
+`062d649c926027557b51c390bac2f5e3f293fbfc`.
+Final stable source integration, author-separated independent review,
+GitHub Release and installation remain separate verifiable steps.
+The current published release remains v2.2.1 until explicit publication.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -20,9 +23,25 @@ install or modify any operator host or enable optional file-transfer mode.
   may outlive the PHP request. It is not an Agent deployment or queue worker.
   Unsupported hosts fail closed. An hourly scheduler performs conservative
   cleanup of terminal jobs; unknown executions require reconciliation.
+- Recovery hardening after independent review: stale pre-dispatch `preparing`
+  intents are fenced against a late PHP launch and safely abandoned; expired
+  uncertain admission leases no longer permanently consume a user's Job
+  capacity. Journal/identity remain durable without automatic re-execution.
+  An exact-binding, local deployment-operator attestation command handles
+  orphaned/rotated/revoked SSH Job cleanup after **independent original-host
+  verification**; operator retirement never claims a confirmed remote exit.
+  New immutable non-secret original User/Target/SSH endpoint and pinned-key
+  digest snapshots survive User/Target deletion so the operator can locate
+  the ORIGINAL host without reusing a rotated Target. For earlier prerelease
+  journals, binding-mismatched provenance is reported unknown, never guessed.
+- The existing Owner-only, password-confirmed Operational Settings screen
+  controls Job concurrency (default 2; 1–1024), maximum Job runtime
+  (default 300 seconds; adjustable up to seven days), terminal-result retention
+  (default 24 hours; 1–8760), pre-dispatch crash grace and post-runtime
+  reconciliation grace. No cumulative historical Job-count cap is imposed.
 - Real OpenSSH/systemd user CI executed a >15-second job with retained
   stdout/stderr and real exit status, safe cancel and no-linger rejection
-  ([workflow #38771039526](https://github.com/AChWorks/mcp-gateway/actions/runs/38771039526)).
+  ([pre-remediation workflow #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531)); new remediation-head acceptance is still pending.
   Host-specific resource, service-manager and operator browser UX remain
   subject to explicit installed-environment validation.
 
@@ -42,7 +61,8 @@ install or modify any operator host or enable optional file-transfer mode.
 ## Upgrade, security and rollback
 
 - New additive migrations: nullable SSH command operational limits and a
-  durable `ssh_command_jobs` journal. **A consistent, test-restored DB backup
+  durable `ssh_command_jobs` journal and a third additive lifecycle-policy
+  migration for typed limits, admission leases and operator attestations. **A consistent, test-restored DB backup
   is required before an eventual operator upgrade.** The journal's rollback
   guard refuses dropping it while any job record remains; do not erase
   unknown jobs to force migration rollback. Browser-updater code backups do
@@ -53,12 +73,10 @@ install or modify any operator host or enable optional file-transfer mode.
   `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
   package. Changes to an actual installed host require a separate authorized
   deployment and compatibility/rollback checks.
-- Exact prerelease source CI (including real SSH/systemd) and published-baseline
-  updater compatibility passed on `47e47595e296f7992123192081987a42c4e18b03`.
-  Stable promotion changes only VERSION and documentation. Independent
-  author-separated security review, controlled main integration and public
-  publication are separate acceptance steps; installed-host behavior requires
-  its own operator validation.
+- Exact-source CI of the final RC, the required fresh author-separated
+  review, controlled integration, stable Release asset verification and
+  any installed-host upgrade are independent gates. This source promotion
+  is prepared in a Draft PR and is not itself proof of publication.
 
 # MCP Gateway v2.2.1
 

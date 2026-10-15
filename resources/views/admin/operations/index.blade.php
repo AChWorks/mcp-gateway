@@ -27,6 +27,15 @@
             'description' => __('Bound each synchronous SSH command separately from whole-file transfer. Use retained SSH Jobs for longer operations. Timeout includes the remote exec phase, not setup; transport, PHP and proxy limits may be lower.'),
             'keys' => ['ssh_command_timeout_seconds', 'ssh_command_max_kib'],
         ],
+        [
+            'title' => __('Detached SSH Jobs'),
+            'description' => __('Owner-configurable per-user concurrent admission, maximum remote runtime, result retention and crash/unknown-recovery windows. Total historical Jobs have no count quota; elapsed admission never certifies a remote process stopped.'),
+            'keys' => [
+                'ssh_job_max_active_per_user', 'ssh_job_max_runtime_seconds',
+                'ssh_job_retention_hours', 'ssh_job_preparing_grace_seconds',
+                'ssh_job_reconcile_grace_seconds',
+            ],
+        ],
     ];
     $descriptions = [
         'wp_response_kib' => __('Ordinary, OAuth and mutating responses'),
@@ -37,6 +46,11 @@
         'ssh_transfer_max_seconds' => __('Maximum synchronous transfer time'),
         'ssh_command_timeout_seconds' => __('Maximum SSH command execution time'),
         'ssh_command_max_kib' => __('Maximum SSH command input size'),
+        'ssh_job_max_active_per_user' => __('Concurrent SSH Jobs admitted per user'),
+        'ssh_job_max_runtime_seconds' => __('Maximum remote Job runtime'),
+        'ssh_job_retention_hours' => __('Retain terminal Job results'),
+        'ssh_job_preparing_grace_seconds' => __('Pre-dispatch crash recovery window'),
+        'ssh_job_reconcile_grace_seconds' => __('Post-runtime uncertain admission grace'),
     ];
 @endphp
 <div class="page-heading">
@@ -86,6 +100,8 @@
             <li>{{ __('WordPress responses count the decoded JSON-RPC envelope, including metadata. Confirmed read-only calls can use their separate higher limit; the independent 8 MiB hard response guard remains in force.') }}</li>
             <li>{{ __('The overall WordPress timeout must be at least the connection timeout. The existing OAuth refresh/recovery window cannot be extended by these settings.') }}</li>
             <li>{{ __('SSH whole-file limits do not change its 16 KiB inline reads, 64 KiB temporary buffer, or WordPress transfer limits. The binary sidecar must be independently enabled and authorized.') }}</li>
+            <li>{{ __('SSH Job concurrency counts only live admission leases, not retained historical records. Remote systemd runtime and metadata retention are independent. A stale or ambiguous Job is never automatically replayed; remote uncertainty remains visible after its admission lease ends.') }}</li>
+            <li>{{ __('Unverifiable orphaned Job spools require deliberate operator reconciliation after independently verified cleanup on the original SSH host, never a newly rebound Target.') }}</li>
             <li>{{ __('Values cannot override PHP worker, proxy/CDN, filesystem or actual client limits. These bounded ranges remain provisional pending operational measurements.') }}</li>
         </ul>
     </details>
@@ -104,14 +120,17 @@
                         @php
                             $range = $definitions[$key];
                             $isTime = str_ends_with($key, '_seconds');
-                            $unit = $isTime ? __('seconds') : __('KiB');
+                            $unit = str_ends_with($key, '_hours') ? __('hours')
+                                : (str_ends_with($key, '_per_user') ? __('jobs')
+                                    : ($isTime ? __('seconds') : __('KiB')));
                             $fieldId = 'setting_'.$key;
                             $effective = $state['overrides'][$key] ?? $defaults[$key];
                             if ($key === 'wp_request_timeout_seconds') {
                                 $effective = max($effective, $state['overrides']['wp_connect_timeout_seconds'] ?? $defaults['wp_connect_timeout_seconds']);
                             }
-                            $formattedEffective = $isTime ? $effective : number_format($effective, 2);
-                            $formattedDefault = $isTime ? $defaults[$key] : number_format($defaults[$key], 2);
+                            $isIntegerUnit = $isTime || str_ends_with($key, '_hours') || str_ends_with($key, '_per_user');
+                            $formattedEffective = $isIntegerUnit ? $effective : number_format($effective, 2);
+                            $formattedDefault = $isIntegerUnit ? $defaults[$key] : number_format($defaults[$key], 2);
                             $overridden = array_key_exists($key, $state['overrides']);
                         @endphp
                         <div class="operations-setting field">

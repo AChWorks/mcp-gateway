@@ -36,6 +36,11 @@ final class OperationalSettingsController extends Controller
                 'ssh_transfer_max_seconds' => min(40, max(1, (int) config('ssh.file_transfer.max_seconds', 30))),
                 'ssh_command_timeout_seconds' => 15,
                 'ssh_command_max_kib' => 8,
+                'ssh_job_max_active_per_user' => 2,
+                'ssh_job_max_runtime_seconds' => 300,
+                'ssh_job_retention_hours' => 24,
+                'ssh_job_preparing_grace_seconds' => 120,
+                'ssh_job_reconcile_grace_seconds' => 600,
             ],
         ]);
     }
@@ -66,12 +71,14 @@ final class OperationalSettingsController extends Controller
         $legacy = array_slice($all, 0, 2);
         $preSsh = array_slice($all, 0, 4);
         $preSshCommand = array_slice($all, 0, 6);
+        $preSshJobs = array_slice($all, 0, 8);
         sort($names);
         sort($all);
         sort($legacy);
         sort($preSsh);
         sort($preSshCommand);
-        if ($names !== $all && $names !== $legacy && $names !== $preSsh && $names !== $preSshCommand) {
+        sort($preSshJobs);
+        if ($names !== $all && $names !== $legacy && $names !== $preSsh && $names !== $preSshCommand && $names !== $preSshJobs) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);

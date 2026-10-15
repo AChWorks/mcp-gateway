@@ -65,7 +65,7 @@ Agent, a Gateway queue daemon, Redis, PTY or an IDE runtime.
 
 | MCP tool | Parameters and result |
 | --- | --- |
-| `ssh-job-start` | Exact `target_id`, caller-generated UUID `request_id`, UTF-8 `script` up to 16 KiB, `max_runtime_seconds` 16–300 (default 60); returns a stable 26-character `job_id`, status and retry guidance |
+| `ssh-job-start` | Exact `target_id`, caller-generated UUID `request_id`, UTF-8 `script` up to 16 KiB, `max_runtime_seconds` 16–the current Owner maximum (default max 300 seconds, Owner-adjustable up to seven days; default request 60 seconds); returns a stable 26-character `job_id`, status and retry guidance |
 | `ssh-job-status` | Exact `target_id` and `job_id`; reconciles remote exit marker or authenticated systemd active state; `failed` includes actual exit code when a script marker is readable; systemd failures have an explicit reason without a fabricated exit code. If systemd reports `exit-code` first and a bounded SFTP read cannot obtain the marker, a later status poll can recover the numeric exit without re-running the job |
 | `ssh-job-output` | Job ID and `stdout` or `stderr` with bounded 1–16 KiB Base64 window, explicit offset, size and EOF; use multiple reads without re-execution |
 | `ssh-job-cancel` | Best-effort stop of the exact unit; only reports `canceled` after independently verifying inactive/failed state and no live MainPID/ControlPID; otherwise `cancel_requested` is honest |
@@ -97,21 +97,105 @@ browser session or Gateway PHP request; each later poll creates an
 independently authorized new SSH connection. Systemd service availability
 is a *remote host capability*, not guaranteed on shared hosting.
 
-A user may have at most **two unresolved jobs**; the active-job admission
-limit persists across expiry until a job is reconciled. Terminal job metadata
-has a 24-hour retention window and an hourly `gateway:ssh-jobs-prune`
-scheduler hook; prune touches only *known files* in an independently verified
-same-owner non-symlink `0700` directory, then removes the empty directory.
-Unknown/active jobs are never auto-pruned. Old job records forbid unsafe
-migration rollback while present; do not manually drop the table or delete
-pending records. An Owner must deliberately reconcile stuck jobs before
-retention data can be cleared.
+A user has **no cumulative historical Job-count limit**. The Owner controls
+the maximum **simultaneously admitted** Jobs per user (default 2, supported
+1–1024) and maximum runtime of each new Job (default 300 seconds, configurable
+300–604800 seconds, i.e. seven days) in **Admin → Operational Settings →
+Detached SSH Jobs**. These are two separate resource boundaries: the MCP
+`ssh-job-start.max_runtime_seconds` schema exposes the current effective
+Owner ceiling, and the remote systemd unit enforces the runtime selected for
+that Job. An existing Job keeps its original finite runtime/lease even if
+the Owner later changes limits. Total stored Job history does not count
+against concurrency.
+
+The Owner separately controls terminal-result retention (default 24 hours,
+1–8760 hours), the crashed pre-dispatch `preparing` recovery threshold
+(default 120 seconds, 30–600), and the conservative post-runtime admission
+grace (default 600 seconds, 60–3600). The admission lease includes the
+pre-dispatch window **plus the requested runtime plus the post-runtime grace**.
+After that deadline, even an uncertain `launch_unknown`, `running` or
+`cancel_requested` Job no longer occupies a concurrent admission slot.
+**Lease expiry does not prove remote completion, issue a cancellation,
+unlock a retry, or delete any script/output.** Its original user, client,
+Target binding, script digest, request UUID and Job ID remain stored for
+inspection/reconciliation. Each new Job also snapshots its original user ID,
+Target record/public ID, hostname, port, OS username, authentication method,
+and SHA-256 digest of the pinned host-public-key line in separate immutable
+(non-foreign-key) journal fields. This metadata is NOT a password, private
+key, remote-connection grant or script log. It survives later User/Target
+deletion or binding rotation and can identify the original endpoint for
+operator verification. Older pre-migration records are backfilled only when
+their current stored Target binding still matches exactly; otherwise the
+original endpoint is reported **unknown** rather than misattributed to a
+replacement host. A duplicate request UUID remains idempotent
+for as long as its journal is retained.
+
+A crash in `preparing` is different: that state is *before* the first
+possible remote side effect. Both new admission attempts and the hourly
+`gateway:ssh-jobs-prune` scheduler may mark a provably stale `preparing`
+as `failed` with `terminal_reason=pre_dispatch_abandoned`; the
+in-flight PHP probe must win an exact conditional state transition before
+it may stage or launch anything. The expired pre-dispatch record can be
+pruned without contacting a remote host. Genuine remote-uncertain records
+are **never auto-pruned**, even if their admission lease or result-retention
+timestamp is past. Ordinary terminal entries are retained for the configured
+period **after reaching terminal state**. Remote spool cleanup remains
+restricted to named files inside an independently verified same-owner,
+non-symlinked `0700` directory.
+
+**Exception recovery for the actual deployment operator:** an authorized
+local operator with access to the installed Gateway Artisan CLI may inspect
+the immutable no-replay journal without any remote operation:
+
+```bash
+php artisan gateway:ssh-jobs-reconcile inspect
+php artisan gateway:ssh-jobs-reconcile inspect YOUR_EXACT_26_CHARACTER_JOB_ID
+```
+
+If the original user/Target was deleted, access revoked, or the Target
+binding/SSH account rotated, automatic spool removal intentionally refuses
+to connect to a potentially **different** host. First identify and
+independently verify the **original** remote systemd unit is stopped and
+the **original** remote private Job spool has actually been deleted.
+Do **not** infer that from admission expiry, a missing/newly bound Target,
+an SSH timeout, or a successful cancellation request alone. After that
+verification, an authorized *local deployment operator* can explicitly
+attest the cleanup, supplying the exact stored original 64-character
+Target-binding SHA-256 from `inspect`, exact Job ID twice, and a meaningful
+reason. `inspect` shows the immutable original non-secret host/port, OS
+login and host-key digest even after referenced user/Target deletion; its
+original host-key digest is only a checksum of the stored pinned public key,
+**not a substitute for verifying the original host out-of-band**. Older
+pre-snapshot records without trustworthy provenance need independent
+operator evidence before attestation:
+
+```bash
+php artisan gateway:ssh-jobs-reconcile retire YOUR_EXACT_26_CHARACTER_JOB_ID \
+  --confirm=YOUR_EXACT_26_CHARACTER_JOB_ID \
+  --binding=ORIGINAL_64_CHARACTER_BINDING_SHA256 \
+  --reason="Verified original systemd unit stopped and original spool removed" \
+  --attest-remote-cleaned
+```
+
+The CLI is **not** an unauthenticated MCP/browser action. It never performs
+SSH itself, never resumes or dispatches a script, and refuses to retire a
+nonterminal entry until its conservative admission lease has elapsed.
+It records `status=retired` and `terminal_reason=operator_attested_cleanup`,
+the local OS UID, reason, and timestamp; this is an **operator assertion**,
+not a verified remote exit code. The original immutable journal fields
+remain intact for the Owner-configured retention period before the hourly
+scheduler can delete only the now-attested local record. Normal
+`completed`/`failed`/`canceled` evidence is distinct from `retired`.
+After every journal row is safely reconciled and pruned, guarded schema
+rollback is possible; never manually drop the table or bypass the
+migration safety guards. For the current exact operation, inspect
+`gateway:ssh-jobs-reconcile --help` before any attestation.
 
 **Acceptance evidence and boundary:** A disposable GitHub Actions
 runner passed actual systemd-user SSH execution >15 seconds with real exit
 code 7, bounded stdout/stderr, replay resistance, cancellation and cleanup
 (18 assertions), followed by a no-linger fail-closed check (5 assertions)
-in [CI #38771039526](https://github.com/AChWorks/mcp-gateway/actions/runs/38771039526). The corresponding regression test is
+in [CI #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531) on the previously reviewed RC (before the newer lifecycle remediation). The corresponding regression test is
 implemented in `tests/Feature/Mcp/SshJobFixtureTest.php` and the GitHub
 Actions runner-only `tests/Support/ssh-job-ci-fixture.sh`, which reuses the
 existing isolated loopback OpenSSH fixture and temporarily enables/disables
