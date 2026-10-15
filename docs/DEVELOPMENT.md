@@ -155,6 +155,14 @@ When extending a supported Target/client, first distinguish **new Target invento
 
 For the current architectural rules see [MASTER-SPEC.md](./MASTER-SPEC.md) §4.9, [ARCHITECTURE.md](./ARCHITECTURE.md) §4 and [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md).
 
+## CI evidence and integration decisions
+
+A GitHub check is **not universally required** for every PR or merge. Apply review and tests to the actual changed behavior and risk. Reuse passing, exact-source evidence when unchanged code/contract remains covered; run the smallest useful targeted check when implementation changes, or stronger affected security, migration, transport and packaged-release checks when those surfaces change. Never waive checks that the repository currently requires or merge a known failing relevant check.
+
+Documentation-only wording/navigation edits normally need Markdown/link/provenance inspection, not the whole PHP, SSH, MariaDB and update suites. A docs-only change that alters a runnable instruction or accepted contract still needs the appropriate focused verification. Release publication has its own exact-artifact validation and Owner authorization independent of ordinary PR/merge cadence.
+
+GitHub workflow jobs may be path-filtered or advisory. Do not configure an unconditional required-status gate that blocks an otherwise acceptable docs-only PR for checks that legitimately did not run. Maintainer review and preserved relevant test evidence, not the raw count of green CI jobs, determine merge readiness. Commit attribution is a separate author-identity provenance control; do not confuse it with an unconditional full-CI mandate.
+
 ## Deterministic validation
 
 The normal repository checks are:

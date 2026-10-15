@@ -53,7 +53,7 @@ curl --fail https://gateway.example.com/oauth/client.json
 curl --fail https://gateway.example.com/oauth/jwks.json
 ```
 
-For CLI-managed installs, run `php artisan gateway:check` as the application account. Keep credentials and tokens out of screenshots and logs.
+For CLI-managed installs, run `php artisan gateway:check` as the application account. Configure **one host Cron task every minute** to invoke Laravel `schedule:run` with the PHP 8.4 CLI **as the site worker** (never root Artisan); this maintains idle WordPress credentials and Activity retention. Verify that the aaPanel task log shows a real dispatch, not only `schedule:list`. See [Deployment](docs/DEPLOYMENT.md#activity-retention-scheduling) for examples. Keep credentials and tokens out of screenshots and logs.
 
 ## Connect WordPress
 

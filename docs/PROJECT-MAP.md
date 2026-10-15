@@ -18,7 +18,7 @@ Use the source that owns the kind of truth you need:
 - [Koinon (`AChWorks/koinon`)](https://github.com/AChWorks/koinon) — ecosystem-level governance, discovery, and generic cross-project contracts; it is not an MCP Gateway runtime dependency.
 - [Connector integration and durability guide](./CONNECTOR-INTEGRATION-GUIDE.md) — implementer steps for future connectors, identity, permissions, durable idle authorization, Stale health, finite credential renewal and safe recovery.
 - [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
-- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — overarching Target/client-neutral program; Agent #111 is owner-paused. Read current #123/#112/#147 before assuming integrated features are shipped.
+- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — delivered Target/client-neutral foundation and its historical program acceptance; consult [Releases](https://github.com/AChWorks/mcp-gateway/releases) for shipped versions, and current Issues for any outstanding host/client acceptance. Agent #111 remains owner-paused.
 - [Program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.
 - Pull requests and commits — implementation identity, review history, and integrated changes.
 - GitHub Actions / CI — validation evidence tied to exact commits.
@@ -35,13 +35,13 @@ The initial WordPress connector compatibility work was established through:
 
 These closed Issues are historical contract provenance, not active task owners. If the Bridge/Gateway connector contract changes materially, recover the current code/release evidence in both repositories and create/update the natural current Issue rather than treating closed Issue #4 as live state.
 
-The non-WordPress connector tracks are independent Direct SSH (active) and AI Server Agent (owner-paused):
+The Direct SSH connector is shipped; the separate AI Server Agent connector remains owner-paused:
 
 - [`mcp-gateway#106`](https://github.com/AChWorks/mcp-gateway/issues/106) — Gateway-side breaking Target foundation and connector program;
 - [`mcp-gateway#117`](https://github.com/AChWorks/mcp-gateway/issues/117) — client-neutral MCP authorization edge; ChatGPT remains the first supported profile while future clients can be added without another core auth rewrite;
 - [`mcp-gateway#97`](https://github.com/AChWorks/mcp-gateway/issues/97) — post-integration WordPress OAuth refresh durability and real installed-host/cron proof, not generic lifecycle redesign.
 - [`ai-server-agent#47`](https://github.com/ach1992/ai-server-agent/issues/47) — Agent-side optional Gateway integration, independent credential lifecycle, preserved direct modes, and Agent-authoritative safety.
-- [`mcp-gateway#123`](https://github.com/AChWorks/mcp-gateway/issues/123) — SSH Target without Agent installation; password/key and arbitrary commands under OS account authority.
+- [`mcp-gateway#123`](https://github.com/AChWorks/mcp-gateway/issues/123) — shipped SSH Target without Agent installation; password/key and OS-authorized commands, with separately owned host/edge acceptance evidence.
 - [`mcp-gateway#122`](https://github.com/AChWorks/mcp-gateway/issues/122) — completed finite oversize-response foundation; do not reopen for generic file transfer.
 - [`mcp-gateway#130`](https://github.com/AChWorks/mcp-gateway/issues/130) — existing WordPress direct-versus-Gateway Ability parity; not general file ingress.
 - [`mcp-gateway#147`](https://github.com/AChWorks/mcp-gateway/issues/147) — shared, client-neutral **real bidirectional file/data transfer**, adaptive quotas and demonstrated host input/model output; does not duplicate #123 SSH backend.
@@ -71,7 +71,7 @@ Keep information in its natural owner:
 
 - user-facing overview, installation, and usage -> `README.md`;
 - durable project intent -> `docs/MASTER-SPEC.md`;
-- current architecture and engineering structure -> `docs/ARCHITECTURE.md`; accepted Program #106 breaking target-state design -> `docs/TARGET-CONNECTOR-FOUNDATION.md` until integration;
+- current architecture and engineering structure -> `docs/ARCHITECTURE.md`; enduring Target/connector contract -> `docs/TARGET-CONNECTOR-FOUNDATION.md` (historical migration sequencing does not override integrated source);
 - development workflow -> `docs/DEVELOPMENT.md`;
 - deployment/upgrade/rollback procedure -> `docs/DEPLOYMENT.md`;
 - navigation/recovery topology -> this file;

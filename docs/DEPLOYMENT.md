@@ -12,7 +12,9 @@ The current [stable v2.2.1 Release](https://github.com/AChWorks/mcp-gateway/rele
 
 Before running a migration-bearing updater, independently **test-restore the consistent database backup** and preserve code, `.env`, `APP_KEY`, signing keys, private storage and host-managed public files. The updater's code-only backup cannot undo SQL/DDL. Never blindly restart a stalled updater or reverse migrations after unknown progress; use the private Owner-local `php update/Recover.php --check` only with the original verified backup and the actual unprivileged site PHP worker, then follow the guarded recovery procedure for the observed phase. After completion, verify HTTP readiness and authenticated Target/OAuth behavior on the actual host.
 
-The next section retains the **historical v2.1.2 migration inventory** because those changes remain relevant to installations upgrading from older stable versions.## v2.1.2 release and migration inventory
+The next section retains the **historical v2.1.2 migration inventory** because those changes remain relevant to installations upgrading from older stable versions.
+
+## v2.1.2 release and migration inventory
 
 [Public v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) is the reviewed WordPress + Direct SSH release built at immutable source SHA `75d0b2284d0ec7dc918795ae3f16198a86e1e656`. Its verified browser-update ZIP is `mcp-gateway-update-v2.1.2.zip`; its fresh-install ZIP is `mcp-gateway-v2.1.2.zip`. **Only the official assets and matching SHA256 companions on that Release page should be used.** Source publication is not server installation; installed Gateway/Bridge versions and actual host health require independent verification.
 
@@ -357,7 +359,21 @@ Configure the host's cron/scheduled-task facility to run Laravel's scheduler onc
 * * * * * cd <APP_ROOT> && php artisan schedule:run >> /dev/null 2>&1
 ```
 
-Use the PHP 8.4 CLI that belongs to the deployed site when `php` is not that binary. The application schedules `activity:prune` once per day with overlap protection. If the Laravel scheduler is unavailable, run the same command from an equivalent host scheduler at least daily; without scheduled or manual pruning, the configured age/row targets are not enforced.
+Use the PHP 8.4 CLI that belongs to the deployed site when `php` is not that binary. Run the scheduler **as the unprivileged site PHP worker**, not as root: executing Artisan as root can create unreadable Laravel cache files on aaPanel/OpenLiteSpeed. Configure **one** every-minute scheduler task rather than separate jobs for each Laravel scheduled command. For example, if the application root is `/www/acdomains/gateway.example.com` and the aaPanel task's **Execute user** is `www`:
+
+```bash
+cd /www/acdomains/gateway.example.com || exit 1
+/www/server/php/84/bin/php artisan schedule:run --no-ansi
+```
+
+If the aaPanel task itself must run as `root`, the PHP process must still drop to `www`:
+
+```bash
+cd /www/acdomains/gateway.example.com || exit 1
+runuser -u www -- /www/server/php/84/bin/php artisan schedule:run --no-ansi
+```
+
+Use the actual installed path, PHP version and PHP worker account. Check the **aaPanel Cron task log** after at least one real dispatch: `artisan schedule:list` only proves Laravel registered tasks, not that host cron executes them. The application schedules `activity:prune` once per day and `gateway:wordpress-credentials-maintain` every minute, both with overlap protection. Actual credential rotation occurs only when due; a successful cron run alone does not prove a token was renewed. Without scheduled pruning the configured age/row targets are not enforced, and without regular maintenance idle WordPress refresh grants may expire.
 
 Operators may also apply the configured policy on demand:
 
