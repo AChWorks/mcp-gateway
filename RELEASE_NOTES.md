@@ -1,6 +1,6 @@
 # MCP Gateway v2.3.0
 
-**Corrective source candidate `2.3.0-rc.3` — NOT PUBLISHED.**
+**Corrective source candidate `2.3.0-rc.4` — NOT PUBLISHED.**
 This combined integration candidate collects Issue #181 and #182's four
 reviewable source slices. It is not a GitHub Release or an installed host.
 The current published version remains v2.2.1 until separately reviewed,

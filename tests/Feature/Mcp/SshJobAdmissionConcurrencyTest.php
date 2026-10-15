@@ -8,6 +8,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Models\User;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
 use RuntimeException;
@@ -169,6 +170,7 @@ final class SshJobAdmissionConcurrencyTest extends TestCase
         // and migrate both forwards across real MariaDB DDL.
         $snapshot->down();
         $lifecycle->down();
+        self::assertTrue(Schema::hasIndex('ssh_command_jobs', 'ssh_jobs_user_fk_recovery'));
         $oldLease = now()->subMinutes(10)->toDateTimeString();
         $ids = [(string) Str::ulid(), (string) Str::ulid()];
         foreach ($ids as $i => $id) {

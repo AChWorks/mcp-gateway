@@ -94,6 +94,17 @@ return new class extends Migration
             throw new RuntimeException('Reconcile and prune every SSH Job before reverting lifecycle policy.');
         }
 
+        // MariaDB may reuse ssh_jobs_active_lease as its only leftmost-user_id
+        // supporting index for the existing user_id foreign key. The active
+        // admission index cannot be dropped until an independent FK-supporting
+        // index exists. Preserve this simple user index for the RC1 schema.
+        // Use a separate ALTER so InnoDB sees the replacement before DROP.
+        if (! Schema::hasIndex('ssh_command_jobs', 'ssh_jobs_user_fk_recovery')) {
+            Schema::table('ssh_command_jobs', static function (Blueprint $table): void {
+                $table->index('user_id', 'ssh_jobs_user_fk_recovery');
+            });
+        }
+
         Schema::table('ssh_command_jobs', static function (Blueprint $table): void {
             $table->dropIndex('ssh_jobs_active_lease');
             $table->dropColumn([
