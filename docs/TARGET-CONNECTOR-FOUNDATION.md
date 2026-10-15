@@ -1,11 +1,11 @@
 # MCP Gateway Target & Connector Foundation
 
-Status: Accepted pre-implementation architecture contract  
-Program owner: [Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106)
+Status: Accepted durable Target/connector architecture contract, with historical transition design.
+Program owner: [Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) (completed); outstanding installed exceptional acceptance is tracked under [#112](https://github.com/AChWorks/mcp-gateway/issues/112).
 
-This document defines the breaking Target/connector foundation and client-neutral MCP edge for WP AI Bridge, AI Server Agent and the owner-accepted Direct SSH connector. Only the first two speak downstream MCP; SSH uses a separate TCP/SFTP adapter. See `DIRECT-SSH-CONNECTOR.md` and `REMOTE-IO-CONTRACT.md`. This remains a target-state design, not current runtime.
+MCP Gateway v2.2.1 **ships WordPress/WP AI Bridge and Direct SSH** as independent first-class Target connectors. SSH commands and bounded SFTP are available; the optional OAuth-scoped SSH whole-file HTTPS mode is **disabled by default**. AI Server Agent remains a separately accepted but **Owner-paused future connector** (#111), not a third shipped option. WordPress and a future Agent connector speak downstream MCP; SSH uses a distinct TCP/SFTP transport.
 
-It is intentionally written as a **target-state design contract**, not a claim that the current `main` implementation already matches it. Until Issue #106 and its child work are integrated, `docs/ARCHITECTURE.md` and current source remain authoritative for the running implementation.
+This document preserves the durable connector-neutral identity, credential, permission and lifecycle contract plus historical design rationale. The integrated code and [current architecture](ARCHITECTURE.md), GitHub Releases and active Issues are authoritative for what actually runs, ships and remains unverified. Earlier pre-implementation sequences below are historical, not instructions to rebuild the shipped Target foundation; the original v1 Site to v2 Target transition is still a breaking data/reset boundary.
 
 Conversation history is not required to recover this design.
 
@@ -13,7 +13,7 @@ Conversation history is not required to recover this design.
 
 MCP Gateway began with WordPress/WP AI Bridge as its first concrete backend. That proved the product but left generic application concepts named and shaped around a "Site".
 
-AI Server Agent is the first accepted non-WordPress connector. It is materially different from WordPress:
+AI Server Agent is an accepted but paused future MCP-speaking connector. Its design differs materially from WordPress:
 
 - it represents one Linux host rather than one CMS site;
 - its downstream authorization is a dedicated Agent credential rather than WP OAuth;
@@ -22,7 +22,7 @@ AI Server Agent is the first accepted non-WordPress connector. It is materially 
 - it may be used directly without Gateway;
 - it is stateless on the current MCP endpoint while WP compatibility includes older session-oriented behavior.
 
-Direct SSH (`ssh_direct`) is also accepted as a third connector: it uses SSH/SFTP rather than downstream MCP and runs arbitrary commands as the configured OS account once Gateway Target/tool authorization permits. The shared core must be transport-neutral.
+Direct SSH (`ssh_direct`) is the first shipped non-WordPress connector: it uses SSH/SFTP rather than downstream MCP and runs arbitrary commands as the configured OS account once Gateway Target/tool authorization permits. The shared core must be transport-neutral.
 
 This is the point where the generic domain must become truly connector-neutral rather than accumulating WordPress exceptions.
 
@@ -184,7 +184,7 @@ Connector onboarding that accepts a secret through the Admin UI treats that fiel
 
 Supported connectors are built-in, explicitly registered implementations.
 
-Accepted built-in connector vocabulary (not a claim of simultaneous installed availability): WordPress is shipped; Direct SSH commands (#145), bounded SFTP calls (#146), internal streams (#148) and optional authenticated SSH whole-file HTTP exchange with per-Target MCP capability discovery ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)) are **source-integrated but not yet in the published maintenance release**. External PHP/Python clients actually exchanged complete binary bytes on a disposable installed Gateway; host-native ChatGPT attachments, additional Target transfer modes and full release acceptance remain open under #147/#112. AI Server Agent #111 remains Owner-paused:
+Current built-in connector contract: `wp_ai_bridge` and `ssh_direct` ship in public v2.1.2 and v2.2.1. Direct SSH includes authorized commands, bounded SFTP and an optional **off-by-default** SSH whole-file HTTPS mode with per-Target MCP capability discovery ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)); real full-object bytes/SHA256 were proved with independent PHP/Python clients on disposable installed Gateway. Native ChatGPT attachment/model consumption and additional connector file modes remain unverified (#147/#112). The vocabulary below also reserves `ai_server_agent` for the **Owner-paused future design**; it is not a currently registered usable connector:
 
 ```text
 wp_ai_bridge
