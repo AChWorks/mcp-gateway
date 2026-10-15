@@ -1,13 +1,13 @@
 
 # MCP Gateway
 
-MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The currently published stable line **v2.2.0** includes both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The browser-updater correction is a separately gated `2.2.1-rc.9` source candidate, **not** a published Release. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
+MCP Gateway is a self-hosted PHP control plane exposing one authenticated MCP endpoint for multiple explicitly authorized **Targets**. The currently published stable line **v2.2.0** includes both **WP AI Bridge** (WordPress) and independent **Direct SSH** Target connectors. The browser-updater correction is a separately gated `2.2.1-rc.10` source candidate, **not** a published Release. The AI Server Agent Target connector is **Owner-paused and not shipped**. Publishing a Release does not update any installed Gateway.
 
 A Target has a stable `target_id`, explicit Gateway user/client/Target access checks and connector-owned credentials. For WordPress, the authenticated WordPress principal and WP AI Bridge access groups remain authoritative; Gateway does not widen their permissions.
 
 ## Browser updater reliability and recovery (corrective source candidate)
 
-The source-only `2.2.1-rc.9` candidate repairs the authenticated
+The source-only `2.2.1-rc.10` candidate repairs the authenticated
 Stage → 303 GET → Finish browser handoff and the named-input
 `form.action` collision. The candidate normalizes only temporary public
 updater permissions so the OpenLiteSpeed front-end can read the entry even
@@ -23,9 +23,10 @@ health, and never blindly roll back possibly started database migrations.
 **These candidate actions are not approved for public release or an
 operator host.** Stable release publication also requires an **active
 GitHub tag Ruleset** restricting updates/deletions of `refs/tags/v*`,
-with creation allowed and no bypass actors; RC.9 refuses publication
-without that platform-enforced protection. This is an Owner/admin
-repository-settings gate, not something green CI can establish.
+with creation allowed and no bypass actors; the release workflow refuses
+publication without that platform-enforced protection. The Owner/admin
+configures and verifies this policy once; no per-release ruleset IDs or
+timestamps are required. CI alone cannot create or prove that policy.
 See `docs/DEPLOYMENT.md` and Issue #135.
 
 ## Current release highlights

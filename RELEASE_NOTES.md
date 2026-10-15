@@ -1,6 +1,6 @@
 # MCP Gateway v2.2.1
 
-**Corrective source candidate `2.2.1-rc.9` — NOT PUBLISHED.**
+**Corrective source candidate `2.2.1-rc.10` — NOT PUBLISHED.**
 The public release remains `v2.2.0` until independently reviewed,
 exact-head accepted, Owner-approved stable integration and manual publication.
 Neither this VERSION/notes change nor green CI authorizes production rollout.
@@ -139,13 +139,29 @@ the create-only Git Reference API (not an annotated replacement that
 peels to the same commit). Existing no-retry, partial-tag preservation,
 and four-asset byte verification remain intact.
 
+The **rc.10** source candidate simplifies the RC.9 policy check without
+removing the GitHub-enforced tag immutability requirement: the Owner sets
+and verifies an active `refs/tags/v*` no-bypass update/deletion restriction
+**once**, and the workflow reads the current effective rule directly.
+There are no per-release ruleset ID, timestamp or bypass-checkbox inputs;
+the Owner only supplies the exact approved commit SHA and stable version.
+Because GitHub withholds bypass details from read-only workflow tokens,
+a deliberate administrator edit to the Ruleset is treated as a
+repository-governance change instead of requiring an administrator
+credential or repeated manual attestation on each release. Visible
+nonempty bypasses, absent/inactive protection or GitHub API failure
+remain fail-closed. No updater/recovery PHP runtime changed in rc.10.
+The established atomic reservation, immutable lightweight tag identity,
+partial-publication safety and four-asset downloaded-byte verification
+are preserved.
+
 **Platform prerequisite is not yet claimed satisfied.** A repository
-Owner/admin must activate and verify that ruleset independently; current
-hermetic tests model the GitHub restriction but never write or race a
-real stable tag. No automatic Release, Merge or production deployment
-is authorized. See the stable-tag policy instructions in
-`docs/DEPLOYMENT.md`. RC.9 requires new exact-head CI, fresh
-author-separated delta review, then separate Owner approval gates.
+Owner/admin must activate and independently verify the no-bypass ruleset.
+Hermetic tests model the GitHub restriction but do not race a live
+protected tag. No automatic Release, Merge or production deployment
+is authorized. See `docs/DEPLOYMENT.md`. RC.10 requires new exact-head
+CI and a fresh author-separated delta review, then separate Owner
+approval gates.
 
 New stable Release, integration and actual operator-host updates require their
 own explicit Owner authorization. See Issue #135, PR #178 and

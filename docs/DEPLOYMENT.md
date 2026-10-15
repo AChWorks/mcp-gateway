@@ -132,39 +132,31 @@ Owner/admin must establish a **GitHub-enforced** tag policy in
 - **Bypass list:** empty; do not give ordinary Write/Maintain actors,
   repository roles or the Release workflow token an update/delete bypass.
 
-The release publication guard accepts only an effective, active,
-**repository-level** tag ruleset with this targeting and security posture
-(or a strict all-tags `~ALL` include with no exclusions). It queries
-GitHub's read-only ruleset APIs in `before`, `reserve` and `after`.
+The release publication guard automatically verifies an ACTIVE,
+repository-level tag ruleset covering `refs/tags/v*`, restricting updates
+and deletions, and allowing creation. It checks the policy using the
+least-privilege GitHub workflow token before packaging, immediately before
+reserving the tag, and after publication. Missing, disabled, mistargeted,
+incomplete or inaccessible policy fails closed. There is no need to copy
+ruleset IDs, timestamps or extra confirmations into each release dispatch.
 
-**Required Owner attestation when dispatching the manual workflow:**
-inspect the complete ruleset as a GitHub administrator, explicitly
-verify the bypass list is empty, and copy the *current* ruleset
-`id` and `updated_at` fields from the authoritative
-GitHub API into workflow inputs
-`approved_tag_ruleset_id` and
-`approved_tag_ruleset_updated_at`. Check
-`approved_tag_ruleset_no_bypass` only after confirming no bypass.
-The workflow `GITHUB_TOKEN` intentionally has no ruleset-admin
-permission; GitHub may therefore omit `bypass_actors` from its
-read-only API response. The Owner-attested pair binds the Release to the
-exact, independently inspected GitHub-managed ruleset revision. A
-later policy edit (including bypass, enforcement or targeting changes)
-changes `updated_at` and is rejected; an explicit nonempty bypass
-list, if visible to the workflow, is always rejected directly. This
-preserves least privilege instead of exposing a repository-admin
-credential to build jobs. It relies on an honest Owner/admin attestation
-and does not prevent a deliberately privileged admin changing the
-policy; that is a separate governance risk.
+**One-time Owner/admin responsibility:** configure the ruleset with an
+**empty bypass list** and independently verify its complete settings in
+GitHub. GitHub may hide `bypass_actors` from the read-only workflow
+token. If a nonempty bypass list is visible, the guard rejects it;
+otherwise it relies on the Owner's one-time configuration. Only an
+administrator can subsequently add bypasses or change the ruleset;
+deliberate administrator policy changes are a separate governance risk
+and should be reviewed through normal repository administration, not
+per-release attestation. Do not give the release CI token administrator
+permissions just to read a hidden field.
 
-Missing/insufficient rules, disabled/evaluate enforcement, API denial,
-unapproved revisions, missing Owner attestation or incomplete policy
-evidence **fail closed**, before a public Release is created. Do not
-run a manual `gh release create` as a workaround. Inspect the
-effective ruleset again before release; current source tests are
-hermetic and do not establish that a live repository policy was
-created or enforced. Changing or disabling the protection requires
-a separately Owner-approved governance operation.
+The workflow's two Owner approval inputs remain only the exact reviewed
+`approved_sha` and `approved_version`. Ruleset settings are a prerequisite,
+**not automatically provisioned by CI**. Do not run manual
+`gh release create` as a workaround if the platform policy is absent.
+Current hermetic tests exercise the fail-closed decisions; they do not
+prove GitHub has activated or is enforcing the actual ruleset.
 
 The reservation procedure retains its create-only 201/SHA check,
 rejects concurrent 409/422 and ambiguous API outcomes without retry,

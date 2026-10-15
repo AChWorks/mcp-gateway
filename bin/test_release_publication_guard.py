@@ -75,9 +75,6 @@ class PublicationGuardTests(unittest.TestCase):
             "GITHUB_REF": "refs/heads/main",
             "APPROVED_SHA": APPROVED,
             "APPROVED_VERSION": VERSION,
-            "APPROVED_TAG_RULESET_ID": "42",
-            "APPROVED_TAG_RULESET_UPDATED_AT": self.policy["updated_at"],
-            "APPROVED_TAG_RULESET_NO_BYPASS": "true",
             "GH_TOKEN": "non-secret-disposable-test-token",
         }
         patcher1 = patch.object(guard, "ROOT", self.root)
@@ -161,45 +158,27 @@ class PublicationGuardTests(unittest.TestCase):
         self.assertEqual(self.download_called, 0)
 
     def test_active_release_tag_immutability_policy_is_required_in_every_phase(self):
-        self.assertTrue(guard.qualifies_as_immutable_release_policy(
-            self.policy, self.ruleset_id, self.env["APPROVED_TAG_RULESET_UPDATED_AT"],
-        ))
+        self.assertTrue(guard.qualifies_as_immutable_release_policy(self.policy))
         guard.execute("before")
         guard.execute("reserve")
         self.release = self.expected_release()
         guard.execute("after")
         self.assertGreaterEqual(self.ruleset_reads, 6)
 
-    def test_owner_ruleset_attestation_must_be_explicit_and_current(self):
-        for variable, value in (
-            ("APPROVED_TAG_RULESET_NO_BYPASS", "false"),
-            ("APPROVED_TAG_RULESET_ID", "999"),
-            ("APPROVED_TAG_RULESET_UPDATED_AT", "2026-10-15T02:35:01Z"),
-            ("APPROVED_TAG_RULESET_ID", "invalid"),
-            ("APPROVED_TAG_RULESET_UPDATED_AT", ""),
-        ):
-            with self.subTest(variable=variable, value=value):
-                with patch.dict(os.environ, {variable: value}):
-                    with self.assertRaises(guard.PublicationStateError):
-                        guard.execute("before")
-        self.assertEqual(self.create_calls, 0)
-
-    def test_missing_bypass_visibility_requires_pinned_owner_attestation(self):
-        # github.token may have Metadata(read), not ruleset Admin(write);
-        # GitHub then omits bypass_actors. Trust the Owner's verified
-        # no-bypass attestation only while the exact ruleset revision matches.
-        del self.policy["bypass_actors"]
+    def test_one_time_owner_policy_does_not_require_release_attestation_inputs(self):
+        self.assertFalse(any(k.startswith("APPROVED_TAG_RULESET_") for k in os.environ))
         guard.execute("before")
-        self.policy["updated_at"] = "2026-10-15T02:35:01Z"
-        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
-            guard.execute("reserve")
         self.assertEqual(self.create_calls, 0)
 
-    def test_ruleset_changed_since_owner_verified_no_bypass_must_fail(self):
-        self.policy["updated_at"] = "2026-10-15T02:36:00Z"
-        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
-            guard.execute("before")
-        self.assertEqual(self.create_calls, 0)
+    def test_hidden_bypass_field_is_accepted_only_as_admin_governance_risk(self):
+        # GitHub omits bypass_actors from a read-only workflow token. Owner
+        # confirms an empty bypass list once at ruleset setup; later edits
+        # require administrator authority, which is outside writer-race scope.
+        self.policy.pop("bypass_actors")
+        guard.execute("before")
+        guard.execute("reserve")
+        self.assertEqual(self.tag, (APPROVED, None))
+        self.assertEqual(self.create_calls, 1)
 
     def test_missing_tag_policy_fails_before_creating_any_tag(self):
         self.ruleset_present = False
@@ -279,13 +258,9 @@ class PublicationGuardTests(unittest.TestCase):
         # Hermetic simulation of GitHub's Restrict updates rule, not a real
         # provider mutation. The actual active ruleset must be read at release.
         guard.execute("reserve")
-        self.assertTrue(guard.qualifies_as_immutable_release_policy(
-            self.policy, self.ruleset_id, self.env["APPROVED_TAG_RULESET_UPDATED_AT"],
-        ))
+        self.assertTrue(guard.qualifies_as_immutable_release_policy(self.policy))
         attempted_wrong_target = OTHER
-        move_allowed = not guard.qualifies_as_immutable_release_policy(
-            self.policy, self.ruleset_id, self.env["APPROVED_TAG_RULESET_UPDATED_AT"],
-        )
+        move_allowed = not guard.qualifies_as_immutable_release_policy(self.policy)
         if move_allowed:
             self.tag = (attempted_wrong_target, None)
         self.assertFalse(move_allowed)
@@ -497,9 +472,8 @@ class PublicationGuardTests(unittest.TestCase):
                         workflow.index("release_publication_guard.py after"))
         self.assertIn("--verify-tag", workflow)
         self.assertIn("--target \"$APPROVED_SHA\"", workflow)
-        self.assertEqual(workflow.count("APPROVED_TAG_RULESET_ID:"), 3)
-        self.assertEqual(workflow.count("APPROVED_TAG_RULESET_UPDATED_AT:"), 3)
-        self.assertEqual(workflow.count("APPROVED_TAG_RULESET_NO_BYPASS:"), 3)
+        self.assertNotIn("APPROVED_TAG_RULESET_", workflow)
+        self.assertNotIn("approved_tag_ruleset_", workflow)
 
     def test_preexisting_mismatched_release_rejected(self):
         self.release = self.expected_release()

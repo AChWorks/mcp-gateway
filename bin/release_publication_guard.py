@@ -116,11 +116,10 @@ def api_release(tag: str, token: str) -> dict | None:
     return result
 
 
-# A deliberately narrow, auditable policy contract. An ACTIVE repository
-# tag ruleset for refs/tags/v* must forbid update and deletion, allow the
-# one-time creation, and grant no bypasses. A GitHub administrator can still
-# deliberately edit/disable a ruleset; that separate governance risk is not
-# a reason to allow ordinary writer tag moves.
+# GitHub must enforce one-time creation but forbid ordinary writers from
+# moving/deleting stable release tags. The Owner configures the no-bypass
+# policy once; changing that policy later requires an administrator and is
+# a separate governance risk, not a per-release attestation ceremony.
 RELEASE_TAG_RULESET_INCLUDE = "refs/tags/v*"
 
 
@@ -147,22 +146,17 @@ def github_ruleset_json(url: str, token: str):
         raise PublicationStateError("GitHub ruleset API returned invalid JSON; refuse publication.") from error
 
 
-def qualifies_as_immutable_release_policy(
-    ruleset: object, expected_id: int, expected_updated_at: str,
-) -> bool:
-    """Require the precise Owner-attested immutable repository tag policy.
+def qualifies_as_immutable_release_policy(ruleset: object) -> bool:
+    """Require effective GitHub tag-update and deletion protection.
 
-    GitHub hides bypass_actors from callers without ruleset-write access.
-    The release's least-privilege token MUST NOT gain that privilege:
-    the Owner verifies no bypass using admin access, then attests the exact
-    ruleset ID + GitHub-managed updated_at at workflow dispatch. Any later
-    changes to the ruleset invalidate that attestation and fail closed.
+    GitHub withholds bypass_actors from tokens lacking ruleset-write access.
+    The Owner must verify an empty bypass list when configuring the rule;
+    if a bypass is visible, refuse it. Only administrators can change that
+    policy later, and release CI must not hold an admin credential.
     """
     if not isinstance(ruleset, dict):
         return False
-    if (ruleset.get("id") != expected_id
-            or ruleset.get("updated_at") != expected_updated_at
-            or ruleset.get("target") != "tag"
+    if (ruleset.get("target") != "tag"
             or ruleset.get("source_type") != "Repository"
             or ruleset.get("source") != REPOSITORY
             or ruleset.get("enforcement") != "active"
@@ -196,15 +190,6 @@ def require_immutable_release_tag_policy(tag: str, token: str) -> int:
     """
     require(bool(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)),
             "Expected an exact stable release tag.")
-    env = os.environ
-    expected_id_raw = env.get("APPROVED_TAG_RULESET_ID", "")
-    expected_updated_at = env.get("APPROVED_TAG_RULESET_UPDATED_AT", "")
-    require(bool(re.fullmatch(r"[1-9][0-9]*", expected_id_raw))
-            and bool(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
-                                  expected_updated_at))
-            and env.get("APPROVED_TAG_RULESET_NO_BYPASS") == "true",
-            "Owner ruleset identity, exact updated_at and no-bypass attestation are required.")
-    expected_id = int(expected_id_raw)
     base = f"https://api.github.com/repos/{REPOSITORY}/rulesets"
     seen: set[int] = set()
     for page in range(1, 11):
@@ -222,19 +207,16 @@ def require_immutable_release_tag_policy(tag: str, token: str) -> int:
             seen.add(ruleset_id)
             ruleset = github_ruleset_json(f"{base}/{ruleset_id}?includes_parents=true", token)
             if isinstance(ruleset, dict) and ruleset.get("id") == ruleset_id:
-                if qualifies_as_immutable_release_policy(
-                    ruleset, expected_id, expected_updated_at,
-                ):
+                if qualifies_as_immutable_release_policy(ruleset):
                     return ruleset_id
         if len(results) < 100:
             break
     else:
         raise PublicationStateError("GitHub ruleset listing exceeds verified pagination bound.")
     raise PublicationStateError(
-        "No active immutable stable-tag ruleset was verified. Configure an ACTIVE "
-        "repository tag ruleset for refs/tags/v* with Restrict updates/deletions, "
-        "no Restrict creations and no bypass; Owner must freshly attest the exact "
-        "ruleset ID/updated_at from an administrator's complete view."
+        "No active immutable stable-tag ruleset was verified. The Owner must "
+        "configure refs/tags/v* with Restrict updates/deletions, allow creations, "
+        "and verify an empty bypass list once in GitHub repository settings."
     )
 
 
