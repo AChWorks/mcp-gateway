@@ -6,6 +6,7 @@ use App\Application\Access\AccessControl;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\TargetOperationGate;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
@@ -41,6 +42,9 @@ final readonly class SshWholeFileTransfer
 
         if (! $target instanceof Target) {
             throw new SshTargetConnectionException('target_not_found');
+        }
+        if (TargetOperationGate::isPaused($target)) {
+            throw new SshTargetConnectionException('target_paused');
         }
 
         return $target;

@@ -6,6 +6,7 @@ use App\Application\Access\AccessControl;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\TargetOperationGate;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
@@ -41,6 +42,9 @@ final readonly class SshCommandMcpToolHandlers
             ->first();
         if (! $target instanceof Target) {
             return $this->failed($operation, null, 'target_not_found');
+        }
+        if (TargetOperationGate::isPaused($target)) {
+            return $this->failed($operation, $target, 'target_paused');
         }
         $limits = $this->settings->sshCommandLimits();
         if (trim($command) === '' || strlen($command) > $limits['max_bytes']

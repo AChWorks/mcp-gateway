@@ -275,6 +275,7 @@ final class SshWholeFileController extends Controller
 
         return $this->fail($code, match ($code) {
             'target_not_found' => 404,
+            'target_paused' => 409,
             'invalid_input', 'input_changed' => 422,
             'source_changed', 'file_exists', 'staging_not_private', 'connection_busy' => 409,
             'rate_limited' => 429,

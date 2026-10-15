@@ -17,6 +17,8 @@ final class TargetTransitionMigrationTest extends TestCase
 
     private const RECOVERY_FENCE_MIGRATION = '2026_10_13_000000_fence_wordpress_disconnect_recovery.php';
 
+    private const TARGET_OPERATIONS_MIGRATION = '2026_10_16_000000_add_target_operations_paused.php';
+
     private bool $rebuildMariaDbTestSchema = false;
 
     protected function setUp(): void
@@ -277,8 +279,9 @@ final class TargetTransitionMigrationTest extends TestCase
         foreach (glob(database_path('migrations/*.php')) ?: [] as $file) {
             // The fixture models a pre-Target database, so neither the
             // breaking Target transition nor its later in-place refresh-
-            // intent/network-settings extension exists at this point.
-            if (in_array(basename($file), [self::MIGRATION, self::NETWORK_TIMEOUT_MIGRATION, self::RECOVERY_FENCE_MIGRATION], true)) {
+            // intent/network-settings/Target-pause extensions exist yet.
+            if (in_array(basename($file), [self::MIGRATION, self::NETWORK_TIMEOUT_MIGRATION,
+                self::RECOVERY_FENCE_MIGRATION, self::TARGET_OPERATIONS_MIGRATION], true)) {
                 continue;
             }
             (require $file)->up();

@@ -68,6 +68,7 @@
                                 <span class="badge badge-{{ $target->connection_state->value === 'connected' ? 'success' : 'neutral' }}">
                                     {{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}
                                 </span>
+                                <small>{{ __('Gateway operations') }}: <strong>{{ $target->operations_paused ? __('Paused') : __('Enabled') }}</strong></small>
                                 @if (isset($recoveries[$target->target_id]))
                                     <small class="target-inventory-recovery">{{ $recoveries[$target->target_id]['title'] }}</small>
                                     @if ($target->connector_type === 'wp_ai_bridge' && $recoveries[$target->target_id]['canFinish'])
@@ -77,6 +78,13 @@
                             </td>
                             <td class="table-action">
                                 <a href="{{ route('admin.targets.show', ['target' => $target->target_id]) }}">{{ __('Inspect') }}</a>
+                                @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
+                                    <form method="post" action="{{ route('admin.targets.operations.update', ['target' => $target->target_id]) }}">
+                                        @csrf
+                                        <input type="hidden" name="state" value="{{ $target->operations_paused ? 'enabled' : 'paused' }}">
+                                        <button class="button button-secondary" type="submit">{{ $target->operations_paused ? __('Resume') : __('Pause') }}</button>
+                                    </form>
+                                @endif
                             </td>
                         </tr>
                     @endforeach
