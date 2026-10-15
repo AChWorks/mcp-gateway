@@ -83,10 +83,10 @@ source promotion nor an unverified archive establishes deployment.
   `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
   package. Changes to an actual installed host require a separate authorized
   deployment and compatibility/rollback checks.
-- Exact-source CI of the final RC, the required fresh author-separated
-  review, controlled integration, stable Release asset verification and
-  any installed-host upgrade are independent gates. This source promotion
-  is prepared in a Draft PR and is not itself proof of publication.
+- Exact-source CI of the final RC, fresh author-separated review,
+  controlled integration, verified official Release assets and any
+  installed-host upgrade are independent gates. Source promotion alone
+  never proves public release or an installed operator version.
 
 # MCP Gateway v2.2.1
 
