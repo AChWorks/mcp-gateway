@@ -6,11 +6,39 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## v2.3.0 SSH upgrade requirements (#181 / #182)
 
-**Prepared stable source; NOT yet a GitHub Release or installed operator version.** This version retains both current WordPress and Direct SSH connectors, removes the obsolete AI Server Agent-branded UI/permissions while preserving inert legacy records, adds Owner-tunable synchronous SSH limits, a disabled-by-default authenticated browser SSH file picker, and durable agentless SSH Jobs. GitHub Issue [#181](https://github.com/AChWorks/mcp-gateway/issues/181) and [#182](https://github.com/AChWorks/mcp-gateway/issues/182) track the acceptance and authorization gates; historical connector claims do not imply production availability.
+**Versioned source, public Release and installed operator version are separate facts.** Confirm official v2.3.0 assets in [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases) before treating this section as shipped. This version retains both current WordPress and Direct SSH connectors, removes the obsolete AI Server Agent-branded UI/permissions while preserving inert legacy records, adds Owner-tunable synchronous SSH limits, a disabled-by-default authenticated browser SSH file picker, and durable agentless SSH Jobs. GitHub Issue [#181](https://github.com/AChWorks/mcp-gateway/issues/181) and [#182](https://github.com/AChWorks/mcp-gateway/issues/182) track the acceptance and authorization gates; historical connector claims do not imply production availability.
 
-The three additive migrations `2026_10_15_000000_add_ssh_command_operational_limits.php`, `2026_10_15_010000_create_ssh_command_jobs.php` and `2026_10_15_020000_add_ssh_job_lifecycle_policy.php` require a **separately verified database backup** before eventual rollout. The third migrates any earlier unpublished Job journals to typed Owner-configurable Job limits, finite admission leases, immutable non-secret original Target/User/host-key-digest snapshots and explicit operator attestations; it also widens runtime storage to support longer bounded Jobs. For prior prerelease Job rows, the original host identity is backfilled ONLY when the original saved binding matches the current config; otherwise it remains unknown and requires separate trusted operator evidence. The Job and lifecycle migrations deliberately refuse rollback while any durable no-replay record exists. Cleanup for orphaned/uncertain Jobs requires the separately gated local `php artisan gateway:ssh-jobs-reconcile inspect|retire` workflow, with verified cleanup on the ORIGINAL remote host and exact immutable binding; see [Direct SSH operator instructions](DIRECT-SSH-CONNECTOR.md#unpublished-v230-candidate-lightweight-agentless-ssh-jobs-181). The existing once-per-minute Laravel scheduler dispatches hourly `gateway:ssh-jobs-prune` only for safely reconciled terminal Jobs. A supported remote SSH Target additionally requires its own OS-native systemd service/user manager; enabling `linger` is a separate, privileged remote-host operator decision, **not a Gateway install step**.
+The four additive migrations
+`2026_10_15_000000_add_ssh_command_operational_limits.php`,
+`2026_10_15_010000_create_ssh_command_jobs.php`,
+`2026_10_15_020000_add_ssh_job_lifecycle_policy.php` and
+`2026_10_15_030000_snapshot_ssh_job_admission_policy.php` require a
+**separately verified database backup** before eventual rollout. The third
+adds typed Owner-configurable Job limits, finite admission leases, immutable
+non-secret original Target/User/host-key-digest snapshots and operator
+attestations, and widens remote runtime storage. The fourth freezes each
+Job's pre-dispatch and reconciliation deadlines and conservatively backfills
+older unpublished journal records. An existing lease is never shortened
+on migration or renewal; any ambiguous old original-host identity is
+recorded as unknown rather than guessing a changed Target. All Job-related
+schema rollback is refused while no-replay journal rows exist. The supported
+local `php artisan gateway:ssh-jobs-reconcile inspect|retire` workflow
+requires independently verified cleanup on the ORIGINAL host and exact
+saved binding; see [Direct SSH](DIRECT-SSH-CONNECTOR.md#unpublished-v230-candidate-lightweight-agentless-ssh-jobs-181).
+The Laravel scheduler runs hourly `gateway:ssh-jobs-prune` only for safely
+reconciled terminal records. Remote systemd user-manager support and approved
+linger are remote-host prerequisites, **not** Gateway installer steps.
 
-A disposable loopback OpenSSH/systemd user fixture passed >15-second Job execution with real exit `7`, stdout/stderr, duplicate-start, verified cancellation, cleanup and refusal without linger in [CI #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531) on the PRE-remediation RC (the new lifecycle candidate requires fresh CI); the binary browser POST/SFTP transport was independently exercised with 180,127 opaque bytes in its isolated feature test. The full combined release candidate, independent review, operator browser visual QA and production-host capability/capacity remain separately gated. Native ChatGPT file attachments are not supported by this evidence.
+Real SSH/systemd, MariaDB concurrent start locking, exact PHP source checks
+and released-baseline update validation must be checked for the **current
+unmerged candidate SHA** in [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks);
+historical green runs do not establish the safety of subsequent code changes.
+An earlier disposable loopback OpenSSH/systemd fixture did complete >15-second
+execution, exit 7, output, replay resistance, verified cancel and no-linger
+denial; browser POST/SFTP also transferred 180,127 opaque bytes in an isolated
+test. None of these claims proves installation on the operator's host,
+the separate visual browser acceptance or native ChatGPT file attachments.
+Independent security review remains mandatory before any merge or Release.
 
 ### Shipping gate
 
@@ -734,7 +762,7 @@ setting in the next request/CLI maintenance invocation.
 | WordPress HTTPS connection timeout | `BRIDGE_REMOTE_CONNECT_TIMEOUT_SECONDS` (2 s) | 1–15 seconds |
 | WordPress HTTPS total request timeout | `BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS` (5 s) | 2–30 seconds |
 
-**v2.3.0 Owner command settings (#181):** the same Owner Settings page adds `ssh_command_timeout_seconds` (default maximum 15 seconds; selectable 15–30) and `ssh_command_max_kib` (default 8 KiB; selectable 8–64). A new additive nullable-column migration, `2026_10_15_000000_add_ssh_command_operational_limits.php`, is required before enabling the candidate. Older Owner forms must not erase these two overrides; the legacy WordPress JSON setting map is unchanged. SSH timeout refers to an individual synchronous exec phase, not a total PHP/proxy request SLA or a retained background job budget.
+**v2.3.0 Owner command settings (#181):** the same Owner Settings page adds `ssh_command_timeout_seconds` (default maximum 15 seconds; selectable 15–30) and `ssh_command_max_kib` (default 8 KiB; selectable 8–64). A new additive nullable-column migration, `2026_10_15_000000_add_ssh_command_operational_limits.php`, is required before these settings exist on an installed host. Older Owner forms must not erase these two overrides; the legacy WordPress JSON setting map is unchanged. SSH timeout refers to an individual synchronous exec phase, not a total PHP/proxy request SLA or a retained background job budget.
 
 The connect timeout cannot exceed the total request timeout. The total request
 deadline is shared by DNS A+AAAA validation and pinned HTTPS dispatch; it is

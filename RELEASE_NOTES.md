@@ -1,13 +1,14 @@
 # MCP Gateway v2.3.0
 
-**Stable v2.3.0 source promotion — NOT YET PUBLISHED.**
+**Stable v2.3.0 source promotion; publication and installation are separately verified.**
 This version collects Issues #181 and #182, including Owner-configurable
 retained SSH Job resource/lifecycle limits and high-assurance reconciliation.
-The preceding versioned integration RC is `2.3.0-rc.2`, candidate HEAD
-`062d649c926027557b51c390bac2f5e3f293fbfc`.
-Final stable source integration, author-separated independent review,
-GitHub Release and installation remain separate verifiable steps.
-The current published release remains v2.2.1 until explicit publication.
+The preceding versioned integration RC is `2.3.0-rc.4`, candidate HEAD
+`be66ed37247928991d404b76c198610912b5e3c8`.
+Author-separated independent review, integration, an official verified
+[GitHub Release](https://github.com/AChWorks/mcp-gateway/releases)
+and actual host installation are distinct verifiable steps; neither
+source promotion nor an unverified archive establishes deployment.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -39,11 +40,20 @@ The current published release remains v2.2.1 until explicit publication.
   (default 300 seconds; adjustable up to seven days), terminal-result retention
   (default 24 hours; 1–8760), pre-dispatch crash grace and post-runtime
   reconciliation grace. No cumulative historical Job-count cap is imposed.
-- Real OpenSSH/systemd user CI executed a >15-second job with retained
-  stdout/stderr and real exit status, safe cancel and no-linger rejection
-  ([pre-remediation workflow #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531)); new remediation-head acceptance is still pending.
-  Host-specific resource, service-manager and operator browser UX remain
-  subject to explicit installed-environment validation.
+- The SSH Job admission lease is renewed on the exact pre-dispatch CAS and
+  immediately before systemd-run, covering bounded SSH/SFTP preparation,
+  the actual possible dispatch delay, selected remote runtime and the
+  **original** reconciliation grace. A timed-out staging request cannot
+  start a Job after its admission slot may have been reassigned.
+  Per-Job prelaunch/reconciliation snapshots survive later Owner changes;
+  a fourth additive migration conservatively backfills older prerelease
+  journal rows without discarding no-replay evidence.
+- Real disposable OpenSSH/systemd validation and MariaDB same-user
+  concurrency checks must be verified against the **current exact PR HEAD**
+  at [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
+  Earlier green workflow runs (including #38791097112) are historical
+  evidence, not approval of a changed candidate. Browser/operator-host
+  acceptance, independent review and publication remain separate gates.
 
 ## SSH file exchange and connector presentation
 
@@ -60,13 +70,13 @@ The current published release remains v2.2.1 until explicit publication.
 
 ## Upgrade, security and rollback
 
-- New additive migrations: nullable SSH command operational limits and a
-  durable `ssh_command_jobs` journal and a third additive lifecycle-policy
-  migration for typed limits, admission leases and operator attestations. **A consistent, test-restored DB backup
-  is required before an eventual operator upgrade.** The journal's rollback
-  guard refuses dropping it while any job record remains; do not erase
-  unknown jobs to force migration rollback. Browser-updater code backups do
-  not reverse database changes.
+- Four additive migrations: SSH command operational limits, the durable
+  `ssh_command_jobs` journal, typed Owner Job policy/reconciliation evidence,
+  and per-Job immutable admission timing snapshots for safe delayed launches.
+  **A consistent, test-restored DB backup is required before any operator
+  upgrade.** Journal rollback guards refuse dropping safety evidence while
+  any Job record remains. Do not erase unknown Jobs to force rollback;
+  browser-updater code backups do not reverse database changes.
 - Refresh locked `symfony/http-foundation` from 8.1.6 to 8.1.9 to remediate
   advisory **CVE-2026-108082**, with Composer audit verified locally.
 - No production Target, OS user, host setting, OAuth credential, or
