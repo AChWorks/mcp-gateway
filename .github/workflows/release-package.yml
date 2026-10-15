@@ -13,6 +13,19 @@ on:
         description: 'Approved stable VERSION (e.g. 2.1.2)'
         required: true
         type: string
+      approved_tag_ruleset_id:
+        description: 'Owner-verified ACTIVE no-bypass release tag ruleset numeric ID'
+        required: true
+        type: string
+      approved_tag_ruleset_updated_at:
+        description: 'Exact GitHub updated_at of Owner-verified no-bypass ruleset'
+        required: true
+        type: string
+      approved_tag_ruleset_no_bypass:
+        description: 'Owner has verified the ruleset has an empty bypass list'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -102,6 +115,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           APPROVED_SHA: ${{ inputs.approved_sha }}
           APPROVED_VERSION: ${{ inputs.approved_version }}
+          APPROVED_TAG_RULESET_ID: ${{ inputs.approved_tag_ruleset_id }}
+          APPROVED_TAG_RULESET_UPDATED_AT: ${{ inputs.approved_tag_ruleset_updated_at }}
+          APPROVED_TAG_RULESET_NO_BYPASS: ${{ inputs.approved_tag_ruleset_no_bypass }}
         run: python3 bin/release_publication_guard.py before
 
       - name: Build fresh-install deployment ZIP
@@ -180,6 +196,9 @@ jobs:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
           APPROVED_SHA: ${{ inputs.approved_sha }}
           APPROVED_VERSION: ${{ inputs.approved_version }}
+          APPROVED_TAG_RULESET_ID: ${{ inputs.approved_tag_ruleset_id }}
+          APPROVED_TAG_RULESET_UPDATED_AT: ${{ inputs.approved_tag_ruleset_updated_at }}
+          APPROVED_TAG_RULESET_NO_BYPASS: ${{ inputs.approved_tag_ruleset_no_bypass }}
         shell: bash
         run: |
           set -euo pipefail
@@ -230,4 +249,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           APPROVED_SHA: ${{ inputs.approved_sha }}
           APPROVED_VERSION: ${{ inputs.approved_version }}
+          APPROVED_TAG_RULESET_ID: ${{ inputs.approved_tag_ruleset_id }}
+          APPROVED_TAG_RULESET_UPDATED_AT: ${{ inputs.approved_tag_ruleset_updated_at }}
+          APPROVED_TAG_RULESET_NO_BYPASS: ${{ inputs.approved_tag_ruleset_no_bypass }}
         run: python3 bin/release_publication_guard.py after

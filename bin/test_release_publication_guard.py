@@ -52,12 +52,32 @@ class PublicationGuardTests(unittest.TestCase):
         self.concurrent_tag_sha = None
         self.create_failure = None
         self.appearing_release = None
+        self.ruleset_id = 42
+        self.ruleset_present = True
+        self.policy = {
+            "id": self.ruleset_id,
+            "name": "Immutable stable release tags",
+            "updated_at": "2026-10-15T02:35:00Z",
+            "target": "tag",
+            "source_type": "Repository",
+            "source": guard.REPOSITORY,
+            "enforcement": "active",
+            "bypass_actors": [],
+            "conditions": {
+                "ref_name": {"include": ["refs/tags/v*"], "exclude": []},
+            },
+            "rules": [{"type": "update"}, {"type": "deletion"}],
+        }
+        self.ruleset_reads = 0
         self.env = {
             "GITHUB_REPOSITORY": guard.REPOSITORY,
             "GITHUB_SHA": APPROVED,
             "GITHUB_REF": "refs/heads/main",
             "APPROVED_SHA": APPROVED,
             "APPROVED_VERSION": VERSION,
+            "APPROVED_TAG_RULESET_ID": "42",
+            "APPROVED_TAG_RULESET_UPDATED_AT": self.policy["updated_at"],
+            "APPROVED_TAG_RULESET_NO_BYPASS": "true",
             "GH_TOKEN": "non-secret-disposable-test-token",
         }
         patcher1 = patch.object(guard, "ROOT", self.root)
@@ -66,9 +86,21 @@ class PublicationGuardTests(unittest.TestCase):
         patcher4 = patch.object(guard, "remote_tag", side_effect=self.fake_tag)
         patcher5 = patch.dict(os.environ, self.env, clear=True)
         patcher6 = patch.object(guard, "create_tag_once", side_effect=self.fake_create)
-        for p in (patcher1, patcher2, patcher3, patcher4, patcher5, patcher6):
+        patcher7 = patch.object(guard, "github_ruleset_json", side_effect=self.fake_ruleset_json)
+        self.real_ruleset_json = guard.github_ruleset_json
+        for p in (patcher1, patcher2, patcher3, patcher4, patcher5, patcher6, patcher7):
             p.start()
             self.addCleanup(p.stop)
+
+    def fake_ruleset_json(self, url: str, token: str):
+        self.assertEqual(token, self.env["GH_TOKEN"])
+        self.ruleset_reads += 1
+        base = f"https://api.github.com/repos/{guard.REPOSITORY}/rulesets"
+        if url == f"{base}?includes_parents=true&targets=tag&per_page=100&page=1":
+            return [{"id": self.ruleset_id}] if self.ruleset_present else []
+        if url == f"{base}/{self.ruleset_id}?includes_parents=true":
+            return self.policy
+        self.fail(f"Unexpected GitHub ruleset API request: {url}")
 
     def fake_api(self, tag: str, token: str):
         self.assertEqual(tag, TAG)
@@ -127,6 +159,198 @@ class PublicationGuardTests(unittest.TestCase):
     def test_fresh_publication_preflight_passes(self):
         guard.execute("before")
         self.assertEqual(self.download_called, 0)
+
+    def test_active_release_tag_immutability_policy_is_required_in_every_phase(self):
+        self.assertTrue(guard.qualifies_as_immutable_release_policy(
+            self.policy, self.ruleset_id, self.env["APPROVED_TAG_RULESET_UPDATED_AT"],
+        ))
+        guard.execute("before")
+        guard.execute("reserve")
+        self.release = self.expected_release()
+        guard.execute("after")
+        self.assertGreaterEqual(self.ruleset_reads, 6)
+
+    def test_owner_ruleset_attestation_must_be_explicit_and_current(self):
+        for variable, value in (
+            ("APPROVED_TAG_RULESET_NO_BYPASS", "false"),
+            ("APPROVED_TAG_RULESET_ID", "999"),
+            ("APPROVED_TAG_RULESET_UPDATED_AT", "2026-10-15T02:35:01Z"),
+            ("APPROVED_TAG_RULESET_ID", "invalid"),
+            ("APPROVED_TAG_RULESET_UPDATED_AT", ""),
+        ):
+            with self.subTest(variable=variable, value=value):
+                with patch.dict(os.environ, {variable: value}):
+                    with self.assertRaises(guard.PublicationStateError):
+                        guard.execute("before")
+        self.assertEqual(self.create_calls, 0)
+
+    def test_missing_bypass_visibility_requires_pinned_owner_attestation(self):
+        # github.token may have Metadata(read), not ruleset Admin(write);
+        # GitHub then omits bypass_actors. Trust the Owner's verified
+        # no-bypass attestation only while the exact ruleset revision matches.
+        del self.policy["bypass_actors"]
+        guard.execute("before")
+        self.policy["updated_at"] = "2026-10-15T02:35:01Z"
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("reserve")
+        self.assertEqual(self.create_calls, 0)
+
+    def test_ruleset_changed_since_owner_verified_no_bypass_must_fail(self):
+        self.policy["updated_at"] = "2026-10-15T02:36:00Z"
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("before")
+        self.assertEqual(self.create_calls, 0)
+
+    def test_missing_tag_policy_fails_before_creating_any_tag(self):
+        self.ruleset_present = False
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable stable-tag ruleset"):
+            guard.execute("reserve")
+        self.assertEqual(self.create_calls, 0)
+        self.assertIsNone(self.release)
+
+    def test_missing_update_restriction_fails_closed(self):
+        self.policy["rules"] = [{"type": "deletion"}]
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("before")
+        self.assertEqual(self.create_calls, 0)
+
+    def test_missing_delete_restriction_fails_closed(self):
+        self.policy["rules"] = [{"type": "update"}]
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("reserve")
+        self.assertEqual(self.create_calls, 0)
+
+    def test_disabled_evaluate_and_wrong_target_rules_are_not_accepted(self):
+        for enforcement in ("disabled", "evaluate", "enabled", None):
+            with self.subTest(enforcement=enforcement):
+                self.policy["enforcement"] = enforcement
+                with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+                    guard.execute("before")
+        self.policy["enforcement"] = "active"
+        self.policy["target"] = "branch"
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("before")
+
+    def test_bypass_rules_cannot_prove_immutability(self):
+        for actor_type in ("RepositoryRole", "Integration", "OrganizationAdmin", "Team"):
+            with self.subTest(actor_type=actor_type):
+                self.policy["bypass_actors"] = [{
+                    "actor_type": actor_type, "actor_id": 5, "bypass_mode": "always",
+                }]
+                with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+                    guard.execute("before")
+        self.policy["bypass_actors"] = [{"actor_type": "Team", "actor_id": 12,
+                                         "bypass_mode": "exempt"}]
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("before")
+        self.assertEqual(self.create_calls, 0)
+
+    def test_incorrect_tag_targeting_and_exclusions_are_rejected(self):
+        for includes in ([], ["refs/heads/main"], ["refs/tags/v1*"], ["v*"]):
+            with self.subTest(includes=includes):
+                self.policy["conditions"]["ref_name"]["include"] = includes
+                with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+                    guard.execute("before")
+        self.policy["conditions"]["ref_name"] = {
+            "include": ["refs/tags/v*"], "exclude": ["refs/tags/v2.2.1"],
+        }
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("before")
+
+    def test_create_restriction_or_parent_policy_is_not_accepted(self):
+        self.policy["rules"].append({"type": "creation"})
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("before")
+        self.policy["rules"].pop()
+        self.policy["source_type"] = "Organization"
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("before")
+
+    def test_approval_policy_must_remain_active_through_postpublication_check(self):
+        guard.execute("reserve")
+        self.release = self.expected_release()
+        self.policy["enforcement"] = "disabled"
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("after")
+        self.assertEqual(self.tag, (APPROVED, None))
+        self.assertEqual(self.download_called, 0)
+
+    def test_force_move_attempt_before_release_rejected_by_policy_model(self):
+        # Hermetic simulation of GitHub's Restrict updates rule, not a real
+        # provider mutation. The actual active ruleset must be read at release.
+        guard.execute("reserve")
+        self.assertTrue(guard.qualifies_as_immutable_release_policy(
+            self.policy, self.ruleset_id, self.env["APPROVED_TAG_RULESET_UPDATED_AT"],
+        ))
+        attempted_wrong_target = OTHER
+        move_allowed = not guard.qualifies_as_immutable_release_policy(
+            self.policy, self.ruleset_id, self.env["APPROVED_TAG_RULESET_UPDATED_AT"],
+        )
+        if move_allowed:
+            self.tag = (attempted_wrong_target, None)
+        self.assertFalse(move_allowed)
+        self.assertEqual(self.tag, (APPROVED, None))
+        self.release = self.expected_release()
+        guard.execute("after")
+        self.assertEqual(self.download_called, 1)
+
+    def test_ruleset_api_requests_use_read_only_authenticated_get(self):
+        class Response:
+            status = 200
+            def __init__(self, body):
+                self.body = body
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, size):
+                return json.dumps(self.body).encode("utf-8")
+        observed = []
+        def route(request, timeout):
+            self.assertEqual(request.get_method(), "GET")
+            self.assertEqual(timeout, 20)
+            self.assertEqual(request.get_header("Authorization"),
+                             f"Bearer {self.env['GH_TOKEN']}")
+            observed.append(request.full_url)
+            if "per_page=100&page=1" in request.full_url:
+                return Response([{"id": self.ruleset_id}])
+            if request.full_url.endswith("/rulesets/42?includes_parents=true"):
+                return Response(self.policy)
+            self.fail("Unexpected GitHub ruleset API GET")
+        with patch.object(guard, "github_ruleset_json", self.real_ruleset_json):
+            with patch.object(guard.urllib.request, "urlopen", side_effect=route):
+                self.assertEqual(
+                    guard.require_immutable_release_tag_policy(TAG, self.env["GH_TOKEN"]),
+                    self.ruleset_id,
+                )
+        self.assertEqual(len(observed), 2)
+        self.assertIn("includes_parents=true&targets=tag", observed[0])
+
+    def test_ruleset_api_denial_must_fail_closed(self):
+        with patch.object(guard, "github_ruleset_json", self.real_ruleset_json):
+            with patch.object(guard.urllib.request, "urlopen",
+                              side_effect=HTTPError("https://api.github.com", 403, "denied", {}, None)):
+                with self.assertRaisesRegex(guard.PublicationStateError, "could not be verified"):
+                    guard.execute("before")
+        self.assertEqual(self.create_calls, 0)
+
+    def test_ruleset_api_invalid_json_and_unverifiable_payload_fail_closed(self):
+        class Response:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, size):
+                return b"not JSON"
+        with patch.object(guard, "github_ruleset_json", self.real_ruleset_json):
+            with patch.object(guard.urllib.request, "urlopen", return_value=Response()):
+                with self.assertRaisesRegex(guard.PublicationStateError, "invalid JSON"):
+                    guard.execute("before")
+        self.assertEqual(self.create_calls, 0)
+        self.policy["id"] = 99
+        with self.assertRaisesRegex(guard.PublicationStateError, "No active immutable"):
+            guard.execute("before")
 
     def test_reservation_success_is_create_only_and_verified_before_release(self):
         guard.execute("before")
@@ -273,6 +497,9 @@ class PublicationGuardTests(unittest.TestCase):
                         workflow.index("release_publication_guard.py after"))
         self.assertIn("--verify-tag", workflow)
         self.assertIn("--target \"$APPROVED_SHA\"", workflow)
+        self.assertEqual(workflow.count("APPROVED_TAG_RULESET_ID:"), 3)
+        self.assertEqual(workflow.count("APPROVED_TAG_RULESET_UPDATED_AT:"), 3)
+        self.assertEqual(workflow.count("APPROVED_TAG_RULESET_NO_BYPASS:"), 3)
 
     def test_preexisting_mismatched_release_rejected(self):
         self.release = self.expected_release()
@@ -330,13 +557,14 @@ class PublicationGuardTests(unittest.TestCase):
     def test_preexisting_tag_points_at_different_approved_commit(self):
         self.tag = (OTHER, None)
         self.release = self.expected_release()
-        with self.assertRaisesRegex(guard.PublicationStateError, "Published tag does not resolve"):
+        with self.assertRaisesRegex(guard.PublicationStateError, "Published lightweight tag does not resolve"):
             guard.execute("after")
 
-    def test_annotated_tag_peeled_commit_controls_identity(self):
+    def test_annotated_tag_replacement_rejected_even_if_peeled_commit_matches(self):
         self.tag = (OTHER, APPROVED)
         self.release = self.expected_release()
-        guard.execute("after")
+        with self.assertRaisesRegex(guard.PublicationStateError, "Published lightweight tag"):
+            guard.execute("after")
 
     def test_draft_is_not_a_published_release(self):
         self.tag = (APPROVED, None)

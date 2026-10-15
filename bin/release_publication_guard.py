@@ -116,6 +116,128 @@ def api_release(tag: str, token: str) -> dict | None:
     return result
 
 
+# A deliberately narrow, auditable policy contract. An ACTIVE repository
+# tag ruleset for refs/tags/v* must forbid update and deletion, allow the
+# one-time creation, and grant no bypasses. A GitHub administrator can still
+# deliberately edit/disable a ruleset; that separate governance risk is not
+# a reason to allow ordinary writer tag moves.
+RELEASE_TAG_RULESET_INCLUDE = "refs/tags/v*"
+
+
+def github_ruleset_json(url: str, token: str):
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            require(response.status == 200, "Ruleset API returned an unexpected HTTP status.")
+            body = response.read(512 * 1024)
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError) as error:
+        raise PublicationStateError(
+            "GitHub ruleset policy could not be verified; refuse Release publication."
+        ) from error
+    try:
+        return json.loads(body)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise PublicationStateError("GitHub ruleset API returned invalid JSON; refuse publication.") from error
+
+
+def qualifies_as_immutable_release_policy(
+    ruleset: object, expected_id: int, expected_updated_at: str,
+) -> bool:
+    """Require the precise Owner-attested immutable repository tag policy.
+
+    GitHub hides bypass_actors from callers without ruleset-write access.
+    The release's least-privilege token MUST NOT gain that privilege:
+    the Owner verifies no bypass using admin access, then attests the exact
+    ruleset ID + GitHub-managed updated_at at workflow dispatch. Any later
+    changes to the ruleset invalidate that attestation and fail closed.
+    """
+    if not isinstance(ruleset, dict):
+        return False
+    if (ruleset.get("id") != expected_id
+            or ruleset.get("updated_at") != expected_updated_at
+            or ruleset.get("target") != "tag"
+            or ruleset.get("source_type") != "Repository"
+            or ruleset.get("source") != REPOSITORY
+            or ruleset.get("enforcement") != "active"
+            or ("bypass_actors" in ruleset and ruleset["bypass_actors"] != [])):
+        return False
+    conditions = ruleset.get("conditions")
+    if not isinstance(conditions, dict):
+        return False
+    ref_names = conditions.get("ref_name")
+    if not isinstance(ref_names, dict):
+        return False
+    includes = ref_names.get("include")
+    if (not isinstance(includes, list)
+            or not all(isinstance(item, str) for item in includes)
+            or not any(item in (RELEASE_TAG_RULESET_INCLUDE, "~ALL") for item in includes)
+            or ref_names.get("exclude") != []):
+        return False
+    rules = ruleset.get("rules")
+    if not isinstance(rules, list) or not all(isinstance(rule, dict) for rule in rules):
+        return False
+    types = [rule.get("type") for rule in rules]
+    return "update" in types and "deletion" in types and "creation" not in types
+
+
+def require_immutable_release_tag_policy(tag: str, token: str) -> int:
+    """Require effective repo-level protection before tag reservation or Release.
+
+    The API includes applicable parent rulesets; only an active repository
+    ruleset with no bypass is currently accepted as sufficient evidence.
+    Incomplete listings, forbidden reads and malformed data fail closed.
+    """
+    require(bool(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)),
+            "Expected an exact stable release tag.")
+    env = os.environ
+    expected_id_raw = env.get("APPROVED_TAG_RULESET_ID", "")
+    expected_updated_at = env.get("APPROVED_TAG_RULESET_UPDATED_AT", "")
+    require(bool(re.fullmatch(r"[1-9][0-9]*", expected_id_raw))
+            and bool(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+                                  expected_updated_at))
+            and env.get("APPROVED_TAG_RULESET_NO_BYPASS") == "true",
+            "Owner ruleset identity, exact updated_at and no-bypass attestation are required.")
+    expected_id = int(expected_id_raw)
+    base = f"https://api.github.com/repos/{REPOSITORY}/rulesets"
+    seen: set[int] = set()
+    for page in range(1, 11):
+        results = github_ruleset_json(
+            f"{base}?includes_parents=true&targets=tag&per_page=100&page={page}",
+            token,
+        )
+        require(isinstance(results, list) and len(results) <= 100,
+                "GitHub ruleset listing is incomplete or malformed; refuse publication.")
+        for item in results:
+            require(isinstance(item, dict) and type(item.get("id")) is int
+                    and item["id"] > 0, "GitHub ruleset listing has an invalid ID.")
+            ruleset_id = item["id"]
+            require(ruleset_id not in seen, "Duplicate GitHub ruleset ID; refuse publication.")
+            seen.add(ruleset_id)
+            ruleset = github_ruleset_json(f"{base}/{ruleset_id}?includes_parents=true", token)
+            if isinstance(ruleset, dict) and ruleset.get("id") == ruleset_id:
+                if qualifies_as_immutable_release_policy(
+                    ruleset, expected_id, expected_updated_at,
+                ):
+                    return ruleset_id
+        if len(results) < 100:
+            break
+    else:
+        raise PublicationStateError("GitHub ruleset listing exceeds verified pagination bound.")
+    raise PublicationStateError(
+        "No active immutable stable-tag ruleset was verified. Configure an ACTIVE "
+        "repository tag ruleset for refs/tags/v* with Restrict updates/deletions, "
+        "no Restrict creations and no bypass; Owner must freshly attest the exact "
+        "ruleset ID/updated_at from an administrator's complete view."
+    )
+
+
 def create_tag_once(tag: str, approved: str, token: str) -> None:
     """Atomically create a lightweight GitHub tag, without overwrite/retry.
 
@@ -214,6 +336,7 @@ def execute(phase: str) -> None:
     require(phase in ("before", "reserve", "after"), "Expected release guard phase: before | reserve | after.")
     version, approved, repo, token = source_envelope()
     tag = f"v{version}"
+    require_immutable_release_tag_policy(tag, token)
     raw, peeled = remote_tag(tag)
     release = api_release(tag, token)
     if phase in ("before", "reserve"):
@@ -237,7 +360,8 @@ def execute(phase: str) -> None:
         return
 
     require(raw is not None, "Published release tag is missing.")
-    require((peeled or raw) == approved, "Published tag does not resolve to approved SHA.")
+    require(raw == approved and peeled is None,
+            "Published lightweight tag does not resolve directly to approved SHA.")
     require(release is not None, "Release does not exist after publication.")
     require(release.get("tag_name") == tag and release.get("target_commitish") == approved,
             "Release tag name or target identity differs from approved source.")

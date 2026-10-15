@@ -116,6 +116,64 @@ mcp-gateway-vX.Y.Z.zip
 
 Do not use GitHub's generic **Source code (zip)** archive; that archive does not contain production `vendor/` dependencies. The named deployment ZIP contains only the application/runtime files required for installation and operation.
 
+### Stable GitHub Release tag immutability (Owner/admin gate)
+
+Before attempting the manual stable Release workflow, the repository
+Owner/admin must establish a **GitHub-enforced** tag policy in
+`AChWorks/mcp-gateway` (GitHub **Settings → Rulesets → New tag ruleset**):
+
+- **Enforcement status:** `Active`.
+- **Target tags:** include pattern `v*` (REST `refs/tags/v*`), with
+  **no exclusions**. This protects current and historical stable tags.
+- **Restrict updates:** enabled (ordinary writers cannot move the tag).
+- **Restrict deletions:** enabled (ordinary writers cannot delete it).
+- **Restrict creations:** disabled, so the official workflow can reserve a
+  previously nonexistent tag with the create-only Git Reference API.
+- **Bypass list:** empty; do not give ordinary Write/Maintain actors,
+  repository roles or the Release workflow token an update/delete bypass.
+
+The release publication guard accepts only an effective, active,
+**repository-level** tag ruleset with this targeting and security posture
+(or a strict all-tags `~ALL` include with no exclusions). It queries
+GitHub's read-only ruleset APIs in `before`, `reserve` and `after`.
+
+**Required Owner attestation when dispatching the manual workflow:**
+inspect the complete ruleset as a GitHub administrator, explicitly
+verify the bypass list is empty, and copy the *current* ruleset
+`id` and `updated_at` fields from the authoritative
+GitHub API into workflow inputs
+`approved_tag_ruleset_id` and
+`approved_tag_ruleset_updated_at`. Check
+`approved_tag_ruleset_no_bypass` only after confirming no bypass.
+The workflow `GITHUB_TOKEN` intentionally has no ruleset-admin
+permission; GitHub may therefore omit `bypass_actors` from its
+read-only API response. The Owner-attested pair binds the Release to the
+exact, independently inspected GitHub-managed ruleset revision. A
+later policy edit (including bypass, enforcement or targeting changes)
+changes `updated_at` and is rejected; an explicit nonempty bypass
+list, if visible to the workflow, is always rejected directly. This
+preserves least privilege instead of exposing a repository-admin
+credential to build jobs. It relies on an honest Owner/admin attestation
+and does not prevent a deliberately privileged admin changing the
+policy; that is a separate governance risk.
+
+Missing/insufficient rules, disabled/evaluate enforcement, API denial,
+unapproved revisions, missing Owner attestation or incomplete policy
+evidence **fail closed**, before a public Release is created. Do not
+run a manual `gh release create` as a workaround. Inspect the
+effective ruleset again before release; current source tests are
+hermetic and do not establish that a live repository policy was
+created or enforced. Changing or disabling the protection requires
+a separately Owner-approved governance operation.
+
+The reservation procedure retains its create-only 201/SHA check,
+rejects concurrent 409/422 and ambiguous API outcomes without retry,
+preserves a tag-only partial publication for manual reconciliation,
+uses `gh release create --verify-tag`, and independently verifies the
+published lightweight tag plus all four downloaded package/checksum
+asset bytes. Any unexpected tag/Release state requires explicit Owner
+reconciliation; never force-move, delete or recreate a reserved tag.
+
 ### Release package hygiene invariant
 
 The named deployment ZIP is a production artifact, not a filtered repository archive. Every current and future release must be built and verified through the repository-owned `bin/build-release-package.sh` and `bin/verify-release-package.sh` path.

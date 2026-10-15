@@ -1,6 +1,6 @@
 # MCP Gateway v2.2.1
 
-**Corrective source candidate `2.2.1-rc.8` — NOT PUBLISHED.**
+**Corrective source candidate `2.2.1-rc.9` — NOT PUBLISHED.**
 The public release remains `v2.2.0` until independently reviewed,
 exact-head accepted, Owner-approved stable integration and manual publication.
 Neither this VERSION/notes change nor green CI authorizes production rollout.
@@ -101,10 +101,10 @@ absence check and `gh release create`, which ignores `--target` when a
 matching tag already exists. Post-publication checks would detect but
 not prevent an incorrectly targeted public Release.
 
-This unique **rc.8** candidate closes that mutation boundary by using
-GitHub's create-only Git Reference API to atomically reserve the stable
-tag at the Owner-approved SHA after the final source review/CI/baseline
-checks. A conflicting existing tag (HTTP 409/422) fails before publication,
+The **rc.8** candidate closed the concurrent tag-*creation* boundary
+by using GitHub's create-only Git Reference API to atomically reserve
+the stable tag at the Owner-approved SHA after the final source
+review/CI/baseline checks. A conflicting existing tag (HTTP 409/422) fails before publication,
 including concurrent same-name tag creation; unknown request outcomes
 fail closed without automatic retry. The resulting lightweight tag is
 independently checked against the exact approved SHA before proceeding,
@@ -114,12 +114,38 @@ retained for manual reconciliation; it must not be moved/deleted or
 silently replayed. All rc.7 post-publication checksum, tag-target and
 downloaded-byte verification remains intact.
 
-The rc.8 delta updates only the manual publication gate, hermetic
-regressions, VERSION and documentation. No PHP application/updater/
-recovery runtime has changed from previously reviewed rc.7. The rc.8
-candidate requires its own exact-head CI and author-separated delta
-review before stable 2.2.1 promotion; this is not a public Release,
-production deployment or authorization to mutate a live operator host.
+The rc.8 delta updated only the manual publication gate, hermetic
+regressions, VERSION and documentation, without PHP runtime changes.
+Its fresh author-separated HIGH_ASSURANCE review returned
+**CHANGES_REQUIRED**: even after reserving a tag correctly, a repository
+writer could force-move the unprotected tag before the public Release
+consumed it. Checking again in the workflow would leave another
+time-of-check/time-of-use gap.
+
+The unique **rc.9** source candidate requires an **ACTIVE GitHub repository
+tag Ruleset** applying to `refs/tags/v*`, with `Restrict updates` and
+`Restrict deletions`, **no creation restriction**, and **no bypass actors**.
+The publication guard reads the effective repository ruleset list and
+full ruleset details, rejecting an absent/disabled/evaluate/mis-targeted
+policy, missing restrictions, visible bypasses, uncertain API replies or
+Owner-attestation identity drift before reservation or Release. GitHub
+can hide bypass actors from the least-privilege workflow token, so the
+Owner must first inspect the complete ruleset and attest its exact
+GitHub-managed ID/updated_at (with the empty bypass list) at dispatch;
+a subsequent ruleset revision invalidates that attestation. It rechecks
+during the reservation and post-publication phases. The final tag
+identity check now requires the exact lightweight commit ref written by
+the create-only Git Reference API (not an annotated replacement that
+peels to the same commit). Existing no-retry, partial-tag preservation,
+and four-asset byte verification remain intact.
+
+**Platform prerequisite is not yet claimed satisfied.** A repository
+Owner/admin must activate and verify that ruleset independently; current
+hermetic tests model the GitHub restriction but never write or race a
+real stable tag. No automatic Release, Merge or production deployment
+is authorized. See the stable-tag policy instructions in
+`docs/DEPLOYMENT.md`. RC.9 requires new exact-head CI, fresh
+author-separated delta review, then separate Owner approval gates.
 
 New stable Release, integration and actual operator-host updates require their
 own explicit Owner authorization. See Issue #135, PR #178 and
