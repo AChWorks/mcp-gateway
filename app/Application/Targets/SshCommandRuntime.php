@@ -10,6 +10,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshCommandAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
@@ -34,8 +35,10 @@ final readonly class SshCommandRuntime
     ) {}
 
     /** @return array<string,mixed> */
-    public function run(User $user, Target $target, string $command, int $timeoutSeconds = 10): array
-    {
+    public function run(
+        User $user, Target $target, string $command, int $timeoutSeconds = 10,
+        ?string $expectedTargetBinding = null,
+    ): array {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
         }
@@ -47,7 +50,7 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('invalid_input');
         }
 
-        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds): array {
+        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             $credential = TargetCredential::query()
@@ -59,6 +62,10 @@ final readonly class SshCommandRuntime
                 || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)
                 || ! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
                 throw new SshTargetConnectionException('credential_unavailable');
+            }
+            if ($expectedTargetBinding !== null
+                && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config))) {
+                throw new SshTargetConnectionException('target_changed');
             }
             try {
                 $material = $this->vault->open($fresh, $config, $credential);
@@ -73,7 +80,7 @@ final readonly class SshCommandRuntime
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SSH2 $ssh, string $peerIp) use (
-                    $user, $target, $config, $credential, $command, $timeoutSeconds, $started,
+                    $user, $target, $config, $credential, $command, $timeoutSeconds, $started, $expectedTargetBinding,
                 ): array {
                     // Credential disconnect or permission revocation during KEX/login
                     // must not authorize a NEW exec after the revocation.
@@ -89,6 +96,12 @@ final readonly class SshCommandRuntime
                         || ! $currentConfig instanceof SshTargetConfig
                         || ! hash_equals((string) $credential->encrypted_payload, (string) $currentCredential->encrypted_payload)
                         || ! hash_equals((string) $config->pinned_host_key, (string) $currentConfig->pinned_host_key)
+                        || ! hash_equals((string) $config->host, (string) $currentConfig->host)
+                        || $config->port !== $currentConfig->port
+                        || ! hash_equals((string) $config->username, (string) $currentConfig->username)
+                        || ! hash_equals((string) $config->auth_method, (string) $currentConfig->auth_method)
+                        || ($expectedTargetBinding !== null
+                            && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($currentTarget, $currentConfig)))
                         || ! $this->access->allows($currentUser, GatewayPermission::SshCommandRun, $currentTarget)) {
                         throw new SshTargetConnectionException('target_changed');
                     }

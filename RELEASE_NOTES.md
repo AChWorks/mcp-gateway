@@ -1,6 +1,6 @@
 # MCP Gateway v2.3.0
 
-**Corrective source candidate `2.3.0-rc.4` — NOT PUBLISHED.**
+**Corrective source candidate `2.3.0-rc.5` — NOT PUBLISHED.**
 This combined integration candidate collects Issue #181 and #182's four
 reviewable source slices. It is not a GitHub Release or an installed host.
 The current published version remains v2.2.1 until separately reviewed,
@@ -44,6 +44,11 @@ approved and published with exact-source and verified package assets.
   Per-Job prelaunch/reconciliation snapshots survive later Owner changes;
   a fourth additive migration conservatively backfills older prerelease
   journal rows without discarding no-replay evidence.
+- RC5 serializes Job launch-lease renewal and pre-dispatch lease extension
+  against new same-user admissions under the same User-before-Job database
+  locks. Every SSH/SFTP Job phase rejects a changed original Target endpoint
+  or SSH trust binding before contacting the replacement host; ambiguous
+  remote launch remains non-replayable.
 - Real disposable OpenSSH/systemd validation and MariaDB same-user
   concurrency checks must be verified against the **current exact PR HEAD**
   at [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
