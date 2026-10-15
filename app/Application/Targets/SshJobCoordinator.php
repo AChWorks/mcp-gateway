@@ -195,7 +195,7 @@ final readonly class SshJobCoordinator
                 $running = $this->safeCommand($user, $target,
                     $this->managerEnvironment((string) $row->unit_mode).'systemctl '.($row->unit_mode === 'user' ? '--user ' : '')
                     .'show '.escapeshellarg($this->unit($jobId))
-                    .' --property=ActiveState --property=Result --no-pager',
+                    .' --property=ActiveState --property=Result --property=ExecMainCode --property=ExecMainStatus --no-pager',
                     8);
                 $state = trim((string) ($running['stdout'] ?? ''));
                 if ($this->successful($running)
@@ -210,8 +210,19 @@ final readonly class SshJobCoordinator
                     // failed-unit result is authoritative for terminal failure.
                     // Omitting --collect keeps failed units inspectable until
                     // bounded post-retention cleanup, even after disconnect.
+                    // The wrapper may have exited before its SFTP-readable
+                    // marker became available. systemd's retained main-process
+                    // exit status is authoritative only for a normal exit,
+                    // never for signals, timeout or inaccessible units.
+                    $systemdExit = null;
+                    if ($match[1] === 'exit-code'
+                        && preg_match('/(?:^|\n)ExecMainCode=1(?:\n|$)/D', $state) === 1
+                        && preg_match('/(?:^|\n)ExecMainStatus=([0-9]{1,3})(?:\n|$)/D', $state, $exitMatch) === 1
+                        && (int) $exitMatch[1] > 0 && (int) $exitMatch[1] <= 255) {
+                        $systemdExit = (int) $exitMatch[1];
+                    }
                     $this->transition($jobId, (string) $row->status, 'failed',
-                        ['terminal_reason' => 'systemd_'.$match[1]]);
+                        ['exit_code' => $systemdExit, 'terminal_reason' => 'systemd_'.$match[1]]);
                 } elseif ($row->status === 'running') {
                     // An absent/inaccessible unit without exit evidence is
                     // NOT proof of completion or a safe re-launch.
