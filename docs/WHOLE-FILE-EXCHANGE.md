@@ -2,6 +2,38 @@
 
 **Public release status:** [v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) includes the implementation from independently HIGH_ASSURANCE-approved [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). This is a **published code/package capability, not a production installation or default enablement**. `SSH_FILE_TRANSFER_ENABLED=false` keeps the optional HTTP route **OFF** until a separately authorized real-host security/proxy/resource check enables it. Independent PHP/Python clients proved bidirectional bytes and SHA-256 on disposable installed fixtures; this does **not** prove native ChatGPT model file handoff. The earlier v2.0.3 maintenance release did not contain the route.
 
+## Browser file picker fallback — source candidate for #181
+
+This is a **development candidate, not part of v2.2.1**. On an authenticated
+Gateway Administration session, open **Targets → exact Direct SSH Target**.
+If the Target has a credential, the active user has `ssh.file.write` and/or
+`ssh.file.read`, and the separately approved server environment has
+`SSH_FILE_TRANSFER_ENABLED=true`, an HTML file picker offers an upload
+and a remote-path form provides a browser attachment download. These Admin
+forms call the existing verified SFTP whole-file service; they do **not**
+issue OAuth access tokens or expose new unauthenticated data-plane endpoints.
+
+The browser must upload a real local file, select the exact absolute remote
+destination and enter a **pre-provisioned owner-controlled 0700 private staging
+directory on the destination's filesystem**. Gateway validates target-specific
+permissions before dispatch, computes local bytes/SHA-256, verifies remote
+readback before atomic create/replace and never echoes file contents or
+private paths to logs. User-selected overwrite is explicitly last-writer-wins
+rather than a compare-and-swap operation. For downloads, Gateway verifies
+remote size/SHA-256 before producing an attachment, supplies verification
+headers and disables content sniffing. Browser or network interruption
+requires separately verifying the remote state; never auto-repeat uncertain
+writes. PHP `upload_max_filesize`, `post_max_size`, proxy and request-timeout
+settings can be stricter than the 64 MiB Gateway maximum.
+
+Native ChatGPT chat attachments still **do not automatically become MCP
+tool input**, and these browser forms do not return ChatGPT-model-readable
+file artifacts. They are a practical user-initiated supported-interface
+fallback, not evidence of native host support. The flag must remain OFF on
+production until a separate authorized rollout and real-browser/SSH
+acceptance. A non-Owner with explicit read/write Target grants is eligible
+to use the forms; permissions are not broadened by the UI.
+
 ## Proven contract and what it does not claim
 
 An approved MCP application obtains its usual OAuth access token and chooses
