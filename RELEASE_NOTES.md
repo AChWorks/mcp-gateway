@@ -1,10 +1,10 @@
 # MCP Gateway v2.3.0
 
-**Corrective source candidate `2.3.0-rc.1` — NOT PUBLISHED.**
-This combined integration candidate collects Issue #181 and #182's four
-reviewable source slices. It is not a GitHub Release or an installed host.
-The current published version remains v2.2.1 until separately reviewed,
-approved and published with exact-source and verified package assets.
+**Stable v2.3.0 source promotion from CI-verified `2.3.0-rc.1`.**
+This source integrates Issue #181 and #182's reviewed-by-CI Direct SSH
+features and Agent-specific presentation cleanup. Public GitHub Release
+publication remains an explicit separate action; source promotion does not
+install or modify any operator host or enable optional file-transfer mode.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -53,9 +53,12 @@ approved and published with exact-source and verified package assets.
   `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
   package. Changes to an actual installed host require a separate authorized
   deployment and compatibility/rollback checks.
-- Exact combined-source CI, source security review, upgrade tests, final
-  stable VERSION promotion and approved Release publication are pending at
-  the time of this prerelease candidate. Do not represent it as shipped.
+- Exact prerelease source CI (including real SSH/systemd) and published-baseline
+  updater compatibility passed on `47e47595e296f7992123192081987a42c4e18b03`.
+  Stable promotion changes only VERSION and documentation. Independent
+  author-separated security review, controlled main integration and public
+  publication are separate acceptance steps; installed-host behavior requires
+  its own operator validation.
 
 # MCP Gateway v2.2.1
 
