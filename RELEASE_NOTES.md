@@ -1,6 +1,6 @@
 # MCP Gateway v2.3.0
 
-**Corrective source candidate `2.3.0-rc.1` — NOT PUBLISHED.**
+**Corrective source candidate `2.3.0-rc.2` — NOT PUBLISHED.**
 This combined integration candidate collects Issue #181 and #182's four
 reviewable source slices. It is not a GitHub Release or an installed host.
 The current published version remains v2.2.1 until separately reviewed,
@@ -27,6 +27,10 @@ approved and published with exact-source and verified package assets.
   An exact-binding, local deployment-operator attestation command handles
   orphaned/rotated/revoked SSH Job cleanup after **independent original-host
   verification**; operator retirement never claims a confirmed remote exit.
+  New immutable non-secret original User/Target/SSH endpoint and pinned-key
+  digest snapshots survive User/Target deletion so the operator can locate
+  the ORIGINAL host without reusing a rotated Target. For earlier prerelease
+  journals, binding-mismatched provenance is reported unknown, never guessed.
 - The existing Owner-only, password-confirmed Operational Settings screen
   controls Job concurrency (default 2; 1–1024), maximum Job runtime
   (default 300 seconds; adjustable up to seven days), terminal-result retention

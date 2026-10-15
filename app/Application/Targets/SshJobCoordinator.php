@@ -52,7 +52,9 @@ final readonly class SshJobCoordinator
             throw new SshTargetConnectionException('invalid_input');
         }
 
-        $binding = $this->binding($target);
+        $original = $this->originalIdentity($target);
+        $binding = $original['target_binding_hash'];
+        $original['original_user_id'] = $user->getKey();
         // HMAC avoids retaining a guessable hash of sensitive script contents.
         $digest = hash_hmac('sha256', $script, (string) config('app.key'));
         $identity = [
@@ -61,7 +63,7 @@ final readonly class SshJobCoordinator
             'client_identity_hash' => $clientHash,
             'request_id' => $requestId,
         ];
-        [$row, $created] = DB::transaction(function () use ($user, $identity, $digest, $runtimeSeconds, $binding, $policy): array {
+        [$row, $created] = DB::transaction(function () use ($user, $identity, $original, $digest, $runtimeSeconds, $binding, $policy): array {
             // Serialize simultaneous intents from one principal on the same
             // database user row, never while an SSH/network operation runs.
             User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
@@ -97,7 +99,7 @@ final readonly class SshJobCoordinator
                 'id' => $id,
                 ...$identity,
                 'script_digest' => $digest,
-                'target_binding_hash' => $binding,
+                ...$original,
                 'status' => 'preparing',
                 'runtime_seconds' => $runtimeSeconds,
                 // This is an admission lease, NOT confirmation that a remote
@@ -542,16 +544,38 @@ final readonly class SshJobCoordinator
 
     private function binding(Target $target): string
     {
+        return $this->originalIdentity($target)['target_binding_hash'];
+    }
+
+    /**
+     * Identity captured before initial admission, not looked up later from
+     * mutable Target pointers. These non-secret immutable snapshots allow a
+     * local operator to identify the ORIGINAL host after FK nullOnDelete or
+     * credential/binding rotation. They do not authorize new SSH access.
+     *
+     * @return array<string, int|string>
+     */
+    private function originalIdentity(Target $target): array
+    {
         $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
         if (! $config instanceof SshTargetConfig) {
             throw new SshTargetConnectionException('credential_unavailable');
         }
 
-        return hash('sha256', implode("\0", [
-            (string) $target->getKey(), $target->target_id,
-            $config->host, (string) $config->port, $config->username,
-            $config->auth_method, $config->pinned_host_key,
-        ]));
+        return [
+            'target_binding_hash' => hash('sha256', implode("\0", [
+                (string) $target->getKey(), $target->target_id,
+                $config->host, (string) $config->port, $config->username,
+                $config->auth_method, $config->pinned_host_key,
+            ])),
+            'original_target_record_id' => (string) $target->getKey(),
+            'original_target_id' => (string) $target->target_id,
+            'original_host' => (string) $config->host,
+            'original_port' => (int) $config->port,
+            'original_os_username' => (string) $config->username,
+            'original_auth_method' => (string) $config->auth_method,
+            'original_host_key_digest' => hash('sha256', (string) $config->pinned_host_key),
+        ];
     }
 
     private function probe(User $user, Target $target): ?string

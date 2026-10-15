@@ -118,7 +118,16 @@ After that deadline, even an uncertain `launch_unknown`, `running` or
 **Lease expiry does not prove remote completion, issue a cancellation,
 unlock a retry, or delete any script/output.** Its original user, client,
 Target binding, script digest, request UUID and Job ID remain stored for
-inspection/reconciliation. A duplicate request UUID remains idempotent
+inspection/reconciliation. Each new Job also snapshots its original user ID,
+Target record/public ID, hostname, port, OS username, authentication method,
+and SHA-256 digest of the pinned host-public-key line in separate immutable
+(non-foreign-key) journal fields. This metadata is NOT a password, private
+key, remote-connection grant or script log. It survives later User/Target
+deletion or binding rotation and can identify the original endpoint for
+operator verification. Older pre-migration records are backfilled only when
+their current stored Target binding still matches exactly; otherwise the
+original endpoint is reported **unknown** rather than misattributed to a
+replacement host. A duplicate request UUID remains idempotent
 for as long as its journal is retained.
 
 A crash in `preparing` is different: that state is *before* the first
@@ -153,7 +162,12 @@ an SSH timeout, or a successful cancellation request alone. After that
 verification, an authorized *local deployment operator* can explicitly
 attest the cleanup, supplying the exact stored original 64-character
 Target-binding SHA-256 from `inspect`, exact Job ID twice, and a meaningful
-reason:
+reason. `inspect` shows the immutable original non-secret host/port, OS
+login and host-key digest even after referenced user/Target deletion; its
+original host-key digest is only a checksum of the stored pinned public key,
+**not a substitute for verifying the original host out-of-band**. Older
+pre-snapshot records without trustworthy provenance need independent
+operator evidence before attestation:
 
 ```bash
 php artisan gateway:ssh-jobs-reconcile retire YOUR_EXACT_26_CHARACTER_JOB_ID \

@@ -43,11 +43,20 @@ final class ReconcileSshJobs extends Command
             }
             $rows = $query->orderByDesc('created_at')->limit(30)->get();
             $this->table(
-                ['Job ID', 'Status', 'User ID', 'Target record', 'Original binding SHA-256', 'Admission until', 'Retain until'],
+                [
+                    'Job ID', 'Status', 'Original User ID', 'Original Target ID',
+                    'Original host:port', 'Original OS user',
+                    'Original host-key SHA-256', 'Original binding SHA-256',
+                    'Admission until', 'Retain until',
+                ],
                 $rows->map(static fn ($row): array => [
-                    $row->id, $row->status, $row->user_id ?? '(deleted)',
-                    $row->target_record_id ?? '(deleted)', $row->target_binding_hash,
-                    $row->admission_expires_at ?? '(unknown)', $row->expires_at,
+                    $row->id, $row->status, $row->original_user_id ?? '(pre-snapshot unknown)',
+                    $row->original_target_id ?? '(pre-snapshot unknown)',
+                    $row->original_host !== null
+                        ? $row->original_host.':'.$row->original_port : '(pre-snapshot unknown)',
+                    $row->original_os_username ?? '(pre-snapshot unknown)',
+                    $row->original_host_key_digest ?? '(pre-snapshot unknown)',
+                    $row->target_binding_hash, $row->admission_expires_at ?? '(unknown)', $row->expires_at,
                 ])->all(),
             );
 

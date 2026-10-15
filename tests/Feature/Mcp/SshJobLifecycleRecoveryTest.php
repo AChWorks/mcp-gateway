@@ -136,6 +136,14 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             $client, (string) Str::uuid(), 'echo secure')['result']['job_id'];
         DB::table('ssh_command_jobs')->where('id', $jobId)->update(['status' => 'launch_unknown']);
         $original = DB::table('ssh_command_jobs')->where('id', $jobId)->first();
+        self::assertSame((int) $user->getKey(), (int) $original->original_user_id);
+        self::assertSame((string) $target->getKey(), $original->original_target_record_id);
+        self::assertSame('ssh-lifecycle-test', $original->original_target_id);
+        self::assertSame('fixture.example.test', $original->original_host);
+        self::assertSame(22, (int) $original->original_port);
+        self::assertSame('fixture-user', $original->original_os_username);
+        self::assertSame('password', $original->original_auth_method);
+        self::assertSame(64, strlen((string) $original->original_host_key_digest));
         $jobs = app(SshJobCoordinator::class);
         try {
             $jobs->operatorRetire($jobId, $original->target_binding_hash,
@@ -168,6 +176,11 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         self::assertSame(0, Artisan::call('gateway:ssh-jobs-reconcile', [
             'operation' => 'inspect', 'job' => $jobId,
         ]));
+        $inspection = Artisan::output();
+        self::assertStringContainsString('fixture.example.test:22', $inspection);
+        self::assertStringContainsString('fixture-user', $inspection);
+        self::assertStringContainsString((string) $original->target_binding_hash, $inspection);
+        self::assertStringNotContainsString('test-secret', $inspection);
         self::assertSame(0, Artisan::call('gateway:ssh-jobs-reconcile', [
             'operation' => 'retire', 'job' => $jobId,
             '--confirm' => $jobId, '--binding' => $original->target_binding_hash,
@@ -182,6 +195,11 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         $row = DB::table('ssh_command_jobs')->where('id', $jobId)->first();
         self::assertNull($row->user_id);
         self::assertNull($row->target_record_id);
+        // Non-FK immutable identity survives linked User/Target deletion.
+        self::assertSame($original->original_user_id, $row->original_user_id);
+        self::assertSame($original->original_target_record_id, $row->original_target_record_id);
+        self::assertSame($original->original_host, $row->original_host);
+        self::assertSame($original->original_host_key_digest, $row->original_host_key_digest);
         self::assertSame($original->script_digest, $row->script_digest);
         self::assertSame($original->request_id, $row->request_id);
         self::assertSame('operator_attested_cleanup', $row->terminal_reason);
