@@ -30,8 +30,8 @@ access permit audited, Owner-confirmed deliberate SSH ACL changes. Target
 Group controls are live deny-only rules; they cannot grant shell authority
 without the role, global grant and selected Target. SSH command permissions
 enable general shell/file access even when SFTP toggles deny file tools.
-AI Server Agent is a separate paused connector; its reservation-only
-permission definitions remain non-executable.
+A previously proposed Agent connector was canceled by the Owner; historical
+identities and denials remain inert, and no Agent capability is advertised.
 
 These capabilities are shipped with v2.1.2, **not evidence that a particular
 operator host has been upgraded or its optional route enabled**. The sections
@@ -52,9 +52,171 @@ Security tests cover out-of-band host-key pin parsing, encrypted bound credentia
 
 The integrated `ssh-command-run` tool authorizes exactly one stored `target_id` through `ssh.command.run`, and reuses the existing verified numeric peer, pinned server host key and encrypted Target-bound credential before a one-off, non-interactive exec. It does not authorize an arbitrary destination, install a daemon, or change WordPress operations. Remote shell text is not allowlisted. The selected remote OS account alone determines permitted commands, including `sudo`, root and access to remote files.
 
-Per-command timeout is 1–15 seconds; command input is at most 8192 bytes. Captured stdout is limited to 16384 bytes, stderr to 8192 bytes, with independent UTF-8 or base64 representations, nullable exit status, completeness/truncation markers and the verified connection IP. A timeout, channel failure, or exceeded preview budget after possible dispatch is `outcome_unknown`; the command is never retried automatically, and no continuation/resume is invented. The remote process may continue after disconnect, so a caller must not repeat a mutating command without independent verification. Activity records do not include raw command strings or output.
+The shipped v2.2.1 command limits are 1–15 seconds with at most 8192 UTF-8 input bytes. Development candidate #181 retains those defaults while adding Owner-adjustable maximum execution timeout (15–30 seconds) and command input budget (8–64 KiB) in the **existing** Operational Settings store. Commands longer than the current Owner limit reject with actual effective-limit diagnostics. Each MCP tool manifest publishes the per-request maximum, with actual byte length checked server-side (JSON Schema `maxLength` counts characters). Changes take effect for new requests without restarting services. Synchronous command processing still depends on the installed PHP/proxy/client deadlines: use a retained SSH Job for longer tasks; a 30-second exec cap is not a guarantee that every hosting stack can sustain that request. Captured stdout is limited to 16384 bytes, stderr to 8192 bytes, with independent UTF-8 or base64 representations, nullable exit status, completeness/truncation markers and the verified connection IP. A timeout, channel failure, or exceeded preview budget after possible dispatch is `outcome_unknown`; the command is never retried automatically, and no continuation/resume is invented. The remote process may continue after disconnect, so a caller must not repeat a mutating command without independent verification. Activity records do not include raw command strings or output.
 
 SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. Bounded SFTP was integrated separately in #146, and Owner-controlled host-key/credential rotation later shipped via PR #168. Command exec was merged as #145 after independent review; safe Owner-controlled rotation subsequently shipped in v2.1.2.
+
+## Unpublished v2.3.0 candidate: lightweight agentless SSH Jobs (#181)
+
+**Not part of the published v2.2.1 release and not installed on an operator host.**
+This source candidate adds four ordinary OAuth-authenticated MCP Tools alongside
+synchronous `ssh-command-run`. It does **not** install or depend on AI Server
+Agent, a Gateway queue daemon, Redis, PTY or an IDE runtime.
+
+| MCP tool | Parameters and result |
+| --- | --- |
+| `ssh-job-start` | Exact `target_id`, caller-generated UUID `request_id`, UTF-8 `script` up to 16 KiB, `max_runtime_seconds` 16–the current Owner maximum (default max 300 seconds, Owner-adjustable up to seven days; default request 60 seconds); returns a stable 26-character `job_id`, status and retry guidance |
+| `ssh-job-status` | Exact `target_id` and `job_id`; reconciles remote exit marker or authenticated systemd active state; `failed` includes actual exit code when a script marker is readable; systemd failures have an explicit reason without a fabricated exit code. If systemd reports `exit-code` first and a bounded SFTP read cannot obtain the marker, a later status poll can recover the numeric exit without re-running the job |
+| `ssh-job-output` | Job ID and `stdout` or `stderr` with bounded 1–16 KiB Base64 window, explicit offset, size and EOF; use multiple reads without re-execution |
+| `ssh-job-cancel` | Best-effort stop of the exact unit; only reports `canceled` after independently verifying inactive/failed state and no live MainPID/ControlPID; otherwise `cancel_requested` is honest |
+
+A Job requires **all three existing SSH permissions** (`ssh.command.run`,
+`ssh.file.read`, `ssh.file.write`) to start, plus a connected exact SSH
+Target and previously approved verified host key/OS account. Subsequent
+operations require the same authenticated Gateway user, OAuth client profile
+and exact persisted Target binding, and the relevant live operation grants.
+Job scripts and output are not stored in the Gateway database, logs or
+analytics: the encrypted Target credentials are used only inside the existing
+SSH/SFTP runtime. The Gateway stores a durable random job ID and hashed
+identity/script/Target binding *before* any remote side effect. The same
+`request_id` and identical arguments return the same job; changed parameters
+fail rather than trigger a second execution. A lost post-dispatch response is
+`outcome_unknown` / `launch_unknown` and **must never be launched again**.
+
+Supported remote execution requires Linux `systemd-run` and a persistent
+systemd **user** manager with `loginctl enable-linger` already approved by
+that host's operator, or a root-owned system manager when the deliberately
+configured SSH OS account is root. Missing support fails closed before
+staging. The same verified SSH path creates one remote private `0700`
+directory under `/var/tmp/.mcp-gateway-job-<job_id>`, stages both the script
+and wrapper via existing atomic SFTP single-window writes (mode `0600`),
+and launches a transient `systemd-run` unit (failed units retained until safe cleanup) with finite lifetime,
+file-size and control-group constraints. The wrapper writes bounded
+`stdout`, `stderr` and a durable exit-code marker. A job may outlive the
+browser session or Gateway PHP request; each later poll creates an
+independently authorized new SSH connection. Systemd service availability
+is a *remote host capability*, not guaranteed on shared hosting.
+
+A user has **no cumulative historical Job-count limit**. The Owner controls
+the maximum **simultaneously admitted** Jobs per user (default 2, supported
+1–1024) and maximum runtime of each new Job (default 300 seconds, configurable
+300–604800 seconds, i.e. seven days) in **Admin → Operational Settings →
+Detached SSH Jobs**. These are two separate resource boundaries: the MCP
+`ssh-job-start.max_runtime_seconds` schema exposes the current effective
+Owner ceiling, and the remote systemd unit enforces the runtime selected for
+that Job. An existing Job keeps its original finite runtime/lease even if
+the Owner later changes limits. Total stored Job history does not count
+against concurrency.
+
+The Owner separately controls terminal-result retention (default 24 hours,
+1–8760 hours), the crashed pre-dispatch `preparing` recovery threshold
+(default 120 seconds, 30–600), and the conservative post-runtime admission
+grace (default 600 seconds, 60–3600). Each new Job snapshots its
+pre-dispatch cutoff and selected reconciliation grace in immutable journal
+fields, independent of later Owner settings changes. At the exact
+`preparing -> launch_unknown` CAS, the admission lease is floored to cover
+a conservative 360-second remote mkdir/SFTP preparation window plus up to
+90 seconds for bounded systemd dispatch, the Job's requested runtime and
+its snapshotted reconciliation grace. Immediately before the possibly
+effectful `systemd-run`, another exact-status/active-lease check **extends,
+never shortens**, admission to cover the latest possible dispatch, actual
+remote runtime and original grace. An unexpectedly stalled start whose
+existing lease already expired must NOT run systemd-run: a different Job
+could already have taken its slot. Neither renewal nor expiry implies
+remote completion. After the correctly computed admission deadline,
+an uncertain `launch_unknown`, `running` or `cancel_requested` Job
+no longer occupies a concurrent admission slot.
+**Lease expiry does not prove remote completion, issue a cancellation,
+unlock a retry, or delete any script/output.** Its original user, client,
+Target binding, script digest, request UUID and Job ID remain stored for
+inspection/reconciliation. Each new Job also snapshots its original user ID,
+Target record/public ID, hostname, port, OS username, authentication method,
+and SHA-256 digest of the pinned host-public-key line in separate immutable
+(non-foreign-key) journal fields. This metadata is NOT a password, private
+key, remote-connection grant or script log. It survives later User/Target
+deletion or binding rotation and can identify the original endpoint for
+operator verification. Older pre-migration records are backfilled only when
+their current stored Target binding still matches exactly; otherwise the
+original endpoint is reported **unknown** rather than misattributed to a
+replacement host. A duplicate request UUID remains idempotent
+for as long as its journal is retained.
+
+A crash in `preparing` is different: that state is *before* the first
+possible remote side effect. Both new admission attempts and the hourly
+`gateway:ssh-jobs-prune` scheduler may mark a provably stale `preparing`
+as `failed` with `terminal_reason=pre_dispatch_abandoned`; the
+in-flight PHP probe must win an exact conditional state transition before
+it may stage or launch anything. The expired pre-dispatch record can be
+pruned without contacting a remote host. Genuine remote-uncertain records
+are **never auto-pruned**, even if their admission lease or result-retention
+timestamp is past. Ordinary terminal entries are retained for the configured
+period **after reaching terminal state**. Remote spool cleanup remains
+restricted to named files inside an independently verified same-owner,
+non-symlinked `0700` directory.
+
+**Exception recovery for the actual deployment operator:** an authorized
+local operator with access to the installed Gateway Artisan CLI may inspect
+the immutable no-replay journal without any remote operation:
+
+```bash
+php artisan gateway:ssh-jobs-reconcile inspect
+php artisan gateway:ssh-jobs-reconcile inspect YOUR_EXACT_26_CHARACTER_JOB_ID
+```
+
+If the original user/Target was deleted, access revoked, or the Target
+binding/SSH account rotated, automatic spool removal intentionally refuses
+to connect to a potentially **different** host. First identify and
+independently verify the **original** remote systemd unit is stopped and
+the **original** remote private Job spool has actually been deleted.
+Do **not** infer that from admission expiry, a missing/newly bound Target,
+an SSH timeout, or a successful cancellation request alone. After that
+verification, an authorized *local deployment operator* can explicitly
+attest the cleanup, supplying the exact stored original 64-character
+Target-binding SHA-256 from `inspect`, exact Job ID twice, and a meaningful
+reason. `inspect` shows the immutable original non-secret host/port, OS
+login and host-key digest even after referenced user/Target deletion; its
+original host-key digest is only a checksum of the stored pinned public key,
+**not a substitute for verifying the original host out-of-band**. Older
+pre-snapshot records without trustworthy provenance need independent
+operator evidence before attestation:
+
+```bash
+php artisan gateway:ssh-jobs-reconcile retire YOUR_EXACT_26_CHARACTER_JOB_ID \
+  --confirm=YOUR_EXACT_26_CHARACTER_JOB_ID \
+  --binding=ORIGINAL_64_CHARACTER_BINDING_SHA256 \
+  --reason="Verified original systemd unit stopped and original spool removed" \
+  --attest-remote-cleaned
+```
+
+The CLI is **not** an unauthenticated MCP/browser action. It never performs
+SSH itself, never resumes or dispatches a script, and refuses to retire a
+nonterminal entry until its conservative admission lease has elapsed.
+It records `status=retired` and `terminal_reason=operator_attested_cleanup`,
+the local OS UID, reason, and timestamp; this is an **operator assertion**,
+not a verified remote exit code. The original immutable journal fields
+remain intact for the Owner-configured retention period before the hourly
+scheduler can delete only the now-attested local record. Normal
+`completed`/`failed`/`canceled` evidence is distinct from `retired`.
+After every journal row is safely reconciled and pruned, guarded schema
+rollback is possible; never manually drop the table or bypass the
+migration safety guards. For the current exact operation, inspect
+`gateway:ssh-jobs-reconcile --help` before any attestation.
+
+**Acceptance evidence and boundary:** A disposable GitHub Actions
+runner passed actual systemd-user SSH execution >15 seconds with real exit
+code 7, bounded stdout/stderr, replay resistance, cancellation and cleanup
+(18 assertions), followed by a no-linger fail-closed check (5 assertions)
+in [historical CI #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531).
+The subsequent lease-safety and MariaDB same-user race must be validated in
+the [current PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks),
+not inferred from this previous run. The corresponding regression test is
+implemented in `tests/Feature/Mcp/SshJobFixtureTest.php` and the GitHub
+Actions runner-only `tests/Support/ssh-job-ci-fixture.sh`, which reuses the
+existing isolated loopback OpenSSH fixture and temporarily enables/disables
+linger for that disposable OS user. The real fixture is not proof of every production systemd/SSH host shape;
+independent author-separated security review and exact combined-source CI
+remain required before merging or publishing. No test alters an operator Target or
+production SSH service.
 
 ## SFTP file I/O — released in v2.1.2
 
@@ -114,7 +276,7 @@ Changed IP, DNS answers, TCP destination or host key must be rechecked under reg
 
 ## Transport and trust
 
-- Use a narrowly scoped SSH adapter (evaluate maintained phpseclib compatible with pinned PHP/Composer) and SFTP adapter; **SSH is not an MCP server**, so the common MCP-over-HTTP adapter used for WP AI Bridge and Agent is not applicable to SSH wire framing.
+- Use a narrowly scoped SSH adapter (evaluate maintained phpseclib compatible with pinned PHP/Composer) and SFTP adapter; **SSH is not an MCP server**, so the common MCP-over-HTTP adapter used for WordPress and future explicitly supported MCP-native Targets is not applicable to SSH wire framing.
 - Remote endpoint identity is the operator-approved host/port and verified host-key binding; do not invent an Agent-style `instance_id`. Store connector-only metadata separately from `targets`. Endpoint and username changes require revalidation/reconnection as appropriate, never silent credential or identity reassignment.
 - SSH TCP egress has its own enforceable address/port/DNS/rebinding policy; reuse shared principles, **not HTTPS-only checks**. Default to explicit admin-registered public destinations. Explicitly allow a private/VPN destination only through an operator-approved scoped network policy for that deployment/Target, rechecking resolved/connected addresses; never create a blanket internal-network scanner/SSRF proxy through MCP inputs.
 - No automatic credential forwarding to other hosts, no transparent jumps/agent forwarding, no unsafe unknown host-key acceptance, no unbounded ports/redirects.
@@ -144,7 +306,7 @@ Do not add a required daemon/queue/SSH binary/PHP SSH extension to the ordinary 
 5. Public/private approved-target egress boundaries, DNS/port controls, host-key mismatch and cross-Target secret isolation are tested.
 6. Output flood, timeout, disconnect, cancellation and repeated-call behavior preserve caps and `outcome_unknown` (no blind retry).
 7. SFTP stat/list/ranged read/small write and bounded basic transfer succeed where supported; malformed path, permission denial, changing source, partial upload and binary data are handled without leakage/corruption.
-8. Both existing WordPress and Agent connector behavior, shared-host release packaging and client auth/target routing remain intact.
+8. The existing WordPress connector behavior, shared-host release packaging and client auth/Target routing remain intact; the canceled Agent connector is not a live acceptance dependency.
 9. Normalized IPv4/IPv6 (including bracket formatting), verified effective DNS-connected IP versus unknown/stale IP states, and `name + username@IP:port + target_id` appear in authorized Admin/picker/MCP selection and connection context. Local IP search handles shared-IP/multi-account ambiguity, unauthorized access returns no endpoint metadata, and command/SFTP cannot route by arbitrary IP.
 
 ## Not in first delivery

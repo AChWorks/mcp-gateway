@@ -16,7 +16,9 @@ final class SshCommandAdmission
         $base = 'ssh-command:'.hash('sha256', $targetRecordId);
         try {
             // The lease exceeds the maximum connect, authentication and exec budget.
-            $lock = Cache::lock($base.':lease', 60);
+            // Includes bounded connect/host-key/auth time plus the Owner's
+            // max 30-second exec and cleanup margin; never an unbounded lock.
+            $lock = Cache::lock($base.':lease', 90);
             if (! $lock->get()) {
                 throw new SshTargetConnectionException('connection_busy');
             }

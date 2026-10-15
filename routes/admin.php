@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\OAuthClientAuthorizationsController;
 use App\Http\Controllers\Admin\OperationalSettingsController;
+use App\Http\Controllers\Admin\SshBrowserFileController;
 use App\Http\Controllers\Admin\TargetConfigurationController;
 use App\Http\Controllers\Admin\TargetConnectionController;
 use App\Http\Controllers\Admin\TargetController;
@@ -43,6 +44,13 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::post('/targets/{target:target_id}/reconcile-disconnect', [TargetConnectionController::class, 'reconcileDisconnect'])->name('targets.reconcile-disconnect');
     Route::post('/targets/{target:target_id}/reconcile-refresh', [TargetConnectionController::class, 'reconcileRefresh'])->name('targets.reconcile-refresh');
     Route::post('/targets/{target:target_id}/test', [TargetConnectionController::class, 'test'])->name('targets.test');
+
+    // Explicit session+CSRF browser fallback, not a new OAuth/MCP transport.
+    // The feature flag and exact user/Target SSH permission remain mandatory.
+    Route::post('/targets/{target:target_id}/ssh-files/upload', [SshBrowserFileController::class, 'upload'])
+        ->middleware('throttle:20,1')->name('targets.ssh-files.upload');
+    Route::post('/targets/{target:target_id}/ssh-files/download', [SshBrowserFileController::class, 'download'])
+        ->middleware('throttle:20,1')->name('targets.ssh-files.download');
 
     Route::get('/users', [UserController::class, 'index'])->name('users.index');
     Route::get('/users/create', [UserController::class, 'create'])->name('users.create');

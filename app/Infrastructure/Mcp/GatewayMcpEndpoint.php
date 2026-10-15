@@ -4,8 +4,10 @@ namespace App\Infrastructure\Mcp;
 
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
+use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -27,10 +29,14 @@ final readonly class GatewayMcpEndpoint
         private WordpressTargetMcpToolHandlers $wordpress,
         private SshCommandMcpToolHandlers $sshCommands,
         private SshFileMcpToolHandlers $sshFiles,
+        private OperationalSettings $settings,
+        private SshJobMcpToolHandlers $sshJobs,
     ) {}
 
     public function handle(Request $request): Response
     {
+        $commandLimits = $this->settings->sshCommandLimits();
+        $jobLimits = $this->settings->sshJobLimits();
         // Expose only operationally implemented tool families. Connector
         // execution tools will be enabled after their runtime/credentials land.
         $server = Server::builder()
@@ -161,10 +167,93 @@ final readonly class GatewayMcpEndpoint
                     'type' => 'object',
                     'properties' => [
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
-                        'command' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 8192],
-                        'timeout_seconds' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 15, 'default' => 10],
+                        // JSON Schema maxLength is Unicode characters; runtime
+                        // independently enforces the actual UTF-8 byte budget.
+                        'command' => ['type' => 'string', 'minLength' => 1, 'maxLength' => $commandLimits['max_bytes']],
+                        'timeout_seconds' => ['type' => 'integer', 'minimum' => 1, 'maximum' => $commandLimits['max_seconds'], 'default' => 10],
                     ],
                     'required' => ['target_id', 'command'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (
+                    string $target_id, string $request_id, string $script,
+                    int $max_runtime_seconds = 60,
+                ): array => $this->sshJobs->start(
+                    $this->user($request), $target_id, $this->clientHash($request),
+                    $request_id, $script, $max_runtime_seconds,
+                ),
+                name: 'ssh-job-start',
+                description: 'Start one durable-intent, bounded non-interactive SSH Job using a supported persistent systemd manager. Requires SSH command and file read/write grants. The caller-generated UUID is an idempotency key: reusing it never reruns the script. Unsupported hosts fail closed.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'request_id' => ['type' => 'string', 'format' => 'uuid'],
+                        'script' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 16384],
+                        'max_runtime_seconds' => ['type' => 'integer', 'minimum' => 16, 'maximum' => $jobLimits['max_runtime_seconds'], 'default' => 60],
+                    ],
+                    'required' => ['target_id', 'request_id', 'script'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (string $target_id, string $job_id): array => $this->sshJobs->status(
+                    $this->user($request), $target_id, $this->clientHash($request), $job_id,
+                ),
+                name: 'ssh-job-status',
+                description: 'Reconcile a prior SSH Job by its stable ID under the same authenticated client/user/Target. Never restarts a potentially executed launch.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'job_id' => ['type' => 'string', 'minLength' => 26, 'maxLength' => 26],
+                    ],
+                    'required' => ['target_id', 'job_id'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (
+                    string $target_id, string $job_id, string $stream = 'stdout',
+                    int $offset = 0, int $length = 16384,
+                ): array => $this->sshJobs->output(
+                    $this->user($request), $target_id, $this->clientHash($request),
+                    $job_id, $stream, $offset, $length,
+                ),
+                name: 'ssh-job-output',
+                description: 'Read at most 16 KiB of retained SSH Job stdout/stderr as base64 with explicit offset/EOF; request subsequent ranges without re-executing.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'job_id' => ['type' => 'string', 'minLength' => 26, 'maxLength' => 26],
+                        'stream' => ['type' => 'string', 'enum' => ['stdout', 'stderr'], 'default' => 'stdout'],
+                        'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 1048576, 'default' => 0],
+                        'length' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 16384, 'default' => 16384],
+                    ],
+                    'required' => ['target_id', 'job_id'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (string $target_id, string $job_id): array => $this->sshJobs->cancel(
+                    $this->user($request), $target_id, $this->clientHash($request), $job_id,
+                ),
+                name: 'ssh-job-cancel',
+                description: 'Request a best-effort stop for the exact systemd-managed SSH Job. Response indicates cancel requested, not guaranteed process termination.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'job_id' => ['type' => 'string', 'minLength' => 26, 'maxLength' => 26],
+                    ],
+                    'required' => ['target_id', 'job_id'],
                     'additionalProperties' => false,
                 ],
             )
@@ -271,6 +360,18 @@ final readonly class GatewayMcpEndpoint
         $psrResponse = $server->run($transport);
 
         return (new HttpFoundationFactory)->createResponse($psrResponse, true);
+    }
+
+    private function clientHash(Request $request): string
+    {
+        $client = $request->attributes->get('oauth_client_id');
+        $profile = $request->attributes->get('oauth_client_profile_key');
+        if (! is_string($client) || $client === '' || ! is_string($profile)
+            || $profile === '') {
+            abort(401);
+        }
+
+        return hash('sha256', $profile.'\\0'.$client);
     }
 
     private function user(Request $request): User

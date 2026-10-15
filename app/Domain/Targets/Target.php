@@ -15,8 +15,9 @@ final class Target extends Model
     use HasUlids;
 
     /**
-     * Persisted Target identity types, including an owner-paused historical
-     * connector. This is NOT a list of executable/enrollable adapters.
+     * Persisted Target identity types, including unsupported historical
+     * record types kept solely for non-destructive upgrade compatibility.
+     * This list does not authorize registration or execution.
      *
      * @var list<string>
      */

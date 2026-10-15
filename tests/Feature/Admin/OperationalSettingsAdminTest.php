@@ -56,6 +56,7 @@ final class OperationalSettingsAdminTest extends TestCase
             ->assertSee('WordPress responses')
             ->assertSee('WordPress connection deadlines')
             ->assertSee('SSH whole-file transfer')
+            ->assertSee('Detached SSH Jobs')
             ->assertSee('Outbound DNS compatibility preflight')
             ->assertSee('/etc/resolv.conf')
             ->assertSee('/etc/hosts')
@@ -69,10 +70,10 @@ final class OperationalSettingsAdminTest extends TestCase
         libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($dom);
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@class,"operations-form")])'));
-        self::assertSame(3, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
-        self::assertSame(6, (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
-        self::assertSame(6, (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
-        self::assertSame(6, (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
+        self::assertSame(5, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
+        self::assertSame(13, (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
+        self::assertSame(13, (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
+        self::assertSame(13, (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//input[@type="password"][@name="current_password"][@required])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//input[@type="hidden"][@name="version"])'));
         foreach (array_keys(OperationalSettings::allowed()) as $key) {
@@ -511,6 +512,144 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(['max_bytes' => 8388608, 'max_seconds' => 30],
             (new OperationalSettings)->sshTransferLimits());
         self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
+    }
+
+    public function test_ssh_command_budgets_preserve_defaults_and_previous_admin_forms(): void
+    {
+        $owner = $this->account('owner');
+        $this->actingAs($owner);
+        self::assertSame(['max_bytes' => 8192, 'max_seconds' => 15],
+            (new OperationalSettings)->sshCommandLimits());
+        $this->get('/admin/operations')->assertOk()
+            ->assertSee('SSH commands')
+            ->assertSee('ssh_command_timeout_seconds')
+            ->assertSee('ssh_command_max_kib');
+
+        $this->put('/admin/operations', [
+            'version' => '0',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '',
+                'ssh_transfer_max_seconds' => '',
+                'ssh_command_timeout_seconds' => '30',
+                'ssh_command_max_kib' => '64',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 65536, 'max_seconds' => 30],
+            (new OperationalSettings)->sshCommandLimits());
+        self::assertSame([], json_decode((string) DB::table('operational_settings')->value('overrides'), true));
+        self::assertEqualsCanonicalizing(
+            ['ssh_command_timeout_seconds', 'ssh_command_max_kib'],
+            DB::table('operational_setting_changes')->pluck('setting_key')->all(),
+        );
+
+        // A previous six-key UI must not erase new command limits.
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '',
+                'ssh_transfer_max_seconds' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 65536, 'max_seconds' => 30],
+            (new OperationalSettings)->sshCommandLimits());
+
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'ssh_command_timeout_seconds' => '31',
+                'ssh_command_max_kib' => '65',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors(['values.ssh_command_timeout_seconds', 'values.ssh_command_max_kib']);
+
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => [
+                'wp_response_kib' => '',
+                'wp_readonly_response_kib' => '',
+                'wp_connect_timeout_seconds' => '',
+                'wp_request_timeout_seconds' => '',
+                'ssh_transfer_max_kib' => '',
+                'ssh_transfer_max_seconds' => '',
+                'ssh_command_timeout_seconds' => '',
+                'ssh_command_max_kib' => '',
+            ],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 8192, 'max_seconds' => 15],
+            (new OperationalSettings)->sshCommandLimits());
+        self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
+    }
+
+    public function test_owner_controls_detached_job_budget_and_older_form_preserves_new_settings(): void
+    {
+        $this->actingAs($this->account('owner'));
+        $defaults = [
+            'max_active_per_user' => 2, 'max_runtime_seconds' => 300,
+            'retention_hours' => 24, 'preparing_grace_seconds' => 120,
+            'reconcile_grace_seconds' => 600,
+        ];
+        self::assertSame($defaults, (new OperationalSettings)->sshJobLimits());
+
+        $blank = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
+        $blank['ssh_job_max_active_per_user'] = '25';
+        $blank['ssh_job_max_runtime_seconds'] = '86400';
+        $blank['ssh_job_retention_hours'] = '168';
+        $blank['ssh_job_preparing_grace_seconds'] = '240';
+        $blank['ssh_job_reconcile_grace_seconds'] = '1800';
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $blank,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        $changed = [
+            'max_active_per_user' => 25, 'max_runtime_seconds' => 86400,
+            'retention_hours' => 168, 'preparing_grace_seconds' => 240,
+            'reconcile_grace_seconds' => 1800,
+        ];
+        self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
+        self::assertSame(5, DB::table('operational_setting_changes')->count());
+
+        // An older tab with only eight pre-Job fields must not erase overrides.
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => array_fill_keys(array_slice(array_keys(OperationalSettings::allowed()), 0, 8), ''),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
+        self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
+
+        $wrong = $blank;
+        $wrong['ssh_job_max_active_per_user'] = '1025';
+        $wrong['ssh_job_max_runtime_seconds'] = '604801';
+        $wrong['ssh_job_preparing_grace_seconds'] = '29';
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => $wrong,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors([
+            'values.ssh_job_max_active_per_user',
+            'values.ssh_job_max_runtime_seconds',
+            'values.ssh_job_preparing_grace_seconds',
+        ]);
+        self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
+
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => array_fill_keys(array_keys(OperationalSettings::allowed()), ''),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame($defaults, (new OperationalSettings)->sshJobLimits());
     }
 
     private function account(string $role): User

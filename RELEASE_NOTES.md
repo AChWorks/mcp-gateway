@@ -1,3 +1,94 @@
+# MCP Gateway v2.3.0
+
+**Corrective source candidate `2.3.0-rc.5` — NOT PUBLISHED.**
+This combined integration candidate collects Issue #181 and #182's four
+reviewable source slices. It is not a GitHub Release or an installed host.
+The current published version remains v2.2.1 until separately reviewed,
+approved and published with exact-source and verified package assets.
+
+## Direct SSH command tuning and retained Jobs
+
+- The existing Owner-only Operational Settings module now controls the maximum
+  synchronous SSH exec timeout (15–30 seconds, default 15) and maximum command
+  UTF-8 bytes (8–64 KiB, default 8 KiB). Actual runtime, MCP schema and
+  Owner settings validation share the same finite limits; no uncertain
+  command is automatically retried.
+- Add `ssh-job-start`, `ssh-job-status`, `ssh-job-output` and
+  `ssh-job-cancel` for **systemd-capable** SSH Targets. Durable Target/user/OAuth
+  client plus UUID request identity prevents blind launch replay; script and
+  output bytes are kept only in verified-private remote storage. A job
+  may outlive the PHP request. It is not an Agent deployment or queue worker.
+  Unsupported hosts fail closed. An hourly scheduler performs conservative
+  cleanup of terminal jobs; unknown executions require reconciliation.
+- Recovery hardening after independent review: stale pre-dispatch `preparing`
+  intents are fenced against a late PHP launch and safely abandoned; expired
+  uncertain admission leases no longer permanently consume a user's Job
+  capacity. Journal/identity remain durable without automatic re-execution.
+  An exact-binding, local deployment-operator attestation command handles
+  orphaned/rotated/revoked SSH Job cleanup after **independent original-host
+  verification**; operator retirement never claims a confirmed remote exit.
+  New immutable non-secret original User/Target/SSH endpoint and pinned-key
+  digest snapshots survive User/Target deletion so the operator can locate
+  the ORIGINAL host without reusing a rotated Target. For earlier prerelease
+  journals, binding-mismatched provenance is reported unknown, never guessed.
+- The existing Owner-only, password-confirmed Operational Settings screen
+  controls Job concurrency (default 2; 1–1024), maximum Job runtime
+  (default 300 seconds; adjustable up to seven days), terminal-result retention
+  (default 24 hours; 1–8760), pre-dispatch crash grace and post-runtime
+  reconciliation grace. No cumulative historical Job-count cap is imposed.
+- The SSH Job admission lease is renewed on the exact pre-dispatch CAS and
+  immediately before systemd-run, covering bounded SSH/SFTP preparation,
+  the actual possible dispatch delay, selected remote runtime and the
+  **original** reconciliation grace. A timed-out staging request cannot
+  start a Job after its admission slot may have been reassigned.
+  Per-Job prelaunch/reconciliation snapshots survive later Owner changes;
+  a fourth additive migration conservatively backfills older prerelease
+  journal rows without discarding no-replay evidence.
+- RC5 serializes Job launch-lease renewal and pre-dispatch lease extension
+  against new same-user admissions under the same User-before-Job database
+  locks. Every SSH/SFTP Job phase rejects a changed original Target endpoint
+  or SSH trust binding before contacting the replacement host; ambiguous
+  remote launch remains non-replayable.
+- Real disposable OpenSSH/systemd validation and MariaDB same-user
+  concurrency checks must be verified against the **current exact PR HEAD**
+  at [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
+  Earlier green workflow runs (including #38791097112) are historical
+  evidence, not approval of a changed candidate. Browser/operator-host
+  acceptance, independent review and publication remain separate gates.
+
+## SSH file exchange and connector presentation
+
+- Authenticated Admin Target details gain a **browser file picker upload**
+  and forced download form that reuse the existing SFTP/whole-file SHA-256
+  transfer engine and registered Target permissions. They are disabled by
+  default (`SSH_FILE_TRANSFER_ENABLED=false`); this is a browser fallback,
+  **not native ChatGPT attachment handoff**. Exact binary SHA-256, create-only
+  denial and explicit overwrite passed a real disposable OpenSSH fixture.
+- Remove the never-implemented AI Server Agent product-specific permission
+  selectors, paused UI and future-connector marketing. Preserve the reusable
+  connector foundation, old dormant Target identity and persisted legacy
+  denial rows; applied historical database migrations remain unmodified.
+
+## Upgrade, security and rollback
+
+- New additive migrations: nullable SSH command operational limits and a
+  durable `ssh_command_jobs` journal and a third additive lifecycle-policy
+  migration for typed limits, admission leases and operator attestations. **A consistent, test-restored DB backup
+  is required before an eventual operator upgrade.** The journal's rollback
+  guard refuses dropping it while any job record remains; do not erase
+  unknown jobs to force migration rollback. Browser-updater code backups do
+  not reverse database changes.
+- Refresh locked `symfony/http-foundation` from 8.1.6 to 8.1.9 to remediate
+  advisory **CVE-2026-108082**, with Composer audit verified locally.
+- No production Target, OS user, host setting, OAuth credential, or
+  `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
+  package. Changes to an actual installed host require a separate authorized
+  deployment and compatibility/rollback checks.
+- Check the [exact-current PR #187 CI](https://github.com/AChWorks/mcp-gateway/pull/187/checks)
+  and obtain fresh independent author-separated approval for the exact code
+  before integration. Stable VERSION promotion and approved Release
+  publication remain separate, and this prerelease is not shipped.
+
 # MCP Gateway v2.2.1
 
 **Stable v2.2.1 source promotion from independently approved `2.2.1-rc.10`.**

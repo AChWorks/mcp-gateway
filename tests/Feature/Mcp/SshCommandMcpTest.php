@@ -4,6 +4,7 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -86,6 +87,58 @@ final class SshCommandMcpTest extends TestCase
         self::assertStringNotContainsString($command, json_encode(
             DB::table('activity_events')->where('operation', 'ssh-command-run')->get(), JSON_THROW_ON_ERROR,
         ));
+    }
+
+    public function test_owner_ssh_command_limits_apply_as_utf8_bytes_without_remote_retry(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                throw new RuntimeException('fixture transport must remain offline');
+            }
+        });
+
+        $handler = app(SshCommandMcpToolHandlers::class);
+        self::assertSame('invalid_input',
+            $handler->run($owner, $target->target_id, str_repeat('a', 8193))['error']['code']);
+        self::assertSame('invalid_input',
+            $handler->run($owner, $target->target_id, str_repeat('é', 4097))['error']['code']);
+        self::assertSame('egress_denied',
+            $handler->run($owner, $target->target_id, str_repeat('a', 8192))['error']['code']);
+
+        app(OperationalSettings::class)->save($owner, [
+            'wp_response_kib' => null,
+            'wp_readonly_response_kib' => null,
+            'wp_connect_timeout_seconds' => null,
+            'wp_request_timeout_seconds' => null,
+            'ssh_transfer_max_kib' => null,
+            'ssh_transfer_max_seconds' => null,
+            'ssh_command_timeout_seconds' => 30,
+            'ssh_command_max_kib' => 64,
+        ], 0);
+
+        self::assertSame('egress_denied',
+            $handler->run($owner, $target->target_id, str_repeat('a', 65536), 30)['error']['code']);
+        self::assertSame('egress_denied',
+            $handler->run($owner, $target->target_id, str_repeat('é', 32768), 21)['error']['code']);
+        foreach ([
+            [str_repeat('a', 65537), 10],
+            ['echo okay', 31],
+            [str_repeat('é', 32769), 10],
+        ] as [$command, $seconds]) {
+            $result = $handler->run($owner, $target->target_id, $command, $seconds);
+            self::assertSame('invalid_input', $result['error']['code']);
+            self::assertSame([
+                'max_command_bytes' => 65536,
+                'max_timeout_seconds' => 30,
+            ], $result['error']['effective_limits']);
+            self::assertStringNotContainsString($command,
+                json_encode($result, JSON_THROW_ON_ERROR));
+        }
     }
 
     private function target(): Target

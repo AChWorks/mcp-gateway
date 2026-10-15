@@ -3,6 +3,7 @@
 namespace App\Application\Mcp;
 
 use App\Application\Access\AccessControl;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Domain\Access\GatewayPermission;
@@ -20,6 +21,7 @@ final readonly class SshCommandMcpToolHandlers
         private AccessControl $access,
         private ActivityRecorder $activity,
         private SshCommandRuntime $runtime,
+        private OperationalSettings $settings,
     ) {}
 
     /** @return array<string,mixed> */
@@ -40,9 +42,11 @@ final readonly class SshCommandMcpToolHandlers
         if (! $target instanceof Target) {
             return $this->failed($operation, null, 'target_not_found');
         }
-        if (trim($command) === '' || strlen($command) > 8192
-            || str_contains($command, "\0") || $timeout_seconds < 1 || $timeout_seconds > 15) {
-            return $this->failed($operation, $target, 'invalid_input');
+        $limits = $this->settings->sshCommandLimits();
+        if (trim($command) === '' || strlen($command) > $limits['max_bytes']
+            || str_contains($command, "\0") || $timeout_seconds < 1
+            || $timeout_seconds > $limits['max_seconds']) {
+            return $this->failed($operation, $target, 'invalid_input', $limits);
         }
 
         try {
@@ -71,8 +75,11 @@ final readonly class SshCommandMcpToolHandlers
         ];
     }
 
-    /** @return array<string,mixed> */
-    private function failed(string $operation, ?Target $target, string $code): array
+    /**
+     * @param  array{max_bytes:int,max_seconds:int}|array{}  $limits
+     * @return array<string,mixed>
+     */
+    private function failed(string $operation, ?Target $target, string $code, array $limits = []): array
     {
         $this->activity->record(CorrelationId::current(), $operation, 'failure', $target, $code);
 
@@ -84,6 +91,10 @@ final readonly class SshCommandMcpToolHandlers
                     ? 'SSH Target is unavailable.'
                     : 'SSH command could not be started safely.',
                 'next_step' => OperationDiagnostics::nextStep($code),
+                ...($limits !== [] ? ['effective_limits' => [
+                    'max_command_bytes' => $limits['max_bytes'],
+                    'max_timeout_seconds' => $limits['max_seconds'],
+                ]] : []),
             ],
         ];
     }

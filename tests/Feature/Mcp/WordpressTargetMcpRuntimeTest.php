@@ -4,6 +4,7 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
@@ -313,6 +314,35 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         foreach (['site-ability-execute', 'agent-run-command'] as $name) {
             self::assertNotContains($name, $names);
         }
+        $ssh = collect($document['result']['tools'])->firstWhere('name', 'ssh-command-run');
+        self::assertSame(8192, $ssh['inputSchema']['properties']['command']['maxLength']);
+        self::assertSame(15, $ssh['inputSchema']['properties']['timeout_seconds']['maximum']);
+
+        app(OperationalSettings::class)->save($owner, [
+            'wp_response_kib' => null,
+            'wp_readonly_response_kib' => null,
+            'wp_connect_timeout_seconds' => null,
+            'wp_request_timeout_seconds' => null,
+            'ssh_transfer_max_kib' => null,
+            'ssh_transfer_max_seconds' => null,
+            'ssh_command_timeout_seconds' => 30,
+            'ssh_command_max_kib' => 64,
+        ], 0);
+        // An entirely new request/endpoint reads the effective Owner limits
+        // without application restart or another release.
+        $updatedRequest = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], $headers, json_encode([
+            'jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/list', 'params' => (object) [],
+        ], JSON_THROW_ON_ERROR));
+        $updatedRequest->attributes->set('oauth_user', $owner);
+        $updatedResponse = app(GatewayMcpEndpoint::class)->handle($updatedRequest);
+        self::assertSame(200, $updatedResponse->getStatusCode());
+        ob_start();
+        $updatedResponse->sendContent();
+        $updatedBody = (string) ob_get_clean();
+        $updatedDocument = json_decode($updatedBody, true, 32, JSON_THROW_ON_ERROR);
+        $updatedSsh = collect($updatedDocument['result']['tools'])->firstWhere('name', 'ssh-command-run');
+        self::assertSame(65536, $updatedSsh['inputSchema']['properties']['command']['maxLength']);
+        self::assertSame(30, $updatedSsh['inputSchema']['properties']['timeout_seconds']['maximum']);
     }
 
     private function user(string $role): User

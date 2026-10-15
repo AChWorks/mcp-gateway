@@ -4,6 +4,46 @@ This document defines the supported **current deployment and validation baseline
 
 GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide. The [operator configuration reference](CONFIGURATION.md) inventories `.env.example` and explains login-session, OAuth/MCP timing and safe live configuration reloads.
 
+## Unpublished v2.3.0-rc.5 integration candidate (#181 / #182)
+
+**Not a GitHub Release or installed operator version.** This candidate retains both current WordPress and Direct SSH connectors, removes the obsolete AI Server Agent-branded UI/permissions while preserving inert legacy records, adds Owner-tunable synchronous SSH limits, a disabled-by-default authenticated browser SSH file picker, and durable agentless SSH Jobs. GitHub Issue [#181](https://github.com/AChWorks/mcp-gateway/issues/181) and [#182](https://github.com/AChWorks/mcp-gateway/issues/182) track the acceptance and authorization gates; historical connector claims do not imply production availability.
+
+The four additive migrations
+`2026_10_15_000000_add_ssh_command_operational_limits.php`,
+`2026_10_15_010000_create_ssh_command_jobs.php`,
+`2026_10_15_020000_add_ssh_job_lifecycle_policy.php` and
+`2026_10_15_030000_snapshot_ssh_job_admission_policy.php` require a
+**separately verified database backup** before eventual rollout. The third
+adds typed Owner-configurable Job limits, finite admission leases, immutable
+non-secret original Target/User/host-key-digest snapshots and operator
+attestations, and widens remote runtime storage. The fourth freezes each
+Job's pre-dispatch and reconciliation deadlines and conservatively backfills
+older unpublished journal records. An existing lease is never shortened
+on migration or renewal; any ambiguous old original-host identity is
+recorded as unknown rather than guessing a changed Target. All Job-related
+schema rollback is refused while no-replay journal rows exist. The supported
+local `php artisan gateway:ssh-jobs-reconcile inspect|retire` workflow
+requires independently verified cleanup on the ORIGINAL host and exact
+saved binding; see [Direct SSH](DIRECT-SSH-CONNECTOR.md#unpublished-v230-candidate-lightweight-agentless-ssh-jobs-181).
+The Laravel scheduler runs hourly `gateway:ssh-jobs-prune` only for safely
+reconciled terminal records. Remote systemd user-manager support and approved
+linger are remote-host prerequisites, **not** Gateway installer steps.
+
+Real SSH/systemd, MariaDB concurrent start locking, exact PHP source checks
+and released-baseline update validation must be checked for the **current
+unmerged candidate SHA** in [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks);
+historical green runs do not establish the safety of subsequent code changes.
+An earlier disposable loopback OpenSSH/systemd fixture did complete >15-second
+execution, exit 7, output, replay resistance, verified cancel and no-linger
+denial; browser POST/SFTP also transferred 180,127 opaque bytes in an isolated
+test. None of these claims proves installation on the operator's host,
+the separate visual browser acceptance or native ChatGPT file attachments.
+Independent security review remains mandatory before any merge or Release.
+
+### Shipping gate
+
+Only the exact versioned integrated SHA with successful source, real transport, MariaDB, dependency audit, browser-updater compatibility and **author-separated independent security review** may be promoted to a stable manual Release. Publication via the existing Owner-dispatched package workflow does not enable optional file mode or install on aaPanel automatically. The current stable installation and update instructions remain below until public Release assets are actually published.
+
 ## Current stable v2.2.1: packages and safe upgrade boundary
 
 The current [stable v2.2.1 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.2.1) provides `mcp-gateway-v2.2.1.zip` for **fresh installation** and `mcp-gateway-update-v2.2.1.zip` for **existing deployment-ZIP installs**, with separate `.sha256` companions. Download and validate only assets belonging to the selected version; GitHub source archives are not replacement installer or update packages. Publishing does not establish the installed operator version or approve a production upgrade.
@@ -347,7 +387,7 @@ versioned effective host/client limits and measurement evidence;
 and installed-host go/no-go; [#147](https://github.com/AChWorks/mcp-gateway/issues/147)
 owns supported transport/client delivery gaps. These are separate from
 ordinary WordPress response size settings and from a future Owner-paused
-AI Server Agent connector [#111](https://github.com/AChWorks/mcp-gateway/issues/111).
+
 
 ### Activity retention scheduling
 
@@ -373,7 +413,7 @@ cd /www/acdomains/gateway.example.com || exit 1
 runuser -u www -- /www/server/php/84/bin/php artisan schedule:run --no-ansi
 ```
 
-Use the actual installed path, PHP version and PHP worker account. Check the **aaPanel Cron task log** after at least one real dispatch: `artisan schedule:list` only proves Laravel registered tasks, not that host cron executes them. The application schedules `activity:prune` once per day and `gateway:wordpress-credentials-maintain` every minute, both with overlap protection. Actual credential rotation occurs only when due; a successful cron run alone does not prove a token was renewed. Without scheduled pruning the configured age/row targets are not enforced, and without regular maintenance idle WordPress refresh grants may expire.
+Use the actual installed path, PHP version and PHP worker account. Check the **aaPanel Cron task log** after at least one real dispatch: `artisan schedule:list` only proves Laravel registered tasks, not that host cron executes them. The v2.2.1 application schedules `activity:prune` once per day and `gateway:wordpress-credentials-maintain` every minute, both with overlap protection. The unpublished v2.3.0 candidate additionally schedules `gateway:ssh-jobs-prune` hourly, limited to safely reconciled terminal SSH Jobs with verified private remote spool directories; it does not start or stop Jobs. This command and its guarded new `ssh_command_jobs` migration are **not part of installed v2.2.1**. Migration rollback refuses to drop the table while *any* durable job record remains. Unknown or active remote work requires explicit reconciliation; do not manually erase the no-replay journal. Actual credential rotation occurs only when due; a successful cron run alone does not prove a token was renewed. Without scheduled pruning the configured age/row targets are not enforced, and without regular maintenance idle WordPress refresh grants may expire.
 
 Operators may also apply the configured policy on demand:
 
@@ -722,6 +762,8 @@ setting in the next request/CLI maintenance invocation.
 | WordPress HTTPS connection timeout | `BRIDGE_REMOTE_CONNECT_TIMEOUT_SECONDS` (2 s) | 1–15 seconds |
 | WordPress HTTPS total request timeout | `BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS` (5 s) | 2–30 seconds |
 
+**Unpublished v2.3.0-rc.5 candidate #181:** the same Owner Settings page adds `ssh_command_timeout_seconds` (default maximum 15 seconds; selectable 15–30) and `ssh_command_max_kib` (default 8 KiB; selectable 8–64). A new additive nullable-column migration, `2026_10_15_000000_add_ssh_command_operational_limits.php`, is required before enabling the candidate. Older Owner forms must not erase these two overrides; the legacy WordPress JSON setting map is unchanged. SSH timeout refers to an individual synchronous exec phase, not a total PHP/proxy request SLA or a retained background job budget.
+
 The connect timeout cannot exceed the total request timeout. The total request
 deadline is shared by DNS A+AAAA validation and pinned HTTPS dispatch; it is
 not a file/object size, overall logical job lifetime, or PHP/CDN/LSAPI worker
@@ -782,4 +824,4 @@ these newer per-intent fences on its own.
 Do not represent v2.1.2's released code as **installed or host-verified**
 without an approved deployment and actual PHP-FPM/CLI/cron/WordPress Bridge
 checks establishing that. #147 remains the
-owner of client-visible bidirectional file bytes; #111 Agent is paused.
+owner of client-visible bidirectional file bytes;
