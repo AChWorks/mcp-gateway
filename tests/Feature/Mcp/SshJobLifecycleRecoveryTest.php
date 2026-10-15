@@ -31,7 +31,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         {
             public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
             {
-                return [];
+                throw new SshTargetConnectionException('egress_denied');
             }
         });
     }
@@ -45,6 +45,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         DB::table('ssh_command_jobs')->where('id', $id)->update([
             'status' => 'preparing', 'unit_mode' => null,
             'created_at' => now()->subMinutes(5),
+            'preparing_expires_at' => now()->subMinute(),
             'admission_expires_at' => now()->addHour(),
         ]);
         self::assertSame('failed', $tools->status($user, $target->target_id, $client, $id)['result']['status']);
@@ -62,6 +63,37 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         DB::table('ssh_command_jobs')->where('id', $id)->update(['expires_at' => now()->subDay()]);
         self::assertSame(1, app(SshJobCoordinator::class)->prune());
         self::assertSame(0, DB::table('ssh_command_jobs')->count());
+    }
+
+    public function test_preparing_grace_snapshot_is_not_shortened_by_later_owner_policy(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_job_preparing_grace_seconds' => 120,
+        ]);
+        $tool = app(SshJobMcpToolHandlers::class);
+        $id = $tool->start($user, $target->target_id, $client,
+            (string) Str::uuid(), 'echo snapshot')['result']['job_id'];
+        $created = Carbon::now();
+        DB::table('ssh_command_jobs')->where('id', $id)
+            ->update(['status' => 'preparing']);
+
+        try {
+            // A new Owner value may not preempt an already-probing request.
+            DB::table('operational_settings')->where('id', 1)->update([
+                'ssh_job_preparing_grace_seconds' => 30,
+            ]);
+            Carbon::setTestNow($created->copy()->addSeconds(45));
+            self::assertSame('preparing',
+                $tool->status($user, $target->target_id, $client, $id)['result']['status']);
+            Carbon::setTestNow($created->copy()->addSeconds(121));
+            self::assertSame('failed',
+                $tool->status($user, $target->target_id, $client, $id)['result']['status']);
+            self::assertSame('pre_dispatch_abandoned',
+                DB::table('ssh_command_jobs')->where('id', $id)->value('terminal_reason'));
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_expired_uncertain_leases_free_admission_without_erase_or_replay(): void
@@ -112,6 +144,11 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             DB::table('ssh_command_jobs')->where('id', $id)->update(['status' => 'running']);
             $row = DB::table('ssh_command_jobs')->where('id', $id)->first();
             self::assertSame(86400, (int) $row->runtime_seconds);
+            self::assertSame(900, (int) $row->reconcile_grace_seconds);
+            self::assertSame(
+                now()->addSeconds(240)->timestamp,
+                Carbon::parse($row->preparing_expires_at)->timestamp,
+            );
             self::assertGreaterThan(now()->addDay()->timestamp,
                 Carbon::parse($row->admission_expires_at)->timestamp);
         }
@@ -127,6 +164,119 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             'echo six', 86400);
         self::assertSame('unsupported', $fresh['result']['status']);
         self::assertSame(4, DB::table('ssh_command_jobs')->count());
+    }
+
+    public function test_minimum_grace_delayed_launch_keeps_single_slot_through_actual_dispatch_and_runtime(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_job_max_active_per_user' => 1,
+            'ssh_job_preparing_grace_seconds' => 30,
+            'ssh_job_reconcile_grace_seconds' => 60,
+        ]);
+        $tool = app(SshJobMcpToolHandlers::class);
+        $requestId = (string) Str::uuid();
+        $id = $tool->start($user, $target->target_id, $client,
+            $requestId, 'echo never-relaunch', 16)['result']['job_id'];
+        // Real SSH is denied. Re-create just the durable prelaunch state to
+        // test the scheduling fence with deterministic elapsed wall time.
+        DB::table('ssh_command_jobs')->where('id', $id)->update([
+            'status' => 'preparing', 'unit_mode' => null,
+        ]);
+        $first = DB::table('ssh_command_jobs')->where('id', $id)->first();
+        $originalExpiry = Carbon::parse($first->admission_expires_at);
+        self::assertSame(60, (int) $first->reconcile_grace_seconds);
+        $start = Carbon::now();
+        $transition = new \ReflectionMethod(SshJobCoordinator::class, 'transition');
+        $renew = new \ReflectionMethod(SshJobCoordinator::class, 'reserveDispatchLease');
+
+        try {
+            Carbon::setTestNow($start->copy()->addSeconds(29));
+            self::assertTrue($transition->invoke(app(SshJobCoordinator::class),
+                $id, 'preparing', 'launch_unknown', ['unit_mode' => 'user']));
+            $fenced = DB::table('ssh_command_jobs')->where('id', $id)->first();
+            self::assertGreaterThan(
+                Carbon::now()->addSeconds(360 + 90 + 16 + 60 - 1)->timestamp,
+                Carbon::parse($fenced->admission_expires_at)->timestamp,
+            );
+            // The original creation-based lease expires while post-fence
+            // staging still runs. Admission must remain consumed.
+            Carbon::setTestNow($start->copy()->addSeconds(160));
+            self::assertTrue($originalExpiry->isPast());
+            self::assertSame('rate_limited',
+                $tool->start($user, $target->target_id, $client,
+                    (string) Str::uuid(), 'echo overlap', 16)['error']['code']);
+
+            // Simulate a slow but still-fenced pipeline just before dispatch.
+            // This forces a real deadline *extension*, not only a fixed
+            // creation-time budget.
+            Carbon::setTestNow($start->copy()->addSeconds(449));
+            $beforeDispatch = DB::table('ssh_command_jobs')
+                ->where('id', $id)->value('admission_expires_at');
+            self::assertTrue($renew->invoke(app(SshJobCoordinator::class), $id));
+            $afterDispatch = DB::table('ssh_command_jobs')
+                ->where('id', $id)->value('admission_expires_at');
+            self::assertGreaterThan(
+                Carbon::parse((string) $beforeDispatch)->timestamp,
+                Carbon::parse((string) $afterDispatch)->timestamp,
+            );
+
+            // Later Owner policy changes cannot affect this Job's original
+            // one-minute reconciliation grace. No zero or shorter lease.
+            DB::table('operational_settings')->where('id', 1)->update([
+                'ssh_job_reconcile_grace_seconds' => 3600,
+            ]);
+            self::assertSame(60,
+                (int) DB::table('ssh_command_jobs')
+                    ->where('id', $id)->value('reconcile_grace_seconds'));
+            self::assertEqualsWithDelta(
+                90 + 16 + 60,
+                Carbon::now()->diffInSeconds(Carbon::parse($afterDispatch)),
+                1,
+            );
+            Carbon::setTestNow(Carbon::parse($afterDispatch)->subSecond());
+            self::assertSame('rate_limited',
+                $tool->start($user, $target->target_id, $client,
+                    (string) Str::uuid(), 'echo still-overlap', 16)['error']['code']);
+
+            Carbon::setTestNow(Carbon::parse($afterDispatch)->addSecond());
+            self::assertSame('unsupported',
+                $tool->start($user, $target->target_id, $client,
+                    (string) Str::uuid(), 'echo new', 16)['result']['status']);
+            // Old immutable request ID continues to resolve to the one old
+            // journal entry; no command has ever been remotely dispatched.
+            self::assertSame($id, $tool->start($user, $target->target_id, $client,
+                $requestId, 'echo never-relaunch', 16)['result']['job_id']);
+            self::assertSame('launch_unknown',
+                DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_dispatch_lease_never_shortens_and_stale_or_canceled_launch_cannot_dispatch(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        $tool = app(SshJobMcpToolHandlers::class);
+        $id = $tool->start($user, $target->target_id, $client,
+            (string) Str::uuid(), 'echo no-replay', 16)['result']['job_id'];
+        DB::table('ssh_command_jobs')->where('id', $id)->update([
+            'status' => 'launch_unknown', 'unit_mode' => 'user',
+            'admission_expires_at' => now()->addDays(2),
+        ]);
+        $renew = new \ReflectionMethod(SshJobCoordinator::class, 'reserveDispatchLease');
+        $far = DB::table('ssh_command_jobs')->where('id', $id)->value('admission_expires_at');
+        self::assertTrue($renew->invoke(app(SshJobCoordinator::class), $id));
+        self::assertSame($far,
+            DB::table('ssh_command_jobs')->where('id', $id)->value('admission_expires_at'));
+
+        DB::table('ssh_command_jobs')->where('id', $id)
+            ->update(['status' => 'cancel_requested']);
+        self::assertFalse($renew->invoke(app(SshJobCoordinator::class), $id));
+        DB::table('ssh_command_jobs')->where('id', $id)
+            ->update(['status' => 'launch_unknown',
+                'admission_expires_at' => now()->subSecond()]);
+        self::assertFalse($renew->invoke(app(SshJobCoordinator::class), $id));
     }
 
     public function test_operator_refuses_active_lease_and_requires_exact_attested_original_binding(): void
@@ -235,7 +385,15 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             $user, $target->target_id, $client, (string) Str::uuid(), 'echo maybe')['result']['job_id'];
         $job = DB::table('ssh_command_jobs')->where('id', $id)->first();
         $lifecycle = require database_path('migrations/2026_10_15_020000_add_ssh_job_lifecycle_policy.php');
+        $snapshot = require database_path('migrations/2026_10_15_030000_snapshot_ssh_job_admission_policy.php');
         $original = require database_path('migrations/2026_10_15_010000_create_ssh_command_jobs.php');
+
+        try {
+            $snapshot->down();
+            self::fail('Rollback must keep immutable Owner policy with unresolved Journal rows');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('Reconcile and prune', $exception->getMessage());
+        }
 
         try {
             $lifecycle->down();
@@ -255,14 +413,18 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         self::assertSame(1, app(SshJobCoordinator::class)->prune());
 
         // Exercise real down/up migration operations, not a mocked guard.
+        $snapshot->down();
         $lifecycle->down();
         $original->down();
         self::assertFalse(Schema::hasTable('ssh_command_jobs'));
         // Restore test fixture schema inside this same isolated DB transaction.
         $original->up();
         $lifecycle->up();
+        $snapshot->up();
         self::assertTrue(Schema::hasColumn(
             'ssh_command_jobs', 'admission_expires_at'));
+        self::assertTrue(Schema::hasColumn(
+            'ssh_command_jobs', 'preparing_expires_at'));
     }
 
     /** @return array{0:User,1:Target,2:string} */

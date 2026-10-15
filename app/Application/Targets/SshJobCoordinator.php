@@ -27,6 +27,18 @@ final readonly class SshJobCoordinator
 
     private const MIN_RUNTIME_SECONDS = 16;
 
+    // The start path can include a bounded SSH command, two independent
+    // 55-second SFTP operations and the final systemd-run command. Cover
+    // conservative command-admission/transport overhead as well, not just
+    // RuntimeMaxSec. A late start whose lease actually expired is NOT sent.
+    private const STAGING_RESERVE_SECONDS = 360;
+
+    private const DISPATCH_RESERVE_SECONDS = 90;
+
+    private const LEGACY_PREPARING_GRACE_SECONDS = 600;
+
+    private const LEGACY_RECONCILE_GRACE_SECONDS = 3600;
+
     private const JOB_DIR_PREFIX = '/var/tmp/.mcp-gateway-job-';
 
     public function __construct(
@@ -83,7 +95,7 @@ final readonly class SshJobCoordinator
             // A crash before the durable launch_unknown fence can never have
             // dispatched work. Recover only this pre-side-effect state. The
             // in-flight probe is fenced by a conditional transition below.
-            $this->recoverStalePreparing($policy, (int) $user->getKey());
+            $this->recoverStalePreparing((int) $user->getKey());
             $active = DB::table('ssh_command_jobs')->where('user_id', $user->getKey())
                 ->whereIn('status', ['preparing', 'launch_unknown', 'running', 'cancel_requested'])
                 ->where(static function ($query): void {
@@ -102,6 +114,11 @@ final readonly class SshJobCoordinator
                 ...$original,
                 'status' => 'preparing',
                 'runtime_seconds' => $runtimeSeconds,
+                // Freeze the Owner policy for this individual Job. A later
+                // settings update may affect new Jobs, but cannot shorten
+                // an already-started Job's predispatch/reconciliation period.
+                'preparing_expires_at' => $stamp->copy()->addSeconds($policy['preparing_grace_seconds']),
+                'reconcile_grace_seconds' => $policy['reconcile_grace_seconds'],
                 // This is an admission lease, NOT confirmation that a remote
                 // process stopped or permission to replay/erase evidence.
                 'admission_expires_at' => $stamp->copy()->addSeconds(
@@ -185,6 +202,16 @@ final readonly class SshJobCoordinator
             .' --property='.escapeshellarg('KillMode=control-group')
             .' -- /bin/sh '.escapeshellarg($directory.'/wrapper.sh');
 
+        // Extend the protected window immediately before the only operation
+        // that can actually launch the systemd Job. If an unexpectedly stalled
+        // staging pipeline has already let its prior lease expire, never
+        // dispatch late: another Job may have taken that admission slot.
+        if (! $this->reserveDispatchLease($id)) {
+            $this->record($target, 'ssh-job-start', 'unknown', 'outcome_unknown');
+
+            return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
+        }
+
         $result = $this->safeCommand($user, $target, $launch, 8);
         if ($this->successful($result)) {
             $this->transition($id, 'launch_unknown', 'running');
@@ -205,7 +232,7 @@ final readonly class SshJobCoordinator
         if ($row->status === 'preparing') {
             // No remote side effect can precede the launch_unknown CAS.
             // Do not contact the remote host or misreport a pending probe.
-            $this->recoverStalePreparing($this->settings->sshJobLimits(), (int) $user->getKey(), $jobId);
+            $this->recoverStalePreparing((int) $user->getKey(), $jobId);
 
             return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first());
         }
@@ -443,7 +470,7 @@ final readonly class SshJobCoordinator
     {
         // All users, bounded by one indexed status/time update. Preparing is
         // the only state known to be free of remote side effects.
-        $this->recoverStalePreparing($this->settings->sshJobLimits());
+        $this->recoverStalePreparing();
         $done = 0;
         $rows = DB::table('ssh_command_jobs')
             ->where('expires_at', '<=', now())
@@ -640,15 +667,50 @@ final readonly class SshJobCoordinator
         return null;
     }
 
-    /** @param array<string,mixed> $extra */
+    /**
+     * Freeze a conservative staging+dispatch+runtime+reconciliation budget
+     * under the exact preparing -> launch_unknown fence, before ANY remote
+     * side effect. The CAS and deadline check prevent a crashed/late probe
+     * from reviving a released admission slot.
+     *
+     * @param  array<string,mixed>  $extra
+     */
     private function transition(string $id, string $expected, string $next, array $extra = []): bool
     {
-        $query = DB::table('ssh_command_jobs')->where('id', $id)->where('status', $expected);
         if ($expected === 'preparing' && $next === 'launch_unknown') {
-            $policy = $this->settings->sshJobLimits();
-            $query->where('created_at', '>', now()->subSeconds($policy['preparing_grace_seconds']))
-                ->where('admission_expires_at', '>', now());
+            return DB::transaction(function () use ($id, $next, $extra): bool {
+                $row = DB::table('ssh_command_jobs')->where('id', $id)->lockForUpdate()->first();
+                $stamp = now();
+                if ($row === null || $row->status !== 'preparing'
+                    || $row->preparing_expires_at === null
+                    || $row->preparing_expires_at <= $stamp->toDateTimeString()
+                    || $row->admission_expires_at === null
+                    || $row->admission_expires_at <= $stamp->toDateTimeString()) {
+                    return false;
+                }
+
+                $protected = $stamp->copy()->addSeconds(
+                    self::STAGING_RESERVE_SECONDS + self::DISPATCH_RESERVE_SECONDS
+                    + (int) $row->runtime_seconds
+                    + (int) ($row->reconcile_grace_seconds ?? self::LEGACY_RECONCILE_GRACE_SECONDS),
+                );
+                // Never shorten a more conservative existing deadline.
+                $deadline = max($row->admission_expires_at, $protected->toDateTimeString());
+
+                return DB::table('ssh_command_jobs')->where('id', $id)
+                    ->where('status', 'preparing')
+                    ->where('preparing_expires_at', '>', $stamp)
+                    ->where('admission_expires_at', '>', $stamp)
+                    ->update([
+                        'status' => $next,
+                        'updated_at' => $stamp,
+                        ...$extra,
+                        'admission_expires_at' => $deadline,
+                    ]) === 1;
+            });
         }
+
+        $query = DB::table('ssh_command_jobs')->where('id', $id)->where('status', $expected);
         if (in_array($next, ['completed', 'failed', 'canceled', 'unsupported', 'retired'], true)) {
             $extra['expires_at'] = now()->addHours($this->settings->sshJobLimits()['retention_hours']);
         }
@@ -657,16 +719,59 @@ final readonly class SshJobCoordinator
     }
 
     /**
-     * Stale preparing is provably before the remote side-effect fence.
-     * A concurrently running probe MUST fail its conditional CAS once this
-     * transition wins. Unknown/dispatched jobs are never falsely terminated.
-     *
-     * @param  array<string,int>  $policy
+     * Re-fence the lease directly before possibly effectful systemd-run.
+     * The dispatch command has its own 90-second command-admission window,
+     * followed by the ORIGINAL Job runtime and reconciliation grace. Never
+     * re-read mutable Owner settings, shorten a lease, or revive an expired
+     * admission after another Job might have been allowed to start.
      */
-    private function recoverStalePreparing(array $policy, ?int $userId = null, ?string $jobId = null): int
+    private function reserveDispatchLease(string $id): bool
     {
+        return DB::transaction(function () use ($id): bool {
+            $row = DB::table('ssh_command_jobs')->where('id', $id)->lockForUpdate()->first();
+            $stamp = now();
+            if ($row === null || $row->status !== 'launch_unknown'
+                || $row->admission_expires_at === null
+                || $row->admission_expires_at <= $stamp->toDateTimeString()) {
+                return false;
+            }
+
+            $protected = $stamp->copy()->addSeconds(
+                self::DISPATCH_RESERVE_SECONDS + (int) $row->runtime_seconds
+                + (int) ($row->reconcile_grace_seconds ?? self::LEGACY_RECONCILE_GRACE_SECONDS),
+            );
+            $deadline = max($row->admission_expires_at, $protected->toDateTimeString());
+            if ($deadline === $row->admission_expires_at) {
+                return true;
+            }
+
+            return DB::table('ssh_command_jobs')->where('id', $id)
+                ->where('status', 'launch_unknown')
+                ->where('admission_expires_at', '>', $stamp)
+                ->update(['admission_expires_at' => $deadline, 'updated_at' => $stamp]) === 1;
+        });
+    }
+
+    /**
+     * Preparing is BEFORE the side-effect fence. Retire only when the
+     * immutable per-Job deadline is past. This single conditional update is
+     * race-safe against the prelaunch CAS and works on SQLite and MariaDB.
+     */
+    private function recoverStalePreparing(?int $userId = null, ?string $jobId = null): int
+    {
+        $stamp = now();
         $query = DB::table('ssh_command_jobs')->where('status', 'preparing')
-            ->where('created_at', '<=', now()->subSeconds($policy['preparing_grace_seconds']));
+            ->where(static function ($q) use ($stamp): void {
+                $q->where('preparing_expires_at', '<=', $stamp)
+                    ->orWhere(static function ($legacy) use ($stamp): void {
+                        // NULL can occur only on an older partial/migrating
+                        // prerelease row. Use the maximum grace, never a new
+                        // Owner setting which could retire it too early.
+                        $legacy->whereNull('preparing_expires_at')
+                            ->where('created_at', '<=',
+                                $stamp->copy()->subSeconds(self::LEGACY_PREPARING_GRACE_SECONDS));
+                    });
+            });
         if ($userId !== null) {
             $query->where('user_id', $userId);
         }
@@ -677,8 +782,8 @@ final readonly class SshJobCoordinator
         return $query->update([
             'status' => 'failed',
             'terminal_reason' => 'pre_dispatch_abandoned',
-            'expires_at' => now()->addHours($policy['retention_hours']),
-            'updated_at' => now(),
+            'expires_at' => $stamp->copy()->addHours($this->settings->sshJobLimits()['retention_hours']),
+            'updated_at' => $stamp,
         ]);
     }
 

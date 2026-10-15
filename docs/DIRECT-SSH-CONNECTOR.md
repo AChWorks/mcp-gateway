@@ -111,10 +111,21 @@ against concurrency.
 The Owner separately controls terminal-result retention (default 24 hours,
 1–8760 hours), the crashed pre-dispatch `preparing` recovery threshold
 (default 120 seconds, 30–600), and the conservative post-runtime admission
-grace (default 600 seconds, 60–3600). The admission lease includes the
-pre-dispatch window **plus the requested runtime plus the post-runtime grace**.
-After that deadline, even an uncertain `launch_unknown`, `running` or
-`cancel_requested` Job no longer occupies a concurrent admission slot.
+grace (default 600 seconds, 60–3600). Each new Job snapshots its
+pre-dispatch cutoff and selected reconciliation grace in immutable journal
+fields, independent of later Owner settings changes. At the exact
+`preparing -> launch_unknown` CAS, the admission lease is floored to cover
+a conservative 360-second remote mkdir/SFTP preparation window plus up to
+90 seconds for bounded systemd dispatch, the Job's requested runtime and
+its snapshotted reconciliation grace. Immediately before the possibly
+effectful `systemd-run`, another exact-status/active-lease check **extends,
+never shortens**, admission to cover the latest possible dispatch, actual
+remote runtime and original grace. An unexpectedly stalled start whose
+existing lease already expired must NOT run systemd-run: a different Job
+could already have taken its slot. Neither renewal nor expiry implies
+remote completion. After the correctly computed admission deadline,
+an uncertain `launch_unknown`, `running` or `cancel_requested` Job
+no longer occupies a concurrent admission slot.
 **Lease expiry does not prove remote completion, issue a cancellation,
 unlock a retry, or delete any script/output.** Its original user, client,
 Target binding, script digest, request UUID and Job ID remain stored for
@@ -195,7 +206,10 @@ migration safety guards. For the current exact operation, inspect
 runner passed actual systemd-user SSH execution >15 seconds with real exit
 code 7, bounded stdout/stderr, replay resistance, cancellation and cleanup
 (18 assertions), followed by a no-linger fail-closed check (5 assertions)
-in [CI #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531) on the previously reviewed RC (before the newer lifecycle remediation). The corresponding regression test is
+in [historical CI #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531).
+The subsequent lease-safety and MariaDB same-user race must be validated in
+the [current PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks),
+not inferred from this previous run. The corresponding regression test is
 implemented in `tests/Feature/Mcp/SshJobFixtureTest.php` and the GitHub
 Actions runner-only `tests/Support/ssh-job-ci-fixture.sh`, which reuses the
 existing isolated loopback OpenSSH fixture and temporarily enables/disables
