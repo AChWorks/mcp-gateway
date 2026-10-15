@@ -56,6 +56,69 @@ Per-command timeout is 1–15 seconds; command input is at most 8192 bytes. Capt
 
 SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. Bounded SFTP was integrated separately in #146, and Owner-controlled host-key/credential rotation later shipped via PR #168. Command exec was merged as #145 after independent review; safe Owner-controlled rotation subsequently shipped in v2.1.2.
 
+## Development candidate: lightweight agentless SSH Jobs (#181)
+
+**Not part of the published v2.2.1 release and not installed on an operator host.**
+This source candidate adds four ordinary OAuth-authenticated MCP Tools alongside
+synchronous `ssh-command-run`. It does **not** install or depend on AI Server
+Agent, a Gateway queue daemon, Redis, PTY or an IDE runtime.
+
+| MCP tool | Parameters and result |
+| --- | --- |
+| `ssh-job-start` | Exact `target_id`, caller-generated UUID `request_id`, UTF-8 `script` up to 16 KiB, `max_runtime_seconds` 16–300 (default 60); returns a stable 26-character `job_id`, status and retry guidance |
+| `ssh-job-status` | Exact `target_id` and `job_id`; reconciles remote exit marker or authenticated systemd active state; `failed` carries actual OS exit code |
+| `ssh-job-output` | Job ID and `stdout` or `stderr` with bounded 1–16 KiB Base64 window, explicit offset, size and EOF; use multiple reads without re-execution |
+| `ssh-job-cancel` | Best-effort stop of the exact unit; only reports `canceled` after independently verifying inactive/failed state and no live MainPID/ControlPID; otherwise `cancel_requested` is honest |
+
+A Job requires **all three existing SSH permissions** (`ssh.command.run`,
+`ssh.file.read`, `ssh.file.write`) to start, plus a connected exact SSH
+Target and previously approved verified host key/OS account. Subsequent
+operations require the same authenticated Gateway user, OAuth client profile
+and exact persisted Target binding, and the relevant live operation grants.
+Job scripts and output are not stored in the Gateway database, logs or
+analytics: the encrypted Target credentials are used only inside the existing
+SSH/SFTP runtime. The Gateway stores a durable random job ID and hashed
+identity/script/Target binding *before* any remote side effect. The same
+`request_id` and identical arguments return the same job; changed parameters
+fail rather than trigger a second execution. A lost post-dispatch response is
+`outcome_unknown` / `launch_unknown` and **must never be launched again**.
+
+Supported remote execution requires Linux `systemd-run` and a persistent
+systemd **user** manager with `loginctl enable-linger` already approved by
+that host's operator, or a root-owned system manager when the deliberately
+configured SSH OS account is root. Missing support fails closed before
+staging. The same verified SSH path creates one remote private `0700`
+directory under `/var/tmp/.mcp-gateway-job-<job_id>`, stages both the script
+and wrapper via existing atomic SFTP single-window writes (mode `0600`),
+and launches a transient `systemd-run --collect` unit with finite lifetime,
+file-size and control-group constraints. The wrapper writes bounded
+`stdout`, `stderr` and a durable exit-code marker. A job may outlive the
+browser session or Gateway PHP request; each later poll creates an
+independently authorized new SSH connection. Systemd service availability
+is a *remote host capability*, not guaranteed on shared hosting.
+
+A user may have at most **two unresolved jobs**; the active-job admission
+limit persists across expiry until a job is reconciled. Terminal job metadata
+has a 24-hour retention window and an hourly `gateway:ssh-jobs-prune`
+scheduler hook; prune touches only *known files* in an independently verified
+same-owner non-symlink `0700` directory, then removes the empty directory.
+Unknown/active jobs are never auto-pruned. Old job records forbid unsafe
+migration rollback while present; do not manually drop the table or delete
+pending records. An Owner must deliberately reconcile stuck jobs before
+retention data can be cleared.
+
+**Isolated acceptance evidence:** a disposable loopback OpenSSH account with
+out-of-band pinned host key, RSA private-key authentication and linger-enabled
+systemd user manager passed a 19-second retained script, 20,000-byte stdout
+read as two Base64 windows, stderr, exit status `7`, duplicate-start
+deduplication, verified cancellation and safe cleanup. With linger disabled,
+the same real SSH account refused job staging and launch as unsupported.
+A separate systemd-system-manager test also verified a 17-second non-zero
+script and transient unit stopping. The manually gated test harness is
+`tests/Support/ssh-job-manual-fixture.sh`; it is **not** run by default CI.
+Published/production compatibility, author-separated security review and
+Owner-gated integration remain separate acceptance obligations.
+
 ## SFTP file I/O — released in v2.1.2
 
 The v2.1.2 release includes PR #146's stat, bounded list, binary-safe ranged read and bounded small write MCP tools. Each requires exact Target ID, fresh pre-login Gateway authorization, verified numeric SSH peer, pinned server host key before credential login and fresh post-login Target/permission checks. The file tools have independent read or write Gateway permissions, default denied for nonowners until a password-confirmed explicit Owner grant in Selected scope. The remote SFTP subsystem and Unix account determine path/symlink/chroot behavior. SSH shell command authority remains independent and can still read or modify remote files.
