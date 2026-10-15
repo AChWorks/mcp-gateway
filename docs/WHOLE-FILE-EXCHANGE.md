@@ -2,6 +2,38 @@
 
 **Public release status:** [v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) includes the implementation from independently HIGH_ASSURANCE-approved [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). This is a **published code/package capability, not a production installation or default enablement**. `SSH_FILE_TRANSFER_ENABLED=false` keeps the optional HTTP route **OFF** until a separately authorized real-host security/proxy/resource check enables it. Independent PHP/Python clients proved bidirectional bytes and SHA-256 on disposable installed fixtures; this does **not** prove native ChatGPT model file handoff. The earlier v2.0.3 maintenance release did not contain the route.
 
+## Unpublished v2.3.0 browser file picker fallback — #181
+
+This is a **development candidate, not part of v2.2.1**. On an authenticated
+Gateway Administration session, open **Targets → exact Direct SSH Target**.
+If the Target has a credential, the active user has `ssh.file.write` and/or
+`ssh.file.read`, and the separately approved server environment has
+`SSH_FILE_TRANSFER_ENABLED=true`, an HTML file picker offers an upload
+and a remote-path form provides a browser attachment download. These Admin
+forms call the existing verified SFTP whole-file service; they do **not**
+issue OAuth access tokens or expose new unauthenticated data-plane endpoints.
+
+The browser must upload a real local file, select the exact absolute remote
+destination and enter a **pre-provisioned owner-controlled 0700 private staging
+directory on the destination's filesystem**. Gateway validates target-specific
+permissions before dispatch, computes local bytes/SHA-256, verifies remote
+readback before atomic create/replace and never echoes file contents or
+private paths to logs. User-selected overwrite is explicitly last-writer-wins
+rather than a compare-and-swap operation. For downloads, Gateway verifies
+remote size/SHA-256 before producing an attachment, supplies verification
+headers and disables content sniffing. Browser or network interruption
+requires separately verifying the remote state; never auto-repeat uncertain
+writes. PHP `upload_max_filesize`, `post_max_size`, proxy and request-timeout
+settings can be stricter than the 64 MiB Gateway maximum.
+
+Native ChatGPT chat attachments still **do not automatically become MCP
+tool input**, and these browser forms do not return ChatGPT-model-readable
+file artifacts. They are a practical user-initiated supported-interface
+fallback, not evidence of native host support. The flag must remain OFF on
+production until a separate authorized rollout and real-browser/SSH
+acceptance. A non-Owner with explicit read/write Target grants is eligible
+to use the forms; permissions are not broadened by the UI.
+
 ## Proven contract and what it does not claim
 
 An approved MCP application obtains its usual OAuth access token and chooses
@@ -29,7 +61,7 @@ WordPress Target still has its existing authorized **native Abilities**,
 including WordPress-owned media operations where available; it does **not**
 currently advertise a raw binary whole-file Target interface. No duplicate
 WordPress media/plugin manager or insecure PHP filesystem bypass is added.
-AI Server Agent Issue #111 remains paused and unchanged.
+The canceled historical Agent connector #111 is not part of this feature or the current Gateway roadmap.
 
 ## Discover supported transfer modes through ordinary MCP
 
@@ -77,37 +109,14 @@ Resource or an automatically invoked Tool; a host unable to send/receive
 raw HTTPS bodies must use an actually supported native mode instead
 of treating the catalog as a promise of file delivery.
 
-### Compatibility reference: AI Server Agent (READ-ONLY comparison)
+### Connector-neutral capability boundary
 
-As of Agent main `d0f98848513bc518b9dd4f8397c089bf3f1acf81`, the
-**standalone** Agent's own `workspace_transfer` MCP tool provides
-`begin/chunk/status/commit/abort`, stable idempotency keys, sequential
-up to 256 KiB decoded Base64 chunks, per-chunk and whole-object SHA-256,
-durable offset/TTL, bounded 4 MiB preparation windows and atomic
-version-preconditioned publication. Its independent `workspace_stat`
-and `workspace_read` paths support version-pinned outbound byte windows
-up to 128 KiB in the tested SDK client. The Agent defaults to **512 MiB
-cumulative staged storage**, 8 active sessions and 3600-second TTL,
-with separately configurable limits. A 33 MiB object has been covered by
-the Agent's separate isolated executable acceptance; that is **not**
-evidence of successful routing through Gateway or a ChatGPT attachment.
-
-**Future connector invariant:** The Gateway must preserve downstream
-Agent session keys, offsets, commit receipts, user/workspace authority
-and error/unknown-outcome semantics if a real Agent connector is
-approved. Its staged logical operation is **not** constrained by this
-Gateway's 16 KiB inline SSH tool window, 64 MiB synchronous SSH profile,
-40-second SFTP primitive, or WordPress HTTP response limits. The
-Gateway may have finite **per MCP call** framing/admission safeguards,
-but must not silently reclassify a series of authorized bounded Agent
-calls as one SSH binary operation. Keep logical lifetime, per-call
-windows, aggregate staged bytes and connected-host capability distinct;
-select an actually implemented downstream mode. Do not duplicate the
-Agent's durable journal or security engine in Gateway merely for proxying.
-Agent Gateway integration remains separately Owner-paused under
-[Issue #111](https://github.com/AChWorks/mcp-gateway/issues/111),
-so **no Agent connector, pass-through or long-running Agent file mode is
-claimed in this PR**.
+A future independently approved downstream MCP connector may expose its
+own chunk/session/cancellation contract. Gateway must preserve authorized
+Target identity, per-call budgets, idempotency, and downstream capability
+semantics rather than silently converting those operations into SSH SFTP
+windows or duplicating a downstream journal. **No new connector is claimed
+by this SSH transport implementation.**
 
 ## Auth and request representation
 
@@ -286,7 +295,7 @@ verify exact `Content-Length` and SHA-256 and discard incomplete data;
 never claim delivery from a server-side staging event alone.
 
 Not covered: ChatGPT host-native attachment/model handoff, WordPress
-whole-file binary transport, Agent routing (Owner-paused #111), durable
+whole-file binary transport, unsupported connector routing, durable
 SSH partial-write resume, retained download jobs, true remote snapshots,
 multi-GiB files or arbitrary proxies/shared hosts. Report these as
 **unsupported/unverified**, not completed. #147 and #154 retain distinct

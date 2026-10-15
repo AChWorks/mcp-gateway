@@ -3,7 +3,7 @@
 Status: Accepted durable Target/connector architecture contract, with historical transition design.
 Program owner: [Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) (completed); outstanding installed exceptional acceptance is tracked under [#112](https://github.com/AChWorks/mcp-gateway/issues/112).
 
-MCP Gateway v2.2.1 **ships WordPress/WP AI Bridge and Direct SSH** as independent first-class Target connectors. SSH commands and bounded SFTP are available; the optional OAuth-scoped SSH whole-file HTTPS mode is **disabled by default**. AI Server Agent remains a separately accepted but **Owner-paused future connector** (#111), not a third shipped option. WordPress and a future Agent connector speak downstream MCP; SSH uses a distinct TCP/SFTP transport.
+MCP Gateway v2.2.1 **ships WordPress/WP AI Bridge and Direct SSH**. SSH commands and SFTP are available; optional OAuth-scoped HTTPS whole-file transfer is disabled by default. The historical `ai_server_agent` Target identity exists only for non-destructive stored-record compatibility; the proposed Agent connector was canceled (#111).
 
 This document preserves the durable connector-neutral identity, credential, permission and lifecycle contract plus historical design rationale. The integrated code and [current architecture](ARCHITECTURE.md), GitHub Releases and active Issues are authoritative for what actually runs, ships and remains unverified. Earlier pre-implementation sequences below are historical, not instructions to rebuild the shipped Target foundation; the original v1 Site to v2 Target transition is still a breaking data/reset boundary.
 
@@ -12,15 +12,6 @@ Conversation history is not required to recover this design.
 ## 1. Why this change exists
 
 MCP Gateway began with WordPress/WP AI Bridge as its first concrete backend. That proved the product but left generic application concepts named and shaped around a "Site".
-
-AI Server Agent is an accepted but paused future MCP-speaking connector. Its design differs materially from WordPress:
-
-- it represents one Linux host rather than one CMS site;
-- its downstream authorization is a dedicated Agent credential rather than WP OAuth;
-- it exposes host/server capabilities rather than WP Abilities;
-- it has its own destructive-operation and approval semantics;
-- it may be used directly without Gateway;
-- it is stateless on the current MCP endpoint while WP compatibility includes older session-oriented behavior.
 
 Direct SSH (`ssh_direct`) is the first shipped non-WordPress connector: it uses SSH/SFTP rather than downstream MCP and runs arbitrary commands as the configured OS account once Gateway Target/tool authorization permits. The shared core must be transport-neutral.
 
@@ -48,7 +39,7 @@ The shared vocabulary is:
 | site-scoped access | target-scoped access |
 | site check operation | target check operation |
 
-Connector-specific nouns remain connector-specific. A WordPress connector may still call a WordPress concept a site inside its own implementation. AI Server Agent may use Agent, host, job or server terminology inside its own implementation.
+Connector-specific nouns remain connector-specific. WordPress may use site terminology, while SSH uses host and OS-account semantics.
 
 The core must not translate every downstream concept into Target. "Target" identifies the routable registered backend; it does not erase connector semantics.
 
@@ -58,7 +49,7 @@ A Target always has two core identities and may also have a connector-owned veri
 
 1. the database primary key, used only as an internal relational identity;
 2. immutable Gateway-local `target_id`, used by Admin/MCP/application routing;
-3. when the connector exposes one, a connector-specific remote identity such as AI Server Agent `instance_id`.
+3. when the connector exposes one, a connector-specific remote identity such as a connector-specific authenticated instance ID.
 
 The shared core must not invent a fake immutable remote identity for a connector that does not expose one. For WP AI Bridge, canonical origin/resource metadata can remain the connector's endpoint/resource binding without pretending it is an opaque permanent instance ID.
 
@@ -66,7 +57,7 @@ The shared core must not invent a fake immutable remote identity for a connector
 
 Public MCP/Admin validation must use the same 64-character bound; do not advertise a wider 128-character public identifier while persistence accepts only 64.
 
-Never derive `target_id` from hostname, URL, IP address, WordPress site URL, Agent label, or another mutable endpoint.
+Never derive `target_id` from hostname, URL, IP address, WordPress site URL, connector label, or another mutable endpoint.
 
 `connector_type` is immutable for an existing Target. Changing a Target from one connector family to another means registering a new Target rather than mutating the security/credential interpretation of the old record.
 
@@ -148,7 +139,6 @@ Connector-specific durable configuration belongs behind connector-owned persiste
 ```text
 targets
 wp_ai_bridge_target_config
-ai_server_agent_target_config
 target_credentials
 ...
 ```
@@ -172,7 +162,6 @@ The generic credential store must be **purpose-aware**, not permanently one-row-
 Examples:
 
 - WP AI Bridge: access/refresh authorization material;
-- AI Server Agent: dedicated named Agent credential.
 
 Connector-owned OAuth flows, refresh-recovery state, authorization metadata, or other temporary credential state do not become generic Target fields merely because WP AI Bridge needs them.
 
@@ -184,11 +173,10 @@ Connector onboarding that accepts a secret through the Admin UI treats that fiel
 
 Supported connectors are built-in, explicitly registered implementations.
 
-Current built-in connector contract: `wp_ai_bridge` and `ssh_direct` ship in public v2.1.2 and v2.2.1. Direct SSH includes authorized commands, bounded SFTP and an optional **off-by-default** SSH whole-file HTTPS mode with per-Target MCP capability discovery ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)); real full-object bytes/SHA256 were proved with independent PHP/Python clients on disposable installed Gateway. Native ChatGPT attachment/model consumption and additional connector file modes remain unverified (#147/#112). The vocabulary below also reserves `ai_server_agent` for the **Owner-paused future design**; it is not a currently registered usable connector:
+Current built-in connectors: `wp_ai_bridge` and `ssh_direct`. Direct SSH includes commands, bounded SFTP and optional off-by-default whole-file transfer ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)); verified external-client bytes do not establish ChatGPT attachment/model consumption (#147/#112). Only currently implemented connectors may be registered:
 
 ```text
 wp_ai_bridge
-ai_server_agent
 ssh_direct
 ```
 
@@ -226,7 +214,7 @@ The exact interface must remain small. Do not create placeholder methods for spe
 
 ## 7. Shared remote MCP client
 
-WP AI Bridge and AI Server Agent need downstream MCP behavior, but their protocol details differ. Direct SSH does **not** speak MCP and must use an independent SSH/SFTP transport adapter instead of being forced into the HTTP MCP client.
+WP AI Bridge uses downstream MCP. Direct SSH does **not** speak MCP and must use an independent SSH/SFTP transport adapter instead of being forced into the HTTP MCP client.
 
 Protocol mechanics that are truly generic belong behind a Gateway-owned remote MCP adapter/client under `Infrastructure/Mcp`.
 
@@ -247,17 +235,16 @@ Responsibilities may include:
 
 Use the maintained MCP PHP SDK client/transport where it can provide these semantics correctly instead of maintaining parallel hand-written JSON-RPC/session framing. Any remaining adapter code must stay small and protocol-focused.
 
-For Program #106, the compatibility evidence must cover both real downstream generations: the modern stateless MCP path used by current AI Server Agent and the legacy/session path still required by the pinned WP AI Bridge contract. Prefer the modern stateless path when the downstream server negotiates/supports it; do not pay an initialize/session/close round-trip tax merely because the first connector needed sessions. Exact supported MCP revisions belong in current compatibility tests/release evidence rather than being frozen forever in this architecture document.
+Protocol interoperability must follow verified downstream MCP negotiation; only an actually supported MCP Target uses the shared remote MCP client, while SSH uses its dedicated SSH/SFTP adapter.
 
 The remote MCP client and generic outbound HTTP policy must read connector-neutral timeout/body-limit/network configuration. Generic infrastructure must not depend on `bridge.*` configuration merely because WP AI Bridge was the first consumer.
 
-Response/request bounds need a shared absolute safety ceiling plus connector/tool-specific bounded limits. Do not copy WP AI Bridge's current 64 KiB response limit onto AI Server Agent or SSH tools, and do not raise the global Gateway limit to match a large payload. Use connector/tool-specific finite ceilings and the honest continuation/transfer rules in `REMOTE-IO-CONTRACT.md`.
+Response/request bounds need a shared absolute safety ceiling plus connector/tool-specific bounded limits. Do not copy WP AI Bridge's current 64 KiB response limit onto SSH tools, and do not raise the global Gateway limit to match a large payload. Use connector/tool-specific finite ceilings and the honest continuation/transfer rules in `REMOTE-IO-CONTRACT.md`.
 
-Timeouts are likewise connector/tool-aware. Do not apply the current short WP metadata/request timeout blindly to Agent command/browser/setup operations. Long-running user work should prefer the Agent's persistent job mechanism; any synchronous timeout remains bounded, and a timed-out mutation with uncertain remote completion is reported as `outcome_unknown` rather than automatically retried.
+Timeouts are likewise connector/tool-aware. Do not reuse WordPress request timeouts for SSH commands; retained SSH jobs support longer work; any synchronous timeout remains bounded, and a timed-out mutation with uncertain remote completion is reported as `outcome_unknown` rather than automatically retried.
 
-Prefer bounded/chunked machine contracts for potentially large Agent data. Persistent job output already has offset/limit semantics; the Agent-side Gateway contract should add similarly machine-readable bounds/truncation/range information where needed so normal Gateway calls remain memory/network efficient under concurrency.
 
-The remote MCP client must not know WordPress Ability semantics or AI Server Agent root-approval semantics.
+The remote MCP client must not know WordPress Ability or SSH OS-account authorization semantics.
 
 Connectors remain responsible for interpreting downstream tools/capabilities and mapping them into Gateway-owned product behavior.
 
@@ -284,19 +271,6 @@ WordPress / WP AI Bridge:
 wordpress-abilities-read
 wordpress-ability-execute
 
-AI Server Agent:
-agent-environment
-agent-run-command
-agent-run-root-command
-agent-start-job
-agent-job-status
-agent-job-output
-agent-job-stop
-agent-read-file
-agent-write-file
-agent-browser-setup
-agent-browser-run
-
 Direct SSH (Target-scoped):
 ssh-command-run
 ssh-file-stat
@@ -313,11 +287,9 @@ Every public tool must carry behaviorally correct MCP annotations. Read-only/des
 
 When a single tool can dispatch operations with different safety classes, its static annotation is conservative. `wordpress-ability-execute` can execute destructive/unclassified downstream Abilities, so its public MCP annotation must not advertise it as read-only or non-destructive merely because some individual Ability calls are safe. Runtime classification still controls Gateway authorization.
 
-The Agent tools follow the same rule. Arbitrary `agent-run-command` is mutation-capable even as the unprivileged worker and must carry a destructive-capable annotation; `agent-run-root-command`, job start/stop, file write, browser setup/run are likewise mutation-capable. Read/status/output/file-read tools may remain read-only annotations while still enforcing their separate security permissions.
 
 Use stable output schemas for structured Gateway-owned responses where practical. Return only user/model-relevant product data. Internal correlation/request/session/trace IDs, raw downstream endpoints, credential metadata and other implementation telemetry stay server-side by default; if a future support reference is genuinely needed, design it explicitly rather than leaking internal tracing fields.
 
-For Agent Targets, public `targets-list`/`target-context` may expose the bounded server identity summary (for example hostname and Server IP) when the caller has the required Target and Agent-environment permission. The raw configured endpoint remains Admin/routing state unless a concrete client use case separately justifies exposing it.
 
 **Direct SSH has such a concrete use case: preventing wrong-host selection before shell/file operations.** Authorized `targets-list`/`target-context` must expose a bounded, non-secret SSH identity projection with `target_id`, display name, normalized configured/verified IP, TCP port, SSH username, optional hostname and IP verification/freshness status. An IP literal can be displayed before connection but is not host-key-verified; hostname records show only the actual policy-approved, host-key-verified TCP peer IP as verified evidence (or an honest unknown/stale label). SSH-specific endpoint identity belongs in connector-owned persistence, not in the common `targets` schema, and must not be visible to unauthorized principals/clients.
 
@@ -325,7 +297,6 @@ For Agent Targets, public `targets-list`/`target-context` may expose the bounded
 
 `targets-list` is bounded, authorization-filtered, deterministically pageable/searchable and may filter by connector type/connection state without contacting Targets.
 
-For Agent Targets, the bounded local inventory index/query may also match normalized Server IP and hostname/FQDN where known so a human or AI client can resolve “the server at X” without a remote probe. IP/hostname matches are not unique identities; return all authorized matches and keep `target_id` as the explicit routing selector.
 
 For Direct SSH Targets, bounded local authorization-filtered search also matches normalized IPv4/IPv6, optional IP:port and configured hostname. Multiple authorized Targets sharing one IP but differing in username/port remain separate selectable choices. No list/search remote probe or implicit selection; command/SFTP calls require exact `target_id` rather than a caller-provided IP.
 
@@ -337,12 +308,6 @@ The WordPress tools keep WP Ability semantics behind the connector and use the `
 
 Do not force other connectors into WP Ability vocabulary.
 
-### AI Server Agent family
-
-The Gateway surfaces the supported Agent capability set through the `agent-*` names above without registering copies for every Agent Target.
-
-The future Agent connector preserves downstream behavior and authorization rather than reimplementing host execution. Newly advertised operations, **including previously unknown names**, should be discoverable and usable by principals with the actual delegated Target/operation authority through stable Gateway family contracts, without per-version manual handlers or tool-registration edits. Unknown/changed effect annotations alone do not ban an operation: use existing configured broad/unclassified execution authority where applicable and let the Agent enforce its own protected-resource/root/approval policy. Reject real identity, privilege, authorization, schema or protocol bypasses; a *genuinely new privilege boundary or unsupported wire capability* still needs implementation/review, not a fake policy ban. Agent #111 stays paused; this is future intent, not shipped behavior.
-
 ### Direct SSH family
 
 `ssh-command-run` deliberately supports unrestricted remote OS account commands (including OS-permitted `sudo`/root); it is mutation-capable and cannot be constrained by shell-string allowlists. `ssh.file.read`/`ssh.file.write` apply to SFTP tool exposure, **not** a sandbox around users with `ssh.command.run`. Common Target authorization, exact host identity, outbound TCP policy and result bounds still apply. See `DIRECT-SSH-CONNECTOR.md` and `REMOTE-IO-CONTRACT.md`.
@@ -352,82 +317,6 @@ The future Agent connector preserves downstream behavior and authorization rathe
 The Gateway maintains **separate MCP protocol support, public Gateway tool families and authenticated Target-owned operation catalogs**. A generic registered MCP-speaking Target with standard `tools/list`/`tools/call` can expose newly added tool names (including new business categories) through one authenticated Target-scoped discover/execute interface **when the caller already has deliberately granted broad execution authority**. A narrow read-only/no-root grant does not silently expand when the Target adds an operation; missing business-category mapping is not an excuse for a hard-coded name blacklist or mandatory Gateway code change.  A Target may add operations (including names unknown to Gateway) within a compatible existing invocation/permission contract without a Gateway release; WordPress Ability discovery demonstrates this. A new MCP protocol feature/extension is an independent negotiated capability and is not an operation in the WordPress catalog. Missing effect metadata maps to the applicable *existing* execution class/permission (including explicit WordPress `unclassified` grants), **not an invented automatic name blacklist**. Enforce actual user/client/Target/credential and downstream permission, genuine schema/protocol validity and resource controls; distinguish `forbidden` from unsupported adapters/extensions. Built-in connector code selection remains explicit and not dynamically loaded from untrusted input. Canonical decision: [MASTER-SPEC.md](./MASTER-SPEC.md) §4.9 and [ARCHITECTURE.md](./ARCHITECTURE.md) §4.
 
 Negotiated core methods/extensions, cached catalog snapshots, schema change detection and optional version-appropriate MCP subscriptions belong to reusable transport adapters. The runtime must not network-fan-out on public `tools/list` or inventory, and must not depend on a host automatically refreshing tools. Protocol extensions are enabled only when implemented and negotiated, not silently synthesized from a changed backend tool name. A new supported client authentication profile still requires reviewed identity/configuration; a new ordinary downstream Ability within an existing family does not. Future connector admission should prefer extending the Target-side adapter/declared family to duplicating core auth, routing, transfer or tool plumbing.
-
-## 9. AI Server Agent safety boundary
-
-Agent-side integration requirements are owned by:
-https://github.com/ach1992/ai-server-agent/issues/47
-
-The exact Agent candidate consumed by the connector must also include the owner-activated minimum hardening slices:
-- https://github.com/ach1992/ai-server-agent/issues/41 — secret-safe structured audit/correlation/bounded retention;
-- https://github.com/ach1992/ai-server-agent/issues/42 — bounded resource governance and command/file/browser data path.
-
-The Gateway must treat AI Server Agent as an independently secured downstream authority.
-
-Required behavior:
-
-- Gateway credential is independently revocable from direct Agent access;
-- Agent remains one-host-per-instance;
-- direct MCP use of the Agent remains supported;
-- Gateway cannot bypass protected resources;
-- `approval_required` must round-trip to the upstream caller;
-- an approval obtained for one Target/operation must never be reusable for another Target or materially different request;
-- before the Gateway forwards downstream `approval=true`, the upstream approval must be bound to the authenticated Gateway user/client context, exact `target_id`, exact Gateway tool, canonical security-relevant arguments, short expiry, and one-time/replay-safe use;
-- that binding may be supplied by a compatible Agent exact-operation grant (ai-server-agent #40) or by an equivalent Gateway-owned narrowing challenge; either way the Agent still re-evaluates its own policy. This preserves downstream authority but does **not** turn arbitrary root shell into a sandbox: `agent.root_command.run` remains broad root-capable authority and Agent pattern/approval checks are defense-in-depth;
-- a later approved retry must still pass Agent-side policy;
-- root authority is never inferred merely because the caller came through Gateway;
-- unknown mutating results are not blindly retried;
-- Agent errors are bounded/redacted without hiding meaningful safety state.
-
-Gateway-level authorization can deny more. It must never grant more than the Agent permits.
-
-### Agent data-path boundary
-
-The Gateway consumes the Agent's bounded structured data path rather than turning remote execution into an unbounded byte pipe.
-
-Common behavior:
-
-- short/ordinary command results stay one downstream request + one bounded structured response;
-- expected long/high-output work uses the Agent persistent-job path and chunked `job_output`;
-- synchronous truncation, timeout, exit code, encoding and unknown-outcome state remain explicit;
-- ranged file reads stay ranged through Gateway; non-UTF-8 bytes use explicit binary-safe encoding rather than lossy text conversion;
-- complete-file writes remain bounded and inherit Agent atomic/symlink-safe semantics;
-- browser results use the same bounded output/timeout/resource-limit contract;
-- large Agent output is not duplicated in full into both human text and structured Gateway payloads;
-- Gateway never buffers an entire persistent job log to serve a bounded chunk;
-- no automatic retry is introduced merely because output was truncated or a mutating call timed out.
-
-This keeps normal interactive work low-overhead while giving large/long work a deliberate continuation path.
-
-### Server inventory identity for Agent Targets
-
-AI Server Agent Targets are servers, so authorized operators and MCP clients need enough bounded host context to distinguish them without confusing mutable network data with identity.
-
-Connector-owned Agent Target context includes the conceptual equivalent of:
-
-```text
-server:
-  instance_id       # stable Agent identity
-  hostname          # authenticated Agent-reported when available
-  primary_ip        # normalized IPv4/IPv6 inventory value when known
-  observed_addresses[] # optional bounded authenticated interface evidence
-  endpoint_url      # actual configured public HTTPS MCP endpoint
-```
-
-Rules:
-
-- `instance_id` remains the downstream continuity/security identity;
-- `primary_ip` is mutable inventory metadata and may be operator-supplied and/or reconciled against authenticated Agent-reported addresses;
-- Server IP inventory semantics are deliberately separate from outbound routing policy: a recorded host/interface IP may be private, NAT-local or otherwise non-routable from Gateway and must **not** be validated through the public-only SSRF routing policy merely because it is stored; only the configured outbound endpoint is subject to the connector's reachable-endpoint policy;
-- accept canonical IPv4/IPv6 literals for Server IP; do not overload it with hostname, CIDR or URL text;
-- a Server IP may legitimately be unknown or change, especially behind NAT, tunnels, CDN/proxy or dynamic addressing; absence of a stable public IP must not block a valid Agent Target;
-- never derive `target_id`, `instance_id`, credential binding, approval binding or routing authority from IP/hostname/MAC/DNS;
-- never label a proxy/CDN/tunnel DNS resolution as the host's own Server IP merely because it fronts the MCP endpoint;
-- IP/hostname changes are auditable metadata changes and never silently rebind a Target to another Agent instance;
-- private/interface address detail is exposed only through authenticated, authorization-filtered context;
-- no periodic network-interface polling/background job is introduced solely to keep this metadata fresh.
-
-This data belongs to `ai_server_agent` connector-owned persistence/evidence, not the shared `targets` row.
 
 ## 10. Admin and frontend foundation
 
@@ -449,24 +338,22 @@ Conceptually:
 ```text
 Add Target
   -> WordPress / WP AI Bridge
-  -> AI Server Agent
   -> Direct SSH (password/key)
   -> future supported connector
 ```
 
 The common shell owns Target identity and generic lifecycle presentation.
 
-**Release truth:** the diagram above describes the *long-term conceptual choices*, not choices to enable before implementation. The Add Target UI offers **only** built-in connectors with a working, reviewed registration/credential flow in the installed release. In v2.0.0 this means **WordPress / WP AI Bridge only**; SSH is planned separately (#123), while Agent is owner-paused (#111). The generic fleet action is **Add Target**; the selected connector's endpoint, OAuth, trust and recovery labels remain specific. The server must still reject fabricated `connector_type` inputs and cannot infer enrollment from a display-only choice.
+Only shipped, implemented connector types appear in Add Target: WordPress/WP AI Bridge and Direct SSH. The server rejects fabricated connector types and unsupported historical Agent records remain non-executable.
 
 Connector-specific steps own their own fields, authorization/setup flow, diagnostics and help text.
 
 ### Permission-screen presentation
 
-User restrictions, Target Group restrictions and per-Target overrides must distinguish **role ceiling**, **Target reachability** and **denial-only capability restrictions**. Render permission keys from the same `GatewayPermission` definitions used by the server, grouped by Gateway administration, shared Target lifecycle, and connector-specific WordPress/SSH/Agent families. Include the true `Gateway-wide` versus `Target-scoped` action badge; this is orthogonal to connector type.
+User restrictions, Target Group restrictions and per-Target overrides must distinguish **role ceiling**, **Target reachability** and **denial-only capability restrictions**. Render permission keys from the same `GatewayPermission` definitions used by the server, grouped by Gateway administration, shared Target lifecycle, and connector-specific WordPress/SSH families. Include the true `Gateway-wide` versus `Target-scoped` action badge; this is orthogonal to connector type.
 
-Only actually executable connector capabilities are interactive. Unshipped connector families may be described in a collapsed read-only advanced section, with explicit `not available`/`paused` status, but must never appear as working permissions or imply the connector is enrollable. Preserve previously stored deny-only values (including for now-unavailable connector families) across unrelated edits, so a UI refactor cannot silently broaden effective authority. On an exact Target editor, show shared capabilities and only that Target connector's controls; retain any historical unrelated denial keys without presenting them as actions on that Target. When a future connector ships, update its real registration route, server guard/authorization contract, and permission-screen availability together rather than displaying a premature placeholder.
+Only implemented connector capabilities are exposed as interactive controls. Preserve historical unknown denial rows without representing them as active features; never expose an unsupported connector as enrollable or executable.
 
-**Current source-candidate connector/editor contract (PR #168, not yet installed):** Direct SSH is implemented and therefore belongs in the **active**, editable permission family on **Add/Edit User**, **Add/Edit Target Group** and **User → Target rule**, rather than a reserved/paused list. All checkboxes in these forms are **negative rights**: checked = DENY, unchecked can only expose a capability that the role, global grant and Selected Target scope already permit. A newly created non-owner starts with every SSH capability denied; an Owner may deliberately grant a subset at creation with a fresh password and explicit acknowledgment. A legacy/unreviewed create form must still apply every default SSH denial. All-scope non-Owners must never gain remote shell/file capabilities. Changing SSH User/Target/Group grants or reachability requires current Owner confirmation where it may increase access. Group deny-only controls cannot grant authority. The AI Server Agent connector is independently paused and remains read-only.
 
 **Existing Target configuration edits:** Common `target_id`, connector type and all ACL/group/client references stay stable. Mutable SSH connector-owned host/port/username/pinned server PUBLIC key and encrypted login credential may be changed through an Owner/password-confirmed, auditable, revision-fenced rotation that invalidates previous SSH verification and blocks commands/SFTP until a new pinned-key/login verification succeeds. WordPress origin editing requires completed OAuth disconnect and revocation/recovery, a fresh bounded HTTPS discovery, and new authorization; never carry tokens to a different origin. An in-flight OAuth flow must disable the origin edit UI as well as block server mutation. These are candidate behaviors only, not claims about an already deployed stable version.
 
@@ -487,7 +374,6 @@ A Target detail page should separate:
 **Connector-specific**
 
 - WordPress/WP AI Bridge connection details; or
-- AI Server Agent endpoint (Admin/routing context), stable instance ID, hostname, Server IP when known, bounded observed-address evidence and capability details; or
 - Direct SSH registered host, normalized configured IPv4/IPv6 or policy-approved host-key-verified effective connection IP (with freshness/unknown status), SSH username, TCP port and pinned host-key verification state. Show `display name — username@IP:port — target_id` (IPv6 in brackets) also on inventory, Target pickers, test and connect/reconnect/operation destination confirmation; or
 - another future connector's own information.
 
@@ -531,7 +417,7 @@ Authorization codes, tokens, refresh state, assertion replay state, revocation a
 
 Authenticated request context exposes the safe client-profile identity for Activity/audit, rate limiting and exact approval binding. MCP Target permissions/tool semantics do not branch on OpenAI/ChatGPT versus another provider.
 
-Issue #117 owns this client-edge slice and must integrate before #110/#111 rely on generic authenticated client-profile context.
+Issue #117 owns the authenticated client-profile edge; no canceled connector depends on additional permission or identity plumbing.
 
 Accessibility, keyboard behavior, responsive layout, dark/light support and clear destructive-action confirmation remain required.
 
@@ -573,18 +459,6 @@ wordpress.abilities.execute.mutating
 wordpress.abilities.execute.destructive
 wordpress.abilities.execute.unclassified
 
-AI Server Agent:
-agent.environment.read
-agent.command.run
-agent.root_command.run
-agent.job.start
-agent.job.read
-agent.job.stop
-agent.file.read
-agent.file.write
-agent.browser.setup
-agent.browser.run
-
 Direct SSH:
 ssh.command.run
 ssh.file.read
@@ -595,24 +469,17 @@ Permission scope is defined by policy metadata, not inferred from the string pre
 
 Exact role bundles must be explicit and tested; adding a connector permission never becomes implicitly allowed through a wildcard. MCP tool annotations are not authorization.
 
-The accepted initial role ceiling for Agent capabilities is intentionally conservative:
-
-- Owner retains the existing recovery rule and can exercise every permission;
-- Administrator's role ceiling includes the full Agent permission family, but a newly created Administrator defaults to only `agent.environment.read` and `agent.command.run` enabled; root/job/file/browser Agent permissions start as explicit global denials until deliberately enabled;
-- Operator's role ceiling adds only `agent.environment.read` and `agent.command.run`;
-- Viewer adds only `agent.environment.read`.
-
 Direct SSH follows the same explicit permission framework without command-string restrictions: Owner has all SSH permissions; Administrator and Operator role ceilings may include `ssh.command.run`, `ssh.file.read` and `ssh.file.write`, but **all SSH permissions default denied for every new non-owner** until deliberately enabled by the Owner and narrowed to assigned Targets. Viewer has no SSH permissions. These toggles control **Gateway tool exposure**, not OS/sudo or filesystem access for a user already granted arbitrary shell commands.
 
-Existing non-owner accounts are migrated with explicit global denials for every newly introduced `agent.*` and `ssh.*` permission that would otherwise enter their role ceiling, so an upgrade never implicitly grants Linux command or file access. The access UI then lets an authorized Owner deliberately remove the relevant denials within the role ceiling. This uses the existing denial model instead of inventing a second grant engine.
+Historical migration-seeded Agent denials are inactive but retained. SSH remains default-denied to non-Owners until Owner-approved grants; removal of unsupported permission definitions must not erase historical stored denials or widen unrelated access.
 
-Input-sensitive authorization must close privilege-composition gaps. In particular, `agent-start-job` with `root=true` requires both `agent.job.start` and `agent.root_command.run`; possession of the job-start permission must never become an alternate path to root. The same rule applies to any future tool whose arguments materially elevate the operation above its base permission.
+Input-sensitive authorization must close privilege-composition gaps. SSH jobs must recheck Gateway user/Target rights before issuing a new command and must not create a path around OS-account privileges.
 
 During the breaking Site -> Target migration, existing users/roles must not become more privileged accidentally. Preserve users and role identity, translate one-to-one generic permission denials where semantics remain identical, reset Target/group-specific membership with the intentionally discarded Target inventory, and leave selected-scope users with an empty Target set until explicitly reassigned. Any permission mapping whose semantics changed or are ambiguous must fail closed or require explicit administrator reconciliation rather than being silently dropped.
 
-The known one-to-one permission renames are explicit: `connection.view -> gateway.connection.view`, `sites.* -> targets.*`, Site-scoped `connections.connect/reconnect/disconnect/test -> targets.connect/reconnect/disconnect/test`, and `abilities.* -> wordpress.abilities.*`. This translation preserves existing WordPress authority while keeping new Agent permissions separate.
+The known one-to-one permission renames are explicit: `connection.view -> gateway.connection.view`, `sites.* -> targets.*`, Site-scoped `connections.connect/reconnect/disconnect/test -> targets.connect/reconnect/disconnect/test`, and `abilities.* -> wordpress.abilities.*`. This translation preserves existing WordPress authority while preserving historical, inactive denial rows.
 
-New connector permissions are especially sensitive: an existing non-owner account that previously administered WordPress must not silently gain Linux command/root/file/browser authority merely because AI Server Agent **or Direct SSH** was added. The migration/default-role plan must preserve equal-or-narrower effective authority for existing non-owner accounts until those new connector capabilities are explicitly enabled through the supported access-management model.
+New connector permissions are especially sensitive: an existing non-owner account that previously administered WordPress must not silently gain Linux command/root/file/browser authority merely because Direct SSH was added. The migration/default-role plan must preserve equal-or-narrower effective authority for existing non-owner accounts until those new connector capabilities are explicitly enabled through the supported access-management model.
 
 Connector-specific downstream authorization remains independent:
 
@@ -648,7 +515,6 @@ Connection removal must distinguish **local credential forgetting** from **confi
 - revocation confirmed by the downstream authority, after which local credential removal may finalize; or
 - remote revocation unavailable/unconfirmed, in which case the Gateway forgets/local-disables only under an explicit operator-visible state and continues to report that downstream revocation may still be required.
 
-For AI Server Agent, the accepted initial contract is narrower: the dedicated Gateway principal exposes a bounded authenticated **self-revocation** operation that can revoke only the credential authenticating that request. Gateway Disconnect/Remove calls that connector-internal lifecycle operation, verifies success, and only then deletes its encrypted local copy. It must not gain credential enumeration or arbitrary-principal revocation authority.
 
 Ordinary Target list/dashboard rendering reads stored evidence only and never fans out across all Targets.
 
@@ -763,11 +629,10 @@ Preserve:
 - credential/host binding;
 - safe error mapping.
 
-Adding AI Server Agent must not create a general internal-network SSRF tunnel.
+Adding a future reviewed remote-MCP connector must not create a general internal-network SSRF tunnel.
 
 If a future product requires private/internal Targets, that trust/topology change is a separate explicit security decision.
 
-The first AI Server Agent connector therefore uses a public HTTPS Agent endpoint that satisfies the existing outbound policy. Agent local/private direct-client modes remain valid Agent features, but they are not implicitly Gateway-reachable and must not be used as a reason to relax RFC1918/loopback/link-local protections.
 
 Direct SSH uses TCP-specific DNS/egress policy plus a verified, pinned server host key **before** authentication. A private/VPN Target is allowed only by a deliberate operator-approved scoped network policy, never by passing arbitrary destinations in a tool call. This is a host/transport control, not a command or sudo restriction.
 
@@ -790,7 +655,7 @@ outcome_unknown         # mutation may have completed remotely; never blind-retr
 response_too_large      # finite decoded-size ceiling exceeded; safe diagnostics
 ```
 
-A connector may retain a bounded namespaced diagnostic code such as `wordpress.*` or `agent.*` in server-side activity/health evidence when it materially helps diagnosis. Publicly return connector-specific detail only when it is stable, safe and actionable for the client; never forward arbitrary downstream exception strings, stack traces, host details or secret-bearing payloads.
+A connector may retain a bounded namespaced diagnostic code such as `wordpress.*` or `ssh.*` in server-side activity/health evidence when it materially helps diagnosis. Publicly return connector-specific detail only when it is stable, safe and actionable for the client; never forward arbitrary downstream exception strings, stack traces, host details or secret-bearing payloads.
 
 Authorization filtering preserves the existing anti-enumeration rule: an out-of-scope Target must not become distinguishable from a nonexistent Target through MCP error detail.
 
@@ -852,21 +717,6 @@ The implementation program must prove at least:
 - Ability discovery/execution still respects authorization;
 - existing direct WP AI Bridge behavior remains independent from Gateway.
 
-### AI Server Agent
-
-- Target registration/test works;
-- stable non-secret Agent instance identity is verified and remains bound to the Target across reconnects;
-- authorized Target inventory/context exposes bounded hostname + Server IP when known, with IPv4/IPv6 normalization and no identity/routing authority assigned to those mutable fields;
-- dedicated Agent credential stays secret and Target-bound;
-- modern stateless MCP path is exercised without unnecessary session churn;
-- required Agent tool names/input-output contracts are compatibility-checked using bounded evidence;
-- extra unknown Agent tools are not automatically exposed;
-- complete supported Agent capability family routes correctly;
-- machine-readable structured Agent results are consumed rather than parsing human-readable text;
-- `approval_required` round-trip works;
-- direct Agent use remains valid;
-- no Gateway route bypasses applicable Agent policy/approval checks, and Gateway never overstates those checks as complete containment of arbitrary root shell.
-
 ### Direct SSH
 
 - SSH Target inventory/pickers/MCP context show bounded IPv4/IPv6 + port + username + display name + stable `target_id` and actual validated TCP peer IP verification/freshness; handle unresolved DNS, shared-IP ambiguity and unauthorized IP disclosure safely, without permitting IP-as-Target command routing;
@@ -909,7 +759,6 @@ The implementation program must prove at least:
 - preservation of unrelated persistent state;
 - release/server implementation versions are derived from the real release identity rather than hard-coded placeholder versions;
 - WP exact-contract CI path filters follow the new shared/connector paths after the refactor;
-- exact AI Server Agent compatibility evidence is tied to a known Agent candidate/release;
 - `achworks.yaml`, Composer metadata, README, deployment guidance and release notes are reconciled when runtime support actually lands;
 - because public MCP tools/routes/schema are intentionally breaking, release versioning must use the project's next major-version boundary rather than presenting this as a compatible 1.x minor/patch;
 - package/update integrity and recovery gates.
@@ -950,17 +799,10 @@ Expected implementation dependency order:
 1. Target domain/schema/access/data-reset foundation.
 2. Connector registry and shared remote MCP client.
 3. Generic Target connection/credential/health lifecycle.
-4. Client-neutral MCP authorization edge (#117; may proceed in parallel where independent, but integrates before public MCP/Agent paths consume its authenticated client-profile context).
+4. Client-neutral MCP authorization edge (#117), which supplies authenticated client context.
 5. Target-neutral Admin + MCP surfaces.
-6. AI Server Agent (#111 and Agent #47) and Direct SSH (#123), independently after common foundations. #122 owns the existing oversized-response fix and cross-connector response contract.
+6. Direct SSH (#123 and current #181 improvements) after common foundations; #122 owns the historical oversized-response fix.
 7. Mixed-connector + mixed-client performance/security/upgrade/release acceptance (#112), including SSH only after its candidate is implemented.
-
-AI Server Agent side:
-- https://github.com/ach1992/ai-server-agent/issues/47 — Gateway integration contract;
-- https://github.com/ach1992/ai-server-agent/issues/41 — required bounded audit/correlation slice;
-- https://github.com/ach1992/ai-server-agent/issues/42 — required bounded resource/data-path slice.
-
-The Gateway connector must not claim support before the exact compatible Agent release/candidate satisfies all three required contracts.
 
 ## 20. Completion test
 

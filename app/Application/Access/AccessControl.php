@@ -371,7 +371,6 @@ final readonly class AccessControl
     {
         return match (true) {
             str_starts_with($permission->value, 'wordpress.') => 'wp_ai_bridge',
-            str_starts_with($permission->value, 'agent.') => 'ai_server_agent',
             str_starts_with($permission->value, 'ssh.') => 'ssh_direct',
             default => null,
         };

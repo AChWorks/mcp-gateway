@@ -22,6 +22,11 @@
             'description' => __('Limits for the optional authenticated binary transfer plane only. Separate from WordPress responses and small SFTP calls.'),
             'keys' => ['ssh_transfer_max_kib', 'ssh_transfer_max_seconds'],
         ],
+        [
+            'title' => __('SSH commands'),
+            'description' => __('Bound each synchronous SSH command separately from whole-file transfer. Use retained SSH Jobs for longer operations. Timeout includes the remote exec phase, not setup; transport, PHP and proxy limits may be lower.'),
+            'keys' => ['ssh_command_timeout_seconds', 'ssh_command_max_kib'],
+        ],
     ];
     $descriptions = [
         'wp_response_kib' => __('Ordinary, OAuth and mutating responses'),
@@ -30,6 +35,8 @@
         'wp_request_timeout_seconds' => __('Total request deadline'),
         'ssh_transfer_max_kib' => __('Maximum whole-file size'),
         'ssh_transfer_max_seconds' => __('Maximum synchronous transfer time'),
+        'ssh_command_timeout_seconds' => __('Maximum SSH command execution time'),
+        'ssh_command_max_kib' => __('Maximum SSH command input size'),
     ];
 @endphp
 <div class="page-heading">

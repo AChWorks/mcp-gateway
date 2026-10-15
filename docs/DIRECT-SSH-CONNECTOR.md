@@ -30,8 +30,8 @@ access permit audited, Owner-confirmed deliberate SSH ACL changes. Target
 Group controls are live deny-only rules; they cannot grant shell authority
 without the role, global grant and selected Target. SSH command permissions
 enable general shell/file access even when SFTP toggles deny file tools.
-AI Server Agent is a separate paused connector; its reservation-only
-permission definitions remain non-executable.
+A previously proposed Agent connector was canceled by the Owner; historical
+identities and denials remain inert, and no Agent capability is advertised.
 
 These capabilities are shipped with v2.1.2, **not evidence that a particular
 operator host has been upgraded or its optional route enabled**. The sections
@@ -52,9 +52,73 @@ Security tests cover out-of-band host-key pin parsing, encrypted bound credentia
 
 The integrated `ssh-command-run` tool authorizes exactly one stored `target_id` through `ssh.command.run`, and reuses the existing verified numeric peer, pinned server host key and encrypted Target-bound credential before a one-off, non-interactive exec. It does not authorize an arbitrary destination, install a daemon, or change WordPress operations. Remote shell text is not allowlisted. The selected remote OS account alone determines permitted commands, including `sudo`, root and access to remote files.
 
-Per-command timeout is 1–15 seconds; command input is at most 8192 bytes. Captured stdout is limited to 16384 bytes, stderr to 8192 bytes, with independent UTF-8 or base64 representations, nullable exit status, completeness/truncation markers and the verified connection IP. A timeout, channel failure, or exceeded preview budget after possible dispatch is `outcome_unknown`; the command is never retried automatically, and no continuation/resume is invented. The remote process may continue after disconnect, so a caller must not repeat a mutating command without independent verification. Activity records do not include raw command strings or output.
+The shipped v2.2.1 command limits are 1–15 seconds with at most 8192 UTF-8 input bytes. Development candidate #181 retains those defaults while adding Owner-adjustable maximum execution timeout (15–30 seconds) and command input budget (8–64 KiB) in the **existing** Operational Settings store. Commands longer than the current Owner limit reject with actual effective-limit diagnostics. Each MCP tool manifest publishes the per-request maximum, with actual byte length checked server-side (JSON Schema `maxLength` counts characters). Changes take effect for new requests without restarting services. Synchronous command processing still depends on the installed PHP/proxy/client deadlines: use a retained SSH Job for longer tasks; a 30-second exec cap is not a guarantee that every hosting stack can sustain that request. Captured stdout is limited to 16384 bytes, stderr to 8192 bytes, with independent UTF-8 or base64 representations, nullable exit status, completeness/truncation markers and the verified connection IP. A timeout, channel failure, or exceeded preview budget after possible dispatch is `outcome_unknown`; the command is never retried automatically, and no continuation/resume is invented. The remote process may continue after disconnect, so a caller must not repeat a mutating command without independent verification. Activity records do not include raw command strings or output.
 
 SSH command rights remain denied by default for non-owners. An Owner must explicitly confirm a selected-scope SSH permission change while reauthenticating. Disabling future `ssh.file.read` or `ssh.file.write` SFTP tools cannot contain remote file access by an account granted unrestricted `ssh.command.run`. Bounded SFTP was integrated separately in #146, and Owner-controlled host-key/credential rotation later shipped via PR #168. Command exec was merged as #145 after independent review; safe Owner-controlled rotation subsequently shipped in v2.1.2.
+
+## Unpublished v2.3.0 candidate: lightweight agentless SSH Jobs (#181)
+
+**Not part of the published v2.2.1 release and not installed on an operator host.**
+This source candidate adds four ordinary OAuth-authenticated MCP Tools alongside
+synchronous `ssh-command-run`. It does **not** install or depend on AI Server
+Agent, a Gateway queue daemon, Redis, PTY or an IDE runtime.
+
+| MCP tool | Parameters and result |
+| --- | --- |
+| `ssh-job-start` | Exact `target_id`, caller-generated UUID `request_id`, UTF-8 `script` up to 16 KiB, `max_runtime_seconds` 16–300 (default 60); returns a stable 26-character `job_id`, status and retry guidance |
+| `ssh-job-status` | Exact `target_id` and `job_id`; reconciles remote exit marker or authenticated systemd active state; `failed` includes actual exit code when a script marker exists; systemd failures have an explicit reason without a fabricated exit code |
+| `ssh-job-output` | Job ID and `stdout` or `stderr` with bounded 1–16 KiB Base64 window, explicit offset, size and EOF; use multiple reads without re-execution |
+| `ssh-job-cancel` | Best-effort stop of the exact unit; only reports `canceled` after independently verifying inactive/failed state and no live MainPID/ControlPID; otherwise `cancel_requested` is honest |
+
+A Job requires **all three existing SSH permissions** (`ssh.command.run`,
+`ssh.file.read`, `ssh.file.write`) to start, plus a connected exact SSH
+Target and previously approved verified host key/OS account. Subsequent
+operations require the same authenticated Gateway user, OAuth client profile
+and exact persisted Target binding, and the relevant live operation grants.
+Job scripts and output are not stored in the Gateway database, logs or
+analytics: the encrypted Target credentials are used only inside the existing
+SSH/SFTP runtime. The Gateway stores a durable random job ID and hashed
+identity/script/Target binding *before* any remote side effect. The same
+`request_id` and identical arguments return the same job; changed parameters
+fail rather than trigger a second execution. A lost post-dispatch response is
+`outcome_unknown` / `launch_unknown` and **must never be launched again**.
+
+Supported remote execution requires Linux `systemd-run` and a persistent
+systemd **user** manager with `loginctl enable-linger` already approved by
+that host's operator, or a root-owned system manager when the deliberately
+configured SSH OS account is root. Missing support fails closed before
+staging. The same verified SSH path creates one remote private `0700`
+directory under `/var/tmp/.mcp-gateway-job-<job_id>`, stages both the script
+and wrapper via existing atomic SFTP single-window writes (mode `0600`),
+and launches a transient `systemd-run` unit (failed units retained until safe cleanup) with finite lifetime,
+file-size and control-group constraints. The wrapper writes bounded
+`stdout`, `stderr` and a durable exit-code marker. A job may outlive the
+browser session or Gateway PHP request; each later poll creates an
+independently authorized new SSH connection. Systemd service availability
+is a *remote host capability*, not guaranteed on shared hosting.
+
+A user may have at most **two unresolved jobs**; the active-job admission
+limit persists across expiry until a job is reconciled. Terminal job metadata
+has a 24-hour retention window and an hourly `gateway:ssh-jobs-prune`
+scheduler hook; prune touches only *known files* in an independently verified
+same-owner non-symlink `0700` directory, then removes the empty directory.
+Unknown/active jobs are never auto-pruned. Old job records forbid unsafe
+migration rollback while present; do not manually drop the table or delete
+pending records. An Owner must deliberately reconcile stuck jobs before
+retention data can be cleared.
+
+**Acceptance evidence and boundary:** A disposable GitHub Actions
+runner passed actual systemd-user SSH execution >15 seconds with real exit
+code 7, bounded stdout/stderr, replay resistance, cancellation and cleanup
+(18 assertions), followed by a no-linger fail-closed check (5 assertions)
+in [CI #38771039526](https://github.com/AChWorks/mcp-gateway/actions/runs/38771039526). The corresponding regression test is
+implemented in `tests/Feature/Mcp/SshJobFixtureTest.php` and the GitHub
+Actions runner-only `tests/Support/ssh-job-ci-fixture.sh`, which reuses the
+existing isolated loopback OpenSSH fixture and temporarily enables/disables
+linger for that disposable OS user. The real fixture is not proof of every production systemd/SSH host shape;
+independent author-separated security review and exact combined-source CI
+remain required before merging or publishing. No test alters an operator Target or
+production SSH service.
 
 ## SFTP file I/O — released in v2.1.2
 

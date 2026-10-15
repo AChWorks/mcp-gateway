@@ -1,3 +1,62 @@
+# MCP Gateway v2.3.0
+
+**Corrective source candidate `2.3.0-rc.1` — NOT PUBLISHED.**
+This combined integration candidate collects Issue #181 and #182's four
+reviewable source slices. It is not a GitHub Release or an installed host.
+The current published version remains v2.2.1 until separately reviewed,
+approved and published with exact-source and verified package assets.
+
+## Direct SSH command tuning and retained Jobs
+
+- The existing Owner-only Operational Settings module now controls the maximum
+  synchronous SSH exec timeout (15–30 seconds, default 15) and maximum command
+  UTF-8 bytes (8–64 KiB, default 8 KiB). Actual runtime, MCP schema and
+  Owner settings validation share the same finite limits; no uncertain
+  command is automatically retried.
+- Add `ssh-job-start`, `ssh-job-status`, `ssh-job-output` and
+  `ssh-job-cancel` for **systemd-capable** SSH Targets. Durable Target/user/OAuth
+  client plus UUID request identity prevents blind launch replay; script and
+  output bytes are kept only in verified-private remote storage. A job
+  may outlive the PHP request. It is not an Agent deployment or queue worker.
+  Unsupported hosts fail closed. An hourly scheduler performs conservative
+  cleanup of terminal jobs; unknown executions require reconciliation.
+- Real OpenSSH/systemd user CI executed a >15-second job with retained
+  stdout/stderr and real exit status, safe cancel and no-linger rejection
+  ([workflow #38771039526](https://github.com/AChWorks/mcp-gateway/actions/runs/38771039526)).
+  Host-specific resource, service-manager and operator browser UX remain
+  subject to explicit installed-environment validation.
+
+## SSH file exchange and connector presentation
+
+- Authenticated Admin Target details gain a **browser file picker upload**
+  and forced download form that reuse the existing SFTP/whole-file SHA-256
+  transfer engine and registered Target permissions. They are disabled by
+  default (`SSH_FILE_TRANSFER_ENABLED=false`); this is a browser fallback,
+  **not native ChatGPT attachment handoff**. Exact binary SHA-256, create-only
+  denial and explicit overwrite passed a real disposable OpenSSH fixture.
+- Remove the never-implemented AI Server Agent product-specific permission
+  selectors, paused UI and future-connector marketing. Preserve the reusable
+  connector foundation, old dormant Target identity and persisted legacy
+  denial rows; applied historical database migrations remain unmodified.
+
+## Upgrade, security and rollback
+
+- New additive migrations: nullable SSH command operational limits and a
+  durable `ssh_command_jobs` journal. **A consistent, test-restored DB backup
+  is required before an eventual operator upgrade.** The journal's rollback
+  guard refuses dropping it while any job record remains; do not erase
+  unknown jobs to force migration rollback. Browser-updater code backups do
+  not reverse database changes.
+- Refresh locked `symfony/http-foundation` from 8.1.6 to 8.1.9 to remediate
+  advisory **CVE-2026-108082**, with Composer audit verified locally.
+- No production Target, OS user, host setting, OAuth credential, or
+  `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
+  package. Changes to an actual installed host require a separate authorized
+  deployment and compatibility/rollback checks.
+- Exact combined-source CI, source security review, upgrade tests, final
+  stable VERSION promotion and approved Release publication are pending at
+  the time of this prerelease candidate. Do not represent it as shipped.
+
 # MCP Gateway v2.2.1
 
 **Stable v2.2.1 source promotion from independently approved `2.2.1-rc.10`.**
