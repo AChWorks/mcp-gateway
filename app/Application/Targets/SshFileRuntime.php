@@ -11,6 +11,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshFileAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshSubsystemOnlySftp;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
@@ -130,6 +131,7 @@ final readonly class SshFileRuntime
     public function read(
         User $user, Target $target, string $path, int $offset = 0, int $length = 16384,
         ?int $expectedSize = null, ?int $expectedMtime = null,
+        ?string $expectedTargetBinding = null,
     ): array {
         $this->validatePath($path);
         if ($offset < 0 || $offset > 1099511627776 || $length < 1 || $length > self::MAX_RANGE_BYTES) {
@@ -171,13 +173,14 @@ final readonly class SshFileRuntime
                     'complete' => true,
                     'source_check' => 'size_mtime_best_effort',
                 ];
-            });
+            }, expectedTargetBinding: $expectedTargetBinding);
     }
 
     /** @return array<string,mixed> */
     public function write(
         User $user, Target $target, string $path, string $contentBase64,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
+        ?string $expectedTargetBinding = null,
     ): array {
         $this->validatePath($path);
         if ($path === '/' || str_ends_with($path, '/') || strlen($contentBase64) > 21848
@@ -374,7 +377,7 @@ final readonly class SshFileRuntime
                     'publish_method' => $overwrite ? 'posix_replace' : 'exclusive_hardlink',
                     'overwrote' => $overwrite,
                 ];
-            });
+            }, expectedTargetBinding: $expectedTargetBinding);
     }
 
     /** @param Closure(SFTP,string,SshTargetConfig):array<string,mixed> $operation
@@ -382,7 +385,7 @@ final readonly class SshFileRuntime
      */
     private function operate(
         User $user, Target $target, GatewayPermission $permission,
-        Closure $operation, ?int $deadlineNs = null,
+        Closure $operation, ?int $deadlineNs = null, ?string $expectedTargetBinding = null,
     ): array {
         // This is an end-to-end budget, including admission and credential
         // lookups, not a fresh timeout for each SFTP packet or path operation.
@@ -394,7 +397,7 @@ final readonly class SshFileRuntime
         }
 
         return $this->admission->run((string) $target->getKey(), function () use (
-            $user, $target, $permission, $operation, $deadlineNs,
+            $user, $target, $permission, $operation, $deadlineNs, $expectedTargetBinding,
         ): array {
             $this->ensureFileDeadline($deadlineNs);
             $fresh = Target::query()->whereKey($target->getKey())->first();
@@ -418,6 +421,10 @@ final readonly class SshFileRuntime
             if (! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
                 throw new SshTargetConnectionException('credential_unavailable');
             }
+            if ($expectedTargetBinding !== null
+                && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config))) {
+                throw new SshTargetConnectionException('target_changed');
+            }
 
             try {
                 $material = $this->vault->open($fresh, $config, $credential);
@@ -432,7 +439,7 @@ final readonly class SshFileRuntime
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SFTP $sftp, string $ip) use (
-                    $user, $target, $permission, $config, $credential, $operation, $deadlineNs,
+                    $user, $target, $permission, $config, $credential, $operation, $deadlineNs, $expectedTargetBinding,
                 ): array {
                     $currentTarget = Target::query()->whereKey($target->getKey())->first();
                     $currentUser = User::query()->whereKey($user->getKey())->first();
@@ -448,6 +455,9 @@ final readonly class SshFileRuntime
                         || ! hash_equals((string) $config->host, (string) $currentConfig->host)
                         || $config->port !== $currentConfig->port
                         || ! hash_equals((string) $config->username, (string) $currentConfig->username)
+                        || ! hash_equals((string) $config->auth_method, (string) $currentConfig->auth_method)
+                        || ($expectedTargetBinding !== null
+                            && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($currentTarget, $currentConfig)))
                         || ! $this->access->allows($currentUser, $permission, $currentTarget)) {
                         throw new SshTargetConnectionException('target_changed');
                     }

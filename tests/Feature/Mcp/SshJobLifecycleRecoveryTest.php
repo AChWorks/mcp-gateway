@@ -3,6 +3,8 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Mcp\SshJobMcpToolHandlers;
+use App\Application\Targets\SshCommandRuntime;
+use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshJobCoordinator;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
@@ -10,6 +12,8 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -277,6 +281,14 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             ->update(['status' => 'launch_unknown',
                 'admission_expires_at' => now()->subSecond()]);
         self::assertFalse($renew->invoke(app(SshJobCoordinator::class), $id));
+
+        // A still-live lease must not permit dispatch after the original
+        // Gateway principal has been disabled, regardless of old snapshots.
+        DB::table('ssh_command_jobs')->where('id', $id)->update([
+            'admission_expires_at' => now()->addHour(),
+        ]);
+        DB::table('users')->where('id', $user->getKey())->update(['access_enabled' => false]);
+        self::assertFalse($renew->invoke(app(SshJobCoordinator::class), $id));
     }
 
     public function test_operator_refuses_active_lease_and_requires_exact_attested_original_binding(): void
@@ -425,6 +437,95 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             'ssh_command_jobs', 'admission_expires_at'));
         self::assertTrue(Schema::hasColumn(
             'ssh_command_jobs', 'preparing_expires_at'));
+    }
+
+    public function test_rebound_target_cannot_receive_later_job_phase_commands_or_sftp(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        $config = SshTargetConfig::query()
+            ->where('target_record_id', $target->getKey())->firstOrFail();
+        $original = SshTargetBinding::hash($target, $config);
+
+        // A Job is admitted against original A. The real initial probe is
+        // blocked by the test's no-egress policy; simulate its successful
+        // immutable pre-dispatch fence without any remote systemd activity.
+        $tool = app(SshJobMcpToolHandlers::class);
+        $id = $tool->start($user, $target->target_id, $client,
+            (string) Str::uuid(), 'echo original-host')['result']['job_id'];
+        DB::table('ssh_command_jobs')->where('id', $id)->update([
+            'status' => 'preparing', 'unit_mode' => null,
+            'preparing_expires_at' => now()->addMinute(),
+            'admission_expires_at' => now()->addHour(),
+        ]);
+        $transition = new \ReflectionMethod(SshJobCoordinator::class, 'transition');
+        self::assertTrue($transition->invoke(app(SshJobCoordinator::class),
+            $id, 'preparing', 'launch_unknown', ['unit_mode' => 'user']));
+
+        // Represents a completed admin reconfiguration+reconnect of the SAME
+        // Target ID from endpoint A to B between distinct SSH connections.
+        DB::table('ssh_direct_target_configs')->where('id', $config->getKey())->update([
+            'host' => 'replacement-host.example.test',
+            'username' => 'replacement-user',
+        ]);
+        self::assertSame(TargetConnectionState::Connected,
+            $target->fresh()->getAttribute('connection_state'));
+        $changed = SshTargetConfig::query()
+            ->whereKey($config->getKey())->firstOrFail();
+        self::assertNotSame($original,
+            SshTargetBinding::hash($target, $changed));
+
+        $spy = new class implements SshDialAddressPolicy
+        {
+            public int $attempts = 0;
+
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                $this->attempts++;
+
+                throw new SshTargetConnectionException('egress_denied');
+            }
+        };
+        $this->app->instance(SshDialAddressPolicy::class, $spy);
+        $command = app(SshCommandRuntime::class);
+        $files = app(SshFileRuntime::class);
+        $directory = '/var/tmp/.mcp-gateway-job-'.$id;
+        $denied = static function (callable $operation): void {
+            try {
+                $operation();
+                self::fail('A Job phase must not dial or mutate the rebound host.');
+            } catch (SshTargetConnectionException $exception) {
+                self::assertSame('target_changed', $exception->reason);
+            }
+        };
+
+        // These are distinct actual runtime entrypoints (not an initial
+        // Coordinator-only check). Every one must reject B before dialing.
+        foreach ([
+            'post-fence-mkdir' => 'mkdir -m 700 -- '.escapeshellarg($directory),
+            'final-systemd-run' => 'systemd-run --unit=test -- /bin/sh /tmp/script.sh',
+            'late-probe' => 'command -v systemd-run',
+        ] as $phase => $text) {
+            $denied(static fn () => $command->run($user, $target, $text, 8, $original));
+        }
+        $denied(static fn () => $files->write(
+            $user, $target, $directory.'/script.sh', base64_encode('echo original'),
+            expectedTargetBinding: $original,
+        ));
+        $denied(static fn () => $files->write(
+            $user, $target, $directory.'/wrapper.sh', base64_encode('#!/bin/sh'),
+            expectedTargetBinding: $original,
+        ));
+        $denied(static fn () => $files->read(
+            $user, $target, $directory.'/exit-code', 0, 8,
+            expectedTargetBinding: $original,
+        ));
+        self::assertSame(0, $spy->attempts, 'The rebound host must not receive any network dial.');
+        self::assertSame($original,
+            DB::table('ssh_command_jobs')->where('id', $id)->value('target_binding_hash'));
+        self::assertSame('launch_unknown',
+            DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+        self::assertSame('target_not_found',
+            $tool->status($user, $target->target_id, $client, $id)['error']['code']);
     }
 
     /** @return array{0:User,1:Target,2:string} */

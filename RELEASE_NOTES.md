@@ -3,8 +3,9 @@
 **Stable v2.3.0 source promotion; publication and installation are separately verified.**
 This version collects Issues #181 and #182, including Owner-configurable
 retained SSH Job resource/lifecycle limits and high-assurance reconciliation.
-The preceding versioned integration RC is `2.3.0-rc.4`, candidate HEAD
-`be66ed37247928991d404b76c198610912b5e3c8`.
+The independently approved integration RC was `2.3.0-rc.5` at
+`6e16ba20e455e3231d5e1da0a10f14ea41597520`, merged to `main` by
+`3dc3eb250052d2187ecbdde15ea9d7f26e52b491`.
 Author-separated independent review, integration, an official verified
 [GitHub Release](https://github.com/AChWorks/mcp-gateway/releases)
 and actual host installation are distinct verifiable steps; neither
@@ -48,12 +49,18 @@ source promotion nor an unverified archive establishes deployment.
   Per-Job prelaunch/reconciliation snapshots survive later Owner changes;
   a fourth additive migration conservatively backfills older prerelease
   journal rows without discarding no-replay evidence.
-- Real disposable OpenSSH/systemd validation and MariaDB same-user
-  concurrency checks must be verified against the **current exact PR HEAD**
-  at [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
-  Earlier green workflow runs (including #38791097112) are historical
-  evidence, not approval of a changed candidate. Browser/operator-host
-  acceptance, independent review and publication remain separate gates.
+- The final RC serializes pre-dispatch and final Job lease renewal under
+  consistent User-before-Job locks, preventing a second same-user admission
+  while the original Job is still permitted to dispatch. Every subsequent
+  SSH/SFTP Job phase checks the original immutable Target/host-key binding
+  before dialing a replacement host and after authentication; unknown remote
+  outcomes remain non-replayable.
+- [Exact-rc.5 CI](https://github.com/AChWorks/mcp-gateway/pull/187/checks)
+  passed including disposable OpenSSH/systemd, independent MariaDB dispatch
+  expiry-race tests, WP Bridge contract, stable-baseline update and package
+  integrity, and attribution. Fresh independent high-assurance review approved
+  that exact candidate before integration. Public publication and installed-host
+  acceptance remain separate gates.
 
 ## SSH file exchange and connector presentation
 
