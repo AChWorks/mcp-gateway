@@ -2,14 +2,14 @@
 
 MCP Gateway is a self-hosted PHP application that connects an authenticated MCP client to the specific servers and WordPress sites you authorize. Add each connection as a **Target**, control who can use it, and manage access from one web Admin panel.
 
-**Public stable v2.2.1:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). **v2.3.0-rc.7 is an unpublished source candidate**; it adds the SSH controls, retained Jobs, and per-Target Pause/Resume described below. Install only from a verified official GitHub Release.
+**Public stable v2.2.1:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). **v2.3.0-rc.8 is an unpublished source candidate**; it adds the SSH controls, retained Jobs, and per-Target Pause/Resume described below. Install only from a verified official GitHub Release.
 
 ## What you can do
 
 - Register WordPress and SSH Targets, review connection status, and let the Owner **Pause/Resume Gateway operations per Target** without disconnecting or deleting access. An already-running remote SSH Job is not stopped by Pause.
 - Discover and run WordPress Abilities through the existing WordPress principal and its WP AI Bridge permissions.
-- Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0-rc.7, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
-- In v2.3.0-rc.7, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.
+- Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0-rc.8, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
+- In v2.3.0-rc.8, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.
 - Assign users, Target Groups and permission scopes; review Activity and AI client authorizations.
 - Install or update from the named GitHub Release ZIPs without requiring Git or Composer on the host.
 
@@ -88,7 +88,7 @@ Use **AI clients** (`/admin/oauth-clients`) to manage application profiles and g
 
 ## Available MCP tools
 
-The **published v2.2.1** MCP catalog contains nine tools. The **unpublished v2.3.0-rc.7 source candidate** adds four agentless SSH Job tools (13 total), shown below. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs are available only after that version is installed and migrated on a supported host.
+The **published v2.2.1** MCP catalog contains nine tools. The **unpublished v2.3.0-rc.8 source candidate** adds four agentless SSH Job tools (13 total), shown below. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs are available only after that version is installed and migrated on a supported host.
 
 | Tool | Purpose |
 | --- | --- |

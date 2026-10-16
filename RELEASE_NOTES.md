@@ -1,18 +1,21 @@
 # MCP Gateway v2.3.0
 
-**Corrective source candidate `2.3.0-rc.7` — NOT PUBLISHED.**
-This follows independently approved/merged rc.5 for Issues #181/#182.
-rc.6 introduced Owner-requested per-Target Pause/Resume (#189) and proportionate
-source-level mixed Target/OAuth/SSH acceptance (#112). Independent review of
-PR #190's rc.6 returned CHANGES_REQUIRED: the new Admin POST resolved a Target
-before checking Owner identity, and specific old-OAuth-bearer and mid-stage SSH
-Job regression tests were missing. rc.7 checks Owner identity before any Target
-lookup, verifies uniform non-Owner 403 for existing/missing IDs, and adds two
-small deterministic regressions proving a previously issued OAuth bearer
-cannot bypass Pause and a paused Job cannot stage/launch further remote work.
-Previous rc.6 CI and review do NOT approve rc.7; exact-candidate CI and a
-fresh author-separated independent delta re-review are required. Published
-stable remains v2.2.1 until separately approved integration and Release.
+**Corrective source candidate `2.3.0-rc.8` — NOT PUBLISHED.**
+This follows independently approved and Owner-merged rc.7 source via
+[PR #190](https://github.com/AChWorks/mcp-gateway/pull/190), which corrected
+rc.6 Owner-authorization and old OAuth bearer / SSH Job pause regressions.
+Under the Owner's single-install decision #182, rc.8 removes obsolete
+Agent-only stored Target identity and historic Agent denial migration seeds;
+the Owner verified zero matching rows across the six inspected DB locations.
+The original generic Target migration remains, the installed ledger is not
+replayed and no automatic data cleanup or live database action occurs.
+This candidate also corrects the stale #187-as-current-review references
+identified as REQUIRED by independent review of stable promotion PR #188.
+rc.7's approval does **not** cover this new migration/model delta: exact
+rc.8 CI, isolated installation/updater checks and fresh independent
+HIGH_ASSURANCE review are required before source integration; stable VERSION
+promotion, public Release and operator-host deployment are separate gates.
+Public stable remains v2.2.1 until official publication is verified.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -82,7 +85,8 @@ stable remains v2.2.1 until separately approved integration and Release.
   unauthorized Targets. Safe local management and credential recovery remain.
 - An additive migration enables old/new Targets by default; Owner POST action
   is idempotent, audited and protected by existing web/CSRF boundaries.
-  Independent delta re-review of rc.7 and exact candidate checks are pending.
+  The rc.7 independent delta review was approved and source merged via #190;
+  the new rc.8 Agent-cleanup candidate requires its own focused independent review.
 
 ## SSH file exchange and connector presentation
 
@@ -116,11 +120,14 @@ stable remains v2.2.1 until separately approved integration and Release.
   `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
   package. Changes to an actual installed host require a separate authorized
   deployment and compatibility/rollback checks.
-- rc.5's approved source is already integrated via [PR #187](https://github.com/AChWorks/mcp-gateway/pull/187).
-  For rc.7, separately verify current exact-source CI and obtain fresh
-  independent author-separated security review before its own integration.
-  Stable VERSION promotion and approved Release publication remain separate;
-  this prerelease is not shipped.
+- rc.5's approved source integrated via [PR #187](https://github.com/AChWorks/mcp-gateway/pull/187),
+  followed by approved rc.7 source integrated via
+  [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190).
+  New rc.8 cleanup source requires its own exact-head CI and independent
+  author-separated review; stable VERSION promotion remains separate
+  [PR #188](https://github.com/AChWorks/mcp-gateway/pull/188).
+  Official Release publication and installed-host deployment are distinct; no
+  production DB cleanup or migration replay is performed by this source.
 
 # MCP Gateway v2.2.1
 
