@@ -2,8 +2,13 @@
 
 namespace Tests\Feature\OAuth;
 
+use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
+use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use App\Infrastructure\OAuth\RefreshTokenInspector;
@@ -878,6 +883,99 @@ final class ChatGptOAuthFlowTest extends TestCase
             ...$base,
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
         ])->assertStatus(400);
+    }
+
+    public function test_preexisting_oauth_bearer_respects_target_pause_and_denied_bearer_cannot_enumerate(): void
+    {
+        $owner = User::query()->create([
+            'name' => 'Pause bearer Owner',
+            'email' => 'pause-owner@example.test',
+            'password' => Hash::make('test-password-not-used-for-oauth'),
+            'role' => GatewayRole::Owner->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
+            'access_enabled' => true,
+        ]);
+        $other = $this->operator();
+        $pinnedKey = 'ssh-ed25519 '.base64_encode(
+            pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat("\x52", 32),
+        );
+        $target = app(SshTargetRegistration::class)->register(
+            'pause-bearer-ssh', 'Bearer Pause Target', 'fixture.example.test',
+            22, 'fixture-user', $pinnedKey, 'password', 'fixture-secret', null,
+        );
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+
+        // Real issued and signed OAuth tokens, not direct Handler/User calls.
+        [, $oldBearer] = $this->issueRefreshableToken($owner);
+        [, $deniedBearer] = $this->issueRefreshableToken($other);
+        $policy = new class implements SshDialAddressPolicy
+        {
+            public int $attempts = 0;
+
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                $this->attempts++;
+
+                throw new SshTargetConnectionException('egress_denied');
+            }
+        };
+        $this->app->instance(SshDialAddressPolicy::class, $policy);
+
+        $host = (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST);
+        $call = function (string $bearer, string $targetId) use ($host): TestResponse {
+            return $this->withHeaders([
+                'Authorization' => 'Bearer '.$bearer,
+                'Host' => $host,
+                'MCP-Protocol-Version' => '2026-07-28',
+                'Mcp-Method' => 'tools/call',
+                'Mcp-Name' => 'ssh-command-run',
+            ])->postJson('/mcp', [
+                'jsonrpc' => '2.0',
+                'id' => 501,
+                'method' => 'tools/call',
+                'params' => [
+                    'name' => 'ssh-command-run',
+                    'arguments' => ['target_id' => $targetId, 'command' => 'echo no-remote-exec'],
+                    '_meta' => [
+                        'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                        'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                        'io.modelcontextprotocol/clientInfo' => [
+                            'name' => 'pause-bearer-test', 'version' => '1.0.0',
+                        ],
+                    ],
+                ],
+            ]);
+        };
+
+        // Prior to pause this exact bearer has SSH permission and reaches the
+        // fixture-only network denial. No real SSH command is dispatched.
+        $call($oldBearer, $target->target_id)->assertOk()
+            ->assertJsonPath('result.structuredContent.error.code', 'egress_denied');
+        self::assertSame(1, $policy->attempts);
+
+        $this->actingAs($owner)
+            ->post(route('admin.targets.operations.update', ['target' => $target->target_id]), [
+                'state' => 'paused',
+            ])->assertRedirect();
+        self::assertTrue($target->fresh()->operations_paused);
+
+        // The exact pre-existing bearer is still cryptographically valid,
+        // but a fresh Target gate now denies it before any network attempt.
+        $call($oldBearer, $target->target_id)->assertOk()
+            ->assertJsonPath('result.structuredContent.error.code', 'target_paused');
+        $call($deniedBearer, $target->target_id)->assertOk()
+            ->assertJsonPath('result.structuredContent.error.code', 'target_not_found');
+        $call($deniedBearer, 'missing-target')->assertOk()
+            ->assertJsonPath('result.structuredContent.error.code', 'target_not_found');
+        self::assertSame(1, $policy->attempts, 'Paused or denied bearers must not reach SSH egress.');
+
+        $this->actingAs($owner)
+            ->post(route('admin.targets.operations.update', ['target' => $target->target_id]), [
+                'state' => 'enabled',
+            ])->assertRedirect();
+        $call($oldBearer, $target->target_id)->assertOk()
+            ->assertJsonPath('result.structuredContent.error.code', 'egress_denied');
+        self::assertSame(2, $policy->attempts);
     }
 
     /** @return array{0:string,1:string} */

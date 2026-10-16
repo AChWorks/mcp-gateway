@@ -34,6 +34,8 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
     /** @var list<array{host:string,method:string,session:string}> */
     private array $sessionTraffic = [];
 
+    private bool $pauseDuringCatalog = false;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -77,6 +79,22 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         foreach ($this->downstream as $call) {
             self::assertSame($baseline, $call['transaction'], 'WordPress MCP transport ran under a database transaction.');
         }
+    }
+
+    public function test_pause_during_wordpress_classification_blocks_final_ability_dispatch(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->pauseDuringCatalog = true;
+
+        $result = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($owner, 'alpha', 'demo/read', []);
+
+        self::assertFalse($result['ok']);
+        self::assertSame('target_paused', $result['error']['code']);
+        self::assertTrue(Target::query()->where('target_id', 'alpha')->firstOrFail()->operations_paused);
+        self::assertSame(['wp-ai-bridge/abilities-read'], array_column($this->downstream, 'ability'));
+        self::assertSame('DELETE', $this->sessionTraffic[array_key_last($this->sessionTraffic)]['method']);
     }
 
     public function test_execute_uses_one_legacy_session_for_classification_and_execution_then_closes_it(): void
@@ -436,6 +454,10 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
                     'transaction' => DB::transactionLevel(),
                 ];
                 if ($ability === 'wp-ai-bridge/abilities-read') {
+                    if ($this->pauseDuringCatalog) {
+                        DB::table('targets')->where('target_id', explode('.', $host)[0])
+                            ->update(['operations_paused' => true]);
+                    }
                     $wanted = (string) ($payload['params']['arguments']['parameters']['name'] ?? 'demo/read');
                     $isDestructive = $wanted === 'demo/destroy';
                     $isReadonly = $wanted === 'demo/read';

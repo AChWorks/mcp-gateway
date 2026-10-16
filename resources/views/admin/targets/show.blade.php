@@ -17,6 +17,25 @@
     </div>
 </div>
 
+<section class="panel panel-wide" aria-labelledby="target-operations-title">
+    <h2 id="target-operations-title">{{ __('Gateway operations') }}</h2>
+    <p role="status"><strong>{{ $target->operations_paused ? __('Paused') : __('Enabled') }}</strong>
+        — {{ $target->operations_paused
+            ? __('New Gateway operations against this Target are blocked. Stored connection, credentials, grants and existing remote Jobs are preserved; running Jobs are not stopped.')
+            : __('This Target can accept new authorized Gateway operations. Connection status is shown separately below.') }}
+    </p>
+    @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
+        <form method="post" action="{{ route('admin.targets.operations.update', ['target' => $target->target_id]) }}">
+            @csrf
+            <input type="hidden" name="state" value="{{ $target->operations_paused ? 'enabled' : 'paused' }}">
+            <button class="button {{ $target->operations_paused ? 'button-primary' : 'button-secondary' }}" type="submit">
+                {{ $target->operations_paused ? __('Resume Target operations') : __('Pause Target operations') }}
+            </button>
+        </form>
+    @endif
+    <p class="field-help">{{ __('Pausing does not revoke WordPress authorization or SSH credentials. Explicit administrative credential recovery and local inventory remain available.') }}</p>
+</section>
+
 <section class="panel panel-wide target-recovery-panel" aria-labelledby="target-recovery-title">
     <div class="section-heading">
         <div>
@@ -144,12 +163,14 @@
                     </form>
                 @endcan
             @endif
+            @if (! $target->operations_paused)
             @can('targets.test', $target)
                 <form method="post" action="{{ route('admin.targets.test', ['target' => $target->target_id]) }}">
                     @csrf
                     <button class="button button-secondary" type="submit">{{ __('Check public WordPress metadata (not OAuth)') }}</button>
                 </form>
             @endcan
+            @endif
         </div>
     @endif
 </section>
@@ -226,12 +247,14 @@
         @if ($sshHasCredential)
             <p class="muted">{{ __('SSH login credentials are stored locally. You can test the pinned host key and login; commands and SFTP are not yet available.') }}</p>
             <div class="filter-actions">
+                @if (! $target->operations_paused)
                 @can('targets.test', $target)
                     <form method="post" action="{{ route('admin.targets.test', ['target' => $target->target_id]) }}">
                         @csrf
                         <button class="button button-primary" type="submit">{{ __('Verify SSH host and login') }}</button>
                     </form>
                 @endcan
+                @endif
                 @can('targets.disconnect', $target)
                     <form method="post" action="{{ route('admin.targets.disconnect', ['target' => $target->target_id]) }}">
                         @csrf
@@ -255,7 +278,9 @@
                     <h2 id="ssh-browser-file-title">{{ __('SSH file upload and download') }}</h2>
                 </div>
             </div>
-            @if (config('ssh.file_transfer.enabled', false) === true)
+            @if ($target->operations_paused)
+                <p class="muted">{{ __('SSH browser upload and download are unavailable while this Target is paused.') }}</p>
+            @elseif (config('ssh.file_transfer.enabled', false) === true)
                 <p class="muted">{{ __('Select an actual local file in this browser for an SSH Target. ChatGPT message attachments do not automatically reach MCP tools. Remote file limits and SSH OS-account permissions still apply.') }}</p>
                 @if ($errors->has('file_exchange'))
                     <p class="target-recovery-warning" role="alert">{{ $errors->first('file_exchange') }}</p>

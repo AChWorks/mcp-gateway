@@ -1,10 +1,18 @@
 # MCP Gateway v2.3.0
 
-**Corrective source candidate `2.3.0-rc.5` — NOT PUBLISHED.**
-This combined integration candidate collects Issue #181 and #182's four
-reviewable source slices. It is not a GitHub Release or an installed host.
-The current published version remains v2.2.1 until separately reviewed,
-approved and published with exact-source and verified package assets.
+**Corrective source candidate `2.3.0-rc.7` — NOT PUBLISHED.**
+This follows independently approved/merged rc.5 for Issues #181/#182.
+rc.6 introduced Owner-requested per-Target Pause/Resume (#189) and proportionate
+source-level mixed Target/OAuth/SSH acceptance (#112). Independent review of
+PR #190's rc.6 returned CHANGES_REQUIRED: the new Admin POST resolved a Target
+before checking Owner identity, and specific old-OAuth-bearer and mid-stage SSH
+Job regression tests were missing. rc.7 checks Owner identity before any Target
+lookup, verifies uniform non-Owner 403 for existing/missing IDs, and adds two
+small deterministic regressions proving a previously issued OAuth bearer
+cannot bypass Pause and a paused Job cannot stage/launch further remote work.
+Previous rc.6 CI and review do NOT approve rc.7; exact-candidate CI and a
+fresh author-separated independent delta re-review are required. Published
+stable remains v2.2.1 until separately approved integration and Release.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -56,6 +64,23 @@ approved and published with exact-source and verified package assets.
   evidence, not approval of a changed candidate. Browser/operator-host
   acceptance, independent review and publication remain separate gates.
 
+## Per-Target Pause / Resume (#189)
+
+- The Owner can pause or resume new Gateway operations on any registered
+  WordPress or SSH Target from the Target list or details. Pause is a durable,
+  default-false **operations_paused** flag independent of Connected status.
+  It preserves the saved endpoint, credentials, OAuth grants, Target groups,
+  permission denials and SSH Job journal. Pausing is not remote revocation,
+  cancellation, or evidence that an already-running remote Job stopped.
+- MCP inventory and target-context identify an authorized paused Target,
+  while operation-mode discovery is suppressed. Fresh server-side checks on
+  WordPress Ability dispatch, SSH exec/SFTP, Job start/stages and browser/HTTP
+  file transfer deny new work with target_paused, without disclosing
+  unauthorized Targets. Safe local management and credential recovery remain.
+- An additive migration enables old/new Targets by default; Owner POST action
+  is idempotent, audited and protected by existing web/CSRF boundaries.
+  Independent delta re-review of rc.7 and exact candidate checks are pending.
+
 ## SSH file exchange and connector presentation
 
 - Authenticated Admin Target details gain a **browser file picker upload**
@@ -71,10 +96,11 @@ approved and published with exact-source and verified package assets.
 
 ## Upgrade, security and rollback
 
-- New additive migrations: nullable SSH command operational limits and a
-  durable `ssh_command_jobs` journal and a third additive lifecycle-policy
-  migration for typed limits, admission leases and operator attestations. **A consistent, test-restored DB backup
-  is required before an eventual operator upgrade.** The journal's rollback
+- Five additive migrations: SSH command operational-limit columns, durable
+  `ssh_command_jobs` journal, typed Job lifecycle/attestation policy, immutable
+  per-Job admission timing and per-Target operations-paused state (operations
+  enabled by default). **A consistent, test-restored DB backup is required
+  before an eventual operator upgrade.** The journal's rollback
   guard refuses dropping it while any job record remains; do not erase
   unknown jobs to force migration rollback. Browser-updater code backups do
   not reverse database changes.
@@ -84,10 +110,11 @@ approved and published with exact-source and verified package assets.
   `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
   package. Changes to an actual installed host require a separate authorized
   deployment and compatibility/rollback checks.
-- Check the [exact-current PR #187 CI](https://github.com/AChWorks/mcp-gateway/pull/187/checks)
-  and obtain fresh independent author-separated approval for the exact code
-  before integration. Stable VERSION promotion and approved Release
-  publication remain separate, and this prerelease is not shipped.
+- rc.5's approved source is already integrated via [PR #187](https://github.com/AChWorks/mcp-gateway/pull/187).
+  For rc.7, separately verify current exact-source CI and obtain fresh
+  independent author-separated security review before its own integration.
+  Stable VERSION promotion and approved Release publication remain separate;
+  this prerelease is not shipped.
 
 # MCP Gateway v2.2.1
 

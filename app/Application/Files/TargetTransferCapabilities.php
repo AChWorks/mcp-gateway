@@ -33,6 +33,11 @@ final readonly class TargetTransferCapabilities
             'model_file_consumption_verified' => false,
         ];
 
+        // Discovery is informative only; actual runtime checks are fresh and independent.
+        if ($target->operations_paused) {
+            return $description;
+        }
+
         if ($target->connector_type === 'wp_ai_bridge') {
             // Stay aligned with the real WordPress execution dispatcher:
             // a client may have ONLY destructive or unclassified execution.

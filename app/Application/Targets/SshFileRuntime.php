@@ -401,6 +401,9 @@ final readonly class SshFileRuntime
         ): array {
             $this->ensureFileDeadline($deadlineNs);
             $fresh = Target::query()->whereKey($target->getKey())->first();
+            if ($fresh instanceof Target && $fresh->operations_paused) {
+                throw new SshTargetConnectionException('target_paused');
+            }
             $freshUser = User::query()->whereKey($user->getKey())->first();
             // Internal streamed callers do not pass through the public MCP
             // dispatcher. Denied/revoked principals must be rejected BEFORE
@@ -442,6 +445,9 @@ final readonly class SshFileRuntime
                     $user, $target, $permission, $config, $credential, $operation, $deadlineNs, $expectedTargetBinding,
                 ): array {
                     $currentTarget = Target::query()->whereKey($target->getKey())->first();
+                    if ($currentTarget instanceof Target && $currentTarget->operations_paused) {
+                        throw new SshTargetConnectionException('target_paused');
+                    }
                     $currentUser = User::query()->whereKey($user->getKey())->first();
                     $currentCredential = TargetCredential::query()->whereKey($credential->getKey())->first();
                     $currentConfig = SshTargetConfig::query()->whereKey($config->getKey())->first();

@@ -29,7 +29,11 @@ final class SshBrowserFileController extends Controller
         $this->requireMode();
         $user = $this->user($request);
         Gate::authorize(GatewayPermission::SshFileWrite->value, $target);
-        $target = $this->files->target($user, $target->target_id, GatewayPermission::SshFileWrite);
+        try {
+            $target = $this->files->target($user, $target->target_id, GatewayPermission::SshFileWrite);
+        } catch (SshTargetConnectionException $exception) {
+            return $this->failed($exception->reason);
+        }
         $maxKiB = (int) ceil($this->files->limits()['max_bytes'] / 1024);
         $input = $request->validate([
             'local_file' => ['required', 'file', 'max:'.$maxKiB],
@@ -85,7 +89,11 @@ final class SshBrowserFileController extends Controller
         $this->requireMode();
         $user = $this->user($request);
         Gate::authorize(GatewayPermission::SshFileRead->value, $target);
-        $target = $this->files->target($user, $target->target_id, GatewayPermission::SshFileRead);
+        try {
+            $target = $this->files->target($user, $target->target_id, GatewayPermission::SshFileRead);
+        } catch (SshTargetConnectionException $exception) {
+            return $this->failed($exception->reason);
+        }
         $input = $request->validate([
             'path' => ['required', 'string', 'max:1024'],
         ]);

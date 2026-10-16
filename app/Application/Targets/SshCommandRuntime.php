@@ -53,6 +53,9 @@ final readonly class SshCommandRuntime
         return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
+            if ($fresh instanceof Target && $fresh->operations_paused) {
+                throw new SshTargetConnectionException('target_paused');
+            }
             $credential = TargetCredential::query()
                 ->where('target_record_id', $target->getKey())
                 ->where('connector_type', 'ssh_direct')
@@ -88,6 +91,9 @@ final readonly class SshCommandRuntime
                     $currentUser = User::query()->whereKey($user->getKey())->first();
                     $currentCredential = TargetCredential::query()->whereKey($credential->getKey())->first();
                     $currentConfig = SshTargetConfig::query()->whereKey($config->getKey())->first();
+                    if ($currentTarget instanceof Target && $currentTarget->operations_paused) {
+                        throw new SshTargetConnectionException('target_paused');
+                    }
                     if (! $currentTarget instanceof Target || $currentTarget->connector_type !== 'ssh_direct'
                         || $currentTarget->getAttribute('connection_state') !== TargetConnectionState::Connected
                         || ! hash_equals((string) $target->target_id, (string) $currentTarget->target_id)

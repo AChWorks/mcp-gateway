@@ -5,6 +5,7 @@ namespace App\Application\Mcp;
 use App\Application\Access\AccessControl;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\TargetOperationGate;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
@@ -76,6 +77,10 @@ final readonly class SshFileMcpToolHandlers
             ->first();
         if (! $target instanceof Target) {
             return $this->failed($tool, null, 'target_not_found');
+        }
+
+        if (TargetOperationGate::isPaused($target)) {
+            return $this->failed($tool, $target, 'target_paused');
         }
 
         try {
