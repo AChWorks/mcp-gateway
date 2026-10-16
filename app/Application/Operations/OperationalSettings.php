@@ -38,6 +38,7 @@ final class OperationalSettings
         'ssh_job_retention_hours' => ['minimum' => 1, 'maximum' => 8760],
         'ssh_job_preparing_grace_seconds' => ['minimum' => 30, 'maximum' => 600],
         'ssh_job_reconcile_grace_seconds' => ['minimum' => 60, 'maximum' => 3600],
+        'ssh_job_max_script_kib' => ['minimum' => 16, 'maximum' => 64],
     ];
 
     /** @var array<string, int>|null */
@@ -104,7 +105,7 @@ final class OperationalSettings
         ];
     }
 
-    /** @return array{max_active_per_user:int,max_runtime_seconds:int,retention_hours:int,preparing_grace_seconds:int,reconcile_grace_seconds:int} */
+    /** @return array{max_active_per_user:int,max_runtime_seconds:int,retention_hours:int,preparing_grace_seconds:int,reconcile_grace_seconds:int,max_script_bytes:int} */
     public function sshJobLimits(): array
     {
         $overrides = $this->overrides();
@@ -115,6 +116,7 @@ final class OperationalSettings
             'retention_hours' => $overrides['ssh_job_retention_hours'] ?? 24,
             'preparing_grace_seconds' => $overrides['ssh_job_preparing_grace_seconds'] ?? 120,
             'reconcile_grace_seconds' => $overrides['ssh_job_reconcile_grace_seconds'] ?? 600,
+            'max_script_bytes' => ($overrides['ssh_job_max_script_kib'] ?? 16) * 1024,
         ];
     }
 
@@ -147,7 +149,8 @@ final class OperationalSettings
         // upgrade path. Preserve rather than erase the new SSH overrides.
         if ($keys !== $all && $keys !== array_slice($all, 0, 4)
             && $keys !== array_slice($all, 0, 6)
-            && $keys !== array_slice($all, 0, 8)) {
+            && $keys !== array_slice($all, 0, 8)
+            && $keys !== array_slice($all, 0, -1)) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);
@@ -210,7 +213,8 @@ final class OperationalSettings
                 || ! property_exists($record, 'ssh_command_timeout_seconds')
                 || ! property_exists($record, 'ssh_command_max_kib')
                 || ! property_exists($record, 'ssh_job_max_active_per_user')
-                || ! property_exists($record, 'ssh_job_reconcile_grace_seconds')) {
+                || ! property_exists($record, 'ssh_job_reconcile_grace_seconds')
+                || ! property_exists($record, 'ssh_job_max_script_kib')) {
                 throw new RuntimeException('Network settings migration is missing.');
             }
             $old = $this->combineOverrides($record);
@@ -237,6 +241,7 @@ final class OperationalSettings
                 'ssh_job_retention_hours' => $next['ssh_job_retention_hours'] ?? null,
                 'ssh_job_preparing_grace_seconds' => $next['ssh_job_preparing_grace_seconds'] ?? null,
                 'ssh_job_reconcile_grace_seconds' => $next['ssh_job_reconcile_grace_seconds'] ?? null,
+                'ssh_job_max_script_kib' => $next['ssh_job_max_script_kib'] ?? null,
                 'version' => $revision,
                 'changed_by' => $actor->getKey(),
                 'updated_at' => $now,
@@ -300,7 +305,7 @@ final class OperationalSettings
             'ssh_command_timeout_seconds', 'ssh_command_max_kib',
             'ssh_job_max_active_per_user', 'ssh_job_max_runtime_seconds',
             'ssh_job_retention_hours', 'ssh_job_preparing_grace_seconds',
-            'ssh_job_reconcile_grace_seconds'] as $key) {
+            'ssh_job_reconcile_grace_seconds', 'ssh_job_max_script_kib'] as $key) {
             $value = $record->{$key} ?? null;
             if ($value === null) {
                 continue;

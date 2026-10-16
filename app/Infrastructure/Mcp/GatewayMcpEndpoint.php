@@ -161,7 +161,7 @@ final readonly class GatewayMcpEndpoint
                     $this->user($request), $target_id, $command, $timeout_seconds,
                 ),
                 name: 'ssh-command-run',
-                description: 'Run one arbitrary non-interactive OS-account command on an explicitly authorized, host-key-pinned SSH Target. sudo/root privileges are controlled by the remote OS, not sandboxed by Gateway. No automatic retry.',
+                description: 'Run one non-interactive command on an authorized host-key-pinned SSH Target. Root/sudo privileges belong to the remote OS account, not a Gateway sandbox. Input UTF-8 byte/time limits are Owner-configured and separate from file-transfer/Job limits. Never blindly retry an uncertain result.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -185,14 +185,14 @@ final readonly class GatewayMcpEndpoint
                     $request_id, $script, $max_runtime_seconds,
                 ),
                 name: 'ssh-job-start',
-                description: 'Start one durable-intent, bounded non-interactive SSH Job using a supported persistent systemd manager. Requires SSH command and file read/write grants. The caller-generated UUID is an idempotency key: reusing it never reruns the script. Unsupported hosts fail closed.',
+                description: 'Start a bounded background systemd SSH Job; requires command and file read/write grants. Script size is Owner-configurable in UTF-8 bytes. Identical UUID and arguments deduplicate while the Job record is retained. On uncertain launch, poll job_id; never re-launch with a new UUID.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
                     'properties' => [
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                         'request_id' => ['type' => 'string', 'format' => 'uuid'],
-                        'script' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 16384],
+                        'script' => ['type' => 'string', 'minLength' => 1, 'maxLength' => $jobLimits['max_script_bytes']],
                         'max_runtime_seconds' => ['type' => 'integer', 'minimum' => 16, 'maximum' => $jobLimits['max_runtime_seconds'], 'default' => 60],
                     ],
                     'required' => ['target_id', 'request_id', 'script'],
@@ -204,7 +204,7 @@ final readonly class GatewayMcpEndpoint
                     $this->user($request), $target_id, $this->clientHash($request), $job_id,
                 ),
                 name: 'ssh-job-status',
-                description: 'Reconcile a prior SSH Job by its stable ID under the same authenticated client/user/Target. Never restarts a potentially executed launch.',
+                description: 'Poll a previous Job by job_id for the same user/client/Target. On launch_unknown or connection_busy, retry status later using the same ID, never re-run the script.',
                 annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -225,7 +225,7 @@ final readonly class GatewayMcpEndpoint
                     $job_id, $stream, $offset, $length,
                 ),
                 name: 'ssh-job-output',
-                description: 'Read at most 16 KiB of retained SSH Job stdout/stderr as base64 with explicit offset/EOF; request subsequent ranges without re-executing.',
+                description: 'Read up to 16 KiB of retained Job stdout/stderr per call as base64; use offset for more. Output unavailable is not EOF. On connection_busy, retry reads sequentially.',
                 annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -245,7 +245,7 @@ final readonly class GatewayMcpEndpoint
                     $this->user($request), $target_id, $this->clientHash($request), $job_id,
                 ),
                 name: 'ssh-job-cancel',
-                description: 'Request a best-effort stop for the exact systemd-managed SSH Job. Response indicates cancel requested, not guaranteed process termination.',
+                description: 'Stop an exact systemd Job. canceled means the unit was verified inactive with MainPID/ControlPID zero; cancel_requested remains unconfirmed until reconciled.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -300,7 +300,7 @@ final readonly class GatewayMcpEndpoint
                     $this->user($request), $target_id, $path, $offset, $length, $expected_size, $expected_mtime,
                 ),
                 name: 'ssh-file-read',
-                description: 'Read up to 16 KiB from an absolute SFTP path as base64; optional size+mtime precondition detects many source changes, not a strong snapshot.',
+                description: 'Read up to 16 KiB per call of an absolute SFTP file as base64; offset allows larger reads over multiple calls. Size+mtime checks are best-effort.',
                 annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -325,7 +325,7 @@ final readonly class GatewayMcpEndpoint
                     $expected_size, $expected_mtime,
                 ),
                 name: 'ssh-file-write',
-                description: 'Write <=16 KiB of base64 bytes to a remote SFTP path. Create-only by default; overwrite=true atomically replaces an existing regular file without requiring size+mtime. Optional expected_size+expected_mtime are paired best-effort preflight checks, not atomic compare-and-swap. Uncertain remote mutations return outcome_unknown; never retry blindly.',
+                description: 'Create or atomically replace one SFTP file (max 16 KiB decoded bytes per call); NOT an append/chunk upload. overwrite=true replaces, size+mtime checks are not CAS. On outcome_unknown, inspect before retrying. Whole-file transfer uses a separate HTTPS endpoint.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',

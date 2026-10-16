@@ -69,6 +69,26 @@ Agent, a Gateway queue daemon, Redis, PTY or an IDE runtime.
 | `ssh-job-output` | Job ID and `stdout` or `stderr` with bounded 1–16 KiB Base64 window, explicit offset, size and EOF; use multiple reads without re-execution |
 | `ssh-job-cancel` | Best-effort stop of the exact unit; only reports `canceled` after independently verifying inactive/failed state and no live MainPID/ControlPID; otherwise `cancel_requested` is honest |
 
+**Subsequent source candidate (#195, not in the published v2.3.0 artifacts):**
+The Owner may independently adjust `ssh_job_max_script_kib` in
+Operational Settings, default 16 KiB and supported range 16-64 KiB.
+The MCP `ssh-job-start.script` schema advertises its current size
+budget; the coordinator enforces actual UTF-8 bytes rather than relying
+on JSON Schema character length. At up to 16 KiB, existing single-window
+atomic SFTP staging remains unchanged. Larger approved scripts use the
+existing verified streaming SFTP engine inside the privately created
+0700 Job directory, including mode 0600, readback SHA-256, exclusive
+publication, and the original Target binding. Unknown staging never
+authorizes dispatch or replay. Existing Jobs remain queryable by
+their stable job_id if the Owner later lowers the new-script size
+ceiling. Their retained UUID/script identity is not erased or replayed;
+a duplicate start carrying more bytes than the new MCP schema may be
+rejected before reaching runtime, so poll the original job_id instead.
+The 16 KiB per-call Job-output and SFTP range/write windows remain
+independent and unchanged. Whole-file upload/download
+requires the separately enabled authenticated HTTPS mode, and native
+ChatGPT file handoff is not yet verified (#147).
+
 A Job requires **all three existing SSH permissions** (`ssh.command.run`,
 `ssh.file.read`, `ssh.file.write`) to start, plus a connected exact SSH
 Target and previously approved verified host key/OS account. Subsequent

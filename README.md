@@ -78,6 +78,15 @@ For actual file selection in v2.3.0, visit **Targets → [Direct SSH Target] →
 
 For retained Jobs, use `ssh-job-start` with a caller-generated UUID `request_id` and a 16 KiB or smaller script. Save its returned `job_id`; poll `ssh-job-status`, read bounded stdout/stderr ranges with `ssh-job-output`, and use `ssh-job-cancel` only when appropriate. A remote host must support `systemd-run` with a persistent user manager (`linger` configured by its administrator), or a system manager for a deliberately configured root SSH account. Unsupported hosts fail closed. Reuse the same request UUID on an uncertain start; **never blindly send a different start request**. The command privileges remain those of the registered remote OS account. See [Direct SSH operator details](docs/DIRECT-SSH-CONNECTOR.md).
 
+**Subsequent source candidate (#195; not yet published or installed):**
+The Owner can increase the SSH Job script-input budget from 16 KiB to
+64 KiB independently of the synchronous SSH command ceiling. Approved
+Job scripts larger than 16 KiB use existing verified SFTP streaming.
+Ordinary per-call `ssh-file-read/write` windows remain 16 KiB;
+these atomic writes cannot be appended into one file. Larger whole-file
+upload/download uses an optional, independently enabled HTTPS binary mode,
+not automatic ChatGPT attachment handoff (#147).
+
 ## Connect ChatGPT
 
 1. Open Gateway **Connection** (`/admin/connection`) and copy the canonical MCP URL, usually `https://gateway.example.com/mcp`.

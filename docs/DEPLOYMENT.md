@@ -779,7 +779,18 @@ setting in the next request/CLI maintenance invocation.
 
 **v2.3.0 Owner command settings (#181):** the same Owner Settings page adds `ssh_command_timeout_seconds` (default maximum 15 seconds; selectable 15–30) and `ssh_command_max_kib` (default 8 KiB; selectable 8–64). A new additive nullable-column migration, `2026_10_15_000000_add_ssh_command_operational_limits.php`, is required before using these settings on an installed host. Older Owner forms must not erase these two overrides; the legacy WordPress JSON setting map is unchanged. SSH timeout refers to an individual synchronous exec phase, not a total PHP/proxy request SLA or a retained background job budget.
 
-The connect timeout cannot exceed the total request timeout. The total request
+**Unpublished source follow-up (#195):** Migration
+`2026_10_16_010000_add_ssh_job_script_input_limit.php` adds
+nullable `ssh_job_max_script_kib` for independent Owner control of
+the Job-script input ceiling (default 16 KiB, selectable 16-64 KiB).
+Apply the migration using the normal verified update process before using
+the new Admin field. Existing retained Job records are not rewritten.
+The upgraded MCP manifest advertises the current ceiling; large scripts
+are staged using bounded, verified SFTP streaming rather than expanding
+the 16 KiB inline write Tool. This source change is not in the earlier
+immutable v2.3.0 Release and does not auto-deploy to the operator host.
+
+The connect timeout cannot exceed the total request timeout.
 deadline is shared by DNS A+AAAA validation and pinned HTTPS dispatch; it is
 not a file/object size, overall logical job lifetime, or PHP/CDN/LSAPI worker
 timeout. Both finite timeout overrides affect the same shared outbound HTTP
