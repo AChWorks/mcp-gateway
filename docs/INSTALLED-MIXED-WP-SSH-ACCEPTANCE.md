@@ -1,10 +1,9 @@
 # Installed mixed WordPress + Direct SSH acceptance
 
-Controlling issue: #112. Companion protocol/permission fixture:
-`tests/Feature/Mcp/MixedTargetAuthenticatedAcceptanceTest.php`. That fixture
-remains synthetic for WordPress; **it does not substitute for this test**.
+This is a **repeatable real installed-provider integration test runbook**, not a production deployment procedure or release status report. The parallel [synthetic PHP acceptance fixture](../tests/Feature/Mcp/MixedTargetAuthenticatedAcceptanceTest.php) cannot replace real WordPress, HTTPS and OpenSSH testing.
 
-**#147 extension:** The same fresh, pinned, disposable runner now also checks optional whole-file binary ingress/egress through an official PHP MCP SDK client plus an independent Python HTTP/MCP client; see [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md). The binary sidecar is enabled only in the ephemeral installed Gateway. Evidence adds `file-client.json`, `python-file-client.json`, and `file-revoked.txt`. It does not claim ChatGPT host file handoff.
+The isolated binary-client lanes use an official PHP MCP SDK plus an independently implemented Python HTTPS/MCP client to verify authenticated bidirectional SSH file bytes and SHA-256. The SSH binary sidecar is enabled only in the ephemeral Gateway. They do **not** establish ChatGPT-native file-parameter/model ingestion. See the [binary transport contract](WHOLE-FILE-EXCHANGE.md).
+
 Both independently authored client implementations first call `target-context` over their real MCP session and verify the Target-specific advertised binary routes and effective SSH Owner budget; the PHP SDK client additionally confirms that the installed WordPress Target has **no** fabricated SSH binary mode. The independent Python client reconstructs a real local binary file.
 
 ## Scope and containment
@@ -42,23 +41,15 @@ configuration fallback. The fixed 8 MiB body bound remains enforced.
 No production account, web property, server listener, credential or SSRF
 policy is changed. Do not run on user-owned/production sites.
 
-## Running on the disposable agent worker
+## Running on an isolated Linux fixture host
 
 Prerequisites: root authorization for `unshare` and a temporary Unix SSH
 account, PHP 8.4 plus Composer dependencies, MariaDB, OpenSSH, `socat`,
 `ip`, `openssl`, `runuser`, WP-CLI, and a compatible Linux kernel.
 
-The default disposable agent inputs are the official WordPress 6.9 archive,
-WP-CLI v2.12.0 PHAR, WordPress MCP Adapter v0.7.0 **release ZIP**, and WP AI
-Bridge v0.5.1 **release ZIP**. The two existing archive/PHAR inputs and Adapter
-ZIP are under `/srv/ai-workspace/wpai-r004-agent-runtime/downloads`. The
-verified Bridge release ZIP is under
-`/srv/ai-workspace/mcp-gateway-acceptance-20261012/inputs/wp-ai-bridge-0.5.1.zip`.
-These are read-only **input artifacts**, never a previously installed plugin
-folder. The Bridge ZIP can be obtained from the immutable [v0.5.1 release](https://github.com/AChWorks/wp-ai-bridge/releases/tag/v0.5.1)
-and Adapter ZIP from [v0.7.0](https://github.com/WordPress/mcp-adapter/releases/tag/v0.7.0).
-WordPress core is from the [official 6.9 archive](https://wordpress.org/download/releases/)
-and WP-CLI from [v2.12.0](https://github.com/wp-cli/wp-cli/releases/tag/v2.12.0).
+The runner uses deliberately pinned fixtures: WordPress 6.9 core archive, WP-CLI v2.12.0 PHAR, WordPress MCP Adapter v0.7.0 release ZIP and WP AI Bridge v0.5.1 release ZIP. Obtain the **actual required byte-identical artifacts** from the [official WordPress release archive](https://wordpress.org/download/releases/), [WP-CLI](https://github.com/wp-cli/wp-cli/releases/tag/v2.12.0), [MCP Adapter](https://github.com/WordPress/mcp-adapter/releases/tag/v0.7.0) and [WP AI Bridge](https://github.com/AChWorks/wp-ai-bridge/releases/tag/v0.5.1) when the runner's pinned fixtures require them. Existing plugin installation directories are **not** acceptable inputs.
+
+**Host portability boundary:** `tests/Support/installed-mixed/run.sh` currently uses explicit `/srv/ai-workspace/` defaults for fixture inputs, temporary installation and evidence output. The fixture input and evidence directories can be overridden with the supported `MIXED_*` variables, **but the script's temporary installed workroot itself is still hard-coded under that parent**. Do not claim the runner is portable to arbitrary hosts merely by changing the variables; provision an authorized disposable Linux host with that private writable workroot, or deliberately refactor/verify the runner separately before use. Never create/modify these fixtures on a production host.
 
 The committed `tests/Support/installed-mixed/fixture-pins.sha256` is the
 **single authoritative pin manifest**. The archive/PHAR digests match
@@ -79,8 +70,7 @@ actually match):
 sudo bash tests/Support/installed-mixed/run.sh
 ```
 
-The runner accepts optional read-only fixture input paths (defaults are
-current disposable agent artifact locators, never modified in place):
+The runner accepts these optional read-only fixture input paths (the shell script also provides its own host-specific defaults):
 
 | Environment variable | Expected source artifact |
 | --- | --- |
@@ -108,18 +98,14 @@ included. The install fails closed if tracked input attempts to inject `.env`,
 `composer.lock` in the isolated target, never copied from checkout `vendor`.
 All writable `storage` paths and `bootstrap/cache` are re-created **empty**
 after dependency installation, then checked for remaining files. The runner
-records this in `source-export.txt` and the sanitized installed identity. For
-R1 verification, run with harmless ignored sentinel files in the source
-checkout: Git status remains clean but no sentinel can enter the installed
-Gateway (no retained source runtime content is permitted).
+records this in `source-export.txt` and the sanitized installed identity. A focused source-isolation regression may include harmless ignored sentinel files: Git status stays clean, but no sentinel may enter the installed Gateway.
 
 Every run creates new credentials, a fresh installed package and a fresh
 MariaDB directory. After success or failure, the test namespace exits and
 the owned SSH account, database, listeners and private files are removed.
 Do not preserve sensitive fixture data for debugging.
 
-The runner prints the path to sanitized evidence files under
-`/srv/ai-workspace/mcp-gateway-acceptance-20261012/real-installed-mixed-112-*`.
+The runner prints the actual private sanitized evidence destination under its configured `MIXED_EVIDENCE_DIR` (or the script's host-specific default).
 Review `identity.txt`, `source-export.txt`, `report.json`, `client.json`,
 `revoked.txt` and `cleanup.txt` (all owner-readable with private permissions). The report
 includes effective Owner settings and finite HTTP limits; the client report
@@ -142,20 +128,9 @@ memory. Repeat the command to prove clean reproducibility.
 
 ## Boundaries and review gate
 
-This proves the actual PHP MCP SDK over HTTPS and a separately authored
-Python HTTPS/MCP client **do** receive and verify real bidirectional SSH
-file bytes via the optional sidecar. It is **not** a complete external Gateway
-client OAuth-onboarding flow, installed hostname DNS-rebinding handling
-(the test uses public-looking numeric namespace IPs), ChatGPT runtime
-model-file ingestion, all arbitrary clients/hosts, native WordPress binary
-handoff, or speculative one-hour streaming. #97 retains long-idle/deployed
-OAuth acceptance; #154 retains broader effective-limit/client/hosting
-compatibility and #147 remains open for unproven client/Target modes.
+The isolated clients can prove that **their own** authenticated inbound/outbound SSH file bytes are complete; they cannot prove full external OAuth client enrollment, every reverse-proxy/DNS topology, arbitrary third-party host compatibility, WordPress-native raw binary transfer or actual ChatGPT model-file ingestion. Use distinct real-host acceptance for those properties.
+
 The Gateway source `VERSION` and public release tags must be reported
 separately from installed identities; passing tests is not deployment.
 
-After installed acceptance: run the relevant complete PHP suite, Pint,
-PHPStan, MariaDB tests and exact-candidate CI. Independently review the
-full effective PR diff. Request one fresh author-separated HIGH_ASSURANCE
-review only once the complete deliverable is stable. Do not merge/publish
-without an explicit Owner gate.
+Source test/package and independent review requirements belong to [Development](DEVELOPMENT.md), with author and integration authorization handled by the applicable PR and repository gates. Never merge, publish or operate on production solely from these isolated results.
