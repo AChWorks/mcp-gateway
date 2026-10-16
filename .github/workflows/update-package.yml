@@ -7,6 +7,10 @@ on:
     paths:
       - VERSION
       - 'database/migrations/**'
+      # Fresh-install policy and legacy fallback must pass release-baseline upgrades.
+      - '.env.example'
+      - 'app/Support/SimpleWebInstaller.php'
+      - 'config/ssh.php'
       - composer.json
       - composer.lock
       - 'bin/build-release-package.sh'
@@ -34,6 +38,10 @@ on:
     paths:
       - VERSION
       - 'database/migrations/**'
+      # Fresh-install policy and legacy fallback must pass release-baseline upgrades.
+      - '.env.example'
+      - 'app/Support/SimpleWebInstaller.php'
+      - 'config/ssh.php'
       - composer.json
       - composer.lock
       - 'bin/build-release-package.sh'
