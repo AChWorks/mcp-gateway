@@ -12,7 +12,7 @@ Use the source that owns the kind of truth you need:
 - [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md) — canonical proportional resource and failure semantics (#122/#123/#147); distinct from effective-limit measurements in #154.
 - [`WHOLE-FILE-EXCHANGE.md`](./WHOLE-FILE-EXCHANGE.md) — publicly released in v2.1.2 but OFF-by-default SSH binary transfer wire contract, `target-context` discovery, disposable external-client E2E, and separately gated **host enablement** (#147).
 - [`DIRECT-SSH-CONNECTOR.md`](./DIRECT-SSH-CONNECTOR.md) — owner-accepted direct SSH password/key, OS-account commands and SFTP design (#123).
-- [`HISTORICAL-V1-ACCEPTANCE.md`](./HISTORICAL-V1-ACCEPTANCE.md) — archived WordPress-first V1 scope and criteria **for historical provenance only**; not a competing current specification.
+- [Completed V1 program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) and Git history — original WordPress-first acceptance/provenance, **not** an additional maintained specification.
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
 - [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
 - [`../achworks.yaml`](../achworks.yaml) — stable machine-readable AChWorks component identity, capabilities, interfaces, and source pointers; it must not mirror live work/runtime state.
@@ -78,7 +78,7 @@ Keep information in its natural owner:
 - current architecture and labeled target-state engineering structure -> `docs/ARCHITECTURE.md`; enduring Target/connector contract -> `docs/TARGET-CONNECTOR-FOUNDATION.md` (historical migration sequencing does not override integrated source);
 - development workflow -> `docs/DEVELOPMENT.md`;
 - deployment/upgrade/rollback procedure -> `docs/DEPLOYMENT.md`;
-- historical V1 acceptance -> `docs/HISTORICAL-V1-ACCEPTANCE.md`;
+- completed V1/pre-release history -> closed Issues, Git history and immutable Releases, **not** additional maintained docs;
 - adapter implementation/conformance requirements -> `docs/CONNECTOR-INTEGRATION-GUIDE.md`;
 - navigation/recovery topology -> this file;
 - live work/status/dependencies -> GitHub Issues/PRs/CI;
