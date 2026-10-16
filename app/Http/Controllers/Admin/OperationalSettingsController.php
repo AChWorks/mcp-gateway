@@ -41,6 +41,7 @@ final class OperationalSettingsController extends Controller
                 'ssh_job_retention_hours' => 24,
                 'ssh_job_preparing_grace_seconds' => 120,
                 'ssh_job_reconcile_grace_seconds' => 600,
+                'ssh_job_max_script_kib' => 16,
             ],
         ]);
     }
@@ -72,13 +73,15 @@ final class OperationalSettingsController extends Controller
         $preSsh = array_slice($all, 0, 4);
         $preSshCommand = array_slice($all, 0, 6);
         $preSshJobs = array_slice($all, 0, 8);
+        $preScriptBudget = array_slice($all, 0, -1);
         sort($names);
         sort($all);
         sort($legacy);
         sort($preSsh);
         sort($preSshCommand);
         sort($preSshJobs);
-        if ($names !== $all && $names !== $legacy && $names !== $preSsh && $names !== $preSshCommand && $names !== $preSshJobs) {
+        sort($preScriptBudget);
+        if ($names !== $all && $names !== $legacy && $names !== $preSsh && $names !== $preSshCommand && $names !== $preSshJobs && $names !== $preScriptBudget) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);

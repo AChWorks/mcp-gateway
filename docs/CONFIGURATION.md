@@ -178,7 +178,7 @@ These are **not extra user roles, guaranteed features or release approvals**. Th
 | `SSH_VERIFY_DECAY_SECONDS` | `60` seconds; verification admission decay interval |
 | `SSH_VERIFY_LEASE_SECONDS` | `30` seconds; verification admission lease window |
 
-Advanced Laravel configuration keys beyond the list above are framework internals; avoid editing them unless the exact release and deployment procedure require it. For operational settings managed through the Gateway **Owner UI/database**, use that interface rather than presuming an equivalent `.env` key exists.
+Advanced Laravel configuration keys beyond the list above are framework internals; avoid editing them unless the exact release and deployment procedure require it. For operational settings managed through the Gateway **Owner UI/database**, use that interface rather than presuming an equivalent `.env` key exists. The `ssh_job_max_script_kib` Owner override defaults to 16 KiB (allowed 16–64 KiB) and requires the additive script-budget migration before use; it does not change `SSH_FILE_TRANSFER_MAX_BYTES` or the 16 KiB SFTP/Job-output per-call windows.
 
 ## Operational cautions
 

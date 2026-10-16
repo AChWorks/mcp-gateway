@@ -29,11 +29,11 @@
         ],
         [
             'title' => __('Detached SSH Jobs'),
-            'description' => __('Owner-configurable per-user concurrent admission, maximum remote runtime, result retention and crash/unknown-recovery windows. Total historical Jobs have no count quota; elapsed admission never certifies a remote process stopped.'),
+            'description' => __('Owner-configurable script input (16-64 KiB), concurrent admission, runtime, result retention and recovery windows. Historical Jobs have no count quota; admission expiry never proves a remote process stopped.'),
             'keys' => [
                 'ssh_job_max_active_per_user', 'ssh_job_max_runtime_seconds',
                 'ssh_job_retention_hours', 'ssh_job_preparing_grace_seconds',
-                'ssh_job_reconcile_grace_seconds',
+                'ssh_job_reconcile_grace_seconds', 'ssh_job_max_script_kib',
             ],
         ],
     ];
@@ -51,6 +51,7 @@
         'ssh_job_retention_hours' => __('Retain terminal Job results'),
         'ssh_job_preparing_grace_seconds' => __('Pre-dispatch crash recovery window'),
         'ssh_job_reconcile_grace_seconds' => __('Post-runtime uncertain admission grace'),
+        'ssh_job_max_script_kib' => __('Maximum SSH Job script input (KiB)'),
     ];
 @endphp
 <div class="page-heading">
