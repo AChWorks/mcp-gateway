@@ -35,10 +35,14 @@ settings can be stricter than the 64 MiB Gateway maximum.
 Native ChatGPT chat attachments still **do not automatically become MCP
 tool input**, and these browser forms do not return ChatGPT-model-readable
 file artifacts. They are a practical user-initiated supported-interface
-fallback, not evidence of native host support. The flag must remain OFF on
-production until a separate authorized rollout and real-browser/SSH
-acceptance. A non-Owner with explicit read/write Target grants is eligible
-to use the forms; permissions are not broadened by the UI.
+fallback, not evidence of native host support. **Existing production**
+installations preserve the previously configured flag (including missing-key
+OFF); do not flip it during an update. For a **new** installation the flag
+is ON, but Operators must first establish real PHP/proxy limits, available
+private staging space and the host-key/permission boundaries before using
+transfer operations. Enabling the flag alone never proves hosted acceptance.
+A non-Owner with explicit read/write Target grants is eligible to use the
+forms; permissions are not broadened by the UI.
 
 ## OAuth-authenticated HTTP transport
 

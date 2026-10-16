@@ -1,6 +1,6 @@
 # MCP Gateway v2.3.1
 
-**Corrective source candidate `2.3.1-rc.1` — NOT PUBLISHED.**
+**Corrective source candidate `2.3.1-rc.2` — NOT PUBLISHED.**
 
 Compared with the publicly released v2.3.0:
 
@@ -19,6 +19,20 @@ Compared with the publicly released v2.3.0:
   keys; destructive or sensitive optional settings remain inactive. Upgrade
   acceptance includes the latest published v2.3.0 baseline and checks that
   installed private `.env` data is preserved.
+- **Target Admin usability:** the merged Targets inventory distinguishes stored
+  WordPress credentials from verified remote OAuth health and offers a clearer,
+  responsive Target/Connector/connection/operations/action layout, including
+  truthful labels for historic unsupported connector records.
+- **Cross-hop WordPress diagnostics:** bounded evidence of the first observed
+  failure layer (Gateway outbound, Gateway response limits, downstream HTTP or
+  downstream MCP) can be found through an authenticated operation's diagnostic
+  reference and existing correlation/Activity logs. A stripped WordPress
+  provider error remains unknown, not an invented code. Mutating MCP isError
+  never proves rollback or authorizes automatic retry.
+- **Release-readiness:** align live fresh-vs-existing-install SSH guidance and
+  cover the decoded 64/128/256 KiB WordPress envelope boundaries with
+  deterministic connector fixtures. Real host limits and model file handoff
+  still require separate post-install evidence.
 
 This source candidate is not a GitHub Release or an installed runtime. Publication,
 migration and live-host configuration changes require their separate approvals.

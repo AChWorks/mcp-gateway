@@ -160,19 +160,32 @@ final readonly class WordpressTargetMcpToolHandlers
      */
     private function failed(string $operation, ?Target $target, string $code, string $message, array $diagnostics = []): array
     {
+        $reference = CorrelationId::current();
+        // Preserve error.code compatibility, while recording a remote Tool
+        // rejection with unconfirmed effects as unknown, never confirmed safe.
+        $unknown = $code === 'outcome_unknown' || ($diagnostics['effect_unconfirmed'] ?? null) === true;
         $this->activity->record(
-            CorrelationId::current(),
+            $reference,
             $operation,
-            $code === 'outcome_unknown' ? 'unknown' : 'failure',
+            $unknown ? 'unknown' : 'failure',
             $target,
             $code,
             $diagnostics,
         );
 
-        return ['ok' => false, 'error' => [
+        $error = [
             'code' => $code,
             'message' => $message,
             'next_step' => OperationDiagnostics::nextStep($code),
-        ]];
+        ];
+        // Only a visible authorized Target with a downstream operation error
+        // receives a lookup reference, not failed input or access probes.
+        if ($target instanceof Target && ! in_array($code, [
+            'forbidden', 'target_not_found', 'invalid_input', 'target_paused',
+        ], true)) {
+            $error['diagnostic_reference'] = $reference;
+        }
+
+        return ['ok' => false, 'error' => $error];
     }
 }
