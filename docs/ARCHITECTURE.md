@@ -54,7 +54,7 @@ One application, one public MCP endpoint and a server-rendered Blade Admin are i
 
 Follow existing Laravel patterns. Keep application authorization and data semantics outside HTTP controllers, Blade and protocol adapters. Do **not** duplicate the Target auth or credential lifecycle for every connector. Do not create a dynamic third-party connector-code loader or universal network proxy.
 
-## Architectural target: Admin and AI share application operations
+### Target-state shared Admin/AI application-operation boundary
 
 **Current source:** the MCP endpoint offers Target-scoped WordPress Ability execution and SSH command/file/Job families; the Blade Admin currently manages inventory, connection, access, operational settings, activity and selected SSH browser file exchange. It **does not** currently provide generic WordPress Ability execution, a multi-Target publisher, semantic per-Ability delegation, or a generic downstream MCP Target connector. Do not present the following intended seams as implemented endpoints.
 
@@ -77,7 +77,7 @@ Follow existing Laravel patterns. Keep application authorization and data semant
 
 The diagram is **target-state layering**, not a description of shipped Admin action endpoints. Application logic belongs below all entry adapters. Existing `TargetConnectorAdapter` lifecycle methods and the MCP tool handlers are reuse points, **not yet one fully generic execution interface**; evolve against a real second consumer instead of introducing a speculative plugin loader or universal command envelope.
 
-### Delegation and operation semantics
+#### Delegation and operation semantics
 
 Maintain two distinct access modes: explicitly granted broad Target-capability execution and narrow, enforceable delegated operations across selected Targets/Groups. Existing Gateway-wide role ceilings and Target Group/direct denials stay effective. A declared restriction such as “publish posts only” requires stable trusted operation evidence and/or downstream enforcement: neither a mutable annotation nor a hidden Admin control supplies the guarantee. Any future policy granularity is added without granting privileges to existing non-owner users by migration/default.
 
