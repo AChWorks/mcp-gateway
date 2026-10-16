@@ -100,6 +100,24 @@ final class SimpleWebInstallerTest extends TestCase
     }
 
     #[Test]
+    public function it_generates_one_secure_production_cookie_setting_from_the_http_template(): void
+    {
+        $template = file_get_contents(dirname(__DIR__, 2).'/.env.example');
+        self::assertIsString($template);
+        self::assertStringContainsString("# SESSION_SECURE_COOKIE=true\n", $template);
+        self::assertSame(0, preg_match('/^SESSION_SECURE_COOKIE=/m', $template));
+
+        $environment = SimpleWebInstaller::buildEnvironment(
+            $template, $this->validInput(), 'base64:test-key',
+        );
+        self::assertSame(1, preg_match_all('/^SESSION_SECURE_COOKIE=true$/m', $environment));
+        self::assertSame(1, preg_match_all('/^SESSION_HTTP_ONLY=true$/m', $environment));
+        self::assertSame(1, preg_match_all('/^SESSION_SAME_SITE=lax$/m', $environment));
+        self::assertSame(1, preg_match_all('/^OAUTH_ACCESS_TOKEN_TTL_SECONDS=3600$/m', $environment));
+        self::assertSame(1, preg_match_all('/^SSH_FILE_TRANSFER_ENABLED=true$/m', $environment));
+    }
+
+    #[Test]
     public function it_can_build_a_mysql_environment_when_explicitly_selected(): void
     {
         $template = "DB_CONNECTION=mariadb\nDB_HOST=127.0.0.1\nDB_PORT=3306\nDB_DATABASE=old\nDB_USERNAME=old\nDB_PASSWORD=\n";

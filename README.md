@@ -15,6 +15,14 @@ MCP Gateway is a self-hosted PHP application that connects an authenticated MCP 
 
 **Limits to know:** SSH runs with the privileges of its configured remote OS account; Gateway permissions do not turn root into a sandbox. Published older releases defaulted SSH whole-file HTTP transfer to OFF. An unreleased source candidate makes SSH-only whole-file transfer **ON for new installations** (`SSH_FILE_TRANSFER_ENABLED=true`), while preserved existing private environments retain their former value (absent-key OFF). This is not proof of ChatGPT-native attachment support. Other AI clients need a compatible, configured client profile; support for every MCP extension is not implied.
 
+**Configuration lookup:** [\`.env.example\`](.env.example) exposes supported everyday
+Gateway settings with commented context-sensitive examples. The
+[configuration reference](docs/CONFIGURATION.md) explains every active
+template key, additional advanced controls, units and safe change procedure.
+Do not replace an existing operator's private \`.env\` with the new template;
+the installer writes HTTPS-only session-cookie security values and a normal
+upgrade preserves site-specific settings.
+
 ## Requirements
 
 MCP Gateway is intended for a conventional Linux PHP host such as aaPanel/OpenLiteSpeed or ordinary shared hosting.
