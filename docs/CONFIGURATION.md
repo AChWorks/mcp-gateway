@@ -158,7 +158,7 @@ Both the edge and authenticated-principal limit apply when relevant. Their effec
 
 Remote timeout/response settings are **budgets**, not guarantees of response speed or permission to bypass DNS pinning, SSRF checks, TLS verification, host-key verification or OAuth permissions.
 
-## Additional advanced and safety-sensitive environment settings
+## Additional supported settings intentionally not in the basic template
 
 Only genuine first-party keys consumed by the application, installer or maintenance paths should be exposed as supported Gateway configuration. Every such key belongs in the operator template with an accurate safe default or commented, clearly restricted example. Framework-internal environment knobs are not automatically supported product settings. **Check the actual installed source and private `.env` when changing any effective setting**; the sample is documentation, not runtime state.
 
