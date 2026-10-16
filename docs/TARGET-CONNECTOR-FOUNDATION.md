@@ -1,6 +1,6 @@
 # Target and connector foundation — implementation contract
 
-**Role:** developer-facing contract for the Gateway's common Target model and connector boundary. Product purpose/constraints belong to [MASTER-SPEC.md](MASTER-SPEC.md); present layering and application operation seams belong to [ARCHITECTURE.md](ARCHITECTURE.md); concrete onboarding and external provider conformance to [CONNECTOR-INTEGRATION-GUIDE.md](CONNECTOR-INTEGRATION-GUIDE.md). **Read source and installed release for actual support.** Historical Site→Target conversion belongs to the [legacy transition runbook](TARGET-TRANSITION-RUNBOOK.md) and Git history, not this living contract.
+**Role:** developer-facing contract for the Gateway's common Target model and connector boundary. Product purpose/constraints belong to [MASTER-SPEC.md](MASTER-SPEC.md); present layering and application operation seams belong to [ARCHITECTURE.md](ARCHITECTURE.md); concrete onboarding and external provider conformance to [CONNECTOR-INTEGRATION-GUIDE.md](CONNECTOR-INTEGRATION-GUIDE.md). Actual implementation signatures and the selected source revision control supported behavior.
 
 ## 1. Stable identity and storage ownership
 
@@ -14,7 +14,7 @@ A **Target** is one explicitly enrolled, individually authorizable downstream sy
 
 ## 2. Registered connectors and lifecycle API
 
-**Current integrated built-in families:** `wp_ai_bridge` and `ssh_direct`, allowlisted by [`TargetConnectorRegistry`](../app/Application/Targets/TargetConnectorRegistry.php). Unknown/stored unsupported types fail closed. The historical Agent connector was canceled; it is neither installed nor a required future type.
+**Current integrated built-in families:** `wp_ai_bridge` and `ssh_direct`, allowlisted by [`TargetConnectorRegistry`](../app/Application/Targets/TargetConnectorRegistry.php). Unknown/stored unsupported types fail closed.
 
 The actual [`TargetConnectorAdapter`](../app/Application/Targets/TargetConnectorAdapter.php) currently covers these lifecycle/metadata responsibilities (use the live interface signature, not this prose, when implementing):
 
@@ -25,7 +25,7 @@ The actual [`TargetConnectorAdapter`](../app/Application/Targets/TargetConnector
 | credential/connection lifecycle | `connect`, `reconnect`, `disconnect`, `test`, `hasPendingDeletion` |
 | bounded presentation | `adminDetails`, `publicMetadata` |
 
-**These methods do not currently constitute a generic action dispatcher.** WordPress Ability and SSH command/file/Job handlers remain family-specific; the future common execution/application use case must be extracted from a real second entry consumer under [#200](https://github.com/AChWorks/mcp-gateway/issues/200), without putting domain authorization in MCP Tool schemas or Blade controllers.
+**These methods do not currently constitute a generic action dispatcher.** WordPress Ability and SSH command/file/Job handlers remain family-specific; reusable execution/application use cases belong below both entry adapters where a real second consumer requires them, never in MCP Tool schemas or Blade controllers.
 
 Selection uses server-authoritative registered connector types. Do not accept caller-provided PHP classes, arbitrary URL hosts, a new plugin marketplace, unreviewed transports or scripts as adapters. Each connector owns its protocol identity, enrollment, authorization check, schema discovery, executable semantics, health and safe remote results.
 
@@ -47,7 +47,7 @@ Source ownership: [`GatewayPermission`](../app/Domain/Access/GatewayPermission.p
 - WordPress current execution classes are `readonly`, `mutating`, `destructive`, `unclassified`, plus Ability inspection. **Unclassified is an explicitly grantable existing class**, not blanket name-based denial. Effect classes do **not** prove a fine-grained “only publish posts” right; a restricted business delegation must have an actual enforceable trusted semantic contract and preserve all existing denials.
 - Broad delegation may permit new **compatible** discovered downstream operations without per-name Gateway code/approval, but only when deliberately granted broad Target execution **and** downstream authority. A changed operation name or missing annotation must neither invent new permission nor force an arbitrary static blacklist.
 
-High-trust policy and group changes that lift SSH denials, change broad scope or alter credential binding need real authenticated confirmation and stale-revision-safe persistence. New adapter behavior must not silently expand historical non-Owner rights.
+High-trust policy and group changes that lift SSH denials, change broad scope or alter credential binding need real authenticated confirmation and stale-revision-safe persistence. New adapter behavior must not silently expand previously restricted non-Owner rights.
 
 ## 4. Connection, credential and health state
 
@@ -77,7 +77,7 @@ Every operation retains exact authenticated actor/client where available, Target
 
 A shared typed resource policy distinguishes finite inline/decoded response bounds, temporary stream windows, whole-object transfer, host/proxy limitations, concurrency and logical Job lifetime. A connector's SFTP window must not become another connector's complete-file ceiling. Integrity, Target/client binding and actual receiving-client evidence govern byte delivery, not merely a returned server-side handle. Detailed semantics live in [REMOTE-IO-CONTRACT.md](REMOTE-IO-CONTRACT.md), [DIRECT-SSH-CONNECTOR.md](DIRECT-SSH-CONNECTOR.md) and [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md).
 
-Admin and MCP are separate entry adapters to one **future application-owned** operation admission/dispatch/outcome path, not two independent engines. A future multi-Target group action must resolve explicit authorized members, recheck at dispatch, retain per-Target successes/failures/unknown effects, and never blindly retry writes. Existing completed bounded group **health-check** work is not evidence of content publishing; the future scoped publisher pilot is tracked in [#200](https://github.com/AChWorks/mcp-gateway/issues/200). Do not introduce a generic job framework, new long-running daemon or duplicated transfer engine merely to pre-build the future.
+Admin and MCP are separate entry adapters to one **future application-owned** operation admission/dispatch/outcome path, not two independent engines. A future multi-Target group action must resolve explicit authorized members, recheck at dispatch, retain per-Target successes/failures/unknown effects, and never blindly retry writes. Group health inspection is not a substitute for separately authorized business-operation dispatch. Do not introduce a generic job framework, new long-running daemon or duplicated transfer engine merely to pre-build the future.
 
 ## 7. Implementing another supported connector
 
