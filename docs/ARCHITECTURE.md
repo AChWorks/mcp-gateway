@@ -1,6 +1,6 @@
 # MCP Gateway Architecture
 
-This document describes the **Target-era architecture and engineering boundaries**. [MASTER-SPEC.md](./MASTER-SPEC.md) owns durable product intent and decisions. [TARGET-CONNECTOR-FOUNDATION.md](./TARGET-CONNECTOR-FOUNDATION.md) owns detailed Target/connector and security semantics; [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md) owns result/data behavior. GitHub Issues, exact Git/PRs, CI and Releases own **current implementation, pending work and delivery status**. Historical V1 Site-era designs remain available in Git history, not as competing active instructions.
+This document describes **implemented Target-era engineering boundaries** and labels proposed shared-operation extension seams explicitly. [MASTER-SPEC.md](./MASTER-SPEC.md) owns durable product intent and decisions. [TARGET-CONNECTOR-FOUNDATION.md](./TARGET-CONNECTOR-FOUNDATION.md) owns detailed Target/connector and security semantics; [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md) owns result/data behavior. GitHub Issues, exact Git/PRs, CI and Releases own **current implementation, pending work and delivery status**. Historical V1 Site-era designs remain available in Git history, not as competing active instructions.
 
 ## 1. Deployable topology
 
@@ -53,6 +53,37 @@ One application, one public MCP endpoint and a server-rendered Blade Admin are i
 | Persistence | `database/migrations`, `app/Domain/Targets/Target*.php` | Indexed Target-specific records, connector-owned configs and credentials |
 
 Follow existing Laravel patterns. Keep application authorization and data semantics outside HTTP controllers, Blade and protocol adapters. Do **not** duplicate the Target auth or credential lifecycle for every connector. Do not create a dynamic third-party connector-code loader or universal network proxy.
+
+## Architectural target: Admin and AI share application operations
+
+**Current source:** the MCP endpoint offers Target-scoped WordPress Ability execution and SSH command/file/Job families; the Blade Admin currently manages inventory, connection, access, operational settings, activity and selected SSH browser file exchange. It **does not** currently provide generic WordPress Ability execution, a multi-Target publisher, semantic per-Ability delegation, or a generic downstream MCP Target connector. Do not present the following intended seams as implemented endpoints.
+
+**Accepted product direction:** Admin actions, supported AI/MCP clients and future authorized APIs enter through separate presentation/authentication adapters, and converge on the **same application use cases** for capability discovery, Target selection, effective authorization, operation admission, invocation, outcome and safe Activity. Do **not** route the Admin back through its own external `/mcp` endpoint or duplicate policy inside Controllers, views or MCP descriptions.
+
+```text
+  Admin UI (current management; future action surfaces)     AI / MCP     Future API
+                         \                                    |            /
+                      interface-specific authentication and request parsing
+                                             |
+                   shared Gateway application authorization and operations
+                     explicit Target(s) + capability + actor + client context
+                                             |
+              Target registry / scoped grants / pause / typed resource budgets
+                                             |
+                      supported connector-owned execution adapters
+                         |                  |                  |
+                    WP AI Bridge        Direct SSH         Future supported MCP/API Target
+```
+
+The diagram is **target-state layering**, not a description of shipped Admin action endpoints. Application logic belongs below all entry adapters. Existing `TargetConnectorAdapter` lifecycle methods and the MCP tool handlers are reuse points, **not yet one fully generic execution interface**; evolve against a real second consumer instead of introducing a speculative plugin loader or universal command envelope.
+
+### Delegation and operation semantics
+
+Maintain two distinct access modes: explicitly granted broad Target-capability execution and narrow, enforceable delegated operations across selected Targets/Groups. Existing Gateway-wide role ceilings and Target Group/direct denials stay effective. A declared restriction such as “publish posts only” requires stable trusted operation evidence and/or downstream enforcement: neither a mutable annotation nor a hidden Admin control supplies the guarantee. Any future policy granularity is added without granting privileges to existing non-owner users by migration/default.
+
+A single invocation binds the user, authenticated client when applicable, exact Target, concrete capability/schema, grant snapshot and execution identity. Do not let UI and MCP report different outcome certainty. For future **multi-Target** publishing/editing, resolve the authorized set, recheck at each actual dispatch, preserve per-Target result/remote identity and partial/unknown outcomes; no unconditional retry after possible side effects. A long-running logical action uses durable minimal state and a measured bounded worker/job route when justified, not a PHP request held open or a one-worker-per-Target design. One-shot publishing does **not** implicitly commit us to ongoing multi-site content synchronization.
+
+Use existing `AccessControl`, `TargetConnectorRegistry`, Target-operation Pause, Activity/CorrelationId, operation diagnostics, typed Owner settings and proven file/Job primitives instead of duplicating them. Connector-specific discovery and remote authority remain at the edge. Narrow generic-MCP discovery/invocation is a future adapter for registered authenticated Targets only, not arbitrary URL execution. See [MASTER-SPEC.md](./MASTER-SPEC.md) and [CONNECTOR-INTEGRATION-GUIDE.md](./CONNECTOR-INTEGRATION-GUIDE.md) for product vs adapter contracts. The corresponding implementation acceptance is tracked in GitHub Issues, **not in README**.
 
 ## 3. Trust and identity model
 
@@ -112,6 +143,6 @@ Client input-byte availability and Target-to-**actual model-readable** or user-d
 - Keep Composer lockfile pinned; verify dependency/protocol upgrades with relevant WordPress/SSH/OAuth/MCP tests. SDK `mcp/sdk` and OAuth `league/oauth2-server` remain vendor adapters, not domain models.
 - Public protocol implementation metadata should reflect current release/build truth, not a stale bootstrap placeholder. Preserve existing supported client and downstream protocol generations; new revisions are **negotiated**, not assumed universally supported.
 - Deployment/update packaging, backup/restore and historical breaking migration rules are in [DEPLOYMENT.md](./DEPLOYMENT.md), [TARGET-TRANSITION-RUNBOOK.md](./TARGET-TRANSITION-RUNBOOK.md) and release notes. Do not infer production deployment from a Git merge or Release.
-- Current release instructions belong in [README.md](../README.md); repeatable validation in [DEVELOPMENT.md](./DEVELOPMENT.md). Active work and gates live in [#106](https://github.com/AChWorks/mcp-gateway/issues/106), [#108](https://github.com/AChWorks/mcp-gateway/issues/108), [#110](https://github.com/AChWorks/mcp-gateway/issues/110), [#112](https://github.com/AChWorks/mcp-gateway/issues/112), [#123](https://github.com/AChWorks/mcp-gateway/issues/123), [#130](https://github.com/AChWorks/mcp-gateway/issues/130) and [#147](https://github.com/AChWorks/mcp-gateway/issues/147). Agent connector #111 is canceled.
+- `README.md` is a public overview/installation/usage entry, **not** an authoritative architecture or development document. Repeatable validation is owned by [DEVELOPMENT.md](./DEVELOPMENT.md); release and operator procedures by [DEPLOYMENT.md](./DEPLOYMENT.md) and immutable Releases. Active work and gates live in [#106](https://github.com/AChWorks/mcp-gateway/issues/106), [#108](https://github.com/AChWorks/mcp-gateway/issues/108), [#110](https://github.com/AChWorks/mcp-gateway/issues/110), [#112](https://github.com/AChWorks/mcp-gateway/issues/112), [#123](https://github.com/AChWorks/mcp-gateway/issues/123), [#130](https://github.com/AChWorks/mcp-gateway/issues/130) and [#147](https://github.com/AChWorks/mcp-gateway/issues/147). Agent connector #111 is canceled.
 
 Changing a connector or client should normally require **only the adapter and evidence genuinely different for that consumer**, not a new Gateway identity domain, a cloned authorization/transfer engine, one public tool per Target, or an expensive infrastructure prerequisite. Future work remains compatible with the existing single-host PHP deployment until a measured need or accepted product change says otherwise.
