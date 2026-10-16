@@ -1,6 +1,6 @@
 # Offline Target removal — local-only Owner recovery
 
-**Version availability:** source-integrated and independently security-reviewed under [Target lifecycle Issue #109](https://github.com/AChWorks/mcp-gateway/issues/109), but **not included in v2.1.2**. Check the approved public Release and exact installed Gateway version before assuming this action is available; publication does not perform an operator upgrade. This is a deliberate irreversible exception to normal connector disconnect, not a DNS/OAuth/network troubleshooting shortcut. Never delete an operator's Target in place without explicit instruction and backup.
+**Operator use:** this is an intentionally **irreversible**, Owner-gated, local-only exception when normal connector disconnect/removal cannot be proved. Verify that the actual installed release supports the action and obtain explicit authorization and a recoverable database backup. It is **not** a DNS/OAuth troubleshooting shortcut and never confirms remote credential revocation.
 
 ## Two distinct operations
 
@@ -26,5 +26,3 @@ For SSH, removing the local Target does **not** revoke the remote Unix account, 
 The local-only form is shown only when **normal safe removal is blocked**, only to an Owner with the matching permission. It presents the exact Target ID, independent irreversible and remote-non-revocation acknowledgments, current Owner password and a distinct destructive button. The usual metadata/edit/Disconnect security checks are unchanged. All forms remain web-authenticated and CSRF protected. No password, encrypted token, private key or OAuth response is shown in the UI or Activity.
 
 **Validation:** in addition to ordinary Target-management regressions, cover a disconnected-but-pending and network-failed WordPress Target with encrypted credential/refresh/revocation/OAuth state, fail-closed password/role/ID/ack refusals, FK cleanup/audit preservation, paused/SSH connector cases, no remote HTTP traffic and rollback when a database deletion fails. Source PHPUnit assertions are not a production host integration test.
-
-**Release and delivery boundary:** The feature's original source security review and integration are complete, but it is **not in v2.1.2**, and a source merge does not fix the original `dns_lookup` incident on an installed host. Check the exact public Release and the host's installed version before using it: public publication and a separately authorized operator upgrade are distinct actions, neither of which itself revokes remote credentials. Future source changes require fresh exact-candidate independent review and the applicable Owner integration approval.
