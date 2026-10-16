@@ -118,6 +118,39 @@ final class SimpleWebInstallerTest extends TestCase
     }
 
     #[Test]
+    public function it_keeps_advanced_and_destructive_environment_switches_inactive_on_a_fresh_install(): void
+    {
+        $template = file_get_contents(dirname(__DIR__, 2).'/.env.example');
+        self::assertIsString($template);
+
+        $environment = SimpleWebInstaller::buildEnvironment(
+            $template, $this->validInput(), 'base64:test-key',
+        );
+
+        foreach ([
+            'GATEWAY_TARGET_RESET_ACKNOWLEDGED',
+            'GATEWAY_TARGET_RESET_DATABASE_BACKUP_VERIFIED',
+            'MCP_GATEWAY_RECOVERY_TEST_LOOPBACK',
+            'APP_PREVIOUS_KEYS',
+            'DB_URL',
+            'MAIL_PASSWORD',
+            'REDIS_PASSWORD',
+            'GATEWAY_TRUSTED_PROXIES',
+            'SESSION_PARTITIONED_COOKIE',
+        ] as $sensitiveOrOptional) {
+            self::assertSame(
+                0,
+                preg_match('/^'.preg_quote($sensitiveOrOptional, '/').'=/', $environment),
+                'Optional/one-time switch must remain inactive: '.$sensitiveOrOptional,
+            );
+            self::assertStringContainsString('# '.$sensitiveOrOptional.'=', $environment);
+        }
+        self::assertSame(1, preg_match_all('/^SSH_FILE_TRANSFER_ENABLED=true$/m', $environment));
+        self::assertSame(1, preg_match_all('/^SESSION_SECURE_COOKIE=true$/m', $environment));
+        self::assertSame(0, preg_match('/^BROADCAST_CONNECTION=/m', $environment));
+    }
+
+    #[Test]
     public function it_can_build_a_mysql_environment_when_explicitly_selected(): void
     {
         $template = "DB_CONNECTION=mariadb\nDB_HOST=127.0.0.1\nDB_PORT=3306\nDB_DATABASE=old\nDB_USERNAME=old\nDB_PASSWORD=\n";

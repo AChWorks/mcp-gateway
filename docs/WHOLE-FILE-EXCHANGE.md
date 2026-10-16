@@ -1,32 +1,23 @@
-# Whole-file binary data plane — Issue #147 (released in v2.1.2; OFF by default)
+# SSH whole-file binary exchange
 
-**Public release status:** [v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) includes the implementation from independently HIGH_ASSURANCE-approved [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). This is a **published code/package capability, not a production installation or default enablement**. `SSH_FILE_TRANSFER_ENABLED=false` keeps the optional HTTP route **OFF** until a separately authorized real-host security/proxy/resource check enables it. Independent PHP/Python clients proved bidirectional bytes and SHA-256 on disposable installed fixtures; this does **not** prove native ChatGPT model file handoff. The earlier v2.0.3 maintenance release did not contain the route.
+This is the technical wire contract for an **optional**, authenticated, complete-file client↔SSH Target HTTPS mode. Enabled behavior requires the real installed code, exact client/Target permissions, effective feature flag and a supported receiving client. Successful independently controlled client bytes do **not** establish native AI host/model file attachment ingestion.
 
-## Unreleased future fresh-install policy (Owner decision, 2026-10-16)
+## New installations versus existing private environments
 
-The installed/public versions described above remain OFF by default. A
-subsequent source candidate makes **fresh** Gateway installations set
-`SSH_FILE_TRANSFER_ENABLED=true` explicitly (new web installer and
-manual `.env.example`). It preserves the existing `.env`
-on upgrade and keeps PHP's absent-key fallback `false`, so older
-operator hosts do not activate upload/download unexpectedly. Operators
-can always set `false` to disable, or `true` after
-auditing an existing host. This setting is **SSH Direct only** and does
-not enable WordPress-native Media/Bridge private transfer or the
-ChatGPT-native attachment handshake. Real usable transfers still depend
-on bearer/session authorization, Target grants, 0700 remote staging
-directory, strict size/time and actual PHP/proxy host capacity.
+The source installer and the canonical new-install template explicitly set
+`SSH_FILE_TRANSFER_ENABLED=true` for **fresh** installations. On upgrades,
+the existing private `.env` is never replaced or silently backfilled;
+when this key is absent, the runtime fallback remains `false`.
+An operator may explicitly disable the mode with `false`.
+This switch covers only authenticated Direct SSH whole-file upload/download,
+not WordPress Bridge Media, ChatGPT model attachment handoff, or any bypass
+of Target/client grants, size/time budgets, remote private staging,
+or PHP/proxy capacity admission. Verify the installed release and actual
+host configuration before claiming an effective mode.
 
-## v2.3.0 browser file picker fallback — #181
+## Browser operator fallback
 
-This source capability is **part of v2.3.0, not v2.2.1**. On an authenticated
-Gateway Administration session, open **Targets → exact Direct SSH Target**.
-If the Target has a credential, the active user has `ssh.file.write` and/or
-`ssh.file.read`, and the separately approved server environment has
-`SSH_FILE_TRANSFER_ENABLED=true`, an HTML file picker offers an upload
-and a remote-path form provides a browser attachment download. These Admin
-forms call the existing verified SFTP whole-file service; they do **not**
-issue OAuth access tokens or expose new unauthenticated data-plane endpoints.
+In the authenticated Gateway Admin, **Targets → exact Direct SSH Target** may expose a local file picker for upload and a remote-path attachment download when the installed version supports the feature, the client has the correct SFTP read/write Target grant and the effective SSH file-transfer flag is enabled. These are CSRF-protected Admin actions using the same verified SFTP whole-file service; they do **not** issue OAuth tokens or create anonymous endpoints.
 
 The browser must upload a real local file, select the exact absolute remote
 destination and enter a **pre-provisioned owner-controlled 0700 private staging
@@ -49,7 +40,7 @@ production until a separate authorized rollout and real-browser/SSH
 acceptance. A non-Owner with explicit read/write Target grants is eligible
 to use the forms; permissions are not broadened by the UI.
 
-## Proven contract and what it does not claim
+## OAuth-authenticated HTTP transport
 
 An approved MCP application obtains its usual OAuth access token and chooses
 a registered authorized SSH Target. The **same signed bearer** is sent over
@@ -76,7 +67,6 @@ WordPress Target still has its existing authorized **native Abilities**,
 including WordPress-owned media operations where available; it does **not**
 currently advertise a raw binary whole-file Target interface. No duplicate
 WordPress media/plugin manager or insecure PHP filesystem bypass is added.
-The canceled historical Agent connector #111 is not part of this feature or the current Gateway roadmap.
 
 ## Discover supported transfer modes through ordinary MCP
 
@@ -290,29 +280,12 @@ effective limits, file sizes/digests/timings, memory peak and cleanup are
 recorded. Do not copy ephemeral signed client tokens, SSH passwords,
 private keys, MariaDB files or test users into GitHub.
 
-## Integration and operational readiness boundaries
+## Host enablement and acceptance
 
-The optional HTTP wire/security contract was accepted in independently reviewed [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and **released as disabled-by-default code in v2.1.2**. It is not evidence of a production deployment. Before enabling it on a *specific* supported hosting profile, follow the [deployment pre-enablement checklist](DEPLOYMENT.md#ssh-whole-file-data-plane-legacy-releases-disabled-new-install-source-policy-pending): request-body/worker/proxy timeouts, temporary-disk and concurrent-upload budgets, verified TLS, remote private SFTP staging, and client-side full-file verification must be measured, not assumed.
+Before enabling binary HTTP transfer for a real environment, follow the [operator deployment preflight](DEPLOYMENT.md#optional-ssh-whole-file-data-plane-host-pre-enablement). Verify HTTPS/TLS, authentication, Target permissions, the pre-provisioned restricted remote SFTP staging directory, PHP/proxy body limits, request/idle deadlines, disk/inode headroom, concurrent ingress and **actual** client byte/SHA-256 receipt.
 
-**Ingress resource boundary (independent review OPTIONAL O1):** inbound HTTP
-bytes can occupy one PHP temporary spool *before* the per-Target SFTP
-admission lease is obtained. That lease serializes **remote SFTP work**,
-not aggregate concurrent HTTP staging. Bound worker count, accepted body
-size, client timeouts and spill storage on the real hosting profile; add
-earlier aggregate ingress admission only if measurements justify it,
-without a second quota engine or unnecessary new processes.
+**HTTP ingress pressure is separate from remote SFTP admission:** several authenticated requests may occupy PHP temporary spool and worker capacity before acquiring the per-Target SSH/SFTP lease. Bound request/worker/temporary-disk concurrency under actual host conditions and add new admission machinery only when measured resource pressure warrants it.
 
-**Outgoing audit semantics (review OPTIONAL O2):** the server records
-successful **remote read and verified local staging** before its HTTP
-download callback finishes streaming to the client. This audit event
-does **not** certify complete client receipt. The receiving client must
-verify exact `Content-Length` and SHA-256 and discard incomplete data;
-never claim delivery from a server-side staging event alone.
+**A download Activity success is not recipient confirmation:** it can record a verified remote read and local staging before streaming completes. Receiving clients must validate Content-Length/hash and discard incomplete files. Do not label server-side staging as completed human download or AI-model ingestion.
 
-Not covered: ChatGPT host-native attachment/model handoff, WordPress
-whole-file binary transport, unsupported connector routing, durable
-SSH partial-write resume, retained download jobs, true remote snapshots,
-multi-GiB files or arbitrary proxies/shared hosts. Report these as
-**unsupported/unverified**, not completed. #147 and #154 retain distinct
-remaining host/client/capacity evidence; #112 owns release and
-production-host acceptance.
+A supported direct SSH file transport is not proof of automatic WordPress media upload, plugin ZIP installation, generic remote filesystem access or arbitrary client/model file parameter support. Unsupported host/protocol features require a genuine separately tested adapter rather than weakened authorization or optimistic capability claims.

@@ -4,109 +4,24 @@ This document defines the supported **current deployment and validation baseline
 
 GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide. The [operator configuration reference](CONFIGURATION.md) inventories `.env.example` and explains login-session, OAuth/MCP timing and safe live configuration reloads.
 
-## v2.3.0 release source and upgrade requirements (#181 / #182 / #189)
+## Releases, supported host profile and migration safety
 
-**Source, public GitHub Release, and the installed operator version are separate facts.** Verify official [v2.3.0 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0) assets before distribution. The release retains WordPress and Direct SSH, removes obsolete Agent-branded UI/permissions **and the historical Agent stored type/permission-seeding compatibility**, adds Owner-tunable SSH limits, an optional browser file picker (disabled by default), durable SSH Jobs and per-Target Pause/Resume. Installed-host availability requires a separately approved upgrade, not this source promotion.
+Install or update **only** from the named official [GitHub Release](https://github.com/AChWorks/mcp-gateway/releases) assets and matching verified checksums. A GitHub source branch/green CI is not a release; a published release is **not** the version installed on the operator's PHP host. Reconcile actual installed version, migration history, admin session/cron and enabled connector settings separately. Do not use a fresh-install ZIP as an updater or bypass rollback/downgrade/version gates.
 
-**One-install Agent retirement (#182):** The original `2026_10_09_000000_transition_site_domain_to_targets.php` migration is retained for fresh installs and v1 Site-era transitions, but no longer recognizes or seeds Agent-specific permission strings. The Owner verified zero Agent records in the six inspected data locations of the one managed installation. That already-applied historical migration **must not be replayed** on the installed DB. No new cleanup migration, manual DB DELETE, table removal or host modification is necessary for Agent retirement. Generic Target schema and conservative SSH deny/upgrade-backup protections remain unchanged.
+**Runtime profile:** ordinary HTTPS PHP 8.4 hosting, MariaDB 10.11 primary/MySQL compatible; required PHP extensions include `curl` with `CURLOPT_RESOLVE`, `mbstring`, `openssl`, `pdo_mysql`, `sodium`. Keep `public/` the only served document root, encrypted keys/storage private, and distinct Gateway OAuth-server vs Bridge-client RSA keypairs. No production Node, Redis, separate queue daemon or Docker is required by the baseline. Actual provider connectivity enforces public DNS/address/pin, verified TLS/SSH host identity and **direct** safe outbound HTTP, not ambient untrusted proxy environment variables.
 
-The five additive migrations
-`2026_10_15_000000_add_ssh_command_operational_limits.php`,
-`2026_10_15_010000_create_ssh_command_jobs.php`,
-`2026_10_15_020000_add_ssh_job_lifecycle_policy.php`,
-`2026_10_15_030000_snapshot_ssh_job_admission_policy.php`, and
-`2026_10_16_000000_add_target_operations_paused.php` require a
-**separately verified database backup** before eventual rollout. The third
-adds typed Owner-configurable Job limits, finite admission leases, immutable
-non-secret original Target/User/host-key-digest snapshots and operator
-attestations, and widens remote runtime storage. The fourth freezes each
-Job's pre-dispatch and reconciliation deadlines and conservatively backfills
-older unpublished journal records. The fifth adds a backward-compatible
-Owner-only per-Target pause state, **operations enabled by default**, leaving
-connection/OAuth/SSH credentials, historical Job rows and existing access
-assignments intact. Pausing never remotely cancels an already-running Job. An existing lease is never shortened
-on migration or renewal; any ambiguous old original-host identity is
-recorded as unknown rather than guessing a changed Target. All Job-related
-schema rollback is refused while no-replay journal rows exist. The supported
-local `php artisan gateway:ssh-jobs-reconcile inspect|retire` workflow
-requires independently verified cleanup on the ORIGINAL host and exact
-saved binding; see [Direct SSH](DIRECT-SSH-CONNECTOR.md#v230-lightweight-agentless-ssh-jobs-181).
-The Laravel scheduler runs hourly `gateway:ssh-jobs-prune` only for safely
-reconciled terminal records. Remote systemd user-manager support and approved
-linger are remote-host prerequisites, **not** Gateway installer steps.
+**Version-dependent schema/behavior:** The v1 **Site → v2 Target** transition is a separately authorized **destructive** migration; see [legacy upgrade/recovery runbook](TARGET-TRANSITION-RUNBOOK.md). Later v2 updates are version-specific; use source migration files and official release notes, not a copied historical checklist. In particular public v2.3.0 introduced additive SSH command/Job/lease and Target Pause schema:
+- `2026_10_15_000000_add_ssh_command_operational_limits.php`
+- `2026_10_15_010000_create_ssh_command_jobs.php`
+- `2026_10_15_020000_add_ssh_job_lifecycle_policy.php`
+- `2026_10_15_030000_snapshot_ssh_job_admission_policy.php`
+- `2026_10_16_000000_add_target_operations_paused.php`
 
-The rc.5 source evidence belongs to
-[historical PR #187](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
-The rc.6 independent review found an Admin existence-disclosure boundary
-and missing pause regressions; rc.7 fixed those, received HIGH_ASSURANCE
-**APPROVE** and integrated through
-[PR #190](https://github.com/AChWorks/mcp-gateway/pull/190).
-The subsequent Agent-only model/historical migration cleanup (`rc.8`)
-received independent COMPLETE / APPROVE, passed all five exact-head
-workflows, fresh MariaDB installation and published-baseline browser
-update/backup checks, and integrated through
-[PR #191](https://github.com/AChWorks/mcp-gateway/pull/191) on
-`main@155ae9ff636c63d5b015b9fdbd8ab86ff28ac0e1`.
-An earlier disposable OpenSSH/systemd fixture completed >15-second
-execution, exit 7, output, replay resistance, verified cancel and no-linger
-denial; browser POST/SFTP transferred 180,127 opaque bytes in an isolated
-test. These checks do not prove real operator-host installation, the
-separate visual browser acceptance or native ChatGPT attachment handoff.
-Exact stable PR #188 checks and a focused Owner-mediated independent
-VERSION/docs review remain separate from merged rc.8 source approval.
+The supported Job journal enforces immutable original user/client/Target/host binding and **no-replay** of an uncertain launch. Journal-bearing Job rollback refuses unsafe destructive schema cleanup; reconciliation requires evidence on the **original** remote host and the guarded command in [Direct SSH](DIRECT-SSH-CONNECTOR.md). Owner-only Target Pause blocks new Gateway-mediated stages, **not** an in-flight remote effect. Historic Agent connector type/support was retired; no Agent data cleanup/replay of the old Target migration is implied. A separate PR's future fresh-install SSH transfer default is **not** a change to an existing private `.env` or a guarantee that any installed feature is enabled.
 
-### Shipping gate
+**Upgrade safety:** Independently test-restore the consistent database backup, protect `.env`, `APP_KEY`, OAuth/Bridge signing keys, storage and host-managed public files. A browser updater's application-file backup **cannot** undo MariaDB/MySQL DDL or revocations. Never replay a possibly dispatched WordPress refresh/revoke, SSH command/Job or migration after unknown progress to guess its result. Preserve original recovery fences and follow the updater's authenticated recovery path.
 
-Only the exact versioned integrated SHA with successful source, real transport, MariaDB, dependency audit, browser-updater compatibility and **author-separated independent security review** may be promoted to a stable manual Release. Publication via the existing Owner-dispatched package workflow does not enable optional file mode or install on aaPanel automatically. Follow the version-matched official installer/update ZIP instructions below after verifying publication; never deploy from a source branch.
-
-## Previous stable v2.2.1: packages and safe upgrade boundary
-
-The previous [stable v2.2.1 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.2.1) provides `mcp-gateway-v2.2.1.zip` for **fresh installation** and `mcp-gateway-update-v2.2.1.zip` for **existing deployment-ZIP installs**, with separate `.sha256` companions. Download and validate only assets belonging to the selected version; GitHub source archives are not replacement installer or update packages. Publishing does not establish the installed operator version or approve a production upgrade.
-
-**Database changes depend on the starting release.** v2.2.1 adds no new schema migration beyond v2.2.0. The v2.2.0 line introduced `2026_10_13_000000_fence_wordpress_disconnect_recovery` in addition to the four earlier migrations documented in the historical v2.1.2 inventory below. Site-era v1→Target-era v2 is a separate breaking transition with data/reset requirements: see [Target transition](TARGET-TRANSITION-RUNBOOK.md) and the exact [release notes](../RELEASE_NOTES.md). Not every prerelease/skipped-version installation is covered by the published baseline matrix.
-
-Before running a migration-bearing updater, independently **test-restore the consistent database backup** and preserve code, `.env`, `APP_KEY`, signing keys, private storage and host-managed public files. The updater's code-only backup cannot undo SQL/DDL. Never blindly restart a stalled updater or reverse migrations after unknown progress; use the private Owner-local `php update/Recover.php --check` only with the original verified backup and the actual unprivileged site PHP worker, then follow the guarded recovery procedure for the observed phase. After completion, verify HTTP readiness and authenticated Target/OAuth behavior on the actual host.
-
-The next section retains the **historical v2.1.2 migration inventory** because those changes remain relevant to installations upgrading from older stable versions.
-
-## v2.1.2 release and migration inventory
-
-[Public v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) is the reviewed WordPress + Direct SSH release built at immutable source SHA `75d0b2284d0ec7dc918795ae3f16198a86e1e656`. Its verified browser-update ZIP is `mcp-gateway-update-v2.1.2.zip`; its fresh-install ZIP is `mcp-gateway-v2.1.2.zip`. **Only the official assets and matching SHA256 companions on that Release page should be used.** Source publication is not server installation; installed Gateway/Bridge versions and actual host health require independent verification.
-
-Upgrading from the **published v2.0.3** line to public v2.1.2 applies **four new additive database migrations** (the later v2.1.2 Stable promotion PR #169 itself changed only VERSION/documentation):
-
-- `2026_10_10_000000_create_ssh_direct_target_configs.php` — direct SSH connector config storage;
-- `2026_10_11_000000_create_operational_settings.php` — typed Owner settings;
-- `2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php` — per-refresh intent timeout snapshots;
-- `2026_10_12_010000_add_ssh_transfer_operational_limits.php` — bounded SSH transfer settings.
-
-Run the authenticated browser updater only after taking and **test-restoring** a consistent database backup, plus separately protecting `.env`, `APP_KEY`, OAuth/Bridge signing keys, other private state and the old release artifacts. A code backup is **not** a database backup. The refresh timeout snapshot migration has a deliberate `down()` safeguard that rejects rollback while unresolved snapshotted intents remain. **Do not automatically reverse SQL or re-run an uncertain refresh, revoke or migration**. Use the updater's staged failure evidence and an operator-approved roll-forward/recovery plan. Published-baseline and RC8→Stable browser upgrades passed isolated tests, **not live aaPanel/OpenLiteSpeed/Cloudflare host acceptance**; see open [#135](https://github.com/AChWorks/mcp-gateway/issues/135) and [#97](https://github.com/AChWorks/mcp-gateway/issues/97).
-
-## What this baseline proves
-
-The current repository supports a conventional single-host PHP deployment with:
-
-- PHP `>= 8.4.1` within the repository's PHP 8.4 target;
-- MariaDB 10.11 as the primary production database target, with MySQL retained as a supported compatibility target;
-- Laravel served only from the repository/package `public/` directory;
-- a deployment-ready Release ZIP with production Composer dependencies bundled, so Git/Composer are not required on the target host;
-- a separate authenticated browser-update ZIP for existing deployment-ZIP installations, also without requiring SSH, Git, or Composer;
-- Git + Composer + Artisan as a supported advanced deployment path;
-- Blade/static assets with no required Node.js production build;
-- file-backed cache and administrator sessions by default;
-- no required Redis, queue worker, broker, Docker runtime, or separate MCP daemon.
-
-Production/runtime checks require the `pdo_mysql` extension for MariaDB/MySQL, cURL with `CURLOPT_RESOLVE` DNS pinning support, OpenSSL, Sodium, a valid Laravel encryption key, MariaDB or MySQL as the configured database, two valid and distinct RSA signing keypairs, private storage that is not web-served, encrypted administrator sessions, and HTTPS-only sessions in production. The first signing pair owns the ChatGPT-facing Gateway OAuth server; the second owns the Gateway's `private_key_jwt` client identity when connecting to WP AI Bridge. CI also provisions `mbstring`; keep it enabled for the deployed PHP 8.4 runtime. `pdo_sqlite` is used by tests and is not a production database requirement.
-
-Policy-controlled Gateway-to-Bridge HTTP requests are intentionally direct: the application explicitly disables Guzzle proxy use for those requests before applying the validated `CURLOPT_RESOLVE` target pin. Ambient `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and equivalent process settings must not become part of the Bridge transport path. Future proxy support would require a separate proxy-aware validation/pinning design; it must not be enabled by removing the direct-request invariant.
-
-Under the pinned WP AI Bridge compatibility contract, OAuth `invalid_client` is not sufficient proof that an existing site authorization is terminal: temporary non-200 responses while resolving an approved additional client's metadata or JWKS can surface as `invalid_client` before refresh or revocation is attempted. The Gateway therefore preserves the encrypted site credential on generic `invalid_client` refresh/revocation failures and fails closed for later retry. A first authenticated refresh returning the Bridge's exact HTTP 400 invalid_client now keeps the same encrypted offline grant and Target Connected, clears only the matching first attempt intent and schedules a bounded 60-second retry; it must NOT consume the provider's single-use lost-response allowance. While access renewal is deferred, a still-valid access bearer can be used, but an expired bearer cannot. An invalid_client on an already-uncertain second attempt does NOT prove the first did not rotate and remains fenced. HTTP 400 temporarily_unavailable can occur after a committed refresh successor; treat it as ambiguous under the provider's one-shot recovery deadline. Real invalid_grant or rejected immutable scope/resource binding remains terminal. Recovery responses keep original issue-time expiry bounds rather than granting a fresh lifetime. Site removal must not proceed until remote revocation is actually confirmed.
-
-## WordPress recovery after v2.1.2 and effective PHP DNS file access
-
-Source-integrated Issue #173 adds a guarded WordPress disconnect-recovery ledger, conditional Owner cancellation, and separately recorded public metadata evidence. See [WordPress Target disconnect recovery](TARGET-DISCONNECT-RECOVERY.md); **these functions are not part of published v2.1.2**. Old outstanding intents default to legacy_unknown, and migration rollback refuses to erase the ledger while pending intents exist.
-
-Under aaPanel/OpenLiteSpeed PHP 8.4 LSAPI, the **effective VHost** php_admin_value open_basedir allowlist may prevent bounded React DNS from reading /etc/resolv.conf, /etc/hosts or symlink destinations, yielding a pre-dispatch dns_lookup network_failure. Use the Owner's **Operations → Outbound DNS compatibility preflight**, adjust only the required allowlisted files via approved aaPanel configuration, and rerun the checks under the actual LSAPI worker. Do not disable open_basedir globally, relax SSRF/TLS policy, add arbitrary DNS fallback or infer OAuth validity from successful public metadata. Verify previous public/.user.ini edits separately rather than assuming they were reverted.
+**WordPress + aaPanel note:** WordPress authenticated authorization and “Stale” health differ. Approved-proxy/DNS policy may require *narrow* PHP LSAPI `open_basedir` access to the actual resolver files, not a global disabling of SSRF/TLS or `open_basedir`. Inspect Owner Operations DNS preflight and actual PHP host configuration before guessing that OAuth was revoked. [Connector guide](CONNECTOR-INTEGRATION-GUIDE.md) owns credential durability. Detailed version-specific assets, issue/review/acceptance evidence and migrations are recoverable from the immutable GitHub Releases, PRs, CI and source—not additional living deployment-status sections.
 
 ## 1. Prerequisites
 
@@ -350,23 +265,9 @@ The ChatGPT-facing MCP limiter is burst-aware by default: the unauthenticated ed
 
 The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
-### SSH whole-file data plane: legacy releases disabled; new-install source policy pending
+### Optional SSH whole-file data plane: host pre-enablement
 
-**Future new-install source candidate (not yet published):** Fresh
-installers and the revised environment template set
-`SSH_FILE_TRANSFER_ENABLED=true` by default, with an explicit
-`false` opt-out. The PHP absent-key fallback stays OFF and the
-normal updater preserves prior private `.env`; existing
-installations therefore require their own explicit change. The setting
-only controls SSH Direct, never WP AI Bridge.
-
-The authenticated SSH whole-file HTTP sidecar was introduced by
-[PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and ships in
-public **v2.1.2**, but the route is **OFF by default**. A published code feature
-and successful disposable tests are not authorization to enable it on an operator host. Its exact wire
-contract, per-mode bounded operation limits and source-integrated client
-proof live in [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md); keep that
-document as the only detailed protocol definition.
+The raw-binary SSH file-transfer endpoint is controlled by installed-version support, the effective configuration and the authenticated Target/Client permission boundary. [Whole-file exchange](WHOLE-FILE-EXCHANGE.md) owns its technical wire protocol. **Do not infer production enablement from source CI, a published release or a disposable binary-client pass.**
 
 **Before a future explicit production enablement**, an operator must
 validate the exact installed release and nominated host/profile, then:
@@ -404,13 +305,7 @@ validate the exact installed release and nominated host/profile, then:
   an isolated fixture passed. Model-native ChatGPT attachments and Agent
   Gateway routing are **not** implied.
 
-[#154](https://github.com/AChWorks/mcp-gateway/issues/154) owns the
-versioned effective host/client limits and measurement evidence;
-[#112](https://github.com/AChWorks/mcp-gateway/issues/112) owns release
-and installed-host go/no-go; [#147](https://github.com/AChWorks/mcp-gateway/issues/147)
-owns supported transport/client delivery gaps. These are separate from
-ordinary WordPress response size settings and from a future Owner-paused
-
+Record environment-specific capacity and receiving-client evidence with the relevant open work item, not in a duplicated dated deployment-status appendix. Keep transfer authorization, host/proxy measurements and rollout consent separate from ordinary WordPress response-size settings.
 
 ### Activity retention scheduling
 
@@ -631,27 +526,20 @@ The application-level log policy bounds retained file count, not the byte size o
 
 When escalating a problem, share only the timestamp/time zone, correlation ID, safe Activity/error category, relevant HTTP status/Retry-After metadata, release identity, and redacted log excerpts. Never attach `.env`, `APP_KEY`, bearer/refresh tokens, authorization codes, client assertions, database passwords, or private keys.
 
-## 10. OpenLiteSpeed V1 validation result
-
-Historical V1 validation completed the production-like aaPanel/OpenLiteSpeed/LSAPI proof on OpenLiteSpeed 1.8.4 with PHP 8.4 and MySQL 8.4. MariaDB 10.11 is now the primary development/CI/deployment target while MySQL compatibility remains supported. Modern MCP requests and the retained legacy compatibility flow worked through HTTPS/OpenLiteSpeed without an evidence-based need for custom buffering or timeout overrides beyond the normal Laravel `public/` document-root/rewrite configuration.
-
-Do not pre-apply nginx directives or generic buffering tweaks. If a future release introduces materially different long-lived server-to-client streaming/SSE behavior, revalidate OpenLiteSpeed/LSAPI buffering and timeout behavior for that release before prescribing a new setting.
-
-## 11. Backup and recovery baseline
+## 10. Backup and recovery baseline
 
 Before every migration-bearing upgrade, preserve a recoverable set containing:
 
-- a consistent MariaDB/MySQL database backup, including site registry, encrypted site credentials and OAuth-flow state owned by the deployed revision;
-- the deployment `.env` / Laravel `APP_KEY` through the site's approved secret-backup mechanism;
+- a consistent MariaDB/MySQL database backup **of the actual installed revision**, including its migration ledger, registered `targets` and connector-specific configurations, encrypted `target_credentials` and credential metadata, WordPress OAuth flows and refresh/revocation intents, Gateway OAuth client authorizations and related grant/recovery state, Target Groups, user/Target grants and denials, Activity, and retained `ssh_command_jobs` journal records **where those tables exist**. When upgrading a genuine legacy Site-era installation, also preserve the actual legacy Site records and flows before the destructive transition (see [Target transition runbook](TARGET-TRANSITION-RUNBOOK.md));
+- the deployment `.env` / Laravel `APP_KEY` through the installation's approved secret-backup mechanism;
 - `OAUTH_PRIVATE_KEY_PATH` and `OAUTH_PUBLIC_KEY_PATH` with permissions preserved;
 - `BRIDGE_CLIENT_PRIVATE_KEY_PATH` and `BRIDGE_CLIENT_PUBLIC_KEY_PATH` with permissions preserved;
+- private application storage and any host-managed files required to restore this installation, with appropriate access protections;
 - the exact deployed release identity and the corresponding repository Composer lockfile identity.
 
-Treat the database, `APP_KEY`, and both signing keypairs as one recovery set. Site access/refresh tokens are encrypted with the application encryption boundary, so restoring the database without the matching `APP_KEY` makes those credentials unusable. Restoring a different Bridge client keypair changes the `private_key_jwt` identity material advertised through the Gateway JWKS endpoint and can break approved site connections even when the database is intact.
+Treat the database, matching `APP_KEY`, both signing keypairs and required private runtime state as **one coherent recovery set**. Encrypted Target credentials and protected refresh/recovery state cannot be recovered correctly without the matching application encryption key. Replacing the Bridge client keypair changes the `private_key_jwt` signing identity advertised in its Gateway-hosted JWKS and may break existing downstream authorizations even if the database is intact. An application-code backup is **not** a database restore: independently test-restore the database and verify the associated key/file compatibility in an isolated environment before relying on this set for a stateful upgrade.
 
-V1 recovery validation proved this set on a controlled two-site installation. Preserve the same recovery-set invariant for future releases; backup presence alone is not sufficient unless restore assumptions remain valid.
-
-## 12. Upgrade and rollback outline
+## 11. Upgrade and rollback outline
 
 The web installer is **fresh-install only**. Never use `/install` to upgrade an existing Gateway.
 
@@ -754,97 +642,26 @@ php artisan gateway:check
 
 Do not promise zero-downtime schema changes unless the exact release has been designed and tested for them. Do not blindly run `migrate:rollback` after an unknown or partially completed failure. When schema/data compatibility is uncertain, restore the pre-upgrade database backup or follow release-specific roll-forward/rollback instructions.
 
-## 13. Current external references
+## Fresh-install SSH whole-file transfer configuration
 
-These external references were checked while establishing this baseline. Repository/runtime evidence remains authoritative for MCP Gateway-specific commands and security checks.
+New web-installer environments and installations copied from the repository's
+current `.env.example` explicitly set `SSH_FILE_TRANSFER_ENABLED=true`.
+The existing private `.env` is preserved on update; older installations with
+no key retain the source fallback `false`. Set `false` for an explicit opt-out.
+This SSH-only policy never enables WordPress Bridge private data exchange or
+native ChatGPT attachment handling. The actual host still requires verified
+HTTPS/OAuth, Target grants, safe remote `0700` staging, finite upload/download
+budgets and PHP/proxy resource compatibility; see the
+[whole-file guide](WHOLE-FILE-EXCHANGE.md).
 
-- Laravel 13 documentation: https://laravel.com/framework/docs
-- OpenLiteSpeed virtual-host/document-root and rewrite configuration: https://docs.openlitespeed.org/config/
-- OpenLiteSpeed rewrite rules: https://docs.openlitespeed.org/config/rewriterules/
-- aaPanel PHP Project/site configuration: https://www.aapanel.com/docs/Function/php.html
-- aaPanel site deployment notes: https://www.aapanel.com/docs/faq/Site_Related.html
+## Owner operational settings and recovery-safe precedence
 
-V1 production-like readiness evidence was completed under Issue #8 and is preserved in the repository/GitHub history. Future releases must revalidate only deployment assumptions materially changed by that release.
+The integrated **Owner-only** `/admin/operations` page is the existing single typed, audited store for bounded WordPress HTTP request/response budgets and SSH command/transfer/Job limits. It requires a real authenticated Owner, password/CSRF, version-aware optimistic updates and applicable migration state. **Never** introduce a second settings registry per connector or treat a new release as proof the operator installed its columns. Exact implemented keys/defaults, permissible ranges and precedence are in [CONFIGURATION.md](CONFIGURATION.md) and the actual [settings service](../app/Application/Operations/OperationalSettings.php); PR #196 proposes but has **not integrated** a distinct SSH Job script-input maximum.
 
-## Owner operational settings — available since public v2.1.2 (#153)
+An empty Owner override restores its underlying source configuration; a maximum is a **ceiling**, not memory reserved for every request. A WordPress connect timeout and total HTTP deadline are different constraints, just as an SSH Job runtime is not a synchronous PHP request budget. Never weaken TLS/SSRF, verified SSH host pin, decoded-body hard bound, Target/user/Client grant, or provider-approved OAuth refresh-recovery fences to make a number larger.
 
-Public v2.1.2 includes the Owner-only `/admin/operations` page, which can edit
-**four finite WordPress downstream resource settings** without editing `.env`
-or restarting PHP workers. On any particular host, the controls become available
-only after an applicable release is actually installed and its required
-migrations are applied; publication alone never updates an installation.
+**Rotating WordPress refresh safety:** A potentially sent refresh stores an immutable snapshot of its original request-timeout budget. Owner settings changed later do not retroactively shorten an in-flight request or reopen the provider's single-use recovery window. Older NULL timeout-intent snapshots keep conservative historical-source bounds. An ambiguous intent must be reconciled before any downgrade/rollback that would remove those fences; the relevant migration refuses destructive reversal with unresolved snapshots. Neither changing `.env` nor downgrading code is provider-token rollback. Retain encrypted credentials and avoid unsafe replay.
 
-Current default values remain the original environment/source settings.
-Leaving a value empty removes its override and restores the normalized source
-setting in the next request/CLI maintenance invocation.
+**SSH Job safety:** Finite per-user active admission, selected remote execution lifetime and terminal record retention are distinct. An expired lease does not prove a Job exited and must never permit silent request-ID replay. The same host/binding, safe remote cleanup and durable journal requirements apply during updates.
 
-| Operational setting | Default source setting | Owner override range |
-| --- | --- | --- |
-| Ordinary, OAuth, metadata, mutating response | `BRIDGE_REMOTE_MAX_RESPONSE_BYTES` (64 KiB) | 16–1024 KiB |
-| Confirmed read-only WP MCP response | `BRIDGE_REMOTE_READONLY_TOOL_MAX_RESPONSE_BYTES` (256 KiB) | 16–2048 KiB |
-| WordPress HTTPS connection timeout | `BRIDGE_REMOTE_CONNECT_TIMEOUT_SECONDS` (2 s) | 1–15 seconds |
-| WordPress HTTPS total request timeout | `BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS` (5 s) | 2–30 seconds |
-
-**v2.3.0 Owner command settings (#181):** the same Owner Settings page adds `ssh_command_timeout_seconds` (default maximum 15 seconds; selectable 15–30) and `ssh_command_max_kib` (default 8 KiB; selectable 8–64). A new additive nullable-column migration, `2026_10_15_000000_add_ssh_command_operational_limits.php`, is required before using these settings on an installed host. Older Owner forms must not erase these two overrides; the legacy WordPress JSON setting map is unchanged. SSH timeout refers to an individual synchronous exec phase, not a total PHP/proxy request SLA or a retained background job budget.
-
-The connect timeout cannot exceed the total request timeout. The total request
-deadline is shared by DNS A+AAAA validation and pinned HTTPS dispatch; it is
-not a file/object size, overall logical job lifetime, or PHP/CDN/LSAPI worker
-timeout. Both finite timeout overrides affect the same shared outbound HTTP
-client used by WordPress metadata, OAuth and MCP Ability requests. The
-independent 8 MiB decoded-response ceiling, fail-closed origin/IP policy,
-no blind mutation replay, and provider-owned refresh/recovery timing remain
-non-overridable. Ranges are provisional safety bounds, **not** measured
-optimal settings for an actual host; #153 owns measurements and #154 owns
-effective limits across client/proxy/WordPress/SSH layers.
-
-A first *possibly sent* rotating WordPress refresh creates an immutable
-request-timeout snapshot in `wp_ai_bridge_refresh_intents` before network
-I/O. The single-use retry fence, CLI maintenance wait and manual revocation
-settle period use that original timeout, **not a subsequent Owner setting**.
-An older pre-migration intent with a NULL timeout snapshot preserves at
-least **max(source connect timeout, source request timeout, current effective
-request timeout)**. Before this migration, the transport's actual source
-request deadline was max(connect, request), even when the environment's
-connect value exceeded request. New Owner overrides must not hide that older
-connect contribution. Keep the legacy source timeout environment stable while
-unresolved pre-upgrade refreshes exist; if the historical environment is no
-longer known, reconcile the unknown refresh with the provider rather than
-assuming a new lower timeout is a safe replay fence. This prevents increasing
-or decreasing Admin settings from reopening a spent provider recovery window
-or overlapping a prior in-flight request. This implementation does not modify
-the provider's 60-second one-shot window, Gateway's 45-second admission
-boundary, or credential identity/expiry/revocation rules.
-
-The existing persisted single-row `operational_settings` version prevents
-stale Owner forms from overwriting a concurrent edit. The current password,
-CSRF, Owner role and enabled-account checks remain mandatory; a transaction
-audits changed numeric values, actor, version and timestamp. Legacy Owner
-browser tabs that submit the original two response keys preserve the new
-network overrides. **Downgrade compatibility:** timeout overrides live in
-two nullable columns of the same `operational_settings` row, not inside the
-legacy JSON response-budget map. Older application code ignores the new
-columns and continues reading valid response budgets. This is one settings
-subsystem, not an independent second registry.
-
-Upgrading applies the small additive migration
-`2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php`;
-existing Target credentials, grants, refreshing intents, values and audit
-history are preserved. Before deploying a different release, verify its
-declared migrations and normal backup/recovery procedures. Rolling code back
-does not roll an in-flight remote refresh back, nor does dropping a snapshot
-column prove successful revocation. Finish/resolve pending uncertain refreshes
-before a manual schema rollback; retain encrypted credentials and recovery
-fences rather than forcing a replay. The migration's `down()` deliberately
-**rejects rollback if any refresh intent still holds a timeout snapshot**.
-This is a fail-closed schema gate, not a replacement for a safe code rollout:
-**do not start a downgraded PHP binary while any such uncertain refresh may
-still be in flight.** Keep Gateway in maintenance, check/reconcile or wait for
-the provider window to expire (without blind replay), verify the intent state,
-then roll back the schema/code in a controlled sequence. Old PHP cannot enforce
-these newer per-intent fences on its own.
-
-Do not represent v2.1.2's released code as **installed or host-verified**
-without an approved deployment and actual PHP-FPM/CLI/cron/WordPress Bridge
-checks establishing that. #147 remains the
-owner of client-visible bidirectional file bytes;
+Public Installer/Updater behavior and non-production validation are owned above; [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) retain unresolved operator acceptance and [Releases](https://github.com/AChWorks/mcp-gateway/releases) establish shipped version, while only an actual installed-host check establishes effective settings.
