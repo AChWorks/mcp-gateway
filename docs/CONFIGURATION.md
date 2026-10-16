@@ -158,7 +158,9 @@ Both the edge and authenticated-principal limit apply when relevant. Their effec
 
 Remote timeout/response settings are **budgets**, not guarantees of response speed or permission to bypass DNS pinning, SSRF checks, TLS verification, host-key verification or OAuth permissions.
 
-## Additional supported settings intentionally not in the basic template
+## Advanced supported settings — template alignment pending
+
+**Canonical configuration discoverability rule:** every **actually supported and consumed first-party** environment variable must be listed exactly once in `.env.example` as a safe active default or an intelligible, explicitly commented operator-only/advanced example, and must have a matching accurate explanation here. A setting documented only in this section is **not** accepted as a permanent template omission. [PR #197](https://github.com/AChWorks/mcp-gateway/pull/197) owns the exhaustive static/dynamic/installer supported-key inventory, safety classification and both-direction CI guard. Current source and published `.env.example` are **not yet verified comprehensive**; do not conclude that keys absent from the template are unsupported, and do not enable high-risk/recovery/proxy settings by copying examples blindly. Preserve existing private `.env` and Owner Operational Settings precedence. This heading records an unresolved source/template reconciliation, not a second independent configuration authority.
 
 These are **not extra user roles, guaranteed features or release approvals**. The production installer explicitly writes several security cookie flags even though the development `.env.example` does not list them.
 
