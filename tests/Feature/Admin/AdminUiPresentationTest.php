@@ -196,6 +196,59 @@ final class AdminUiPresentationTest extends TestCase
             ->assertDontSee('class="target-action-confirm"', false);
     }
 
+    public function test_target_inventory_labels_unsupported_historical_connectors_without_reclassifying_them(): void
+    {
+        $legacy = Target::query()->create([
+            'target_id' => 'legacy-unsupported',
+            'display_name' => 'Historical connector',
+            'connector_type' => 'ssh_direct',
+        ]);
+        // The immutable model disallows new unsupported connector types; only
+        // previously persisted historical records may still have one.
+        DB::table('targets')->where('id', $legacy->getKey())
+            ->update(['connector_type' => 'unrecognized_connector']);
+
+        Target::query()->create([
+            'target_id' => 'supported-ssh',
+            'display_name' => 'Supported SSH',
+            'connector_type' => 'ssh_direct',
+        ]);
+        Target::query()->create([
+            'target_id' => 'supported-wordpress',
+            'display_name' => 'Supported WordPress',
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+
+        $html = $this->actingAs($this->owner())
+            ->get('/admin/targets')
+            ->assertOk()
+            ->getContent();
+        $document = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($document);
+
+        $connectorLabelFor = static function (string $targetId) use ($xpath): array {
+            $cell = $xpath->query(
+                '//table[contains(concat(" ", normalize-space(@class), " "), " targets-table ")]'
+                .'/tbody/tr[td[1]//code[text()="'.$targetId.'"]]/td[2]',
+            )->item(0);
+            self::assertInstanceOf(\DOMElement::class, $cell);
+
+            return [
+                trim($xpath->evaluate('string(.//strong)', $cell)),
+                trim($xpath->evaluate('string(.//code)', $cell)),
+            ];
+        };
+
+        self::assertSame(['Unsupported connector', 'unrecognized_connector'], $connectorLabelFor('legacy-unsupported'));
+        self::assertSame(['Direct SSH', 'ssh_direct'], $connectorLabelFor('supported-ssh'));
+        self::assertSame(['WordPress', 'wp_ai_bridge'], $connectorLabelFor('supported-wordpress'));
+        self::assertSame('unrecognized_connector', DB::table('targets')->where('id', $legacy->getKey())->value('connector_type'));
+    }
+
     public function test_target_entry_remains_neutral_and_available_connectors_have_registration_flows(): void
     {
         $owner = $this->owner();

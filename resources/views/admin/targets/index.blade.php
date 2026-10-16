@@ -83,7 +83,7 @@
                             <td>
                                 <span class="targets-mobile-label" aria-hidden="true">{{ __('Connector') }}</span>
                                 <div class="target-cell">
-                                    <strong>{{ $target->connector_type === 'wp_ai_bridge' ? __('WordPress') : __('Direct SSH') }}</strong>
+                                    <strong>{{ match ($target->connector_type) { 'wp_ai_bridge' => __('WordPress'), 'ssh_direct' => __('Direct SSH'), default => __('Unsupported connector') } }}</strong>
                                     <code class="small-code">{{ $target->connector_type }}</code>
                                 </div>
                             </td>
