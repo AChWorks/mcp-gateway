@@ -1,165 +1,131 @@
 # MCP Gateway — Master Specification
 
-**Status:** Canonical, durable product specification
+## 1. Purpose
 
-**Repository:** `AChWorks/mcp-gateway`
+MCP Gateway is a **self-hosted, connector-neutral platform for controlled access to and operations on registered external systems** (Targets). It gives authorized people, AI clients and other explicitly supported application clients a coherent way to discover capabilities, choose the correct Target, execute permitted work and understand the result.
 
-This document defines **what MCP Gateway must be and what constraints govern its evolution**, not the implementation backlog, a release note, an issue log, a deployment report, or a version-specific configuration manual. [ARCHITECTURE.md](ARCHITECTURE.md) describes how currently integrated components fit these goals. Concrete connector, protocol, resource and migration contracts live in their dedicated documents. Current delivery and outstanding acceptance belong to GitHub source, Issues, PRs, CI, releases and the actual host.
+The product has **one application-owned security and operation model**, exposed through multiple suitable interfaces: a stable authenticated MCP entry for AI clients, a practical human administration/action interface and deliberately supported programmatic integrations. These interfaces differ in presentation and authentication but must not create competing business logic or permission systems.
 
-## 1. Product identity and desired outcome
+Gateway is a **coordination, authorization and interoperability layer**. It is not a replacement for the connected applications' business logic, a duplicate content-management system, a public multitenant service, a universal network proxy or an unrestricted plugin marketplace.
 
-MCP Gateway is a **lightweight, self-hosted, connector-neutral access and operations platform** for a fleet of explicitly registered remote systems (**Targets**). Its durable job is to let authorized humans and machine clients **discover available capabilities, select Targets, invoke supported actions, inspect outcomes and administer access** through one coherent application security and operation model.
+### Product outcomes
 
-It is simultaneously:
-- a stable authenticated MCP-facing entry point for supported AI clients;
-- an administration and, progressively, an **operator-facing action surface** for direct human use;
-- an application core that can serve other explicitly supported API/automation consumers without duplicating Target or authorization logic.
+A successful Gateway enables an authorized principal to:
+- identify the intended system unambiguously, even among many similar Targets;
+- discover and use genuine capabilities that the selected Target and client support;
+- act within both Gateway-granted authority and the downstream system's own permissions;
+- use either human or machine entry points with equivalent effective policy and outcome semantics;
+- perform bounded work on one or several authorized Targets without hiding partial results or uncertain remote effects;
+- transfer or retrieve supported data and files with proven integrity and actual receiving-client compatibility;
+- diagnose and recover from failures without disclosing sensitive infrastructure to ordinary users;
+- operate and maintain the system without requiring heavyweight infrastructure for idle connections.
 
-The Gateway is **not merely a protocol proxy** and its Admin is **not permanently restricted to connection management**. Equally, it must **not** become a replacement CMS, WordPress business-logic clone, universal hosting panel, arbitrary network proxy, always-on agent fleet, or speculative all-purpose workflow platform.
+## 2. Identity, authority and responsibility
 
-**Success:** an authorized user can reach many Targets of supported types using a single stable Gateway, perform only actions permitted by both Gateway and the actual Target authority, and obtain trustworthy outcomes. A capability already expressible through a supported connector contract can evolve at the Target without a Gateway code release for each new operation. AI and Admin use the same effective authority and operation path.
+A **Target** is an explicitly enrolled, independently selectable and authorizable downstream system. Its Gateway-local identifier is stable and independent of mutable labels, hostnames, IP addresses, URLs or transport credentials. A connector family is an explicit, reviewed adapter to the Target's real protocol and trust boundary.
 
-## 2. Product boundary and authority of connected systems
+Maintain clear separation between:
+- the authenticated Gateway user or service principal;
+- the exact authenticated client identity and profile, where applicable;
+- the selected Target or explicitly resolved authorized collection of Targets;
+- the connector and its separately authenticated downstream principal;
+- the requested capability, effect class and any additional approval required for that operation.
 
-The Gateway owns **stable Target identity**, connector registration, groups/scopes, client and user identities, access policy, credential custody, capability discovery/routing, admission, applicable resource controls, operation/outcome coordination, and safe activity and diagnostics.
+Gateway owns Target identity, registration, scoping and groups, access decisions, credential custody, execution admission, coherent operation outcomes and safe diagnostics. **The downstream system retains authority over its own objects, user rights, business rules, validation and side effects.** Gateway can narrow that authority, never manufacture or elevate it.
 
-A connector owns the Target-specific authentication/lifecycle, remote identity, discovery and schema translation, transport, and actual invocation protocol. The **Target remains authoritative** for its own content, permissions, validation, side effects and state. Gateway may narrow a principal's effective power; it must never synthesize additional downstream authority.
+A Target Group is a convenient authorized membership and restriction mechanism, not a second permission engine. A group-level operation evaluates each actual Target and its effective grants; membership alone does not grant executable capability. Display labels, tool annotations, AI context or supplied remote addresses never substitute for server-authoritative identity.
 
-The Gateway should prefer **coordination and authorization** over copying business data, reimplementing provider features, maintaining a shadow CMS or routing all large data bodies through PHP. Client-independent shared mechanisms are extracted only from proven common semantics; similar-looking Target operations need not have identical implementation.
+## 3. One shared application operation model
 
-An AChWorks ecosystem capability or future Foundation may be consumed where it demonstrably reduces total cost; Gateway-specific runtime behavior belongs to this product. Koinon owns AChWorks-wide discovery/governance, not Gateway's runtime or product decisions. Independent projects and their repositories are not implicitly writable dependencies.
+Admin, AI/MCP and other supported clients are **entry adapters** to common application operations. Authentication/presentation may be interface-specific, but Target selection, effective permission, risk checks, resource admission, dispatch, result certainty and Activity belong to reusable application logic.
 
-## 3. Actors, clients, Targets and groups
+An Admin operation must not depend on calling Gateway's own public MCP endpoint. A public MCP Tool must not become the only place that enforces business rules needed by a human action. Connector-specific protocols remain behind reviewed adapters; a common operation model does **not** imply one universal wire format, one remote API or one generalized command executor.
 
-Distinguish the **Gateway human principal**, actual authenticated **client application/profile** and its exact protocol identity, immutable registered **Target**, Target Group or other explicitly authorized collection, **connector type**, and **downstream principal**. A display name, requested hostname, AI conversation, or convenient role label is not authority.
+Extract shared code only from real common behavior and preserve small, replaceable adapters. Do not pre-build an unrelated workflow platform, duplicate authorization/credential stores or introduce one new remote transport/worker for every connector.
 
-Every Target-specific operation is bound to the exact authorized Target identity. Group operations resolve an explicit, authorized **set of Targets**; they must not rely on a mutable conversation-wide “active Target,” ambiguous aliases or client-supplied arbitrary endpoints.
+## 4. Capabilities and extensibility
 
-Gateway-wide permissions, resource-scoped grants/denials and downstream permissions form one server-authoritative decision. Roles are understandable bundles; they do not substitute for policy evaluation. Target Groups are a grouping and access mechanism, not an independent authorization engine.
+Keep **three separate evolution boundaries**:
 
-Registered idle Targets must not generate permanent sessions, per-Target processes, one tool registration per Target, or mandatory fleet polling. Group membership/visibility and capability access must be scoped, searchable and bounded.
+1. **Target-side capabilities:** a compatible new operation or schema advertised by an existing connected system should become discoverable and usable within that connector's authenticated invocation contract, **without requiring Gateway code or a public MCP Tool per downstream operation**. Real input validation, operation authority and downstream policy still apply.
+2. **Client-facing MCP/protocol capabilities:** methods, extensions and client-specific file/interaction modes require honest support and, when necessary, protocol negotiation or a reviewed adapter. Changing a downstream business operation is not equivalent to introducing a new MCP wire extension.
+3. **New connector families:** introduce an explicit trusted connector only when the protocol or security model actually differs, reusing the established Target, credential, access, operation, result and diagnostics foundations. Do not dynamically execute provider-supplied code or trust arbitrary request-selected destinations.
 
-## 4. One application operation path, multiple entry points
+The public capability surface scales with **families of supported work**, not the number of Targets or installed plugins. Authenticated discovery may be dynamic, but advertised capabilities must reflect the actual connector, client, configuration, Target state and principal permissions. A schema or discovery cache is not an authorization cache.
 
-**Admin UI, MCP/AI, and later approved APIs or automations are entry adapters to common application operations**, not independent business engines. Core authorization, selected Target binding, execution admission, resource policy, outcome interpretation and activity recording must remain reusable and authoritative below the entry adapter.
+For a standards-compliant authenticated MCP-speaking Target, prefer shared standards-based discovery/invocation over one hard-coded Gateway implementation for every remote tool—without weakening endpoint identity, protocol version checks or scoped execution grants. Other protocols, including SSH and application-native APIs, retain their appropriate native adapters.
 
-An Admin action must not need to call its own public MCP endpoint to execute a local application operation. An MCP tool must not be the exclusive owner of business behavior later needed by Admin. Inbound adapters may differ in authentication, request schema and presentation, while invoking the same capability and Target-owned executor with the same effective privileges.
+Unsupported client/protocol behavior, lack of authorization and Target/provider failure are distinct conditions and must never be mislabeled as one another.
 
-This is a **target-state boundary, not a claim that current MCP and Admin controllers already share every operation**. Evolve incrementally from real consumers; do not pre-build a universal operation engine or move all current code for architectural aesthetics.
+## 5. Delegation and safe high-impact work
 
-The Gateway's public MCP tool set is bounded by **capability families**, not fleet size, plugin count or each downstream operation. Each relevant call names its Target(s) explicitly. Supported direct-to-Target client modes remain usable independently when the connector offers them; Gateway participation is additive, not mandatory replacement.
+Support **deliberately broad** Target-capability delegation when the operator authorizes it and the authenticated downstream principal also has that power. The addition of a compatible Target operation must not silently widen a previously restricted grant.
 
-## 5. Capability discovery and connector evolution
+Support **narrow, enforceable** delegation when a workflow requires particular Targets, action classes, business operations or content scope. A promise such as “publish selected content, but cannot administer the site” is valid only when real trusted operation semantics and/or downstream policy enforce it. A tool name, mutable annotation, inferred description or hidden UI button is not a security control.
 
-Separate three axes:
-1. **Existing Target capability changes.** New operation names, schemas and compatible functionality published by an already supported/authenticated Target must normally work through that connector's existing discovery/invocation contract without a Gateway release, per-name allowlist, per-plugin review or newly registered MCP tool. A name or unfamiliar annotation alone is not a security denial.
-2. **MCP protocol/client capability evolution.** Wire-method revisions and optional protocol extensions require actual version/capability negotiation and compatible adapters. New wire behavior can require an SDK or Gateway edge change, but need not rewrite every Target connector. Unsupported is not unauthorized.
-3. **New connector family, trust model or identity protocol.** Introduce the smallest explicit, reviewed adapter and reuse the existing identity/access/operation services; a new unrelated protocol is not magically supported merely because the Gateway has a generic domain model.
+Role ceilings, user/client Target scope, group restrictions, explicit denials, connector-specific grants and downstream checks must combine consistently across every interface. Unfamiliar operations are not forbidden merely for being new, nor are unclassified effects silently granted without deliberate policy. Principal disabling, revocation, Target changes and explicit operation-pause gates must be rechecked at the relevant admission point.
 
-A registered and authenticated **MCP-speaking Target** should eventually be able to use reusable, Target-scoped standard `tools/list` / `tools/call` discovery/invocation where its actual protocol, identity and granted delegation permit; not one hard-coded gateway implementation per remote tool. WordPress's Ability discovery is an existing family-specific example, **not evidence that generic downstream MCP registration is already implemented**.
+**Legitimate high-privilege work remains possible.** An authorized SSH operator can execute arbitrary commands permitted by the configured remote OS account, including OS-authorized sudo/root work. Gateway capability toggles for SFTP are **not** a sandbox around granted shell rights. Security gates preserve exact identity, consent, trust, authorization and audit; they must not invent superficial string-based command bans or bypass real downstream permissions.
 
-Connectors may support different capability families, direct modes, authentication, file transfer, async execution, privilege classes and lifecycle semantics. Discovery must honestly advertise **effective** availability after connector support, configured enablement, real client compatibility and principal permissions. Cache metadata with bounded identity-aware freshness/invalidation; cached descriptions never replace live authorization at execution.
+Approval is bound to the authenticated actor, exact Target(s), intended action and a meaningful request identity. Confirmation does not retroactively undo a remote effect, and pausing new Gateway-mediated work does not cancel already-dispatched remote activity.
 
-The supported connector registry must not execute caller-supplied arbitrary code, dynamically load unknown PHP classes or act as an unrestricted outbound proxy. Published connector implementation/conformance guidance must make it possible for third parties to integrate without reconstructing Gateway internals.
+## 6. Operations, partial results and recovery
 
-## 6. Delegated access: broad and restricted
+Every operation has an identifiable principal, selected Target(s), requested capability, actual admission decision and outcome certainty. Distinguish:
 
-A deliberate, trusted **broad execution delegation** may allow new Target-advertised compatible operations through an existing generic invocation path, always limited by the actual Gateway user/client/Target grant and authenticated downstream principal.
+- **Not dispatched:** authorization, schema, rate, health, budget or safety admission stopped the request before an effectful remote stage.
+- **Confirmed:** a real source reports a verifiable completed result, with the applicable completeness limits.
+- **Partial:** some independently identified work or outputs succeeded, with the remainder explicitly recorded as incomplete or failed.
+- **Unknown after dispatch:** the Target **may** have acted despite a lost response, timeout or canceled connection. This is neither confirmed failure nor permission for blind replay.
 
-A **restricted delegation** must be able to narrow reach to particular Targets/Groups and action types or enforceable semantics when needed by real workflows (for example, selected publishing operations, not unrestricted site administration). This is a durable **direction**, not an assertion that today's coarse WordPress effect classes already implement semantic per-Ability or per-content delegation.
+A multi-Target action explicitly resolves permitted members, rechecks authorization and Target state before each meaningful dispatch and retains **per-Target outcomes and remote identities where available**. It does not pretend multiple independent Targets participate in one atomic transaction. Retrying, reconciliation, cancellation and compensation require evidence for the specific operation; a canceled request is not evidence the remote side effect disappeared.
 
-An operation's effective permissions must be enforced by stable, trusted policy evidence and, where appropriate, the Target's own authorization. Tool names, mutable annotations, caller-supplied operation parameters and hidden UI buttons are **not sufficient proof** of semantic restrictions. If a narrow promise cannot be technically verified/enforced, do not advertise it. Unknown or unclassified effects use explicitly configured authority without turning novelty into an automatic ban or covert grant broadening.
+Provide durable operation identity, status, progress, retention and safe continuation **when** the actual workload warrants them. Logical work may outlast an HTTP request, but this is not an excuse to require one worker, remote agent or live connection per registered Target. One-time group actions do not imply continuous replication/synchronization or automatic cross-site conflict resolution.
 
-AI clients and users must not gain extra Target or operation authority by changing entry points. Where a workflow warrants it, explicit owner-configurable approval can distinguish proposed from committed high-impact actions without introducing an unconditional ban. No privilege aggregation or accidental cross-Target credential sharing.
+## 7. Results, files and effective resource policy
 
-## 7. Operation outcomes and multi-Target work
+Provide one common semantic policy for identity-bound data access, size/time/concurrency limits, integrity, failure classification, cleanup and honest availability—**not** one mandatory binary transport for every connector.
 
-**Single-Target actions** must identify actor, client when applicable, exact Target, capability/schema, grant and execution identity. Distinguish request rejected **before dispatch**, confirmed result, provider-reported error, and **unknown outcome after possible side effects (`outcome_unknown`)**. No automatic blind replay: never blindly retry uncertain mutations, and never claim remote rollback or absence of effects without evidence.
+Small structured operations should be inexpensive single-call responses. Large structured results require source-supported projection, pagination, continuation or truthful oversize handling; never truncate malformed JSON or invent a cursor. A non-repeatable command's truncated output is not resumable unless a genuine retained backing result exists.
 
-**Multi-Target actions** (for example publishing or editing content on a selected group of websites) are a supported **future product direction**, not proof of current delivery. They must reuse the same per-Target permission, connector admission and execution path; record per-Target success/failure/unknown outcomes and useful remote object identities when available. Partial success is a first-class result; neither an all-or-nothing fiction nor automatic replay of already dispatched writes is acceptable.
+For binary or large files, select a **supported**, authorized and bounded client/Target route: range, stream, whole-object exchange, provider-native transfer or appropriately retained work. Keep inline-body budgets, response encoding overhead, per-window limits, total object limits, transient disk/memory/concurrency and logical operation lifetime **independent and correctly dimensioned**. An internal 16 KiB window must never be mistaken for a universal total-file limit.
 
-For long-running, bulk or interrupted work, introduce minimal durable operation/job identity, progress, cancellation and idempotency/repair semantics when the first real workflow requires them. Cancellation means only what the connector confirms; avoid turning an active operation into a mandatory long-lived HTTP/PHP request. Do not install a universal workflow engine or per-Target worker as a prerequisite.
+Transfer claims require the actual bytes, source/destination identity, size and integrity evidence at the stages that can be verified. A path, URL, handle, server spool or successfully executed tool is **not proof** that a human received the content or that an AI model can consume it. Connector-native transport support and host/client-specific file handoff must be verified separately. Downloads and uploads have independent directions, permissions and completion semantics.
 
-**One-time multi-Target publishing** and **persistent synchronization/conflict resolution** are different product behaviors. The latter is not implied by the former and requires a separate accepted contract, ownership model and evidence.
+Avoid unnecessary data duplication, long-lived Gateway storage and compulsory PHP-host transit for every large file. Source applications remain systems of record. Temporary data is private, bounded, subject to actual host capacity and cleaned up safely.
 
-## 8. Results, data and file exchange
+## 8. Security, credentials and diagnostics
 
-Use one common, typed contract for **permission, identity binding, capacity, integrity, availability, error/outcome and cleanup**; implement wire formats and native capabilities in the appropriate client/connector adapters.
+Authentication, client identity and Target selection must be cryptographically and authoritatively bound where appropriate. Protect Gateway sessions, consent, client OAuth/PKCE and token lifecycle, secret encryption and private storage, rate and resource admission, anti-enumeration access, outbound HTTPS/TLS/DNS/SSRF policy and independently pinned SSH host key/verified peer identity. No ordinary client may choose an arbitrary remote destination or cause unapproved credential forwarding.
 
-Small structured results should remain cheap single-call JSON/UTF-8 responses. Larger objects may use bounded windows, streaming, connector-native continuation, direct storage/Target handoff or a retained job according to the **actual supported client and Target modes**. Do not force a universal inline body size, Base64 duplication, shared long-lived socket or one connector's SFTP window onto another connector's legal workload.
+Credential refresh, reauthorization, local forgetting, confirmed remote revocation, recorded connection health and Gateway operational pause are **different states**. Connector-owned rotating credentials need bounded due-work maintenance, generation fencing and provider-permitted recovery. Do not hold database locks across long remote network operations or treat a stale health timestamp as revoked authority.
 
-Transfer success requires actual byte/length/hash and receiving-client evidence where relevant. A server-side path, handle, file ID or URL alone does not prove that an AI model consumed bytes or a human received a file. Bidirectional host-specific modes need independent acceptance; never claim one host's extension is universally available.
+Safe and coherent diagnostics identify the **first evidenced** failing layer: Gateway admission, outbound transport, connector protocol, downstream result or receiving-client boundary. If an intermediary strips structured provider errors, original provider cause remains unknown rather than being guessed from free-form messages. Ordinary end-user errors are understandable and do not expose infrastructure topology, private paths, provider internals, stack traces or credentials. Appropriately authorized operators receive bounded actionable stage/correlation evidence via a shared Activity and diagnostic model, not cloned per-connector logging systems.
 
-Provider/Target remains system of record for its content. Gateway retains only operational metadata and data actually justified by its workflow; retention, private spool and cleanup are bounded and operator-visible where appropriate.
+Avoid logging secrets, private keys, bearer/refresh tokens, raw large outputs or arbitrary command and content bodies. An Activity persistence failure must not change a completed remote operation's authoritative result.
 
-[REMOTE-IO-CONTRACT.md](REMOTE-IO-CONTRACT.md) governs protocol/transfer details, typed limits and cross-hop failure semantics; current measured effective limits and supported implementations must be established separately.
+## 9. Efficiency, scale and supported operation
 
-## 9. Proportional performance, budgets and operational cost
+The primary model is a manageable **single-installation private workspace**, deployable on ordinary compatible PHP hosting with a relational database, HTTPS, private runtime state and a usable server-rendered Admin. Support hosts without shell/Composer access through trustworthy install/update packages, while retaining an advanced source deployment route. **README is not the product specification.**
 
-**Performance and resource efficiency are requirements, not reasons to invent feature restrictions.** Limits must reflect actual resource, host, protocol and security constraints, remain finite and measured, and be **independently typed** for inline request, decoded/encoded response, stream window, whole object, temporary disk, memory, concurrency and distinct operation lifetimes.
+Idle registered Targets should impose nearly only indexed database storage cost: no mandatory background polling, per-Target process, permanent SSH/MCP connection or Tool registration for each Target. Workload-dependent mechanisms should be proportional, measured, bounded and maintainable. Optimize end-to-end latency, number of remote round trips, throughput, worker memory/CPU, database overhead, private temporary storage, concurrency and operational cost before adding caches, queues, brokers, daemons or orchestration systems.
 
-Separate **maximum admissible budget** from **actual allocation**: a permitted large transfer should not preallocate that maximum for a small action. The owner should be able to adjust legitimate operational budgets through a single coherent, typed policy within real host/protocol/safety bounds; avoid code rewrites and one new settings subsystem per connector. Security invariants and provider credential-recovery fences are not user-tunable performance knobs.
+Finite Owner-configurable operational budgets belong to **one coherent typed policy** where legitimate workloads need adjustment. Maximum allowed size is not preallocated capacity; effective limits depend on the whole authenticated client–Gateway–Target path. Never expose immutable trust, permission or provider recovery invariants as performance tuning switches.
 
-Registered-but-idle fleet inventory should incur approximately durable database cost only; ordinary Admin and machine listing must be indexed, paged, filtered and permission-scoped, without fleet-wide remote fan-out. Active workload, not stored fleet count, determines needed runtime resources.
+Install/update procedures protect existing credentials, users and unrelated state, authenticate and verify packages, preserve private files, apply migrations with explicit compatibility boundaries, and support an **independently verified database restoration path**. A code-file backup is not a database backup; upgrades or rollback must not invent remote mutation reversibility. Supported environment settings must be discoverable and documented once with safe defaults and clear opt-in for dangerous options.
 
-Measure representative latency, round trips, throughput, PHP worker CPU/RSS, remote connections, database cost, temporary disk, concurrent operations and failure rates before adding queues, Redis, daemons, search clusters or other services. Optimize total lifecycle/maintenance cost as well as raw throughput. Reuse mature maintained libraries and native capabilities when they fit, avoiding both needless dependencies and bespoke reimplementations.
+## 10. Product acceptance principles
 
-## 10. Security as a capability-enabling boundary
+A product change is acceptable when it preserves the following properties relevant to its scope:
 
-Security controls **permit authorized high-impact work**, rather than silently excluding useful Target functionality by name, format or perceived risk. Owner-configurable, explicit, well-audited risk acceptance is appropriate for legitimate actions, including privileged SSH operations, provided it does not bypass another principal's authority or non-negotiable trust constraints.
+- **Usable authority:** the intended real operation succeeds under an approved user/client/Target/downstream grant, while negative scopes and permission boundaries remain enforced.
+- **One policy across interfaces:** equivalent Admin and machine actions share admission, dispatch and truthful outcome semantics rather than diverging in authorization or diagnostics.
+- **Adaptive interoperability:** compatible new Target operations need not multiply Gateway Tool names or require per-name Gateway releases; incompatible protocols/extensions are reported accurately.
+- **Extensible without duplication:** a new supported connector reuses common identity, access, credential, result and resource mechanisms where they are truly shared, while retaining necessary protocol-specific code.
+- **Safe group work:** multi-Target operations record independently attributable partial or unknown outcomes without duplicate or unapproved effects.
+- **Real data delivery:** size, integrity and receiver/client compatibility are demonstrated for the supported mode; no claim of delivered or model-readable files from server-side handles alone.
+- **Efficient operation:** small workloads stay cheap, idle fleets do not create proportional runtime work and measured larger workloads can use appropriate bounded modes.
+- **Recoverable trust:** authentication/secret boundaries, exact remote identity, consent, revoke/unknown-result semantics, audit and independently restorable application data remain intact.
+- **Operational clarity:** an administrator can deploy, grant, observe, diagnose and recover the system without reverse-engineering its internals or interpreting ordinary user errors as internal infrastructure details.
 
-Always preserve secure administrator password hashing, authenticated sessions with production cookie/CSRF protections, reasonable rate limiting, exact MCP OAuth state/PKCE/client/resource binding, and reviewed client profiles; never trust a client display label as authorization. Keep signing/encryption keys private outside the web root, maintain key-aware backup/recovery guidance, and avoid leaking passwords, bearer/refresh tokens or full sensitive content into logs, Activity or errors.
-
-Always preserve correct Gateway/client authentication and consent, exact user/client/Target authorization, encrypted and segregated secrets, downstream permission enforcement, verified remote endpoint and peer (HTTPS/TLS/DNS/SSRF or pinned SSH host key as applicable), data protection, request validity, finite host/resource admission and safe logs. A remote shell with administrative OS rights is real administrative power; do not present tool-family toggles as a sandbox.
-
-Revoked authorization, changed identities, known unsafe destinations and unauthorized cross-scope access fail closed. A new capability unknown to Gateway is not automatically deemed malicious; offer a truthful unsupported/permission explanation and appropriate explicit delegation instead of hardcoded feature bans.
-
-Any high-impact approval or confirmation must be bound to the exact authenticated principal, selected Target(s), intended action and meaningful request identity; it must not become a reusable cross-Target approval token. **Only a suitably authorized Owner may control a global or Target-wide Pause/Resume gate** where that policy is part of the supported product; new remote stages recheck it, but in-flight remote side effects are not revoked or rolled back by pausing.
-
-Approval/confirmation, pause, disconnect, job cancellation and remote revocation have **different effects**. Pausing Gateway-mediated new operations does not retroactively undo in-flight Target changes; user acknowledgment cannot invent a remote rollback. Preserve recovery from partial/uncertain results without leaking secrets or encouraging unsafe replay.
-
-## 11. Credential lifecycle, diagnostics and evidence
-
-Connection authorization, last authenticated health observation and operational availability are separate facts. **Stale health is not credential revocation**. Connector-owned, renewable offline grants use bounded due-work maintenance and authorized single-use recovery where supported; never assume SSH passwords have OAuth refresh semantics or that an unverified host Cron is running.
-
-Use a single safe, connector-neutral correlation and diagnostics path. Identify the **first evidenced** failure stage, preserve a stable external error contract and distinguish Gateway admission/transport, adapter/protocol, provider (only with evidence), capacity/wire and actual client handoff. When intermediaries strip upstream error codes, report original cause as unknown rather than parsing arbitrary translated text or guessing.
-
-Operator-facing diagnostics and authorized Activity may be more detailed than end-user MCP errors, but must remain appropriately scoped, bounded and free of credentials, arbitrary full payloads or protected Target exposure. Administrative/security audit and high-volume operational events may require different retention semantics; avoid a duplicate logging database by default.
-
-Source implementation, passing CI, public release, installation and user/client behavior are **separate evidence claims**. None proves the next automatically.
-
-## 12. Supported operating model and evolution
-
-The initial and continuing primary product is a **private self-hosted deployment for a trusted owner/small workspace**, not a public multi-tenant SaaS. Preserve a simple PHP/Laravel application usable on ordinary compatible PHP hosting, with MariaDB/MySQL-compatible persistence, HTTPS, private credentials, server-rendered Admin and no mandatory Docker, Redis, Node runtime, separate agent, message broker or long-running daemon.
-
-Provide safe fresh-install and update packages for hosts without SSH/Composer and an advanced source-based deployment route. Fresh installers require HTTPS, an empty provisioned database, private secret handling and an irreversible installer lock after first success. Temporary browser updaters require existing authorized administrator session and CSRF/HTTPS admission, verified package identity, private staging, preservation of existing private environment/state, explicit managed-file ownership, cleanup of temporary public entry points, safe schema-migration boundaries and a separately verified database restore plan. A code backup is not a verified database restore. Public web access is confined to the intended public document root. Environment settings actually supported by this product must be discoverable consistently in the operator template and reference; dangerous/optional settings are clearly commented or safely defaulted, not silently enabled on an upgraded host.
-
-Do not mandate a SPA, Kubernetes, public tenancy, billing, enterprise hierarchy, permanent data replication, generic host/file/SQL console, arbitrary URL proxy, dynamic connector marketplace or premature Foundation extraction. These are distinct future product decisions, not hidden requirements of extensibility.
-
-Compatibility for existing authenticated clients, Target identities, credentials, direct connector use and public contracts is preserved where feasible; deliberate breaking changes require an explicit migration and recovery contract. Add external clients, connectors, richer Admin operations, groups, storage adapters and workload infrastructure **as concrete demand and measured evidence justify them**, without rewriting the shared core.
-
-## 13. Acceptance and growth rules
-
-Product evolution must be evidenced by representative, authorized real operations, not only mocks or a passing source build:
-- an existing supported Target adds a compatible capability that becomes discoverable/invocable **without changing Gateway code**, while narrower and downstream denials remain enforced;
-- identical authorized operations initiated through **MCP and Admin** converge on common policy, execution and outcome semantics once the Admin execution surface is implemented;
-- authorized multi-Target work produces individually truthful partial/unknown results with no duplicate unsafe mutation;
-- new connector families and reviewed clients reuse shared identity/access/operation/data contracts rather than duplicating the core;
-- small/large payloads and mixed workloads obey effective measured boundaries without unrelated connector limits; real client handoff is distinguished from server-side byte storage;
-- idle fleet growth does not force proportional workers, polling or per-Target registrations; meaningful work remains observable, bounded and recoverable;
-- authorized high-risk operations remain possible within real downstream authority and immutable trust boundaries;
-- a fresh maintainer can recover **intent here**, **architecture in the technical docs**, **unresolved work from Issues**, **code identity from Git**, and **shipped/installed facts from the actual release/runtime** without prior chat state.
-
-These are enduring acceptance **directions**, not a declaration that every future capability is shipped. WordPress-first V1 scope and acceptance remain recoverable from this file's Git history and completed [V1 program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1); they are historical evidence, not competing live product requirements.
-
-## 14. Sources of truth and change policy
-
-- **This MASTER-SPEC:** lasting product intent, invariants, supported operating model and non-goals.
-- **ARCHITECTURE / TARGET-CONNECTOR-FOUNDATION / REMOTE-IO-CONTRACT / connector guides:** current design, executable boundaries, standards and adapter contracts, including implementation status when explicitly marked.
-- **Git source, PRs and exact CI:** implementation and review evidence.
-- **GitHub Issues:** current acceptance gaps, sequencing, dependencies and owner decisions pending execution.
-- **Releases and actual environments:** shipped artifact and installed/runtime truth.
-- **README:** short public introduction, installation entry and usage navigation **only**; **not a project specification, durable architecture document, issue tracker, recovery log or authoritative implementation proof**.
-- **Koinon:** ecosystem-wide governance/asset discovery, not this product's live backlog or runtime.
-
-Change the MASTER-SPEC only for a materially accepted change to product purpose, lasting behavior, authority/trust model, deployment commitments or non-goals. Do not put SHAs, PR status, current versions, implementation subtasks, release timelines or arbitrary numeric tuning settings here. Specifics belong to their nearest owner. Changes to dependent architecture and Issues must be reconciled before implementation claims are made.
+New capabilities, infrastructure and compatibility obligations should have a real consumer and evidence of need. Preserve these product guarantees rather than adding speculative platform abstractions or restrictions that merely appear safer.
