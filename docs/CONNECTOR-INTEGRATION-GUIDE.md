@@ -14,7 +14,7 @@ This is the implementer/operator contract for connecting a new Target to MCP Gat
 
 Current source connector types are declared in app/Application/Targets/TargetConnectorRegistry.php. Only `wp_ai_bridge` and `ssh_direct` are supported built-in connector types; unsupported stored types are rejected for registration, inventory filters and execution. An architecture entry does not mean a released or deployed capability.
 
-## 1a. External integrators: choose a contract before choosing a Gateway adapter
+## 2. External integrators: choose a contract before choosing a Gateway adapter
 
 The Gateway is one authorized application-operation plane with multiple entry surfaces (MCP/AI now; Admin direct actions progressively). A new operation on an **already connected and compatible** Target should require neither a Gateway MCP Tool per operation nor a Gateway code release. The Target remains the source of business behavior, permission enforcement, operation/schema truth and content.
 
@@ -36,7 +36,7 @@ For a non-MCP product, first determine whether its native authenticated API or a
 
 The Gateway must not promise automatic bridging of a completely new transport, protocol revision, identity scheme or semantic permission vocabulary. Clearly distinguish **unsupported implementation**, **not authorized**, **Temporarily unavailable**, and **unknown outcome**. Provider-specific tools may be broad or restricted only as the effective Gateway-and-provider grant truly allows.
 
-## 2. Implement an integrated Target connector
+## 3. Implement an integrated Target connector
 
 1. Choose one immutable Gateway Target record identity, a stable connector type and display label. Store changeable remote URL/IP, principal, certificate/host key and authentication details behind the connector; do not add connector-specific fields to the shared Target row without evidence.
 2. Implement App\Application\Targets\TargetConnectorAdapter: type, registrationRules, safeOldInputFields, register, registrationStatus, connect, reconnect, disconnect, test, adminDetails, publicMetadata and hasPendingDeletion. The first two real examples are WpAiBridgeTargetAdapter and SshDirectTargetAdapter.
@@ -45,7 +45,7 @@ The Gateway must not promise automatic bridging of a completely new transport, p
 5. State the connector's remote discovery, protocol negotiation, authentication and test semantics. Add credential maintenance only when the connector truly supports renewable credentials; never require an OAuth issuer/refresh URL for an SSH or named-token Target.
 6. Provide source-level, independent review/CI, exact released-artifact and installed-environment evidence independently before advertising feature availability.
 
-## 3. Connection lifetime, authentication and Stale health
+## 4. Connection lifetime, authentication and Stale health
 
 A connection is a stored, authorized relationship, not a permanently open socket. These facts are independent:
 
@@ -60,7 +60,7 @@ A connection is a stored, authorized relationship, not a permanently open socket
 
 **Product requirement:** A previously authorized, renewable connection remains usable through days/months of inactivity, including old Stale health evidence, **provided the remote grant remains valid and required host-side bounded refresh maintenance is running**. The next operation should resume without interactive WordPress sign-in or new Gateway registration. With finite refresh credentials and no running maintenance process, unbounded inactivity past the refresh lifetime cannot be promised. Never substitute non-expiring bearer tokens to conceal that prerequisite.
 
-## 4. Provider OAuth: only if this connector supports it
+## 5. Provider OAuth: only if this connector supports it
 
 - Establish initial OAuth client identity, exact issuer/resource/redirect URI, PKCE, allowed scope and client authentication. The WP AI Bridge-approved Gateway uses HTTPS Client ID Metadata Document, JWKS RS256 private_key_jwt, PKCE S256 and mcp:use plus offline_access. Never reuse another client's identity.
 - Persist rotating credentials encrypted and bound to immutable Target record identity, connector purpose/version, client, issuer/resource and authorized scope/principal. WordPress browser logout is NOT offline OAuth revocation.
@@ -70,7 +70,7 @@ A connection is a stored, authorized relationship, not a permanently open socket
 - A successful provider rotation can commit before its response reaches Gateway. Persist a target/credential/generation-bound intent before the attempt. Apply ONLY provider-authorized exact old-token recovery under a fresh, same-client/resource/scope assertion and finite window. WP Bridge currently permits one single-use recovery within 60 seconds; no third replay, arbitrary retry, or grace beyond the provider guarantee. See [Bridge #92](https://github.com/AChWorks/wp-ai-bridge/issues/92) for evaluation of more durable provider recovery.
 - Terminal revoked/invalid user, approval, issuer, resource, client or scope must fail closed. A provider outage, Stale evidence, WordPress logout or one missing HTTP response must not itself erase a grant. Conversely, never falsely claim an unknown rotation succeeded. Local credential forgetting and confirmed remote revocation are different actions; Owner attestation is not an automatic "Refresh" action.
 
-## 5. Security, scale, performance and diagnostics
+## 6. Security, scale, performance and diagnostics
 
 - Connector transport must enforce its own approved egress identity: public HTTPS origin and redirect/DNS restrictions for MCP, or pinned authenticated host key and approved TCP egress for SSH. No attacker-selected arbitrary destination or cross-Target secret reuse.
 - Use the prepare-under-short-lock, remote-call-outside-lock, conditional-finalize pattern with generation/intent/time fences. Preserve behavior under concurrent requests, revoked authorization, crashed workers and lost DB sessions; do not blindly retry a mutation with unknown remote outcome.
@@ -78,7 +78,7 @@ A connection is a stored, authorized relationship, not a permanently open socket
 - Work scales with ACTUALLY due credentials, not the count of all registered Targets. Do not register one timer, daemon or background heartbeat per Target or incorrectly poll SSH named credentials. Prefer the existing shared MCP runtime, response ceilings, and [remote I/O design](REMOTE-IO-CONTRACT.md) where relevant.
 - Confirm deployed scheduler and operation: the Laravel schedule includes gateway:wordpress-credentials-maintain and the host must invoke artisan schedule:run every minute. Use php artisan schedule:list for read-only inspection; presence in source is NOT proof host cron ran. Diagnose request-failure timing/HTTP status and scheduler last execution without leaking secrets.
 
-## 5a. Common human/AI action conformance (future runtime work)
+## 7. Common human/AI action conformance (future runtime work)
 
 Before calling a new connector **Admin-and-AI compatible**, establish evidence that its same authorized single-Target capability can be invoked through both surfaces with equivalent Target/user grant enforcement, downstream permission, validation, outcome certainty and safe diagnostic classification. Until a direct Admin executor exists for the relevant capability family, label that acceptance **not implemented / not tested**.
 
@@ -86,7 +86,7 @@ For delegated restricted actions, include an authenticated allowed operation, sa
 
 Do not create one required SDK or conformance fixture that all connectors must implement regardless of feature support. Use capability-scoped tests and report precisely which surface, protocol and host combination was verified.
 
-## 6. Representative acceptance before claiming compatibility
+## 8. Representative acceptance before claiming compatibility
 
 - [ ] One owner-approved connection remains Connected as health becomes Stale; authenticated read after long idle resumes transparently without new consent while the grant remains valid.
 - [ ] Short access expiry renews on demand; no unnecessary half-hour idle rotation for a 30-day refresh token.
