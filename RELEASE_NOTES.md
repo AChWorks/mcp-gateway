@@ -1,6 +1,6 @@
 # MCP Gateway v2.3.0
 
-**Stable v2.3.0 source promotion — NOT YET A PUBLISHED GITHUB RELEASE.**
+**Stable v2.3.0 — public Release identity and installed-host status are verified separately.**
 This promotes the Owner-approved, independently HIGH_ASSURANCE-reviewed
 `2.3.0-rc.8` source, including Direct SSH command budgets, retained Jobs and
 browser file selection (#181), Owner-only Target Pause/Resume (#189) and the
@@ -12,14 +12,15 @@ the final Agent-only source/migration cleanup passed an independent
 workflows and published-baseline upgrade tests, and merged through
 [PR #191](https://github.com/AChWorks/mcp-gateway/pull/191) as
 `main@155ae9ff636c63d5b015b9fdbd8ab86ff28ac0e1`.
-This [stable promotion PR #188](https://github.com/AChWorks/mcp-gateway/pull/188)
+The [stable promotion PR #188](https://github.com/AChWorks/mcp-gateway/pull/188)
 changes VERSION and release/operator documentation **only**, relative to
-the fully reviewed and merged rc.8 source. Stable promotion still requires
-its own exact-head CI and author-separated Owner-mediated delta review.
-Publishing the official Release (on the actually approved, merged stable
-main SHA), updating an installed host, migrating its database, and enabling
-optional SSH file transfer remain separate actions. Do not infer public
-availability from the source VERSION alone.
+the independently reviewed and merged rc.8 source. Publication policy
+requires exact-stable-HEAD CI, author-separated Owner-mediated review,
+and an explicitly approved merged-main SHA; older PR checks cannot replace
+those gates. The official GitHub Release is identified by its verified
+tag and package assets, **not** by this source VERSION or changelog text.
+Publishing a Release does not update an installed host, migrate its
+database, or enable optional SSH file transfer.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -72,10 +73,11 @@ availability from the source VERSION alone.
   approved, tested and integrated via
   [PR #191](https://github.com/AChWorks/mcp-gateway/pull/191).
   The [stable promotion PR #188](https://github.com/AChWorks/mcp-gateway/pull/188)
-  requires fresh exact-head checks and a focused Owner-mediated independent
-  review; official publication binds to the separately approved, merged
-  **main SHA** rather than any historical PR/check identity.
-  Browser/operator-host acceptance and live deployment remain separate.
+  is the separate stable VERSION/documentation promotion, governed by its own
+  exact-head checks and Owner-mediated independent review. Official publication
+  binds to the explicitly approved, merged **main SHA** rather than any
+  historical PR/check identity. Browser/operator-host acceptance and live
+  deployment remain separate.
 
 ## Per-Target Pause / Resume (#189)
 
@@ -136,9 +138,10 @@ availability from the source VERSION alone.
   independently approved rc.8 final Agent identity/migration retirement
   through [PR #191](https://github.com/AChWorks/mcp-gateway/pull/191).
   [PR #188](https://github.com/AChWorks/mcp-gateway/pull/188) is the distinct
-  stable VERSION/docs-only promotion and requires fresh stable exact-head
-  checks/review. The official Release and an operator-host upgrade remain
-  separate; preserve a test-restorable database backup for installation.
+  stable VERSION/docs-only promotion; its own exact-head checks and independent
+  review are release-policy gates, not substitutes for the source reviews.
+  The official Release and an operator-host upgrade remain separate;
+  preserve a test-restorable database backup for installation.
 
 # MCP Gateway v2.2.1
 
