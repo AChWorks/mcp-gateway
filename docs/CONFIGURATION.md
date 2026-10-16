@@ -160,6 +160,8 @@ Remote timeout/response settings are **budgets**, not guarantees of response spe
 
 ## Additional supported settings intentionally not in the basic template
 
+Only genuine first-party keys consumed by the application, installer or maintenance paths should be exposed as supported Gateway configuration. Every such key belongs in the operator template with an accurate safe default or commented, clearly restricted example. Framework-internal environment knobs are not automatically supported product settings. **Check the actual installed source and private `.env` when changing any effective setting**; the sample is documentation, not runtime state.
+
 These are **not extra user roles, guaranteed features or release approvals**. The production installer explicitly writes several security cookie flags even though the development `.env.example` does not list them.
 
 | Key | Effective default / meaning |
@@ -169,20 +171,20 @@ These are **not extra user roles, guaranteed features or release approvals**. Th
 | `SESSION_SAME_SITE` | `lax`; baseline CSRF-aware cross-site cookie behavior |
 | `SESSION_COOKIE` | Derived from `APP_NAME`; changing it logs out old browser sessions |
 | `GATEWAY_TRUSTED_PROXIES` | Empty = trust **no** forwarded proxy headers; when necessary, comma-separated **exact IPv4/IPv6 addresses**, maximum 64, never a wildcard. Change only after identifying the actual trusted proxy path |
-| `SSH_FILE_TRANSFER_ENABLED` | `false`; do not enable whole-file sidecar on a real host before separate Owner approval and installed-host acceptance; see [whole-file contract](WHOLE-FILE-EXCHANGE.md) |
+| `SSH_FILE_TRANSFER_ENABLED` | Source fallback `false` when unset; the fresh installer may explicitly write a version-specific value. Verify the actual installed private `.env`. Do not change the effective mode on a real host before separate Owner approval and host acceptance; see [whole-file contract](WHOLE-FILE-EXCHANGE.md) |
 | `SSH_FILE_TRANSFER_MAX_BYTES` | `8388608` bytes (8 MiB), bounded transfer budget when that feature is enabled |
 | `SSH_FILE_TRANSFER_MAX_SECONDS` | `30` seconds, transfer wall-time budget |
 | `SSH_VERIFY_MAX_ATTEMPTS_PER_MINUTE` | `6` attempts per Target; per-Target SSH credential verification admission |
 | `SSH_VERIFY_DECAY_SECONDS` | `60` seconds; verification admission decay interval |
 | `SSH_VERIFY_LEASE_SECONDS` | `30` seconds; verification admission lease window |
 
-Advanced Laravel configuration keys beyond the list above are framework internals; avoid editing them unless the exact release and deployment procedure require it. For operational settings managed through the Gateway **Owner UI/database**, use that interface rather than presuming an equivalent `.env` key exists.
+Advanced Laravel configuration keys beyond the list above are framework internals; avoid editing them unless the exact release and deployment procedure require it. For operational settings managed through the Gateway **Owner UI/database**, use that interface rather than presuming an equivalent `.env` key exists. The `ssh_job_max_script_kib` Owner override defaults to 16 KiB (allowed 16–64 KiB) and requires the additive script-budget migration before use; it does not change `SSH_FILE_TRANSFER_MAX_BYTES` or the 16 KiB SFTP/Job-output per-call windows.
 
 ## Operational cautions
 
 - **Identity:** `APP_URL`, `APP_KEY`, OAuth/Bridge key paths, and browser cookie security are identity/access boundaries, not routine performance knobs. The configured key paths must remain separate, private and stable through upgrades.
 - **Persistence:** activity pruning is scheduled, not synchronous; log retention is separate from Activity retention. File-backed sessions, cache and MCP state require private writable `storage/`.
-- **Recovery:** the authenticated browser updater and Owner-local recovery have a separate private state machine. Do not modify updater continuation/journal state or mistake its fixed 30-minute continuation for an administrator login TTL; follow [Deployment](DEPLOYMENT.md) and [Issue #135](https://github.com/AChWorks/mcp-gateway/issues/135). An updater **code backup is not a database backup**.
+- **Recovery:** the authenticated browser updater and Owner-local recovery have a separate private state machine. Do not modify updater continuation/journal state or mistake its fixed 30-minute continuation for an administrator login TTL; follow [Deployment](DEPLOYMENT.md). An updater **code backup is not a database backup**.
 - **Versions:** `.env.example` is a development template, not evidence of the settings active on the actual server. Published GitHub Release, installed runtime, and an unmerged source RC are different identities. A release does not auto-update your site.
 - **Support:** provide installed version, sanitized symptoms, timestamps/timezone, and safe correlation IDs. Never provide raw `.env`, tokens, passwords, private keys, database backups, full authorization headers, or user/Target secrets.
 

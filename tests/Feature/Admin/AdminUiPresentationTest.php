@@ -28,6 +28,44 @@ final class AdminUiPresentationTest extends TestCase
             );
     }
 
+    public function test_ssh_job_script_budget_uses_existing_accessible_owner_setting_fields(): void
+    {
+        $html = $this->actingAs($this->owner())
+            ->get('/admin/operations')
+            ->assertOk()
+            ->assertSee('Maximum SSH Job script input (KiB)')
+            ->getContent();
+
+        $dom = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($dom);
+
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//fieldset[legend[normalize-space(.)="Detached SSH Jobs"]]'
+            .'//label[@for="setting_ssh_job_max_script_kib"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//fieldset[legend[normalize-space(.)="Detached SSH Jobs"]]'
+            .'//input[@id="setting_ssh_job_max_script_kib"]'
+            .'[@name="values[ssh_job_max_script_kib]"][@min="16"][@max="64"]'
+            .'[@aria-describedby="setting_ssh_job_max_script_kib_info"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//fieldset[legend[normalize-space(.)="SSH commands"]]'
+            .'//input[@id="setting_ssh_command_max_kib"])',
+        ));
+
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertStringContainsString(
+            ".operations-field-grid {\n        grid-template-columns: minmax(0, 1fr);",
+            $css,
+        );
+    }
+
     public function test_adjacent_admin_panels_use_shared_spacing_without_page_specific_card_fixes(): void
     {
         $this->actingAs($this->owner())
