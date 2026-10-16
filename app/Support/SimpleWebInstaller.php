@@ -257,6 +257,9 @@ final class SimpleWebInstaller
             'FILESYSTEM_DISK' => 'local',
             'MCP_BOOTSTRAP_FIXTURE_ENABLED' => 'false',
             'MCP_BOOTSTRAP_FIXTURE_TOKEN' => '',
+            // Fresh installs default to SSH-only whole-file exchange.
+            // Existing installs preserve their own environment setting.
+            'SSH_FILE_TRANSFER_ENABLED' => 'true',
         ];
 
         foreach ($values as $key => $value) {

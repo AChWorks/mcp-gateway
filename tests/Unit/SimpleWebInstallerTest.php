@@ -83,6 +83,20 @@ final class SimpleWebInstallerTest extends TestCase
         self::assertStringContainsString("SESSION_SAME_SITE=lax\n", $environment);
         self::assertStringContainsString("MCP_BOOTSTRAP_FIXTURE_ENABLED=false\n", $environment);
         self::assertStringContainsString("MCP_BOOTSTRAP_FIXTURE_TOKEN=\"\"\n", $environment);
+        self::assertStringContainsString("SSH_FILE_TRANSFER_ENABLED=true\n", $environment);
+    }
+
+    #[Test]
+    public function a_fresh_install_enables_ssh_only_whole_file_even_with_an_old_template(): void
+    {
+        $template = "APP_ENV=local\nSSH_FILE_TRANSFER_ENABLED=false\n";
+
+        $environment = SimpleWebInstaller::buildEnvironment(
+            $template, $this->validInput(), 'base64:test-key',
+        );
+
+        self::assertSame(1, substr_count($environment, "SSH_FILE_TRANSFER_ENABLED=true\n"));
+        self::assertStringNotContainsString("SSH_FILE_TRANSFER_ENABLED=false\n", $environment);
     }
 
     #[Test]

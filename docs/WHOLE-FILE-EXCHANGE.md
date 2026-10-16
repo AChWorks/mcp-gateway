@@ -2,6 +2,21 @@
 
 **Public release status:** [v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) includes the implementation from independently HIGH_ASSURANCE-approved [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). This is a **published code/package capability, not a production installation or default enablement**. `SSH_FILE_TRANSFER_ENABLED=false` keeps the optional HTTP route **OFF** until a separately authorized real-host security/proxy/resource check enables it. Independent PHP/Python clients proved bidirectional bytes and SHA-256 on disposable installed fixtures; this does **not** prove native ChatGPT model file handoff. The earlier v2.0.3 maintenance release did not contain the route.
 
+## Unreleased future fresh-install policy (Owner decision, 2026-10-16)
+
+The installed/public versions described above remain OFF by default. A
+subsequent source candidate makes **fresh** Gateway installations set
+`SSH_FILE_TRANSFER_ENABLED=true` explicitly (new web installer and
+manual `.env.example`). It preserves the existing `.env`
+on upgrade and keeps PHP's absent-key fallback `false`, so older
+operator hosts do not activate upload/download unexpectedly. Operators
+can always set `false` to disable, or `true` after
+auditing an existing host. This setting is **SSH Direct only** and does
+not enable WordPress-native Media/Bridge private transfer or the
+ChatGPT-native attachment handshake. Real usable transfers still depend
+on bearer/session authorization, Target grants, 0700 remote staging
+directory, strict size/time and actual PHP/proxy host capacity.
+
 ## v2.3.0 browser file picker fallback — #181
 
 This source capability is **part of v2.3.0, not v2.2.1**. On an authenticated
@@ -277,7 +292,7 @@ private keys, MariaDB files or test users into GitHub.
 
 ## Integration and operational readiness boundaries
 
-The optional HTTP wire/security contract was accepted in independently reviewed [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and **released as disabled-by-default code in v2.1.2**. It is not evidence of a production deployment. Before enabling it on a *specific* supported hosting profile, follow the [deployment pre-enablement checklist](DEPLOYMENT.md#optional-ssh-whole-file-data-plane-released-but-disabled-host-acceptance-pending): request-body/worker/proxy timeouts, temporary-disk and concurrent-upload budgets, verified TLS, remote private SFTP staging, and client-side full-file verification must be measured, not assumed.
+The optional HTTP wire/security contract was accepted in independently reviewed [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and **released as disabled-by-default code in v2.1.2**. It is not evidence of a production deployment. Before enabling it on a *specific* supported hosting profile, follow the [deployment pre-enablement checklist](DEPLOYMENT.md#ssh-whole-file-data-plane-legacy-releases-disabled-new-install-source-policy-pending): request-body/worker/proxy timeouts, temporary-disk and concurrent-upload budgets, verified TLS, remote private SFTP staging, and client-side full-file verification must be measured, not assumed.
 
 **Ingress resource boundary (independent review OPTIONAL O1):** inbound HTTP
 bytes can occupy one PHP temporary spool *before* the per-Target SFTP

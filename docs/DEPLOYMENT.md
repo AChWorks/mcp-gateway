@@ -350,7 +350,15 @@ The ChatGPT-facing MCP limiter is burst-aware by default: the unauthenticated ed
 
 The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
-### Optional SSH whole-file data plane: released but disabled; host acceptance pending
+### SSH whole-file data plane: legacy releases disabled; new-install source policy pending
+
+**Future new-install source candidate (not yet published):** Fresh
+installers and the revised environment template set
+`SSH_FILE_TRANSFER_ENABLED=true` by default, with an explicit
+`false` opt-out. The PHP absent-key fallback stays OFF and the
+normal updater preserves prior private `.env`; existing
+installations therefore require their own explicit change. The setting
+only controls SSH Direct, never WP AI Bridge.
 
 The authenticated SSH whole-file HTTP sidecar was introduced by
 [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and ships in

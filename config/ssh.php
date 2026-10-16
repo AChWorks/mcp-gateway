@@ -1,8 +1,9 @@
 <?php
 
 return [
-    // DRAFT #147: opt-in only in disposable acceptance, not approved as a public API.
-    // These are SSH file-data-plane budgets, never WordPress/MCP frame limits.
+    // Fresh installs explicitly set SSH_FILE_TRANSFER_ENABLED=true in their .env.
+    // Keep the absent-key fallback OFF for older installations whose private
+    // .env files are preserved during upgrades. SSH-only, never WordPress.
     'file_transfer' => [
         'enabled' => (bool) env('SSH_FILE_TRANSFER_ENABLED', false),
         'max_bytes' => (int) env('SSH_FILE_TRANSFER_MAX_BYTES', 8388608),
