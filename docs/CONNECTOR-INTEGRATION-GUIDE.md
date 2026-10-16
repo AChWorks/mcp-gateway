@@ -14,6 +14,28 @@ This is the implementer/operator contract for connecting a new Target to MCP Gat
 
 Current source connector types are declared in app/Application/Targets/TargetConnectorRegistry.php. Only `wp_ai_bridge` and `ssh_direct` are supported built-in connector types; unsupported stored types are rejected for registration, inventory filters and execution. An architecture entry does not mean a released or deployed capability.
 
+## 1a. External integrators: choose a contract before choosing a Gateway adapter
+
+The Gateway is one authorized application-operation plane with multiple entry surfaces (MCP/AI now; Admin direct actions progressively). A new operation on an **already connected and compatible** Target should require neither a Gateway MCP Tool per operation nor a Gateway code release. The Target remains the source of business behavior, permission enforcement, operation/schema truth and content.
+
+A Target product that **already speaks supported standard MCP over an authenticated supported transport** is a candidate for a future registered, generic downstream MCP connector. Its conformance route is a bounded Target-scoped `tools/list` discovery plus `tools/call` with actual advertised schema and negotiated protocol support. **This generic connector is not yet integrated**; a server exposing MCP somewhere is not automatically enrollable in the current Gateway. OAuth identity, egress verification and arbitrary URL restrictions still apply. The existing WordPress Ability family is a **specific** working discovery/execute mechanism, not interchangeable with all ordinary downstream MCP tool names.
+
+For a non-MCP product, first determine whether its native authenticated API or an embedded application Bridge can expose explicit discoverable operations and a trustworthy authorization boundary. Adapt only that genuinely different provider protocol at the connector edge. A new connector must not create a second Gateway-wide credential system, Group model, diagnostics store, resource policy, MCP endpoint, or file-transfer infrastructure. An AChrix/Rixa application integration must follow **its actual upstream signed contract** and cannot be inferred from a possible future CMS framework component.
+
+### What the provider must specify
+
+| Contract | Provider responsibility / Gateway expectation |
+| --- | --- |
+| Identity | stable remote application identity, Gateway Target binding, authenticated downstream principal, exact endpoint and credential scope |
+| Admission | authenticated request, revocation/permission proof, privileged effects and narrow-delegation guarantees the provider can actually enforce |
+| Discovery | capability IDs and descriptions, argument/result schemas, version/compatibility change rules, effective optional features |
+| Execution | operation inputs/outputs, mutation certainty, structured error evidence, idempotency/replay guidance and cancel/partial semantics when supported |
+| Files/data | actual direction/mode, encoded versus decoded versus whole-object bounds, integrity and real client compatibility (not merely a path or opaque file ID) |
+| Lifecycle | register/connect/test/disconnect/health; only connector-supported renewable credentials receive bounded scheduled maintenance |
+| Operations | bounded resource usage, concurrency, diagnostics correlation, safe retention and explicit capability negotiation |
+
+The Gateway must not promise automatic bridging of a completely new transport, protocol revision, identity scheme or semantic permission vocabulary. Clearly distinguish **unsupported implementation**, **not authorized**, **Temporarily unavailable**, and **unknown outcome**. Provider-specific tools may be broad or restricted only as the effective Gateway-and-provider grant truly allows.
+
 ## 2. Implement an integrated Target connector
 
 1. Choose one immutable Gateway Target record identity, a stable connector type and display label. Store changeable remote URL/IP, principal, certificate/host key and authentication details behind the connector; do not add connector-specific fields to the shared Target row without evidence.
@@ -55,6 +77,14 @@ A connection is a stored, authorized relationship, not a permanently open socket
 - Separate current connection authorization from health timestamps. Show accurate bounded diagnostic categories: temporary/unreachable, terminal authorization, uncertain refresh outcome, permission denied, incompatible service. Log correlation and safe failure status only; never tokens, signed assertions, passwords, raw upstream response body or sensitive personal data.
 - Work scales with ACTUALLY due credentials, not the count of all registered Targets. Do not register one timer, daemon or background heartbeat per Target or incorrectly poll SSH named credentials. Prefer the existing shared MCP runtime, response ceilings, and [remote I/O design](REMOTE-IO-CONTRACT.md) where relevant.
 - Confirm deployed scheduler and operation: the Laravel schedule includes gateway:wordpress-credentials-maintain and the host must invoke artisan schedule:run every minute. Use php artisan schedule:list for read-only inspection; presence in source is NOT proof host cron ran. Diagnose request-failure timing/HTTP status and scheduler last execution without leaking secrets.
+
+## 5a. Common human/AI action conformance (future runtime work)
+
+Before calling a new connector **Admin-and-AI compatible**, establish evidence that its same authorized single-Target capability can be invoked through both surfaces with equivalent Target/user grant enforcement, downstream permission, validation, outcome certainty and safe diagnostic classification. Until a direct Admin executor exists for the relevant capability family, label that acceptance **not implemented / not tested**.
+
+For delegated restricted actions, include an authenticated allowed operation, same-Target denied operation, cross-Target and Group-scope denial, stale/changed capability schema and a downstream denial. For a group operation, verify per-Target result/remote identity, partial success, one ambiguous post-dispatch result, cancellation truth and no blind replay. For file exchange, test actual ingress and recipient-consumable bytes and SHA when supported by the host. Test real worker memory/connection/disk bounds rather than equating max settings with reserved memory.
+
+Do not create one required SDK or conformance fixture that all connectors must implement regardless of feature support. Use capability-scoped tests and report precisely which surface, protocol and host combination was verified.
 
 ## 6. Representative acceptance before claiming compatibility
 
