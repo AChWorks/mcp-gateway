@@ -2,11 +2,11 @@
 
 **Role:** one shared specification for result completeness, bounded resource use, cross-hop failures and trustworthy file delivery across the **actual supported** Gateway client/Target connector families. Canonical product intent is [MASTER-SPEC.md](MASTER-SPEC.md), current architecture is [ARCHITECTURE.md](ARCHITECTURE.md); implementation-specific SSH wire behavior belongs to [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md) and [DIRECT-SSH-CONNECTOR.md](DIRECT-SSH-CONNECTOR.md). This document is **not** a release checklist, inventory of current host limits or proof of client-native file attachment support.
 
-Measured effective envelopes and compatibility gaps belong to [#154](https://github.com/AChWorks/mcp-gateway/issues/154); client↔Target *actual bytes* and ChatGPT-host file handoff belong to [#147](https://github.com/AChWorks/mcp-gateway/issues/147); safe cross-hop diagnostics to [#199](https://github.com/AChWorks/mcp-gateway/issues/199). Those owners are separate; no duplicate new transport or diagnostic store is warranted.
+Effective host/client limits must be established from measured behavior, not copied release snapshots. Client↔Target byte delivery, resource admission and cross-hop error provenance are distinct acceptance concerns; no duplicate transport or diagnostic store is warranted.
 
 ## 1. Shared operation plane is not a universal wire transport
 
-An authenticated **Admin** action and an authenticated **AI/MCP** action should reach common application authorization, exact Target/capability selection, dispatch and outcome rules. Admin must not be forced to call its own public `/mcp` endpoint, and an MCP Tool must not be the sole owner of business logic required by Admin. **This is future acceptance, not a claim generic Admin WordPress Ability execution or group publishing ships today** ([#200](https://github.com/AChWorks/mcp-gateway/issues/200)).
+An authenticated **Admin** action and an authenticated **AI/MCP** action should reach common application authorization, exact Target/capability selection, dispatch and outcome rules. Admin must not be forced to call its own public `/mcp` endpoint, and an MCP Tool must not be the sole owner of business logic required by Admin. A common domain operation model does not itself mean an Admin UI for every downstream operation has been implemented.
 
 The shared application controls **permission, quota/admission, identity binding, integrity, outcome and cleanup semantics**. A connector/client adapter controls wire-specific JSON, HTTP, OAuth, SSH/SFTP, native provider pagination or approved file modes. A connected Target may have capabilities or limits different from every other connector; the Gateway must not silently inherit one connector's synchronous request/window ceiling as the total allowable payload for another legitimate operation.
 
@@ -24,7 +24,7 @@ Do not conflate the following budgets or substitute one single “maximum messag
 | Range or stream buffer | bytes per read/write or transport frame | small reusable bounded blocks; 16 KiB SFTP inline window is **not** 16 KiB max whole-file |
 | Complete transfer | total bytes, verified source/destination/temporary storage | a separate finite whole-object budget, available only for a supported direction/mode |
 | Host resources | PHP worker RAM/CPU, disk/inodes, outbound connections | admit against actual quotas; large ceiling does not preallocate large buffer |
-| Concurrency | active per-principal/Target/workflow jobs/connections | separate from historical Job count and operation lifetime |
+| Concurrency | active per-principal/Target/workflow jobs/connections | separate from accumulated Job history and operation lifetime |
 | Remote request | connect, first-byte, inactivity and finite per-call deadline | operation-specific, not one WordPress timeout imposed on SSH Jobs |
 | Logical job/workflow | duration, durable identity, retention and retry/unknown state | may span multiple ordinary PHP requests without a held worker/socket |
 | Client, reverse proxy and Target | provider/host upload limits, accepted encodings, negotiated capabilities | **effective** limit is constrained by all *actual* hops, not the Gateway setting alone |
