@@ -138,6 +138,46 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(2, DB::table('ssh_command_jobs')->count());
     }
 
+    public function test_owner_script_budget_checks_actual_bytes_and_keeps_existing_uuid_durable_when_lowered(): void
+    {
+        $user = $this->user('owner');
+        $target = $this->target();
+        $client = hash('sha256', 'script-budget');
+        DB::table('operational_settings')->where('id', 1)
+            ->update(['ssh_job_max_script_kib' => 64]);
+        $tool = app(SshJobMcpToolHandlers::class);
+        $script = str_repeat('# padded script line'.chr(10), 1000).'echo safe';
+        self::assertGreaterThan(16384, strlen($script));
+        self::assertLessThanOrEqual(65536, strlen($script));
+
+        $uuid = (string) Str::uuid();
+        $first = $tool->start($user, $target->target_id, $client, $uuid, $script, 30);
+        self::assertSame('job_unsupported', $first['error']['code']);
+        self::assertSame('unsupported', $first['result']['status']);
+        self::assertSame(1, DB::table('ssh_command_jobs')->count());
+
+        foreach ([str_repeat('a', 65537), str_repeat('ی', 40000)] as $overlong) {
+            self::assertSame('invalid_input', $tool->start(
+                $user, $target->target_id, $client, (string) Str::uuid(), $overlong, 30,
+            )['error']['code']);
+        }
+        self::assertSame(1, DB::table('ssh_command_jobs')->count());
+
+        DB::table('operational_settings')->where('id', 1)
+            ->update(['ssh_job_max_script_kib' => 16]);
+        $this->app->forgetInstance(OperationalSettings::class);
+        $this->app->forgetInstance(SshJobCoordinator::class);
+        $this->app->forgetInstance(SshJobMcpToolHandlers::class);
+        $tool = app(SshJobMcpToolHandlers::class);
+
+        $same = $tool->start($user, $target->target_id, $client, $uuid, $script, 30);
+        self::assertSame($first['result']['job_id'], $same['result']['job_id']);
+        self::assertSame('invalid_input', $tool->start(
+            $user, $target->target_id, $client, (string) Str::uuid(), $script, 30,
+        )['error']['code']);
+        self::assertSame(1, DB::table('ssh_command_jobs')->count());
+    }
+
     public function test_expired_unknown_job_stays_recoverable_and_does_not_get_replayed_or_pruned(): void
     {
         $owner = $this->user('owner');
@@ -247,11 +287,14 @@ final class SshJobMcpTest extends TestCase
         self::assertFalse($byName['ssh-job-start']['annotations']['readOnlyHint']);
         self::assertTrue($byName['ssh-job-status']['annotations']['readOnlyHint']);
         self::assertTrue($byName['ssh-job-cancel']['annotations']['destructiveHint']);
+        self::assertStringContainsString('per call', $byName['ssh-job-output']['description']);
+        self::assertStringContainsString('NOT an append/chunk upload', $byName['ssh-file-write']['description']);
+        self::assertStringContainsString('separate from file-transfer/Job limits', $byName['ssh-command-run']['description']);
 
         // New MCP requests publish the current Owner-configured maximum,
         // never a hardcoded 300s schema that contradicts real runtime.
         DB::table('operational_settings')->where('id', 1)
-            ->update(['ssh_job_max_runtime_seconds' => 7200]);
+            ->update(['ssh_job_max_runtime_seconds' => 7200, 'ssh_job_max_script_kib' => 64]);
         // The test directly invokes the endpoint twice in one Laravel
         // container; in real HTTP handling scoped settings reset per request.
         $this->app->forgetInstance(OperationalSettings::class);
@@ -268,6 +311,7 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(200, $updated->getStatusCode());
         $changed = collect($updatedData['result']['tools'])->keyBy('name');
         self::assertSame(7200, $changed['ssh-job-start']['inputSchema']['properties']['max_runtime_seconds']['maximum']);
+        self::assertSame(65536, $changed['ssh-job-start']['inputSchema']['properties']['script']['maxLength']);
     }
 
     private function user(string $role): User

@@ -71,9 +71,9 @@ final class OperationalSettingsAdminTest extends TestCase
         $xpath = new \DOMXPath($dom);
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@class,"operations-form")])'));
         self::assertSame(5, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
-        self::assertSame(13, (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
-        self::assertSame(13, (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
-        self::assertSame(13, (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
+        self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
+        self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
+        self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//input[@type="password"][@name="current_password"][@required])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//input[@type="hidden"][@name="version"])'));
         foreach (array_keys(OperationalSettings::allowed()) as $key) {
@@ -599,7 +599,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $defaults = [
             'max_active_per_user' => 2, 'max_runtime_seconds' => 300,
             'retention_hours' => 24, 'preparing_grace_seconds' => 120,
-            'reconcile_grace_seconds' => 600,
+            'reconcile_grace_seconds' => 600, 'max_script_bytes' => 16384,
         ];
         self::assertSame($defaults, (new OperationalSettings)->sshJobLimits());
 
@@ -609,6 +609,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $blank['ssh_job_retention_hours'] = '168';
         $blank['ssh_job_preparing_grace_seconds'] = '240';
         $blank['ssh_job_reconcile_grace_seconds'] = '1800';
+        $blank['ssh_job_max_script_kib'] = '64';
         $this->put('/admin/operations', [
             'version' => '0', 'values' => $blank,
             'current_password' => 'CorrectHorse!234',
@@ -616,10 +617,10 @@ final class OperationalSettingsAdminTest extends TestCase
         $changed = [
             'max_active_per_user' => 25, 'max_runtime_seconds' => 86400,
             'retention_hours' => 168, 'preparing_grace_seconds' => 240,
-            'reconcile_grace_seconds' => 1800,
+            'reconcile_grace_seconds' => 1800, 'max_script_bytes' => 65536,
         ];
         self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
-        self::assertSame(5, DB::table('operational_setting_changes')->count());
+        self::assertSame(6, DB::table('operational_setting_changes')->count());
 
         // An older tab with only eight pre-Job fields must not erase overrides.
         $this->put('/admin/operations', [
@@ -630,10 +631,22 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
         self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
 
+        // A browser tab opened before the new script-size control was added
+        // must retain the new override instead of resetting it silently.
+        $preScriptForm = $blank;
+        unset($preScriptForm['ssh_job_max_script_kib']);
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => $preScriptForm,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
+        self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
+
         $wrong = $blank;
         $wrong['ssh_job_max_active_per_user'] = '1025';
         $wrong['ssh_job_max_runtime_seconds'] = '604801';
         $wrong['ssh_job_preparing_grace_seconds'] = '29';
+        $wrong['ssh_job_max_script_kib'] = '65';
         $this->put('/admin/operations', [
             'version' => '1', 'values' => $wrong,
             'current_password' => 'CorrectHorse!234',
@@ -641,6 +654,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'values.ssh_job_max_active_per_user',
             'values.ssh_job_max_runtime_seconds',
             'values.ssh_job_preparing_grace_seconds',
+            'values.ssh_job_max_script_kib',
         ]);
         self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
 

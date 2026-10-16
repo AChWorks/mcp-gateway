@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
+use App\Application\Files\VerifiedTransferSpool;
 use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -24,7 +25,9 @@ use Throwable;
  */
 final readonly class SshJobCoordinator
 {
-    private const MAX_SCRIPT_BYTES = 16384;
+    private const MAX_SCRIPT_BYTES = 65536;
+
+    private const MAX_INLINE_SCRIPT_BYTES = 16384;
 
     private const MIN_RUNTIME_SECONDS = 16;
 
@@ -57,9 +60,10 @@ final readonly class SshJobCoordinator
     ): array {
         $target = $this->authorized($user, $targetId, true);
         $policy = $this->settings->sshJobLimits();
+        $scriptBytes = strlen($script);
         if (strlen($clientHash) !== 64 || ! ctype_xdigit($clientHash)
             || Str::isUuid($requestId) === false
-            || strlen($script) > self::MAX_SCRIPT_BYTES || trim($script) === ''
+            || $scriptBytes > self::MAX_SCRIPT_BYTES || trim($script) === ''
             || str_contains($script, "\0") || ! mb_check_encoding($script, 'UTF-8')
             || $runtimeSeconds < self::MIN_RUNTIME_SECONDS || $runtimeSeconds > 604800) {
             throw new SshTargetConnectionException('invalid_input');
@@ -76,7 +80,7 @@ final readonly class SshJobCoordinator
             'client_identity_hash' => $clientHash,
             'request_id' => $requestId,
         ];
-        [$row, $created] = DB::transaction(function () use ($user, $identity, $original, $digest, $runtimeSeconds, $binding, $policy): array {
+        [$row, $created] = DB::transaction(function () use ($user, $identity, $original, $digest, $runtimeSeconds, $binding, $policy, $scriptBytes): array {
             // Serialize simultaneous intents from one principal on the same
             // database user row, never while an SSH/network operation runs.
             User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
@@ -90,7 +94,8 @@ final readonly class SshJobCoordinator
 
                 return [$existing, false];
             }
-            if ($runtimeSeconds > $policy['max_runtime_seconds']) {
+            if ($scriptBytes > $policy['max_script_bytes']
+                || $runtimeSeconds > $policy['max_runtime_seconds']) {
                 throw new SshTargetConnectionException('invalid_input');
             }
             // A crash before the durable launch_unknown fence can never have
@@ -179,14 +184,38 @@ final readonly class SshJobCoordinator
             '',
         ]);
         try {
-            // Each write uses the existing 16 KiB, atomically-published,
-            // owner/mode-verified SFTP single-window file path.
-            $scriptFile = $this->files->write($user, $target, $directory.'/script.sh',
-                base64_encode($script), expectedTargetBinding: $binding);
+            if ($scriptBytes <= self::MAX_INLINE_SCRIPT_BYTES) {
+                // Preserve the existing 16 KiB safe path for ordinary Jobs.
+                $scriptFile = $this->files->write($user, $target, $directory.'/script.sh',
+                    base64_encode($script), expectedTargetBinding: $binding);
+            } else {
+                // Reuse verified whole-file SFTP streaming within the already
+                // private 0700 Job directory. Never put a large script into
+                // an OS command, weaken per-call file-tool limits, or dispatch
+                // until the remote read-back digest and exclusive publication
+                // are confirmed under the original pinned Target binding.
+                $source = VerifiedTransferSpool::empty();
+                try {
+                    if (fwrite($source, $script) !== $scriptBytes || fseek($source, 0) !== 0) {
+                        throw new SshTargetConnectionException('input_unavailable');
+                    }
+                    $scriptFile = $this->files->uploadFromStream(
+                        $user, $target, $directory.'/script.sh', $source,
+                        $scriptBytes, hash('sha256', $script),
+                        $policy['max_script_bytes'], 40, $directory,
+                        expectedTargetBinding: $binding,
+                    );
+                } finally {
+                    fclose($source);
+                }
+            }
+            if (($scriptFile['status'] ?? '') !== 'completed') {
+                // Uncertain staging is never followed by wrapper creation.
+                throw new SshTargetConnectionException('outcome_unknown');
+            }
             $wrapperFile = $this->files->write($user, $target, $directory.'/wrapper.sh',
                 base64_encode($wrapper), expectedTargetBinding: $binding);
-            if (($scriptFile['status'] ?? '') !== 'completed'
-                || ($wrapperFile['status'] ?? '') !== 'completed') {
+            if (($wrapperFile['status'] ?? '') !== 'completed') {
                 throw new SshTargetConnectionException('outcome_unknown');
             }
         } catch (Throwable) {

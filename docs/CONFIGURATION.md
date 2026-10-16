@@ -281,6 +281,15 @@ The ordinary Gateway profile requires **no Redis, Memcached, external queue work
 
 Unsupported framework scaffold entries (e.g. AWS/SQS/Beanstalkd/DynamoDB/Postmark/Resend/Slack-bot adapters and arbitrary auth-driver replacement) are **not** shipped Gateway capabilities; they are intentionally absent from the template, even where Laravel's example config references them. The first-party source inventory guard documents and checks these explicit exclusions. Do not install extra dependencies, enable arbitrary external services or change `AUTH_MODEL` to make the template appear complete.
 
+For values managed in **Owner → Operational settings** use the existing audited
+database-backed Owner control, **not** an invented `.env` key. In particular,
+`ssh_job_max_script_kib` defaults to **16 KiB** and may be set to **16–64 KiB**
+only after its additive `2026_10_16_010000_add_ssh_job_script_input_limit.php`
+migration is applied on the installed host. It is separate from
+`SSH_FILE_TRANSFER_MAX_BYTES`, synchronous command input, 16 KiB per-call SFTP
+read/write and Job output windows. New settings do not retroactively change
+the identity or authorization of retained Jobs.
+
 ## Operational cautions
 
 - **Identity:** `APP_URL`, `APP_KEY`, OAuth/Bridge key paths, and browser cookie security are identity/access boundaries, not routine performance knobs. The configured key paths must remain separate, private and stable through upgrades.
