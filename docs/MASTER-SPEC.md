@@ -8,6 +8,8 @@ The product has **one application-owned security and operation model**, exposed 
 
 Gateway is a **coordination, authorization and interoperability layer**. It is not a replacement for the connected applications' business logic, a duplicate content-management system, a public multitenant service, a universal network proxy or an unrestricted plugin marketplace.
 
+**Integration must preserve independent supported direct access.** Registering or operating a Target through Gateway must not require disabling, altering or breaking an existing supported direct client-to-backend connection. This guarantees coexistence where the downstream system genuinely offers a direct mode; it does not invent a direct mode where none exists or bypass either path's authentication and authorization.
+
 ### Product outcomes
 
 A successful Gateway enables an authorized principal to:
