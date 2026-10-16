@@ -1,87 +1,44 @@
-# MCP Gateway Project Map
+# MCP Gateway — documentation map and recovery path
 
-This file is the maintainer/agent navigation entry point for recovering and continuing the project. It is intentionally separate from `README.md`, which is reserved for the user-facing project overview, installation, and usage guidance.
+**Purpose:** tell a developer/operator/AI Master **where to find the one authoritative answer**, not replicate the specification, current project status, release notes or Issues. `README.md` is the **public introduction, installation entry and usage navigation**, **not** the product or architectural specification.
 
-## Authoritative sources
+## What to read for a concrete question
 
-Use the source that owns the kind of truth you need:
+| Question | Authoritative source |
+| --- | --- |
+| **Why the product exists, enduring behavior, constraints and non-goals** | [MASTER-SPEC.md](MASTER-SPEC.md) |
+| **How the currently integrated Gateway is structured; clearly labeled future seams** | [ARCHITECTURE.md](ARCHITECTURE.md) and actual implementation |
+| **What one Target and registered connector must guarantee** | [TARGET-CONNECTOR-FOUNDATION.md](TARGET-CONNECTOR-FOUNDATION.md) |
+| **How an external product/adapter can integrate and prove compatibility** | [CONNECTOR-INTEGRATION-GUIDE.md](CONNECTOR-INTEGRATION-GUIDE.md) |
+| **What makes results, file exchange, quotas, errors and retry safe** | [REMOTE-IO-CONTRACT.md](REMOTE-IO-CONTRACT.md) |
+| **Specific SSH operations, Jobs and OS trust boundaries** | [DIRECT-SSH-CONNECTOR.md](DIRECT-SSH-CONNECTOR.md) |
+| **Actual SSH complete-binary HTTP endpoints and testable wire semantics** | [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md) |
+| **Operator settings, effective examples and safety defaults** | [CONFIGURATION.md](CONFIGURATION.md) and actual `.env.example`/configuration source |
+| **Installation, update, backup, rollback and production incident procedures** | [DEPLOYMENT.md](DEPLOYMENT.md) |
+| **Rare, explicit legacy v1 Site → Target data-reset upgrade** | [TARGET-TRANSITION-RUNBOOK.md](TARGET-TRANSITION-RUNBOOK.md) |
+| **Disconnection/credential revocation recovery** | [TARGET-DISCONNECT-RECOVERY.md](TARGET-DISCONNECT-RECOVERY.md) |
+| **Local-only Target removal when remotely unavailable** | [OFFLINE-TARGET-REMOVAL.md](OFFLINE-TARGET-REMOVAL.md) |
+| **OAuth client identity, reverse proxy and recovery procedures** | [CLIENT-PROFILE-RUNBOOK.md](CLIENT-PROFILE-RUNBOOK.md) |
+| **Develop, validate, reproduce and test with isolated real providers** | [DEVELOPMENT.md](DEVELOPMENT.md), [INSTALLED-MIXED-WP-SSH-ACCEPTANCE.md](INSTALLED-MIXED-WP-SSH-ACCEPTANCE.md) |
+| **Shared Admin UI and accessibility conventions** | [ADMIN-UI-QUALITY.md](ADMIN-UI-QUALITY.md) and [AGENTS.md](../AGENTS.md) |
 
-- [`MASTER-SPEC.md`](./MASTER-SPEC.md) — canonical lasting product identity, shared Admin/AI operation boundary, access/connector requirements, resource constraints and non-goals; **not** release or live-work status.
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — currently implemented Target-era structure **plus explicitly labeled future shared-operation seams**; capability discovery and connector boundaries. Obsolete V1 Site-era diagrams remain in Git history only.
-- [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md) — detailed accepted Target/connector capability, identity, credential, security and future extension contract; historical transition sequencing must not override current source/PR/Issue truth.
-- [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md) — canonical proportional resource and failure semantics (#122/#123/#147); distinct from effective-limit measurements in #154.
-- [`WHOLE-FILE-EXCHANGE.md`](./WHOLE-FILE-EXCHANGE.md) — publicly released in v2.1.2 but OFF-by-default SSH binary transfer wire contract, `target-context` discovery, disposable external-client E2E, and separately gated **host enablement** (#147).
-- [`DIRECT-SSH-CONNECTOR.md`](./DIRECT-SSH-CONNECTOR.md) — owner-accepted direct SSH password/key, OS-account commands and SFTP design (#123).
-- [Completed V1 program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) and Git history — original WordPress-first acceptance/provenance, **not** an additional maintained specification.
-- [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
-- [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
-- [`../achworks.yaml`](../achworks.yaml) — stable machine-readable AChWorks component identity, capabilities, interfaces, and source pointers; it must not mirror live work/runtime state.
-- [Koinon (`AChWorks/koinon`)](https://github.com/AChWorks/koinon) — ecosystem-level governance, discovery, and generic cross-project contracts; it is not an MCP Gateway runtime dependency.
-- [Connector integration and durability guide](./CONNECTOR-INTEGRATION-GUIDE.md) — implementer steps for future connectors, identity, permissions, durable idle authorization, Stale health, finite credential renewal and safe recovery.
-- [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues) — active work, dependencies, acceptance criteria, task state, risk, and current execution contracts.
-- [Program Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) — delivered Target/client-neutral foundation and its historical program acceptance; consult [Releases](https://github.com/AChWorks/mcp-gateway/releases) for shipped versions, and current Issues for any outstanding host/client acceptance. The canceled Agent connector #111 is historical only.
-- [Program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1) — historical completed V1 execution program and dependency graph; it is not the current-work index.
-- Pull requests and commits — implementation identity, review history, and integrated changes.
-- GitHub Actions / CI — validation evidence tied to exact commits.
-- [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases) — immutable public release identity and release notes; deployment state remains separate production truth when deployment is explicitly authorized.
+A link from a specialist guide to the canonical contract is intentional **navigation**, not permission to copy the same requirement into a second maintained version. If a detail has a clearer natural owner, edit there and point readers to it.
 
-`README.md` is not a project-state, architecture, or recovery source. It is the public/user-facing project page.
+## Recovery in a new Master/chat
 
-## Cross-repository dependency
+1. Read [MASTER-SPEC](MASTER-SPEC.md) to establish enduring accepted intent; do **not** infer shipping or completion from design text.
+2. Read [ARCHITECTURE](ARCHITECTURE.md) plus the **smallest relevant specialist contract** for the task. Source code and the immutable relevant Git ref control implemented behavior.
+3. Query [open Issues](https://github.com/AChWorks/mcp-gateway/issues?q=is%3Aissue+is%3Aopen) and [PRs](https://github.com/AChWorks/mcp-gateway/pulls) for **current** ownership, requirements and dependencies. Completed one-off acceptance belongs to the closed Issue, PR/CI and Git history, **not a parallel version-specific living Markdown status report**.
+4. Check exact source/PR SHA and its own applicable [GitHub Actions](https://github.com/AChWorks/mcp-gateway/actions) when validating code. [Releases](https://github.com/AChWorks/mcp-gateway/releases) prove published assets; **only installed-host evidence** proves the active version, enabled modes, migrations and health.
+5. Read [DEPLOYMENT](DEPLOYMENT.md) only when installation, update, backup/restore or operator actions are in scope; require appropriate separate authorization and risk gates.
 
-The initial WordPress connector compatibility work was established through:
+Never rely on chat summaries, a stale status paragraph or `README.md` to supersede GitHub/CI/installed evidence.
 
-- [`AChWorks/wp-ai-bridge#54`](https://github.com/AChWorks/wp-ai-bridge/issues/54) — approved MCP Gateway OAuth-client support while preserving direct ChatGPT behavior;
-- [`mcp-gateway#4`](https://github.com/AChWorks/mcp-gateway/issues/4) — the completed Gateway-side site registry and secure pairing work.
+## External and historical ownership
 
-These closed Issues are historical contract provenance, not active task owners. If the Bridge/Gateway connector contract changes materially, recover the current code/release evidence in both repositories and create/update the natural current Issue rather than treating closed Issue #4 as live state.
+- [Koinon](https://github.com/AChWorks/koinon) owns AChWorks-wide discovery/governance and optional Foundation-promotion rules. Gateway product/runtime/Issues remain here. [`achworks.yaml`](../achworks.yaml) is a stable metadata pointer, not another status database.
+- [WP AI Bridge](https://github.com/AChWorks/wp-ai-bridge) owns its WordPress/provider implementation and permissions; [AChrix](https://github.com/AChWorks/achrix) and actual application consumers own their optional application Bridge decisions. Cross-repo dependencies do **not** grant mutation authority.
+- Completed WordPress-first V1 criteria, former Site-era migration work, historic RC8 release tests and older release identities remain in **Git history, closed GitHub Issues/PRs, exact CI and immutable Releases**. They do not need new permanent “historical acceptance” files alongside maintained docs.
+- Future architecture and product work have explicit controlling open Issues. A reference to an unmerged PR is a proposed candidate, never integrated functionality.
 
-The Direct SSH connector is shipped. The previously proposed Agent connector was canceled (historical [#111](https://github.com/AChWorks/mcp-gateway/issues/111)); it is not an active dependency:
-
-- [`mcp-gateway#106`](https://github.com/AChWorks/mcp-gateway/issues/106) — Gateway-side breaking Target foundation and connector program;
-- [`mcp-gateway#117`](https://github.com/AChWorks/mcp-gateway/issues/117) — client-neutral MCP authorization edge; ChatGPT remains the first supported profile while future clients can be added without another core auth rewrite;
-- [`mcp-gateway#97`](https://github.com/AChWorks/mcp-gateway/issues/97) — post-integration WordPress OAuth refresh durability and real installed-host/cron proof, not generic lifecycle redesign.
-- [`mcp-gateway#123`](https://github.com/AChWorks/mcp-gateway/issues/123) — shipped SSH Target without Agent installation; password/key and OS-authorized commands, with separately owned host/edge acceptance evidence.
-- [`mcp-gateway#122`](https://github.com/AChWorks/mcp-gateway/issues/122) — completed finite oversize-response foundation; do not reopen for generic file transfer.
-- [`mcp-gateway#130`](https://github.com/AChWorks/mcp-gateway/issues/130) — existing WordPress direct-versus-Gateway Ability parity; not general file ingress.
-- [`mcp-gateway#147`](https://github.com/AChWorks/mcp-gateway/issues/147) — shared, client-neutral **real bidirectional file/data transfer**, effective mode discovery and host input/model output **to be separately verified**; does not duplicate #123 SSH backend.
-- [Gateway Issue #181](https://github.com/AChWorks/mcp-gateway/issues/181) — reviewed bounded direct SSH command tuning, selectable browser file transfer, and agentless SSH Job candidate; exact CI/release proof is in PRs, not README.
-- [Gateway Issue #182](https://github.com/AChWorks/mcp-gateway/issues/182) — selective retirement of Agent-branded UI/permissions with non-destructive legacy denial preservation.
-- [Gateway Issue #153](https://github.com/AChWorks/mcp-gateway/issues/153) — measured operational budgets and single Owner Admin settings module, distinct from security/provider invariants.
-- [Gateway Issue #154](https://github.com/AChWorks/mcp-gateway/issues/154) — per-layer effective payload/format/capacity and Bridge/client compatibility matrix, not a duplicate data plane.
-- [Gateway Issue #199](https://github.com/AChWorks/mcp-gateway/issues/199) — connector-neutral first-evidenced cross-hop error provenance and authorized operator diagnostics.
-- [Gateway Issue #200](https://github.com/AChWorks/mcp-gateway/issues/200) — **future** shared Admin/AI application-operation path, enforceable broad/restricted delegation, and one concrete multi-Target content pilot; not currently shipped. Historical completed multi-site connection checks belong to [#85](https://github.com/AChWorks/mcp-gateway/issues/85).
-- [`mcp-gateway#112`](https://github.com/AChWorks/mcp-gateway/issues/112) — mixed WordPress + SSH final acceptance and release evidence; Agent does not gate current acceptance.
-
-Neither repository's Issue grants mutation authority in the other repository. Recover both contracts and current exact implementation/release evidence before cross-repository compatibility work.
-
-## Recovery path
-
-A replacement Master or developer should recover in this order:
-
-1. Read `docs/MASTER-SPEC.md` only as needed to establish or verify project-level intent, durable constraints, and completion/growth rules.
-2. Read `docs/ARCHITECTURE.md` for the current integrated implementation boundaries.
-3. Use `docs/TARGET-CONNECTOR-FOUNDATION.md` and the appropriate `docs/DIRECT-SSH-CONNECTOR.md` / `docs/REMOTE-IO-CONTRACT.md` sections only for the current connector/transfer work. The canonical capability-evolution policy is in Master Spec §5 and Architecture §4; historical sequencing in long Issue bodies is not today's source state.
-4. Inspect current open GitHub Issues for active work, dependencies and acceptance; first read each issue's latest controlling status and current code/PR/release evidence. Older dated `NEXT`/`BLOCKED` notes are historical unless explicitly still current. Use closed Program #1 only for V1 provenance.
-5. Read only the relevant current Issue/Task Contract and its direct dependencies, including #117 when working on client-facing MCP/OAuth identity.
-6. Inspect the corresponding branch/PR/commit and exact CI evidence before changing or integrating implementation.
-7. Use `docs/DEPLOYMENT.md` plus the applicable GitHub Release and deployment evidence when installation, upgrade, or delivery becomes relevant.
-
-Conversation history is not an authoritative project source and is not required to continue the project.
-
-## Documentation ownership rule
-
-Keep information in its natural owner:
-
-- user-facing overview, installation, and usage -> `README.md`;
-- durable project intent, including future Admin/AI shared operation principles -> `docs/MASTER-SPEC.md`;
-- current architecture and labeled target-state engineering structure -> `docs/ARCHITECTURE.md`; enduring Target/connector contract -> `docs/TARGET-CONNECTOR-FOUNDATION.md` (historical migration sequencing does not override integrated source);
-- development workflow -> `docs/DEVELOPMENT.md`;
-- deployment/upgrade/rollback procedure -> `docs/DEPLOYMENT.md`;
-- completed V1/pre-release history -> closed Issues, Git history and immutable Releases, **not** additional maintained docs;
-- adapter implementation/conformance requirements -> `docs/CONNECTOR-INTEGRATION-GUIDE.md`;
-- navigation/recovery topology -> this file;
-- live work/status/dependencies -> GitHub Issues/PRs/CI;
-- release/deployment truth -> release/deployment systems.
-
-Do not mirror live task status into documentation files.
+**Document rule:** one stable product specification; one current architecture; concise specialist operator/connector/data documents with a real reader/use case; Issues for unfinished work; Git/CI/Releases for evidence. Do not add duplicate architectural copies, transient handoff snapshots or dated acceptance documents without an exceptional concrete operational need.
