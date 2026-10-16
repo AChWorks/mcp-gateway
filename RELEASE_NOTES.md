@@ -1,3 +1,28 @@
+# MCP Gateway v2.3.1
+
+**Corrective source candidate `2.3.1-rc.1` — NOT PUBLISHED.**
+
+Compared with the publicly released v2.3.0:
+
+- **Fresh Direct SSH installs:** authenticated SSH whole-file browser/HTTPS
+  transfer is explicitly enabled during new installation. Existing private
+  `.env` files and explicit opt-outs remain unchanged; a missing setting
+  retains the disabled runtime fallback. This does not add WordPress Bridge
+  file exchange or native ChatGPT attachment handoff.
+- **Detached SSH Jobs:** the Owner can tune script input to 16–64 KiB
+  independently of synchronous commands and 16 KiB per-call SFTP windows.
+  Larger scripts use the existing verified streaming transport. The additive
+  `2026_10_16_010000_add_ssh_job_script_input_limit.php` migration is required
+  on installed hosts before the new Owner setting can be used.
+- **Configuration and upgrade safety:** the first-party environment template,
+  configuration reference and source-consumer guard cover active and optional
+  keys; destructive or sensitive optional settings remain inactive. Upgrade
+  acceptance includes the latest published v2.3.0 baseline and checks that
+  installed private `.env` data is preserved.
+
+This source candidate is not a GitHub Release or an installed runtime. Publication,
+migration and live-host configuration changes require their separate approvals.
+
 # MCP Gateway v2.3.0
 
 **Stable v2.3.0 — public Release identity and installed-host status are verified separately.**
