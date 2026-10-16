@@ -106,7 +106,7 @@ Avoid logging secrets, private keys, bearer/refresh tokens, raw large outputs or
 
 ## 9. Efficiency, scale and supported operation
 
-The primary model is a manageable **single-installation private workspace**, deployable on ordinary compatible PHP hosting with a relational database, HTTPS, private runtime state and a usable server-rendered Admin. Support hosts without shell/Composer access through trustworthy install/update packages, while retaining an advanced source deployment route. **README is not the product specification.**
+The primary model is a manageable **single-installation private workspace**, deployable on ordinary compatible PHP hosting with a relational database, HTTPS, private runtime state and a usable server-rendered Admin. Support hosts without shell/Composer access through trustworthy install/update packages, while retaining an advanced source deployment route.
 
 Idle registered Targets should impose nearly only indexed database storage cost: no mandatory background polling, per-Target process, permanent SSH/MCP connection or Tool registration for each Target. Workload-dependent mechanisms should be proportional, measured, bounded and maintainable. Optimize end-to-end latency, number of remote round trips, throughput, worker memory/CPU, database overhead, private temporary storage, concurrency and operational cost before adding caches, queues, brokers, daemons or orchestration systems.
 
