@@ -6,12 +6,13 @@ This file is the maintainer/agent navigation entry point for recovering and cont
 
 Use the source that owns the kind of truth you need:
 
-- [`MASTER-SPEC.md`](./MASTER-SPEC.md) — canonical project purpose, durable requirements, constraints, non-goals, security boundaries, and V1 completion criteria.
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — current Target-era structure, capability discovery/evolution, shared controls and connector boundaries. Obsolete V1 Site-era diagrams remain in Git history only.
+- [`MASTER-SPEC.md`](./MASTER-SPEC.md) — canonical lasting product identity, shared Admin/AI operation boundary, access/connector requirements, resource constraints and non-goals; **not** release or live-work status.
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — currently implemented Target-era structure **plus explicitly labeled future shared-operation seams**; capability discovery and connector boundaries. Obsolete V1 Site-era diagrams remain in Git history only.
 - [`TARGET-CONNECTOR-FOUNDATION.md`](./TARGET-CONNECTOR-FOUNDATION.md) — detailed accepted Target/connector capability, identity, credential, security and future extension contract; historical transition sequencing must not override current source/PR/Issue truth.
 - [`REMOTE-IO-CONTRACT.md`](./REMOTE-IO-CONTRACT.md) — canonical proportional resource and failure semantics (#122/#123/#147); distinct from effective-limit measurements in #154.
 - [`WHOLE-FILE-EXCHANGE.md`](./WHOLE-FILE-EXCHANGE.md) — publicly released in v2.1.2 but OFF-by-default SSH binary transfer wire contract, `target-context` discovery, disposable external-client E2E, and separately gated **host enablement** (#147).
 - [`DIRECT-SSH-CONNECTOR.md`](./DIRECT-SSH-CONNECTOR.md) — owner-accepted direct SSH password/key, OS-account commands and SFTP design (#123).
+- [`HISTORICAL-V1-ACCEPTANCE.md`](./HISTORICAL-V1-ACCEPTANCE.md) — archived WordPress-first V1 scope and criteria **for historical provenance only**; not a competing current specification.
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — repeatable local setup, dependency boundaries, and repository validation workflow.
 - [`DEPLOYMENT.md`](./DEPLOYMENT.md) — supported aaPanel/OpenLiteSpeed/PHP deployment with MariaDB primary and MySQL compatibility, validation, backup, upgrade, rollback, and operational safety boundaries.
 - [`../achworks.yaml`](../achworks.yaml) — stable machine-readable AChWorks component identity, capabilities, interfaces, and source pointers; it must not mirror live work/runtime state.
@@ -43,11 +44,13 @@ The Direct SSH connector is shipped. The previously proposed Agent connector was
 - [`mcp-gateway#123`](https://github.com/AChWorks/mcp-gateway/issues/123) — shipped SSH Target without Agent installation; password/key and OS-authorized commands, with separately owned host/edge acceptance evidence.
 - [`mcp-gateway#122`](https://github.com/AChWorks/mcp-gateway/issues/122) — completed finite oversize-response foundation; do not reopen for generic file transfer.
 - [`mcp-gateway#130`](https://github.com/AChWorks/mcp-gateway/issues/130) — existing WordPress direct-versus-Gateway Ability parity; not general file ingress.
-- [`mcp-gateway#147`](https://github.com/AChWorks/mcp-gateway/issues/147) — shared, client-neutral **real bidirectional file/data transfer**, adaptive quotas and demonstrated host input/model output; does not duplicate #123 SSH backend.
+- [`mcp-gateway#147`](https://github.com/AChWorks/mcp-gateway/issues/147) — shared, client-neutral **real bidirectional file/data transfer**, effective mode discovery and host input/model output **to be separately verified**; does not duplicate #123 SSH backend.
 - [Gateway Issue #181](https://github.com/AChWorks/mcp-gateway/issues/181) — reviewed bounded direct SSH command tuning, selectable browser file transfer, and agentless SSH Job candidate; exact CI/release proof is in PRs, not README.
 - [Gateway Issue #182](https://github.com/AChWorks/mcp-gateway/issues/182) — selective retirement of Agent-branded UI/permissions with non-destructive legacy denial preservation.
 - [Gateway Issue #153](https://github.com/AChWorks/mcp-gateway/issues/153) — measured operational budgets and single Owner Admin settings module, distinct from security/provider invariants.
 - [Gateway Issue #154](https://github.com/AChWorks/mcp-gateway/issues/154) — per-layer effective payload/format/capacity and Bridge/client compatibility matrix, not a duplicate data plane.
+- [Gateway Issue #199](https://github.com/AChWorks/mcp-gateway/issues/199) — connector-neutral first-evidenced cross-hop error provenance and authorized operator diagnostics.
+- [Gateway Issue #200](https://github.com/AChWorks/mcp-gateway/issues/200) — **future** shared Admin/AI application-operation path, enforceable broad/restricted delegation, and one concrete multi-Target content pilot; not currently shipped. Historical completed multi-site connection checks belong to [#85](https://github.com/AChWorks/mcp-gateway/issues/85).
 - [`mcp-gateway#112`](https://github.com/AChWorks/mcp-gateway/issues/112) — mixed WordPress + SSH final acceptance and release evidence; Agent does not gate current acceptance.
 
 Neither repository's Issue grants mutation authority in the other repository. Recover both contracts and current exact implementation/release evidence before cross-repository compatibility work.
@@ -58,7 +61,7 @@ A replacement Master or developer should recover in this order:
 
 1. Read `docs/MASTER-SPEC.md` only as needed to establish or verify project-level intent, durable constraints, and completion/growth rules.
 2. Read `docs/ARCHITECTURE.md` for the current integrated implementation boundaries.
-3. Use `docs/TARGET-CONNECTOR-FOUNDATION.md` and the appropriate `docs/DIRECT-SSH-CONNECTOR.md` / `docs/REMOTE-IO-CONTRACT.md` sections only for the current connector/transfer work. The canonical capability-evolution policy is in Master Spec §4.9 and Architecture §4; historical sequencing in long Issue bodies is not today's source state.
+3. Use `docs/TARGET-CONNECTOR-FOUNDATION.md` and the appropriate `docs/DIRECT-SSH-CONNECTOR.md` / `docs/REMOTE-IO-CONTRACT.md` sections only for the current connector/transfer work. The canonical capability-evolution policy is in Master Spec §5 and Architecture §4; historical sequencing in long Issue bodies is not today's source state.
 4. Inspect current open GitHub Issues for active work, dependencies and acceptance; first read each issue's latest controlling status and current code/PR/release evidence. Older dated `NEXT`/`BLOCKED` notes are historical unless explicitly still current. Use closed Program #1 only for V1 provenance.
 5. Read only the relevant current Issue/Task Contract and its direct dependencies, including #117 when working on client-facing MCP/OAuth identity.
 6. Inspect the corresponding branch/PR/commit and exact CI evidence before changing or integrating implementation.
@@ -71,10 +74,12 @@ Conversation history is not an authoritative project source and is not required 
 Keep information in its natural owner:
 
 - user-facing overview, installation, and usage -> `README.md`;
-- durable project intent -> `docs/MASTER-SPEC.md`;
-- current architecture and engineering structure -> `docs/ARCHITECTURE.md`; enduring Target/connector contract -> `docs/TARGET-CONNECTOR-FOUNDATION.md` (historical migration sequencing does not override integrated source);
+- durable project intent, including future Admin/AI shared operation principles -> `docs/MASTER-SPEC.md`;
+- current architecture and labeled target-state engineering structure -> `docs/ARCHITECTURE.md`; enduring Target/connector contract -> `docs/TARGET-CONNECTOR-FOUNDATION.md` (historical migration sequencing does not override integrated source);
 - development workflow -> `docs/DEVELOPMENT.md`;
 - deployment/upgrade/rollback procedure -> `docs/DEPLOYMENT.md`;
+- historical V1 acceptance -> `docs/HISTORICAL-V1-ACCEPTANCE.md`;
+- adapter implementation/conformance requirements -> `docs/CONNECTOR-INTEGRATION-GUIDE.md`;
 - navigation/recovery topology -> this file;
 - live work/status/dependencies -> GitHub Issues/PRs/CI;
 - release/deployment truth -> release/deployment systems.
