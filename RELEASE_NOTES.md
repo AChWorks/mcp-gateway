@@ -1,21 +1,26 @@
 # MCP Gateway v2.3.0
 
-**Corrective source candidate `2.3.0-rc.8` — NOT PUBLISHED.**
-This follows independently approved and Owner-merged rc.7 source via
-[PR #190](https://github.com/AChWorks/mcp-gateway/pull/190), which corrected
-rc.6 Owner-authorization and old OAuth bearer / SSH Job pause regressions.
-Under the Owner's single-install decision #182, rc.8 removes obsolete
-Agent-only stored Target identity and historic Agent denial migration seeds;
-the Owner verified zero matching rows across the six inspected DB locations.
-The original generic Target migration remains, the installed ledger is not
-replayed and no automatic data cleanup or live database action occurs.
-This candidate also corrects the stale #187-as-current-review references
-identified as REQUIRED by independent review of stable promotion PR #188.
-rc.7's approval does **not** cover this new migration/model delta: exact
-rc.8 CI, isolated installation/updater checks and fresh independent
-HIGH_ASSURANCE review are required before source integration; stable VERSION
-promotion, public Release and operator-host deployment are separate gates.
-Public stable remains v2.2.1 until official publication is verified.
+**Stable v2.3.0 — public Release identity and installed-host status are verified separately.**
+This promotes the Owner-approved, independently HIGH_ASSURANCE-reviewed
+`2.3.0-rc.8` source, including Direct SSH command budgets, retained Jobs and
+browser file selection (#181), Owner-only Target Pause/Resume (#189) and the
+full retirement of the obsolete Agent connector identity and denial seeding
+(#182). The prior security/pause changes were independently reviewed and
+merged through [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190);
+the final Agent-only source/migration cleanup passed an independent
+**COMPLETE / APPROVE** with no required findings, all five exact-head CI
+workflows and published-baseline upgrade tests, and merged through
+[PR #191](https://github.com/AChWorks/mcp-gateway/pull/191) as
+`main@155ae9ff636c63d5b015b9fdbd8ab86ff28ac0e1`.
+The [stable promotion PR #188](https://github.com/AChWorks/mcp-gateway/pull/188)
+changes VERSION and release/operator documentation **only**, relative to
+the independently reviewed and merged rc.8 source. Publication policy
+requires exact-stable-HEAD CI, author-separated Owner-mediated review,
+and an explicitly approved merged-main SHA; older PR checks cannot replace
+those gates. The official GitHub Release is identified by its verified
+tag and package assets, **not** by this source VERSION or changelog text.
+Publishing a Release does not update an installed host, migrate its
+database, or enable optional SSH file transfer.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -60,15 +65,19 @@ Public stable remains v2.2.1 until official publication is verified.
   locks. Every SSH/SFTP Job phase rejects a changed original Target endpoint
   or SSH trust binding before contacting the replacement host; ambiguous
   remote launch remains non-replayable.
-- Real disposable OpenSSH/systemd and MariaDB race checks originally passed
-  for rc.5 in [historical PR #187](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
-  The later rc.7 source/pause corrections received independent approval and
-  integration via [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190).
+- The rc.5 OpenSSH/systemd and MariaDB race evidence originated in
+  [historical PR #187](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
+  The later rc.7 fixes were independently approved and integrated via
+  [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190), and the
+  final Agent-only identity/migration cleanup (`rc.8`) was independently
+  approved, tested and integrated via
+  [PR #191](https://github.com/AChWorks/mcp-gateway/pull/191).
   The [stable promotion PR #188](https://github.com/AChWorks/mcp-gateway/pull/188)
-  requires its own current exact-head checks/review, and the official manual
-  release binds to the subsequently approved **merged main SHA**. No historical
-  PR check can substitute for the current release boundary. Browser/operator-host
-  acceptance, independent review and publication remain separate gates.
+  is the separate stable VERSION/documentation promotion, governed by its own
+  exact-head checks and Owner-mediated independent review. Official publication
+  binds to the explicitly approved, merged **main SHA** rather than any
+  historical PR/check identity. Browser/operator-host acceptance and live
+  deployment remain separate.
 
 ## Per-Target Pause / Resume (#189)
 
@@ -85,8 +94,7 @@ Public stable remains v2.2.1 until official publication is verified.
   unauthorized Targets. Safe local management and credential recovery remain.
 - An additive migration enables old/new Targets by default; Owner POST action
   is idempotent, audited and protected by existing web/CSRF boundaries.
-  The rc.7 independent delta review was approved and source merged via #190;
-  the new rc.8 Agent-cleanup candidate requires its own focused independent review.
+  Independent R2 delta review of rc.7 APPROVED; all five exact rc.7 checks PASSED.
 
 ## SSH file exchange and connector presentation
 
@@ -96,13 +104,17 @@ Public stable remains v2.2.1 until official publication is verified.
   default (`SSH_FILE_TRANSFER_ENABLED=false`); this is a browser fallback,
   **not native ChatGPT attachment handoff**. Exact binary SHA-256, create-only
   denial and explicit overwrite passed a real disposable OpenSSH fixture.
-- Remove the never-implemented AI Server Agent-specific permissions/UI and
-  retire the obsolete stored connector identity and historical Agent-denial
-  migration seeding under the Owner's one-install/no-Agent-rows decision #182.
-  Keep the generic Target/SSH/WordPress migration and active SSH default-deny
-  protections. No new data-cleanup migration or production DB mutation is
-  required. Previously executed migrations remain recorded as applied; the
-  updated migration implementation is only used by future fresh builds.
+- Fully retire the never-implemented AI Server Agent-specific UI/permissions,
+  `ai_server_agent` supported stored connector identity and obsolete
+  `agent.*` historical Target migration seeding/allowlist (#182), as
+  explicitly authorized for the Owner's **single managed installation**.
+  Keep the generic historical migration, all shared Target tables,
+  WordPress/SSH registration and conservative non-Owner SSH default-deny.
+  The Owner verified zero Agent records across six relevant database
+  locations; no cleanup migration, installed DB DELETE or replay of an
+  already-applied Target migration is required. These changes were validated
+  by a clean MariaDB install, ten published-baseline update tests and
+  independently verified candidate install/update artifacts.
 
 ## Upgrade, security and rollback
 
@@ -120,14 +132,16 @@ Public stable remains v2.2.1 until official publication is verified.
   `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
   package. Changes to an actual installed host require a separate authorized
   deployment and compatibility/rollback checks.
-- rc.5's approved source integrated via [PR #187](https://github.com/AChWorks/mcp-gateway/pull/187),
-  followed by approved rc.7 source integrated via
-  [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190).
-  New rc.8 cleanup source requires its own exact-head CI and independent
-  author-separated review; stable VERSION promotion remains separate
-  [PR #188](https://github.com/AChWorks/mcp-gateway/pull/188).
-  Official Release publication and installed-host deployment are distinct; no
-  production DB cleanup or migration replay is performed by this source.
+- rc.5 source was integrated through [PR #187](https://github.com/AChWorks/mcp-gateway/pull/187),
+  rc.7's independently approved Pause/Resume and authorization correction
+  through [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190), and
+  independently approved rc.8 final Agent identity/migration retirement
+  through [PR #191](https://github.com/AChWorks/mcp-gateway/pull/191).
+  [PR #188](https://github.com/AChWorks/mcp-gateway/pull/188) is the distinct
+  stable VERSION/docs-only promotion; its own exact-head checks and independent
+  review are release-policy gates, not substitutes for the source reviews.
+  The official Release and an operator-host upgrade remain separate;
+  preserve a test-restorable database backup for installation.
 
 # MCP Gateway v2.2.1
 

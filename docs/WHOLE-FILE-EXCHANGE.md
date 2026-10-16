@@ -2,9 +2,9 @@
 
 **Public release status:** [v2.1.2](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.1.2) includes the implementation from independently HIGH_ASSURANCE-approved [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166). This is a **published code/package capability, not a production installation or default enablement**. `SSH_FILE_TRANSFER_ENABLED=false` keeps the optional HTTP route **OFF** until a separately authorized real-host security/proxy/resource check enables it. Independent PHP/Python clients proved bidirectional bytes and SHA-256 on disposable installed fixtures; this does **not** prove native ChatGPT model file handoff. The earlier v2.0.3 maintenance release did not contain the route.
 
-## Unpublished v2.3.0 browser file picker fallback — #181
+## v2.3.0 browser file picker fallback — #181
 
-This is a **development candidate, not part of v2.2.1**. On an authenticated
+This source capability is **part of v2.3.0, not v2.2.1**. On an authenticated
 Gateway Administration session, open **Targets → exact Direct SSH Target**.
 If the Target has a credential, the active user has `ssh.file.write` and/or
 `ssh.file.read`, and the separately approved server environment has

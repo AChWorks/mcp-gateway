@@ -2,14 +2,14 @@
 
 MCP Gateway is a self-hosted PHP application that connects an authenticated MCP client to the specific servers and WordPress sites you authorize. Add each connection as a **Target**, control who can use it, and manage access from one web Admin panel.
 
-**Public stable v2.2.1:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). **v2.3.0-rc.8 is an unpublished source candidate**; it adds the SSH controls, retained Jobs, and per-Target Pause/Resume described below. Install only from a verified official GitHub Release.
+**v2.3.0 release source:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). This release adds Owner-adjustable SSH controls, agentless retained Jobs, authorized browser file selection, and per-Target Pause/Resume. **Install or update only from the verified official [v2.3.0 GitHub Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0) once it is published**; source promotion does not install or deploy anything.
 
 ## What you can do
 
 - Register WordPress and SSH Targets, review connection status, and let the Owner **Pause/Resume Gateway operations per Target** without disconnecting or deleting access. An already-running remote SSH Job is not stopped by Pause.
 - Discover and run WordPress Abilities through the existing WordPress principal and its WP AI Bridge permissions.
-- Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0-rc.8, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
-- In v2.3.0-rc.8, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.
+- Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
+- In v2.3.0, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.
 - Assign users, Target Groups and permission scopes; review Activity and AI client authorizations.
 - Install or update from the named GitHub Release ZIPs without requiring Git or Composer on the host.
 
@@ -35,7 +35,7 @@ Normal operation does **not** require Redis, Docker, Node.js, a queue worker, a 
 ## Install (recommended: web installer)
 
 1. Create an HTTPS domain or subdomain and a **dedicated empty** MariaDB/MySQL database and user.
-2. Download `mcp-gateway-v2.2.1.zip` (the **deployment ZIP**, not GitHub's generic source archive) from the [v2.2.1 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.2.1). Verify the matching `.sha256`.
+2. Download `mcp-gateway-v2.3.0.zip` (the **deployment ZIP**, not GitHub's generic source archive) from the verified [v2.3.0 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0). Verify the matching `.sha256`.
 3. Extract it into a private application directory. Point the domain's **document root to its `public/` subdirectory**, for example `/www/wwwroot/mcp-gateway/public`. Never expose the application root.
 4. Make `storage/` and `bootstrap/cache/` writable by the PHP worker. Enable HTTPS before entering credentials; do not use `chmod -R 777`.
 5. Open `https://gateway.example.com/install`, supply the canonical URL, database settings and first administrator, then choose **Install MCP Gateway**.
@@ -72,9 +72,9 @@ A successful WordPress metadata check does **not** prove that an outstanding cre
 2. Verify and trust the server's **SSH host-key fingerprint** using an independent trusted source before connecting; investigate unexpected key changes rather than bypassing host-key verification.
 3. Assign the specific users and SSH permissions they need. Test with a read-only command or SFTP `stat` before allowing mutations.
 
-SSH command execution is non-interactive and is constrained by Gateway access checks **and** the remote account's real OS privileges. SFTP is bounded; large binary file exchange requires the separately supported and explicitly enabled transfer path. In the v2.3.0 candidate, the Owner can open **Admin → Operational Settings** to adjust the maximum command timeout (15–30 seconds; default ceiling 15) and command length (8–64 KiB; default 8 KiB), effective for new commands without restarting PHP. A longer-lived Job is not a longer synchronous HTTP request. The same Owner screen provides separate **Detached SSH Jobs** limits: concurrently admitted Jobs per user (default 2, adjustable 1–1024), maximum duration per Job (default 300 seconds, adjustable up to seven days), result retention (default 24 hours), and safe crash/reconciliation grace periods. There is no cumulative historical Job-count ceiling. Expiration of admission never reruns a script or proves a remote process stopped.
+SSH command execution is non-interactive and is constrained by Gateway access checks **and** the remote account's real OS privileges. SFTP is bounded; large binary file exchange requires the separately supported and explicitly enabled transfer path. In v2.3.0, the Owner can open **Admin → Operational Settings** to adjust the maximum command timeout (15–30 seconds; default ceiling 15) and command length (8–64 KiB; default 8 KiB), effective for new commands without restarting PHP. A longer-lived Job is not a longer synchronous HTTP request. The same Owner screen provides separate **Detached SSH Jobs** limits: concurrently admitted Jobs per user (default 2, adjustable 1–1024), maximum duration per Job (default 300 seconds, adjustable up to seven days), result retention (default 24 hours), and safe crash/reconciliation grace periods. There is no cumulative historical Job-count ceiling. Expiration of admission never reruns a script or proves a remote process stopped.
 
-For actual file selection in that candidate, visit **Targets → [Direct SSH Target] → SSH file upload and download**, choose a file, enter its absolute remote destination and an already provisioned private `0700` staging directory, and submit. For a download, enter the remote absolute path and save the returned attachment; verify the supplied SHA-256 and byte length. The site operator must independently approve and enable `SSH_FILE_TRANSFER_ENABLED=true` only after validating PHP/proxy upload size, temporary storage and timeouts. The option is disabled by default. A ChatGPT chat attachment is **not automatically available** to these forms or MCP tools. See [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md).
+For actual file selection in v2.3.0, visit **Targets → [Direct SSH Target] → SSH file upload and download**, choose a file, enter its absolute remote destination and an already provisioned private `0700` staging directory, and submit. For a download, enter the remote absolute path and save the returned attachment; verify the supplied SHA-256 and byte length. The site operator must independently approve and enable `SSH_FILE_TRANSFER_ENABLED=true` only after validating PHP/proxy upload size, temporary storage and timeouts. The option is disabled by default. A ChatGPT chat attachment is **not automatically available** to these forms or MCP tools. See [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md).
 
 For retained Jobs, use `ssh-job-start` with a caller-generated UUID `request_id` and a 16 KiB or smaller script. Save its returned `job_id`; poll `ssh-job-status`, read bounded stdout/stderr ranges with `ssh-job-output`, and use `ssh-job-cancel` only when appropriate. A remote host must support `systemd-run` with a persistent user manager (`linger` configured by its administrator), or a system manager for a deliberately configured root SSH account. Unsupported hosts fail closed. Reuse the same request UUID on an uncertain start; **never blindly send a different start request**. The command privileges remain those of the registered remote OS account. See [Direct SSH operator details](docs/DIRECT-SSH-CONNECTOR.md).
 
@@ -88,7 +88,7 @@ Use **AI clients** (`/admin/oauth-clients`) to manage application profiles and g
 
 ## Available MCP tools
 
-The **published v2.2.1** MCP catalog contains nine tools. The **unpublished v2.3.0-rc.8 source candidate** adds four agentless SSH Job tools (13 total), shown below. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs are available only after that version is installed and migrated on a supported host.
+The earlier v2.2.1 MCP catalog contained nine tools. The **v2.3.0 catalog** adds four agentless SSH Job tools (13 total), shown below. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs are available only after that version is installed and migrated on a supported host.
 
 | Tool | Purpose |
 | --- | --- |
@@ -101,10 +101,10 @@ The **published v2.2.1** MCP catalog contains nine tools. The **unpublished v2.3
 | `ssh-file-list` | List a bounded directory on an authorized SSH Target using SFTP. |
 | `ssh-file-read` | Read a bounded byte range from an authorized SSH Target SFTP file. |
 | `ssh-file-write` | Create or conditionally overwrite a bounded SSH Target SFTP file, subject to explicit write authorization. |
-| `ssh-job-start` | Candidate only: start a bounded persistent systemd SSH script with idempotent UUID request identity. |
-| `ssh-job-status` | Candidate only: reconcile the exact retained Job state and real exit reason/code, when known. |
-| `ssh-job-output` | Candidate only: read Base64 stdout/stderr windows without rerunning the remote script. |
-| `ssh-job-cancel` | Candidate only: request a verified, best-effort stop of the exact Job. |
+| `ssh-job-start` | start a bounded persistent systemd SSH script with idempotent UUID request identity. |
+| `ssh-job-status` | reconcile the exact retained Job state and real exit reason/code, when known. |
+| `ssh-job-output` | read Base64 stdout/stderr windows without rerunning the remote script. |
+| `ssh-job-cancel` | request a verified, best-effort stop of the exact Job. |
 
 New WordPress plugin Abilities are discovered through the existing WordPress tools; the Gateway does not need a separate public tool per Ability. All operations are restricted by the authenticated user, client, Target and downstream WordPress/SSH permissions.
 
@@ -122,7 +122,7 @@ New WordPress plugin Abilities are discovered through the existing WordPress too
 
 ## Update safely
 
-**For an existing deployment-ZIP installation**, use **`mcp-gateway-update-v2.2.1.zip`** from the [same v2.2.1 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.2.1), never the fresh-install ZIP, an old release's update ZIP or the generic GitHub source archive.
+**For an existing deployment-ZIP installation**, use **`mcp-gateway-update-v2.3.0.zip`** from the [same v2.3.0 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0), never the fresh-install ZIP, an old release's update ZIP or the generic GitHub source archive.
 
 1. Confirm the installed version and review the [release notes](RELEASE_NOTES.md). Take and **test-restore a consistent database backup**; also preserve `.env`, `APP_KEY`, both OAuth/signing key pairs, current code and private state. An updater code snapshot is **not** a database backup.
 2. Upload and extract the named update ZIP into the **existing application root** (where `artisan`, `.env`, `public/` and `storage/` reside). This stages a temporary `update/` and `public/update/`; it does not immediately replace the app.
@@ -131,7 +131,7 @@ New WordPress plugin Abilities are discovered through the existing WordPress too
 
 **Do not blindly retry failed updates.** If a migration may have started, code-only rollback is not a database rollback. Keep backup, private recovery state and logs, then follow the [deployment/recovery procedures](docs/DEPLOYMENT.md) before any further action. The private Owner-local recovery CLI is not an unauthenticated web recovery endpoint.
 
-**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. The v2.3.0 candidate adds five migrations: SSH command operational-limit columns, a durable SSH Job journal, configurable Job lifecycle/resource budgets and operator attestation, immutable per-Job admission timing snapshots, and a default-enabled Target Pause/Resume flag; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
+**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. The v2.3.0 release adds five migrations: SSH command operational-limit columns, a durable SSH Job journal, configurable Job lifecycle/resource budgets and operator attestation, immutable per-Job admission timing snapshots, and a default-enabled Target Pause/Resume flag; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
 
 ## Troubleshooting
 
