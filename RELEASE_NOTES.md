@@ -57,11 +57,14 @@ stable remains v2.2.1 until separately approved integration and Release.
   locks. Every SSH/SFTP Job phase rejects a changed original Target endpoint
   or SSH trust binding before contacting the replacement host; ambiguous
   remote launch remains non-replayable.
-- Real disposable OpenSSH/systemd validation and MariaDB same-user
-  concurrency checks must be verified against the **current exact PR HEAD**
-  at [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
-  Earlier green workflow runs (including #38791097112) are historical
-  evidence, not approval of a changed candidate. Browser/operator-host
+- Real disposable OpenSSH/systemd and MariaDB race checks originally passed
+  for rc.5 in [historical PR #187](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
+  The later rc.7 source/pause corrections received independent approval and
+  integration via [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190).
+  The [stable promotion PR #188](https://github.com/AChWorks/mcp-gateway/pull/188)
+  requires its own current exact-head checks/review, and the official manual
+  release binds to the subsequently approved **merged main SHA**. No historical
+  PR check can substitute for the current release boundary. Browser/operator-host
   acceptance, independent review and publication remain separate gates.
 
 ## Per-Target Pause / Resume (#189)
@@ -89,10 +92,13 @@ stable remains v2.2.1 until separately approved integration and Release.
   default (`SSH_FILE_TRANSFER_ENABLED=false`); this is a browser fallback,
   **not native ChatGPT attachment handoff**. Exact binary SHA-256, create-only
   denial and explicit overwrite passed a real disposable OpenSSH fixture.
-- Remove the never-implemented AI Server Agent product-specific permission
-  selectors, paused UI and future-connector marketing. Preserve the reusable
-  connector foundation, old dormant Target identity and persisted legacy
-  denial rows; applied historical database migrations remain unmodified.
+- Remove the never-implemented AI Server Agent-specific permissions/UI and
+  retire the obsolete stored connector identity and historical Agent-denial
+  migration seeding under the Owner's one-install/no-Agent-rows decision #182.
+  Keep the generic Target/SSH/WordPress migration and active SSH default-deny
+  protections. No new data-cleanup migration or production DB mutation is
+  required. Previously executed migrations remain recorded as applied; the
+  updated migration implementation is only used by future fresh builds.
 
 ## Upgrade, security and rollback
 

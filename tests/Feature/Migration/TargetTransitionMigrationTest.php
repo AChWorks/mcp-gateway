@@ -177,9 +177,8 @@ final class TargetTransitionMigrationTest extends TestCase
         self::assertContains('wordpress.abilities.execute.destructive', $denied($admin));
         self::assertContains('gateway.connection.view', $denied($operator));
         self::assertContains('targets.view', $denied($viewer));
-        self::assertContains('agent.root_command.run', $denied($admin));
-        self::assertContains('agent.command.run', $denied($operator));
-        self::assertContains('agent.environment.read', $denied($viewer));
+        self::assertSame(0, DB::table('user_permission_denials')
+            ->where('permission', 'like', 'agent.%')->count());
         self::assertContains('ssh.command.run', $denied($admin));
         self::assertContains('ssh.file.write', $denied($operator));
         self::assertNotContains('ssh.command.run', $denied($viewer));

@@ -6,7 +6,9 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## Unpublished v2.3.0-rc.7 candidate (#181 / #182 / #189)
 
-**Not a GitHub Release or installed operator version.** This candidate retains both current WordPress and Direct SSH connectors, removes the obsolete AI Server Agent-branded UI/permissions while preserving inert legacy records, adds Owner-tunable synchronous SSH limits, a disabled-by-default authenticated browser SSH file picker, and durable agentless SSH Jobs. GitHub Issue [#181](https://github.com/AChWorks/mcp-gateway/issues/181) and [#182](https://github.com/AChWorks/mcp-gateway/issues/182) track the acceptance and authorization gates; historical connector claims do not imply production availability.
+**Not a GitHub Release or installed operator version.** This candidate retains both current WordPress and Direct SSH connectors, removes obsolete Agent-branded UI/permissions and retired Agent-specific stored-identity/denial-seeding compatibility, adds Owner-tunable synchronous SSH limits, a disabled-by-default authenticated browser SSH file picker, and durable agentless SSH Jobs. GitHub Issue [#181](https://github.com/AChWorks/mcp-gateway/issues/181) and [#182](https://github.com/AChWorks/mcp-gateway/issues/182) track the acceptance and authorization gates; historical connector claims do not imply production availability.
+
+The existing Target transition migration is retained for fresh installation and historical v1-to-v2 upgrades; only its obsolete Agent-specific denial-seeding/allowlist is retired in the 2026-10-16 source cleanup. The one owner-managed installation already records this migration as applied; it must never be replayed on that DB, and no cleanup migration or live SQL modification is required after the Owner's six zero-result checks. Preserve all generic schema, non-Owner SSH default-deny and preflight/backup safeguards. The new v2.3.0 additive migration list is unrelated to Agent cleanup.
 
 The five additive migrations
 `2026_10_15_000000_add_ssh_command_operational_limits.php`,

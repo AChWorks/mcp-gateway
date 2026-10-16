@@ -15,15 +15,13 @@ final class Target extends Model
     use HasUlids;
 
     /**
-     * Persisted Target identity types, including unsupported historical
-     * record types kept solely for non-destructive upgrade compatibility.
-     * This list does not authorize registration or execution.
+     * Supported built-in Target identities. Unimplemented connector types
+     * are rejected on creation and cannot be promoted into active routing.
      *
      * @var list<string>
      */
     public const KNOWN_CONNECTOR_TYPES = [
         'wp_ai_bridge',
-        'ai_server_agent',
         'ssh_direct',
     ];
 
