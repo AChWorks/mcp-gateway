@@ -1,6 +1,6 @@
-# WordPress Target disconnect recovery — Issue #173
+# WordPress Target disconnect recovery
 
-**Version availability:** these source-integrated recovery actions are **not in v2.1.2**. Consult the exact approved public GitHub Release and the actual installed Gateway version before assuming they are available. Publishing a release never upgrades an operator host automatically. Do not test the actions against a working production Target without explicit authorization.
+**Operator use:** follow this recovery procedure only when supported by the actual installed Gateway. Never replay an uncertain WordPress refresh/revoke or test these state-changing actions on a working production Target without specific approval. Publishing a release does not change an installed host.
 
 The Target Details recovery panel separates public WordPress metadata reachability, OAuth authorization, pending operations, and diagnostic history. Public metadata success is not OAuth success, proof of remote revocation, or proof that an authenticated WordPress Ability can run.
 
@@ -20,7 +20,7 @@ The Target Details recovery panel separates public WordPress metadata reachabili
 4. Use the Owner-only WordPress-side recovery form. Type the exact Target ID, check both explicit attestations (client approval removed; other clients affected), and enter your current Owner password.
 5. A required transactionally persisted audit records an **operator-attested** result. Gateway clears its **local** credential and intent. This is NOT independently verified remote revocation. Then reapprove the client in WordPress and start new Gateway authorization.
 
-PR #172's Owner-only local forget is a distinct last-resort operation and never proves WordPress-side revocation.
+The separate [local-only Target removal](OFFLINE-TARGET-REMOVAL.md) is a last-resort Owner action and never proves WordPress-side revocation.
 
 ## Durable revocation state machine
 
