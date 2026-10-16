@@ -31,17 +31,6 @@ final class TargetConnectorRegistry
         return array_keys(self::IMPLEMENTED);
     }
 
-    /**
-     * Historical stored types remain inventory-filterable without implying
-     * that unsupported connectors can be registered or executed.
-     *
-     * @return list<string>
-     */
-    public function storedTypes(): array
-    {
-        return Target::KNOWN_CONNECTOR_TYPES;
-    }
-
     public function availableForTarget(Target $target): ?TargetConnectorAdapter
     {
         return isset(self::IMPLEMENTED[$target->connector_type])

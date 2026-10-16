@@ -6,7 +6,9 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## v2.3.0 release source and upgrade requirements (#181 / #182 / #189)
 
-**Source, public GitHub Release, and the installed operator version are separate facts.** Verify official [v2.3.0 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0) assets before distribution. The release retains WordPress and Direct SSH, removes obsolete Agent-branded live UI/permissions while preserving inert legacy records, adds Owner-tunable SSH limits, an optional browser file picker (disabled by default), durable SSH Jobs and per-Target Pause/Resume. Installed-host availability requires a separately approved upgrade, not this source promotion.
+**Source, public GitHub Release, and the installed operator version are separate facts.** Verify official [v2.3.0 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0) assets before distribution. The release retains WordPress and Direct SSH, removes obsolete Agent-branded UI/permissions **and the historical Agent stored type/permission-seeding compatibility**, adds Owner-tunable SSH limits, an optional browser file picker (disabled by default), durable SSH Jobs and per-Target Pause/Resume. Installed-host availability requires a separately approved upgrade, not this source promotion.
+
+**One-install Agent retirement (#182):** The original `2026_10_09_000000_transition_site_domain_to_targets.php` migration is retained for fresh installs and v1 Site-era transitions, but no longer recognizes or seeds Agent-specific permission strings. The Owner verified zero Agent records in the six inspected data locations of the one managed installation. That already-applied historical migration **must not be replayed** on the installed DB. No new cleanup migration, manual DB DELETE, table removal or host modification is necessary for Agent retirement. Generic Target schema and conservative SSH deny/upgrade-backup protections remain unchanged.
 
 The five additive migrations
 `2026_10_15_000000_add_ssh_command_operational_limits.php`,
@@ -33,18 +35,25 @@ The Laravel scheduler runs hourly `gateway:ssh-jobs-prune` only for safely
 reconciled terminal records. Remote systemd user-manager support and approved
 linger are remote-host prerequisites, **not** Gateway installer steps.
 
-The rc.5 source passed [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks)
-and was merged. The rc.6 independent review found an Admin existence-disclosure
-boundary and missing pause regressions; rc.7 resolved both, received independent
-HIGH_ASSURANCE **APPROVE** and passed all five exact-head checks before the
-Owner-authorized [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190)
-merge into `main@e8fc920892e4b1b9a572c23e29f5699cd99d4dab`.
-An earlier disposable loopback OpenSSH/systemd fixture did complete >15-second
+The rc.5 source evidence belongs to
+[historical PR #187](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
+The rc.6 independent review found an Admin existence-disclosure boundary
+and missing pause regressions; rc.7 fixed those, received HIGH_ASSURANCE
+**APPROVE** and integrated through
+[PR #190](https://github.com/AChWorks/mcp-gateway/pull/190).
+The subsequent Agent-only model/historical migration cleanup (`rc.8`)
+received independent COMPLETE / APPROVE, passed all five exact-head
+workflows, fresh MariaDB installation and published-baseline browser
+update/backup checks, and integrated through
+[PR #191](https://github.com/AChWorks/mcp-gateway/pull/191) on
+`main@155ae9ff636c63d5b015b9fdbd8ab86ff28ac0e1`.
+An earlier disposable OpenSSH/systemd fixture completed >15-second
 execution, exit 7, output, replay resistance, verified cancel and no-linger
-denial; browser POST/SFTP also transferred 180,127 opaque bytes in an isolated
-test. None of these claims proves installation on the operator's host,
-the separate visual browser acceptance or native ChatGPT file attachments.
-Independent review of the stable VERSION/docs-only promotion and exact-stable-head checks remain separate from completed rc.7 approval.
+denial; browser POST/SFTP transferred 180,127 opaque bytes in an isolated
+test. These checks do not prove real operator-host installation, the
+separate visual browser acceptance or native ChatGPT attachment handoff.
+Exact stable PR #188 checks and a focused Owner-mediated independent
+VERSION/docs review remain separate from merged rc.8 source approval.
 
 ### Shipping gate
 

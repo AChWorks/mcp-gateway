@@ -15,17 +15,12 @@ final class TargetDomainFoundationTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_three_supported_connector_identities_are_stable_and_wp_details_stay_connector_owned(): void
+    public function test_two_supported_connector_identities_are_stable_and_wp_details_stay_connector_owned(): void
     {
         $wp = Target::query()->create([
             'target_id' => 'wordpress-main',
             'display_name' => 'WordPress',
             'connector_type' => 'wp_ai_bridge',
-        ]);
-        $agent = Target::query()->create([
-            'target_id' => 'linux-agent',
-            'display_name' => 'Agent',
-            'connector_type' => 'ai_server_agent',
         ]);
         $ssh = Target::query()->create([
             'target_id' => 'server-ssh',
@@ -33,12 +28,11 @@ final class TargetDomainFoundationTest extends TestCase
             'connector_type' => 'ssh_direct',
         ]);
 
+        self::assertSame(['wp_ai_bridge', 'ssh_direct'], Target::KNOWN_CONNECTOR_TYPES);
         self::assertSame(TargetConnectionState::Disconnected, $wp->refresh()->connection_state);
         self::assertSame('wp_ai_bridge', $wp->connector_type);
-        self::assertSame('ai_server_agent', $agent->connector_type);
         self::assertSame('ssh_direct', $ssh->connector_type);
         self::assertNull($wp->getAttribute('base_url'));
-        self::assertNull($agent->getAttribute('base_url'));
         self::assertNull($ssh->getAttribute('mcp_resource_url'));
 
         WpAiBridgeTargetConfig::query()->create([
@@ -53,7 +47,7 @@ final class TargetDomainFoundationTest extends TestCase
         ]);
         $config = WpAiBridgeTargetConfig::query()->sole();
         self::assertSame($wp->getKey(), $config->target->getKey());
-        self::assertNull($agent->refresh()->getAttribute('base_url'));
+        self::assertNull($ssh->refresh()->getAttribute('base_url'));
     }
 
     public function test_public_target_identity_and_connector_type_cannot_be_silently_rebound(): void
@@ -78,7 +72,7 @@ final class TargetDomainFoundationTest extends TestCase
 
         $target->refresh();
         try {
-            $target->connector_type = 'ai_server_agent';
+            $target->connector_type = 'wp_ai_bridge';
             $target->save();
             self::fail('Target connector reassignment succeeded.');
         } catch (DomainException $exception) {
@@ -94,6 +88,7 @@ final class TargetDomainFoundationTest extends TestCase
         foreach ([
             ['Invalid Target', 'ssh_direct'],
             ['valid-target', 'arbitrary_plugin'],
+            ['retired-connector', 'ai_server_agent'],
             [str_repeat('a', 65), 'wp_ai_bridge'],
         ] as [$id, $connector]) {
             try {
@@ -136,7 +131,7 @@ final class TargetDomainFoundationTest extends TestCase
         try {
             TargetCredential::query()->create([
                 'target_record_id' => $target->getKey(),
-                'connector_type' => 'ai_server_agent',
+                'connector_type' => 'wp_ai_bridge',
                 'purpose' => 'remote_ssh',
                 'encrypted_payload' => 'unsafe-cross-connector',
             ]);

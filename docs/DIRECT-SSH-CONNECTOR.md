@@ -30,8 +30,7 @@ access permit audited, Owner-confirmed deliberate SSH ACL changes. Target
 Group controls are live deny-only rules; they cannot grant shell authority
 without the role, global grant and selected Target. SSH command permissions
 enable general shell/file access even when SFTP toggles deny file tools.
-A previously proposed Agent connector was canceled by the Owner; historical
-identities and denials remain inert, and no Agent capability is advertised.
+The previously proposed Agent connector was canceled by the Owner; its stored type and historic denial-seeding compatibility were retired in #182. Only WordPress and Direct SSH are supported and no Agent capability is advertised.
 
 These capabilities are shipped with v2.1.2, **not evidence that a particular
 operator host has been upgraded or its optional route enabled**. The sections
@@ -207,16 +206,18 @@ runner passed actual systemd-user SSH execution >15 seconds with real exit
 code 7, bounded stdout/stderr, replay resistance, cancellation and cleanup
 (18 assertions), followed by a no-linger fail-closed check (5 assertions)
 in [historical CI #38774916531](https://github.com/AChWorks/mcp-gateway/actions/runs/38774916531).
-The subsequent lease-safety and MariaDB same-user race must be validated in
-the [current PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks),
-not inferred from this previous run. The corresponding regression test is
-implemented in `tests/Feature/Mcp/SshJobFixtureTest.php` and the GitHub
-Actions runner-only `tests/Support/ssh-job-ci-fixture.sh`, which reuses the
-existing isolated loopback OpenSSH fixture and temporarily enables/disables
-linger for that disposable OS user. The real fixture is not proof of every production systemd/SSH host shape;
-independent author-separated security review and exact combined-source CI
-remain required before merging or publishing. No test alters an operator Target or
-production SSH service.
+The prior rc.5 lease-safety and MariaDB same-user race evidence belongs to
+[historical PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks),
+not the current release candidate. The subsequent rc.7 correction and pause
+gates were independently approved and merged via
+[PR #190](https://github.com/AChWorks/mcp-gateway/pull/190); the
+[stable promotion PR #188](https://github.com/AChWorks/mcp-gateway/pull/188)
+requires its own exact-head CI and independent review. The official manual
+release workflow additionally binds publication to the approved **merged main SHA**,
+not an old PR number. The real disposable test is in
+`tests/Feature/Mcp/SshJobFixtureTest.php` and runner-only
+`tests/Support/ssh-job-ci-fixture.sh`; it is not proof of every production
+systemd/SSH host shape. No test alters an operator Target or production SSH service.
 
 ## SFTP file I/O — released in v2.1.2
 
@@ -242,7 +243,7 @@ The separately OAuth-authenticated full-file client ingress/egress shipped in v2
 
 ## Product boundary
 
-`ssh_direct` is a **separate, built-in Target connector** for explicitly registered Linux/Unix SSH servers **without requiring AI Server Agent installation**. It supports username/password and username/private-key (+ optional passphrase) authentication. The user selects the remote OS account; the server's account permissions determine actual command privileges, including `sudo` and root when that account is legitimately configured for them.
+`ssh_direct` is a **separate, built-in Target connector** for explicitly registered Linux/Unix SSH servers **without requiring an additional remote management agent**. It supports username/password and username/private-key (+ optional passphrase) authentication. The user selects the remote OS account; the server's account permissions determine actual command privileges, including `sudo` and root when that account is legitimately configured for them.
 
 **Do not impose a Gateway command allowlist, hardcoded command/`sudo`/root denial, or shell-text filtering masquerading as a security boundary.** Arbitrary commands are mutation-capable. Gateway authorizes the *capability* to run commands on the *selected Target*, not individual shell strings. Warnings and a clear high-privilege label may assist operator choice but must not claim containment.
 
