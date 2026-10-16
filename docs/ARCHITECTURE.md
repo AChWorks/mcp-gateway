@@ -1,148 +1,106 @@
-# MCP Gateway Architecture
+# MCP Gateway — Architecture
 
-This document describes **implemented Target-era engineering boundaries** and labels proposed shared-operation extension seams explicitly. [MASTER-SPEC.md](./MASTER-SPEC.md) owns durable product intent and decisions. [TARGET-CONNECTOR-FOUNDATION.md](./TARGET-CONNECTOR-FOUNDATION.md) owns detailed Target/connector and security semantics; [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md) owns result/data behavior. GitHub Issues, exact Git/PRs, CI and Releases own **current implementation, pending work and delivery status**. Historical V1 Site-era designs remain available in Git history, not as competing active instructions.
+**Scope:** the source-level component boundaries and extension seams of the Gateway application. The [Master Specification](MASTER-SPEC.md) defines enduring product requirements; [Target/connector contract](TARGET-CONNECTOR-FOUNDATION.md), [remote I/O contract](REMOTE-IO-CONTRACT.md) and specialist guides define the corresponding detailed rules. Class and route references describe the application and should be checked against the selected code revision before changing implementation.
 
-## 1. Deployable topology
+## 1. Runtime topology
 
 ```text
-  ChatGPT (supported reviewed client)
-  additional reviewed client profiles when actually enabled
-                     |
-      authenticated HTTPS /mcp
-      optional HTTPS raw binary sidecar
-      (SSH only, OFF by default)
-                     v
-       +---------------------------+
-       | MCP Gateway (PHP/Laravel) |
-       | OAuth + client identity   |
-       | Target/Group inventory    |
-       | shared scope/access rules |
-       | MCP capability families   |
-       | activity + safe errors    |
-       +-------------+-------------+
-                     |
-            exact authorized target_id
-                 /         \
-                v           v
-          WP AI Bridge    Direct SSH
-          WP OAuth        pinned host key
-          MCP/Abilities   SSH command/SFTP
-                |           |
-             WordPress   registered host
+    Authenticated AI / MCP client              Authenticated browser operator
+                     |                                     |
+           HTTPS OAuth + /mcp                  HTTPS session + /admin
+                     |                                     |
+         MCP protocol / transport                      Admin controllers
+                     \                                     /
+                      \---- application Target/access ----/
+                                      |
+                     Connector registry + specific operations
+                              /                    \
+                WP AI Bridge Target           Direct SSH Target
+              HTTPS OAuth + MCP call        SSH / SFTP / systemd Jobs
+                              \                    /
+                       Registered downstream systems
 
-         MariaDB/MySQL + private local runtime state
+            MariaDB/MySQL + private keys, sessions and spool
 ```
 
-WordPress and SSH use different **Target-side transports and permissions**, but share Gateway Target identity, inventory, client/user authorization, audit and bounded I/O principles. SSH commands, bounded SFTP tools (#146), internal streams (#148), and the **optional SSH HTTP whole-file data plane with permission-filtered MCP discovery** ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)) are integrated in source. Two independent HTTPS/MCP clients proved upload/download on a disposable installed Gateway; **which features have shipped or were deployed must be determined from their actual Release and host**. Native ChatGPT host file ingestion, WordPress raw-binary handoff and production-host enablement remain unverified under #147/#112. The binary route is not an MCP Resource or Tool, and does not create a second MCP server. The historical Agent connector proposal (#111) was canceled and its stored type and permission-seeding compatibility were retired under Owner decision #182; the shared connector-neutral core remains independent of that project. Read current GitHub state before declaring a feature released or deployed.
+The deployed application is PHP/Laravel with one authenticated public MCP endpoint and a server-rendered Blade Admin. Private keys, encrypted Target credentials and temporary data remain outside `public/`. The normal hosting profile needs no mandatory separate daemon, Redis, message broker or Node production build. Remote **SSH Jobs** may use the *Target host's own* supported systemd user or root manager; that is not a Gateway-host worker.
 
-One application, one public MCP endpoint and a server-rendered Blade Admin are intentional. The supported baseline is PHP 8.4, Laravel 13, MariaDB-primary/MySQL-compatible, OpenLiteSpeed/LSAPI or comparable PHP hosting; no mandatory Node, Redis, dedicated queue worker, message broker, object store, daemon or Kubernetes. Add infrastructure only after measured workload justifies it. The public web root is `public/`; encrypted Target credentials, session/cache state and keys are private and never served.
+A separate, optional authenticated `/mcp/file-transfer/ssh/{targetId}/upload|download` HTTPS binary sidecar serves **supported SSH whole-file operations**. It is not an additional MCP server and is gated by effective configuration, authenticated identity, Target permissions, safe spool admission and SSH destination trust. The normal MCP JSON Tool payload is not a general binary-file transport.
 
-## 2. Ownership and dependencies
+## 2. Component ownership
 
-| Layer | Main source owner | Responsibility |
+| Concern | Source entry point | Boundary |
 | --- | --- | --- |
-| Domain | `app/Domain/Targets`, `app/Domain/Access` | Stable Target identity, access vocabulary and invariants |
-| Application | `app/Application/Targets`, `app/Application/Access`, `app/Application/Mcp` | Target lifecycle, user/Target permissions, operation orchestration, bounded outcomes |
-| Inbound MCP | `app/Infrastructure/Mcp/GatewayMcpEndpoint.php`, `routes/mcp.php` | Public MCP tool schema/annotations, supported protocol transport, authenticated user context |
-| Client OAuth | `app/Infrastructure/OAuth`, `app/Http/Controllers/OAuth` | Profile-authenticated client identity, consent, PKCE, exact authorization, refresh/revocation |
-| WordPress Target | `app/Infrastructure/Connectors/WpAiBridge` | Target metadata, WP OAuth, WordPress Ability catalog, compatible legacy downstream MCP calls |
-| SSH Target | `app/Infrastructure/Connectors/SshDirect` | Registered endpoint/IP policy, host-key pin, SSH auth, command and gated SFTP mechanics |
-| Whole-file SSH data plane | `app/Application/Files`, `app/Http/Controllers/Mcp/SshWholeFileController.php` | Authenticated optional binary HTTPS edge, verified spooling, SHA-256, SSH-mode admission and atomic SFTP publication; reuses shared AccessControl and settings |
-| HTTP/transport policy | `app/Infrastructure/Http` and connector-specific transports | SSRF/dial protections, deadlines, size bounds, response processing |
-| Admin | `app/Http/Controllers/Admin`, `resources/views/admin` | Scoped inventory, enrollment, grants, client profiles, connections and diagnostics |
-| Persistence | `database/migrations`, `app/Domain/Targets/Target*.php` | Indexed Target-specific records, connector-owned configs and credentials |
+| Target definition, connector registration | [`TargetConnectorRegistry`](../app/Application/Targets/TargetConnectorRegistry.php), [`TargetConnectorAdapter`](../app/Application/Targets/TargetConnectorAdapter.php) | Explicit, built-in connector types; no remote-supplied executable loader |
+| User/role/Target/group grants | [`AccessControl`](../app/Application/Access/AccessControl.php), [`GatewayPermission`](../app/Domain/Access/GatewayPermission.php) | Actual authorization and anti-enumeration selection |
+| AI/MCP entry | [`GatewayMcpEndpoint`](../app/Infrastructure/Mcp/GatewayMcpEndpoint.php), [`routes/mcp.php`](../routes/mcp.php) | Client-facing Tool schemas, authentication, request parsing and routing |
+| Admin entry | [`routes/admin.php`](../routes/admin.php), `app/Http/Controllers/Admin` | Browser login/CSRF, Target lifecycle, groups, grants and operator settings |
+| WordPress Ability execution | [`WordpressTargetMcpToolHandlers`](../app/Application/Mcp/WordpressTargetMcpToolHandlers.php), [`WpAiBridgeMcpClient`](../app/Infrastructure/Connectors/WpAiBridge/WpAiBridgeMcpClient.php) | Target permission class, authenticated downstream MCP, dynamic Ability catalog |
+| WordPress connection lifecycle | [`WpAiBridgeTargetConnectionService`](../app/Application/Targets/WpAiBridgeTargetConnectionService.php) | OAuth intent/recovery, exact credential/Target identity and remote lifecycle |
+| SSH identity and execution | [`SshVerifiedTransport`](../app/Infrastructure/Connectors/SshDirect/SshVerifiedTransport.php), [`SshJobCoordinator`](../app/Application/Targets/SshJobCoordinator.php) | Approved numeric peer and pinned host key before credentials; separate sync/SFTP/retained Job semantics |
+| Binary SSH exchange | [`TargetTransferCapabilities`](../app/Application/Files/TargetTransferCapabilities.php), [`SshWholeFileTransfer`](../app/Application/Files/SshWholeFileTransfer.php), [`SshWholeFileController`](../app/Http/Controllers/Mcp/SshWholeFileController.php) | Permission-filtered mode discovery, binary admission/staging, verified source/destination |
+| Safe outbound HTTP | [`SafeHttpClient`](../app/Infrastructure/Http/SafeHttpClient.php) | HTTPS origin/DNS/peer/TLS policy and bounded decoded responses |
+| Diagnostics and Activity | [`OperationDiagnostics`](../app/Support/OperationDiagnostics.php), [`ActivityRecorder`](../app/Infrastructure/Activity/ActivityRecorder.php) | Safe classifications, correlation and bounded audit rather than raw remote payloads |
+| Bounded runtime settings | [`OperationalSettings`](../app/Application/Operations/OperationalSettings.php) | One typed persisted Owner settings subsystem with validated source fallbacks |
 
-Follow existing Laravel patterns. Keep application authorization and data semantics outside HTTP controllers, Blade and protocol adapters. Do **not** duplicate the Target auth or credential lifecycle for every connector. Do not create a dynamic third-party connector-code loader or universal network proxy.
+These layers are **not interchangeable**: `TargetConnectorAdapter` is a lifecycle/metadata interface and **does not** currently provide one generic invocation method for all WordPress/SSH business actions. Likewise, an existing MCP Tool handler is not a contract granting a matching Admin action automatically.
 
-### Target-state shared Admin/AI application-operation boundary
+## 3. Real request paths
 
-**Current source:** the MCP endpoint offers Target-scoped WordPress Ability execution and SSH command/file/Job families; the Blade Admin currently manages inventory, connection, access, operational settings, activity and selected SSH browser file exchange. It **does not** currently provide generic WordPress Ability execution, a multi-Target publisher, semantic per-Ability delegation, or a generic downstream MCP Target connector. Do not present the following intended seams as implemented endpoints.
+### Registered Target discovery
 
-**Accepted product direction:** Admin actions, supported AI/MCP clients and future authorized APIs enter through separate presentation/authentication adapters, and converge on the **same application use cases** for capability discovery, Target selection, effective authorization, operation admission, invocation, outcome and safe Activity. Do **not** route the Admin back through its own external `/mcp` endpoint or duplicate policy inside Controllers, views or MCP descriptions.
+The authenticated client requests a bounded list or one explicit Target context. Gateway evaluates its real user/client scope and connector metadata through the local registry and database. Listing is indexed/paged and **does not contact every downstream Target** or synthesize a tool instance per Target. A registered hostname or cached IP alone never becomes a verified SSH peer identity.
+
+### WordPress Ability invocation
+
+The MCP entry validates the exact `target_id`, input and Gateway permission class. The connector uses the Target-bound authenticated WordPress MCP identity to discover the relevant actual Ability schema/effect and execute it. A compatible newly added WordPress Ability may be reached without adding a public Gateway Tool; the selected user/client/Target grants and downstream WordPress principal still govern access. A missing or unclassified annotation does not invent either a ban or a grant.
+
+The transport and downstream result remain separate: a downstream text-only error cannot be retroactively assigned a specific original WordPress error code that was not received. A mutation after possible remote dispatch does not become safe to retry merely because its response failed.
+
+### Direct SSH actions and Jobs
+
+An SSH request selects an **already enrolled** Target, checks the exact user/client capability and the current Target operations gate, then validates the approved resolved numeric TCP peer and independently pinned SSH **server host key before login**. The remote OS account determines command authority. Non-interactive synchronous exec, SFTP stat/list/ranged read/small write and detached systemd Jobs have **different budgets, confirmation and continuation semantics**.
+
+The retained Job journal associates `request_id`, `job_id`, actor/client and original remote identity before effectful dispatch. Job polling/output/cancel reauthenticate and reauthorize new stages. A lost launch or uncertain cancellation cannot be blindly replayed. Connection metadata, exit marker and remote unit state are observed honestly rather than inventing confirmed completion.
+
+### Whole-file SSH binary exchange
+
+The public authenticated raw-HTTPS sidecar validates client/User/Target/operation permissions, finite object size/time and effective mode, then uses private local/remote staging and already verified SFTP operations. Upload publication and download receipt/integrity are distinct guarantees. The client must separately understand and receive that mode; `target-context` metadata or a server path does not guarantee the host supplied model-readable file bytes.
+
+## 4. Security and operational state
+
+**The identity chain** is Gateway principal + exact authenticated client profile/ID where applicable + immutable Target record/public key + connector family + downstream principal. A Target display name, URL, connected flag, OAuth profile label or Tool annotation cannot override it.
+
+- `AccessControl` combines role ceilings, global grants/denials, selected Target reachability, group and direct restrictions; the Owner's recovery authority and non-Owner SSH default restrictions remain explicit. Gateway scope can only narrow downstream permissions.
+- Target lifecycle and credential persistence use connector-specific encrypted, purpose-bound material. New/rotated endpoint or credential identities require appropriate revision fencing and fresh verification. WordPress pending refresh/disconnect and confirmed remote revocation are different states.
+- Network requests are bounded and trust-checked according to their actual protocol. HTTPS/DNS/SSRF pinning applies to the approved HTTP path; the SSH transport separately verifies numeric TCP peer and pinned host key. Do not mechanically reuse one protocol's timeout or URL policy for the other.
+- Stored `connected`, recent test, `stale` and Owner-paused operations are separate: inventory does not perform implicit health probes; Pause blocks newly admitted Gateway remote stages without undoing already-dispatched effects.
+- Long HTTP/OAuth/SSH remote requests do not hold a database row lock for their whole network lifetime. Short prepare/fence/finalize stages prevent stale responses from reviving revoked credentials, changed Target configurations or forgotten Jobs.
+- Errors and activity have bounded public classifications and safe private correlation. Internal topology, private paths, credential values and arbitrary command contents do not belong in ordinary client-facing messages.
+
+## 5. Extension seams
 
 ```text
-  Admin UI (current management; future action surfaces)     AI / MCP     Future API
-                         \                                    |            /
-                      interface-specific authentication and request parsing
-                                             |
-                   shared Gateway application authorization and operations
-                     explicit Target(s) + capability + actor + client context
-                                             |
-              Target registry / scoped grants / pause / typed resource budgets
-                                             |
-                      supported connector-owned execution adapters
-                         |                  |                  |
-                    WP AI Bridge        Direct SSH         Future supported MCP/API Target
+  Admin actions        MCP / AI tools          Supported external API
+       \                     |                         /
+        \-- authenticated adapter-specific input ---/
+                              |
+                application operation use cases
+            authorize + bind Target(s) + admit budget
+                              |
+                   connector-owned executor
+                              |
+             outcome certainty + correlated Activity
 ```
 
-The diagram is **target-state layering**, not a description of shipped Admin action endpoints. Application logic belongs below all entry adapters. Existing `TargetConnectorAdapter` lifecycle methods and the MCP tool handlers are reuse points, **not yet one fully generic execution interface**; evolve against a real second consumer instead of introducing a speculative plugin loader or universal command envelope.
+**Implemented boundary:** the shared Target/Access/Group/credential/Activity infrastructure and specific MCP WordPress/SSH execution families. Admin handles lifecycle, permissions, operator settings and scoped SSH browser files; it does **not** share a general-purpose WordPress Ability dispatcher or group publisher.
 
-#### Delegation and operation semantics
+**Intended extension:** move only the operation rules needed by a genuine additional consumer into small reusable application use cases. Do **not** route Admin through public `/mcp`, create a second authorization service, overload the lifecycle `TargetConnectorAdapter` with speculative methods or add an unproven workflow engine.
 
-Maintain two distinct access modes: explicitly granted broad Target-capability execution and narrow, enforceable delegated operations across selected Targets/Groups. Existing Gateway-wide role ceilings and Target Group/direct denials stay effective. A declared restriction such as “publish posts only” requires stable trusted operation evidence and/or downstream enforcement: neither a mutable annotation nor a hidden Admin control supplies the guarantee. Any future policy granularity is added without granting privileges to existing non-owner users by migration/default.
+- **Another client profile:** adapt authentication/consent, retain exactly the same Target access and operation model.
+- **Another compatible Target-side Ability/tool:** re-read the Target-owned catalog/schema under the existing reviewed connector and current permissions, not a public Tool per capability.
+- **Another authenticated MCP-speaking Target:** introduce only a reviewed registration/authentication/transport adapter; standard `tools/list`/`tools/call` reuse is an interoperability design, **not** evidence arbitrary MCP servers can be enrolled now.
+- **Human-executable or multi-Target operations:** resolve selected Targets, apply the same per-Target admission near dispatch, preserve partial/unknown outcomes, and add durable bulk state only where the concrete workflow requires it.
+- **Additional data path:** use shared resource/integrity/authorization semantics with connector/native transport adapters and proven receiving-client support; never assume one generic Gateway storage/stream service makes every provider file-capable.
 
-A single invocation binds the user, authenticated client when applicable, exact Target, concrete capability/schema, grant snapshot and execution identity. Do not let UI and MCP report different outcome certainty. For future **multi-Target** publishing/editing, resolve the authorized set, recheck at each actual dispatch, preserve per-Target result/remote identity and partial/unknown outcomes; no unconditional retry after possible side effects. A long-running logical action uses durable minimal state and a measured bounded worker/job route when justified, not a PHP request held open or a one-worker-per-Target design. One-shot publishing does **not** implicitly commit us to ongoing multi-site content synchronization.
-
-Use existing `AccessControl`, `TargetConnectorRegistry`, Target-operation Pause, Activity/CorrelationId, operation diagnostics, typed Owner settings and proven file/Job primitives instead of duplicating them. Connector-specific discovery and remote authority remain at the edge. Narrow generic-MCP discovery/invocation is a future adapter for registered authenticated Targets only, not arbitrary URL execution. See [MASTER-SPEC.md](./MASTER-SPEC.md) and [CONNECTOR-INTEGRATION-GUIDE.md](./CONNECTOR-INTEGRATION-GUIDE.md) for product vs adapter contracts. The corresponding implementation acceptance is tracked in GitHub Issues, **not in README**.
-
-## 3. Trust and identity model
-
-The meaningful identities are **Gateway user**, **reviewed authenticated client profile**, **exact OAuth/protocol client ID**, **immutable registered Target identity** and **downstream principal/remote identity** where applicable. These are not interchangeable. Client/app/provider display names, IP address, target hostname and raw request arguments are not authority.
-
-- Every Target operation selects an explicit, authorized `target_id`; never derive write/destructive routing from conversational state, a requested host or a similarly named Target.
-- Shared AccessControl enforces role ceiling, global deny, Target reachability (direct/group), applicable group/direct capability denials and current user state **server-side**; view visibility and MCP annotations are non-authoritative hints.
-- Credentials are purpose- and Target-bound, encrypted at rest, write-only in UI, excluded from MCP responses, Activity and logs. Downstream access still enforces WordPress principal/Ability/group policy or SSH OS-account permissions. Gateway grants can **narrow**, not expand, downstream authority.
-- Independent sensitive effects (SSH shell, file read/write, root approval, destructive WP ability, package installation, public network exposure) keep explicit capability and approval boundaries. A grant to unrestricted SSH command authority is **not** a filesystem sandbox.
-- Outbound registered endpoint and actual peer identity are verified under connector-specific strict policies: HTTPS, DNS/SSRF/TLS for WordPress; DNS/TCP peer, approved egress and independently pinned SSH host key **before credentials** for SSH. Unknown/private routing is not silently enabled.
-- Unknown connector types and unsupported client auth strategies fail closed. New client authentication profiles remain reviewed, exact-client-bound and separately configurable; adding an ordinary downstream capability must not require inventing a new OAuth identity system.
-- No remote HTTP/SSH call takes place with a long-held database row lock. Credential/health writes and refresh state use short, concurrency-safe prepare/finalize or fencing where appropriate; stale in-flight results must not override newer revocation/health state.
-
-For security detail use the foundation, [CLIENT-PROFILE-RUNBOOK.md](./CLIENT-PROFILE-RUNBOOK.md) and [DIRECT-SSH-CONNECTOR.md](./DIRECT-SSH-CONNECTOR.md).
-
-## 4. MCP protocol evolution and adaptive Target capabilities
-
-The **public Gateway tool catalog** is bounded by reviewed capability families, not by number of Targets, installed plugins or downstream tool versions. Current family examples include `targets-list` and `target-context`; WordPress exposes `wordpress-abilities-read` and `wordpress-ability-execute`. SSH command/file families are exposed **only** when the actual implementation has landed, passed gates and is appropriate for the installed release. There are no `sites-*` aliases and no separate tool set per Target.
-
-There are **three independently evolving capability layers**:
-
-1. **MCP protocol capabilities:** The client and Gateway negotiate actual supported protocol methods, response semantics and optional extensions (Tasks, resources, subscriptions and other future capabilities). These are protocol concerns independent of a WordPress plugin or SSH operation. A compatible implemented extension may work without redeploying Target connectors; a wholly new wire behavior can require an SDK/adapter update. Unsupported is not the same as forbidden.
-2. **Public Gateway discovery:** `tools/list` returns stable Gateway-owned tools and schemas. A genuinely new public tool family or breaking schema may need a code release and a client-catalog refresh, not every Target operation.
-3. **Selected Target discovery:** WordPress Abilities or another supported Target's authenticated operation catalog can change independently. New operations within the existing invocation contract should normally work through the family discovery/execute interface without a hard-coded name allowlist or Gateway release. This pattern is implemented for WordPress; it is future acceptance work for other connectors.
-
-**Supported downstream MCP tools need generic Target-scoped discovery and invocation.** For an authenticated registered MCP-speaking Target, a new `tools/list` entry using normal `tools/call` semantics should be callable through a shared Gateway discover/execute family **under an explicitly granted broad Target-execute permission** and the authenticated downstream principal—without per-name or per-business-domain Gateway wrapper code. This is not a claim that an unimplemented provider connector already operates. A deliberately *narrow* user grant is never upgraded to root/destructive permission because the Target added a tool. WordPress already implements the analogous dynamic Ability model, but the exact WordPress Ability catalog is not the same as generic downstream `tools/list`.
-
-**Discovery does not replace existing authorization.** An unfamiliar operation name or new tool annotation is **not** a rejection reason. Existing Gateway user/client/Target grants, configured operation-class permissions, valid request/identity and the downstream authority govern access. WordPress `unclassified` is a grantable existing execution permission, not an unconditional denial; preserve intentional non-owner denials. Distinguish an actual authorization rejection from an operation/extension unsupported by an adapter or an incompatible schema. The connector registry selects authenticated built-in Targets, not caller-supplied destinations or executable classes.
-
-Keep protocol/version negotiation in a small reusable downstream MCP client adapter where a real second consumer justifies it. Present WordPress's legacy session behavior remains connector-owned; do not impose its initialize/session/close tax on stateless downstream versions. `server/discover`, `tools/list`, cache scope/TTL and optional extensions are used only when the negotiated version and peer support them. In MCP 2026-07-28, change notifications use negotiated `subscriptions/listen`; older notification delivery differs. See [MCP specification](https://modelcontextprotocol.io/specification/2026-07-28) and [PHP SDK extensions](https://php.sdk.modelcontextprotocol.io/advanced/extensions/). Do not claim notification support forces an external ChatGPT App to refresh.
-
-Use **bounded freshness**: capture safe compatibility/catalog evidence on connection/reconnect or on demand, invalidate when source identity/version/schema/grants change, and refresh stale evidence without fan-out to every Target during fleet listing or each public `tools/list`. Never use cached metadata as permission. If the implementation cannot establish schema/version continuity for execution, it rejects or explicitly refreshes rather than silently invoking an incompatible operation. Cache scope and negative-result behavior must be compatible with Target and client principals.
-
-Current real-world performance risks include WP legacy session establishment and an extra Ability catalog/classification call before execution, repeated SFTP login for each inline range, HTTP response decoding, and OAuth metadata bursts. Optimize against representative round trips, p50/p95 latency, peak PHP worker RAM, database queries, connection count, concurrent active work and total failure outcomes; do not speculate that a particular cache, bigger constant or additional server fixes them.
-
-## 5. Results, file transfer and resource economics
-
-**Separate control and data planes when evidence warrants it.** Typed small JSON/UTF-8 and bounded previews remain cheap single-call results. For a real authorized `ssh_direct` Target, existing MCP `target-context` advertises `file_transfer` modes/directions only as effective permissions and enabled code permit; an optional same-origin raw-binary HTTP endpoint moves complete objects without encoding their contents in MCP JSON. Clients must actually support that separate transport and validate the received byte count/digest. Other Target types may have native tools or different future modes rather than inheriting SSH synchronous resource limits. File/media/document/ZIP transfers use one client-neutral shared permission, integrity, quota, progress/error and cleanup semantic layer, with **appropriate client and Target adapters**; WordPress native operations and SSH SFTP wire mechanics stay connector-owned. Transfer is not automatic ZIP installation, extraction or code execution.
-
-A **configured maximum is not reserved capacity**. Resource use follows actual bytes and necessary framing/encoding/session overhead. Separate ceilings for inline request/decoded reply, bounded stream buffer/chunk, overall finite transfer, active Target connections, memory/temporary disk and operation lifetime. An inline 16KiB cap from a small-SFTP PR is not a universal file-size limit. A 10KiB input under a higher validated ceiling should not reserve a full maximum-size buffer; unknown-length streams use finite read buffers and enforce limits as bytes arrive.
-
-**The shared resource policy is not a shared wire transport.** [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md) defines capability-aware independent budgets for decoded HTTP replies, chunks, full objects, connection and idle/first-byte/request/overall logical lifetimes and active resource admissions. A small ordinary WordPress call must not impose its own 64 KiB bound or 5-second timeout on SSH file aggregate work or future asynchronous streams. Select the cheapest truly supported inline, ranged, streaming, direct-handoff or retained task route; preserve connector-specific protocol and actual host/client limits. A one-hour logical job need not occupy an hour-long PHP process. [#153](https://github.com/AChWorks/mcp-gateway/issues/153) owns one Owner operational-settings registry and measured tuning; [#154](https://github.com/AChWorks/mcp-gateway/issues/154) owns versioned capability matrices, [#147](https://github.com/AChWorks/mcp-gateway/issues/147) actual bidirectional file delivery. Source-integrated [PR #156](https://github.com/AChWorks/mcp-gateway/pull/156) established the one typed Owner-only settings store for finite WordPress response budgets. The #153 continuation adds separate paired connect/request-timeout overrides in the same store, consumed by the shared outbound HTTP client and frozen on each pending WordPress refresh intent for safe retry/maintenance/manual reconciliation. [PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) now consumes **the same** Owner settings subsystem for finite synchronous SSH whole-file budgets without changing WordPress response limits. It does not provide a generic long-lived stream, a WordPress binary adapter, or automatic ChatGPT host file handoff; each such capability and production rollout still needs its own real evidence. The proposed Agent connector (#111) was canceled.
-
-Client input-byte availability and Target-to-**actual model-readable** or user-downloadable result must each be tested on the supported host. Returned file paths, URLs and opaque handles are not synonymous with file delivery. Preserve byte count/SHA-256 (when specified), source/destination identity, safe overwrite, short reads/writes and `outcome_unknown`; never invent a replay-safe resume mechanism. See [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md), #123, #147 and #112 for contract and acceptance evidence.
-
-## 6. Failure, concurrency and fleet scale
-
-- Every mutation runs only with the real authorization at dispatch; an interruption after dispatch may yield `outcome_unknown`, **never blind replay**.
-- Read-only errors distinguish permission, incompatible protocol, unreachable Target, stale capability catalog, partial/incomplete data and safe oversize/timeout outcomes without revealing protected Target existence or secrets.
-- Target inventory and Admin pages are server-side filtered, indexed, bounded, cursor/paged and authorized before serialization. Idle registered Targets incur near-zero dynamic cost, not polling, permanent sessions or per-Target workers.
-- Health and activity evidence are bounded. Page views do not fan out remote connectivity tests; a recent successful operation and an explicit connection check are separate forms of evidence.
-- Secure login/metadata caches may reduce verified repeated work, but they must have bounded freshness, safe invalidation and no privilege impact.
-- Optimize CI for signal: narrow checks during active edits; exact-candidate broad/contract/security checks on stable changes based on affected surface and project policy. Never disable a required gate to save time.
-
-## 7. Compatibility, deployment and documentation ownership
-
-- Keep Composer lockfile pinned; verify dependency/protocol upgrades with relevant WordPress/SSH/OAuth/MCP tests. SDK `mcp/sdk` and OAuth `league/oauth2-server` remain vendor adapters, not domain models.
-- Public protocol implementation metadata should reflect current release/build truth, not a stale bootstrap placeholder. Preserve existing supported client and downstream protocol generations; new revisions are **negotiated**, not assumed universally supported.
-- Deployment/update packaging, backup/restore and historical breaking migration rules are in [DEPLOYMENT.md](./DEPLOYMENT.md), [TARGET-TRANSITION-RUNBOOK.md](./TARGET-TRANSITION-RUNBOOK.md) and release notes. Do not infer production deployment from a Git merge or Release.
-- `README.md` is a public overview/installation/usage entry, **not** an authoritative architecture or development document. Repeatable validation is owned by [DEVELOPMENT.md](./DEVELOPMENT.md); release and operator procedures by [DEPLOYMENT.md](./DEPLOYMENT.md) and immutable Releases. Active work and gates live in [#106](https://github.com/AChWorks/mcp-gateway/issues/106), [#108](https://github.com/AChWorks/mcp-gateway/issues/108), [#110](https://github.com/AChWorks/mcp-gateway/issues/110), [#112](https://github.com/AChWorks/mcp-gateway/issues/112), [#123](https://github.com/AChWorks/mcp-gateway/issues/123), [#130](https://github.com/AChWorks/mcp-gateway/issues/130) and [#147](https://github.com/AChWorks/mcp-gateway/issues/147). Agent connector #111 is canceled.
-
-Changing a connector or client should normally require **only the adapter and evidence genuinely different for that consumer**, not a new Gateway identity domain, a cloned authorization/transfer engine, one public tool per Target, or an expensive infrastructure prerequisite. Future work remains compatible with the existing single-host PHP deployment until a measured need or accepted product change says otherwise.
+Runtime implementation and acceptance should be checked in the selected Git revision, tests and the owning work item. This architecture describes responsible components and safe extension seams, not a release chronology or an alternative backlog.
