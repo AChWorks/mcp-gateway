@@ -3,7 +3,7 @@
 Status: Accepted durable Target/connector architecture contract, with historical transition design.
 Program owner: [Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) (completed); outstanding installed exceptional acceptance is tracked under [#112](https://github.com/AChWorks/mcp-gateway/issues/112).
 
-MCP Gateway v2.2.1 **ships WordPress/WP AI Bridge and Direct SSH**. SSH commands and SFTP are available; optional OAuth-scoped HTTPS whole-file transfer is disabled by default. The proposed Agent connector was canceled (#111) and its stored connector identity and permission-seeding logic were removed from the supported source under Owner decision #182; only WordPress and Direct SSH are recognized built-in Target types.
+The supported integrated connector families are **WordPress/WP AI Bridge and Direct SSH**. SSH commands and SFTP are integrated; optional OAuth-scoped HTTPS whole-file transfer is feature-gated and disabled by default in the integrated baseline. Shipped version and installed-host flag status must be verified against actual Releases and runtime. The proposed Agent connector was canceled (#111) and its stored connector identity and permission-seeding logic were removed from the supported source under Owner decision #182; only WordPress and Direct SSH are recognized built-in Target types.
 
 This document preserves the durable connector-neutral identity, credential, permission and lifecycle contract plus historical design rationale. The integrated code and [current architecture](ARCHITECTURE.md), GitHub Releases and active Issues are authoritative for what actually runs, ships and remains unverified. Earlier pre-implementation sequences below are historical, not instructions to rebuild the shipped Target foundation; the original v1 Site to v2 Target transition is still a breaking data/reset boundary.
 
@@ -211,6 +211,16 @@ Likely shared application-level needs include:
 - execute one explicit connector operation against one explicit Target.
 
 The exact interface must remain small. Do not create placeholder methods for speculative future services.
+
+### Shared operation entry points and future delegation
+
+**Current versus target-state:** The Target/connector foundation already supplies stable Target identity, connector-specific registration/lifecycle, role ceilings, Target Groups/direct denials, OAuth client context, Pause and bounded Admin/MCP inventory. The MCP tool handlers currently own family-specific execution, and the Admin is **not yet a generic action executor**. Future human-initiated Admin operations and AI/MCP operations must share one application-owned policy/admission/dispatch/outcome path under their separately authenticated entry contexts. This is an architectural invariant, **not a claim that a generic runtime dispatcher or UI already exists**.
+
+Broad delegation to newly discovered *compatible* downstream operations is valid only under explicitly granted Target execute authority and the downstream principal. Narrow delegated business actions (such as selected-site content publication without site administration) require an enforceable, trusted semantic contract. Unknown names/annotations are neither a blanket ban nor evidence of permission; a restricted grant may not be widened merely because an operation was newly advertised. Do not treat WordPress effect classes (`readonly`, `mutating`, `destructive`, `unclassified`) as sufficient proof of fine-grained per-Ability/per-content controls.
+
+Multi-Target invocations resolve the authorized membership set explicitly, reuse the same single-Target policy/connector executor, recheck admission near each dispatch, retain per-Target partial or uncertain results, and never automatically replay unknown mutations. Any durable operation state and job/concurrency infrastructure must be the smallest real-workload justified extension of existing primitives; a generic workflow engine is not a prerequisite.
+
+The corresponding API shape, Admin controls and evidence belong to a current implementation Issue. Do not bind every connector to WordPress Ability schemas, a universal `tools/call` assumption, OAuth refresh or identical transfer modes. The [connector integration guide](CONNECTOR-INTEGRATION-GUIDE.md) provides the concrete compatibility and conformance checklist; [MASTER-SPEC](MASTER-SPEC.md) alone defines lasting intent.
 
 ## 7. Shared remote MCP client
 
@@ -767,7 +777,7 @@ The implementation program must prove at least:
 
 The practical [connector integration guide](CONNECTOR-INTEGRATION-GUIDE.md) documents supported built-in adapter requirements, correct long-lived credential renewal, error classes and future-connector acceptance. In particular, Stale health never expires an authorized connection, access-token TTL must not force unnecessary idle refresh-token rotation, and a connector without renewable credentials gets no periodic OAuth maintenance.
 
-A fourth or later connector should not require another generic-domain rename. The third accepted connector is `ssh_direct`.
+An additional connector must not require another generic-domain rename. The current first-class registered connector families are `wp_ai_bridge` and `ssh_direct`; the canceled Agent proposal is not a supported third family.
 
 Before adding one, document:
 
@@ -806,7 +816,7 @@ Expected implementation dependency order:
 
 ## 20. Completion test
 
-The foundation is successful when a future engineer can add a fourth or later well-defined connector without:
+The foundation is successful when a future engineer can add another well-defined connector without:
 
 - renaming the core domain again;
 - adding connector-specific columns to the shared Target record by default;
