@@ -73,7 +73,7 @@ AI clients and users must not gain extra Target or operation authority by changi
 
 ## 7. Operation outcomes and multi-Target work
 
-**Single-Target actions** must identify actor, client when applicable, exact Target, capability/schema, grant and execution identity. Distinguish request rejected **before dispatch**, confirmed result, provider-reported error, and **unknown outcome after possible side effects**. Never blindly retry uncertain mutations, and never claim remote rollback or absence of effects without evidence.
+**Single-Target actions** must identify actor, client when applicable, exact Target, capability/schema, grant and execution identity. Distinguish request rejected **before dispatch**, confirmed result, provider-reported error, and **unknown outcome after possible side effects (`outcome_unknown`)**. No automatic blind replay: never blindly retry uncertain mutations, and never claim remote rollback or absence of effects without evidence.
 
 **Multi-Target actions** (for example publishing or editing content on a selected group of websites) are a supported **future product direction**, not proof of current delivery. They must reuse the same per-Target permission, connector admission and execution path; record per-Target success/failure/unknown outcomes and useful remote object identities when available. Partial success is a first-class result; neither an all-or-nothing fiction nor automatic replay of already dispatched writes is acceptable.
 
