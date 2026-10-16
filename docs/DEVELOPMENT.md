@@ -153,7 +153,7 @@ When extending a supported Target/client, first distinguish **new Target invento
 - Establish a representative performance baseline **before** adding abstractions, increasing or lowering payload ceilings or requiring extra services. Compare actual small payloads under a higher permitted cap, medium files, concurrent operations, round trips/SSH sessions, p50/p95 latency, PHP peak memory, CPU and transient disk. A tiny fixed cap is not a performance optimization by itself.
 - Keep related fixes in one coherent slice; run targeted checks during editing, exact affected broad/security/contract checks only for a stable candidate, and preserve still-valid evidence. A documentation-only change does not justify manually rerunning SFTP/WordPress integration suites unless the changed material actually affects executable acceptance.
 
-For the current architectural rules see [MASTER-SPEC.md](./MASTER-SPEC.md) §4.9, [ARCHITECTURE.md](./ARCHITECTURE.md) §4 and [REMOTE-IO-CONTRACT.md](./REMOTE-IO-CONTRACT.md).
+For product invariants, implementation boundaries and resource semantics use the [Master Specification](MASTER-SPEC.md), [Architecture](ARCHITECTURE.md) and [Remote I/O contract](REMOTE-IO-CONTRACT.md). Avoid numeric section citations that become stale when these documents are reorganized.
 
 ## CI evidence and integration decisions
 
