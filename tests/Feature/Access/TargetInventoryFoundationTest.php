@@ -18,14 +18,14 @@ final class TargetInventoryFoundationTest extends TestCase
     {
         $user = app(UserAccessManager::class)->create($this->userAttributes('owner'), []);
         $now = now();
-        $types = ['wp_ai_bridge', 'ai_server_agent', 'ssh_direct'];
+        $types = ['ssh_direct', 'wp_ai_bridge'];
         $rows = [];
         for ($i = 1; $i <= 115; $i++) {
             $rows[] = [
                 'id' => (string) Str::ulid(),
                 'target_id' => sprintf('target-%04d', $i),
                 'display_name' => sprintf('Target %04d', $i),
-                'connector_type' => $types[$i % 3],
+                'connector_type' => $types[$i % 2],
                 'connection_state' => 'disconnected',
                 'created_at' => $now,
                 'updated_at' => $now,
@@ -59,7 +59,7 @@ final class TargetInventoryFoundationTest extends TestCase
         self::assertCount(115, $result);
         self::assertCount(115, array_unique($result));
         self::assertSame('target-0115', end($result));
-        self::assertCount(38, app(TargetInventory::class)->mcpPage($user, connectorType: 'ssh_direct')['items']);
+        self::assertCount(57, app(TargetInventory::class)->mcpPage($user, connectorType: 'ssh_direct')['items']);
     }
 
     public function test_inventory_search_never_reveals_out_of_scope_targets(): void

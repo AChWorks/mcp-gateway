@@ -3,7 +3,7 @@
 Status: Accepted durable Target/connector architecture contract, with historical transition design.
 Program owner: [Issue #106](https://github.com/AChWorks/mcp-gateway/issues/106) (completed); outstanding installed exceptional acceptance is tracked under [#112](https://github.com/AChWorks/mcp-gateway/issues/112).
 
-MCP Gateway v2.2.1 **ships WordPress/WP AI Bridge and Direct SSH**. SSH commands and SFTP are available; optional OAuth-scoped HTTPS whole-file transfer is disabled by default. The historical `ai_server_agent` Target identity exists only for non-destructive stored-record compatibility; the proposed Agent connector was canceled (#111).
+MCP Gateway v2.2.1 **ships WordPress/WP AI Bridge and Direct SSH**. SSH commands and SFTP are available; optional OAuth-scoped HTTPS whole-file transfer is disabled by default. The proposed Agent connector was canceled (#111) and its stored connector identity and permission-seeding logic were removed from the supported source under Owner decision #182; only WordPress and Direct SSH are recognized built-in Target types.
 
 This document preserves the durable connector-neutral identity, credential, permission and lifecycle contract plus historical design rationale. The integrated code and [current architecture](ARCHITECTURE.md), GitHub Releases and active Issues are authoritative for what actually runs, ships and remains unverified. Earlier pre-implementation sequences below are historical, not instructions to rebuild the shipped Target foundation; the original v1 Site to v2 Target transition is still a breaking data/reset boundary.
 
@@ -344,7 +344,7 @@ Add Target
 
 The common shell owns Target identity and generic lifecycle presentation.
 
-Only shipped, implemented connector types appear in Add Target: WordPress/WP AI Bridge and Direct SSH. The server rejects fabricated connector types and unsupported historical Agent records remain non-executable.
+Only shipped, implemented connector types appear in Add Target: WordPress/WP AI Bridge and Direct SSH. The server rejects fabricated connector types even when a malformed stored row is present; unknown connectors cannot execute.
 
 Connector-specific steps own their own fields, authorization/setup flow, diagnostics and help text.
 
@@ -471,7 +471,7 @@ Exact role bundles must be explicit and tested; adding a connector permission ne
 
 Direct SSH follows the same explicit permission framework without command-string restrictions: Owner has all SSH permissions; Administrator and Operator role ceilings may include `ssh.command.run`, `ssh.file.read` and `ssh.file.write`, but **all SSH permissions default denied for every new non-owner** until deliberately enabled by the Owner and narrowed to assigned Targets. Viewer has no SSH permissions. These toggles control **Gateway tool exposure**, not OS/sudo or filesystem access for a user already granted arbitrary shell commands.
 
-Historical migration-seeded Agent denials are inactive but retained. SSH remains default-denied to non-Owners until Owner-approved grants; removal of unsupported permission definitions must not erase historical stored denials or widen unrelated access.
+The old Agent-specific denial-seeding contract has been retired for the Owner's single managed installation (#182). SSH remains default-denied for non-Owners until Owner-approved grants; unknown permission values never become executable permissions, and unrelated SSH/WordPress denials cannot be widened by this change.
 
 Input-sensitive authorization must close privilege-composition gaps. SSH jobs must recheck Gateway user/Target rights before issuing a new command and must not create a path around OS-account privileges.
 

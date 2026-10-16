@@ -264,21 +264,23 @@ final class TargetConfigurationAdminTest extends TestCase
         self::assertSame(0, DB::table('activity_events')->where('operation', 'ssh-target-reconfigure')->count());
     }
 
-    public function test_paused_connector_cannot_be_reconfigured_through_owner_route(): void
+    public function test_unrecognized_stored_connector_cannot_be_reconfigured_through_owner_route(): void
     {
         $this->actingAs($this->user('owner'));
-        $paused = Target::query()->create([
-            'target_id' => 'paused-agent',
-            'display_name' => 'Paused Agent',
-            'connector_type' => 'ai_server_agent',
+        $target = Target::query()->create([
+            'target_id' => 'unrecognized-record',
+            'display_name' => 'Unrecognized stored record',
+            'connector_type' => 'wp_ai_bridge',
         ]);
-        $this->get('/admin/targets/paused-agent/edit')->assertOk()
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['connector_type' => 'unrecognized_connector']);
+        $this->get('/admin/targets/unrecognized-record/edit')->assertOk()
             ->assertSee('historical connector does not offer a configuration editor');
-        $this->put('/admin/targets/paused-agent/configuration', [
+        $this->put('/admin/targets/unrecognized-record/configuration', [
             'current_password' => 'CorrectHorse!234',
             'configuration_revision' => str_repeat('1', 64),
         ])->assertNotFound();
-        self::assertSame('ai_server_agent', $paused->fresh()->connector_type);
+        self::assertSame('unrecognized_connector', $target->fresh()->connector_type);
     }
 
     public function test_disconnected_ssh_target_can_readd_write_only_credential_without_recreating_identity(): void

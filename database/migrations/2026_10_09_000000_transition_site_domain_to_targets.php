@@ -48,19 +48,6 @@ return new class extends Migration
         'security.manage',
     ];
 
-    private const AGENT_ADMIN = [
-        'agent.environment.read',
-        'agent.command.run',
-        'agent.root_command.run',
-        'agent.job.start',
-        'agent.job.read',
-        'agent.job.stop',
-        'agent.file.read',
-        'agent.file.write',
-        'agent.browser.setup',
-        'agent.browser.run',
-    ];
-
     private const SSH_ADMIN_OPERATOR = [
         'ssh.command.run',
         'ssh.file.read',
@@ -113,7 +100,6 @@ return new class extends Migration
             array_keys(self::PERMISSION_RENAMES),
             array_values(self::PERMISSION_RENAMES),
             self::UNCHANGED_PERMISSIONS,
-            self::AGENT_ADMIN,
             self::SSH_ADMIN_OPERATOR,
         );
         foreach ($denialSnapshot as $denial) {
@@ -363,9 +349,9 @@ return new class extends Migration
                 continue;
             }
             $newPermissions = match ((string) $user->role) {
-                'administrator' => [...self::AGENT_ADMIN, ...self::SSH_ADMIN_OPERATOR],
-                'operator' => ['agent.environment.read', 'agent.command.run', ...self::SSH_ADMIN_OPERATOR],
-                'viewer' => ['agent.environment.read'],
+                'administrator' => self::SSH_ADMIN_OPERATOR,
+                'operator' => self::SSH_ADMIN_OPERATOR,
+                'viewer' => [],
                 default => throw new RuntimeException('Unrecognized Gateway role requires reconciliation before migration.'),
             };
             foreach ($newPermissions as $permission) {

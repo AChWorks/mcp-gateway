@@ -114,10 +114,12 @@ final class TargetManagementAdminTest extends TestCase
         }
     }
 
-    public function test_paused_stored_agent_target_remains_readable_without_enabling_its_connector(): void
+    public function test_unrecognized_stored_connector_cannot_execute_or_be_filtered_as_supported(): void
     {
         $this->actingAs($this->user('owner', 'all'));
-        $target = $this->target('paused-agent', 'ai_server_agent');
+        $target = $this->target('unsupported-record', 'ssh_direct');
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['connector_type' => 'unrecognized_connector']);
 
         $this->get('/admin/targets/'.$target->target_id)
             ->assertOk()
@@ -129,14 +131,10 @@ final class TargetManagementAdminTest extends TestCase
                 ->assertSessionHasErrors('target');
         }
 
-        $inventory = app(TargetInventory::class)
-            ->mcpPage($this->user('owner', 'all'), connectorType: 'ai_server_agent');
-        self::assertSame(['paused-agent'], array_map(
-            static fn (Target $item): string => $item->target_id,
-            $inventory['items'],
-        ));
-
         Http::assertNothingSent();
+        $this->expectException(\InvalidArgumentException::class);
+        app(TargetInventory::class)
+            ->mcpPage($this->user('owner', 'all'), connectorType: 'unrecognized_connector');
     }
 
     public function test_selected_scope_operator_cannot_discover_other_target_or_enroll_new_connector(): void
@@ -634,7 +632,7 @@ final class TargetManagementAdminTest extends TestCase
         self::assertSame(0, DB::table('ssh_direct_target_configs')
             ->where('target_record_id', $recordId)->count());
 
-        $paused = $this->target('offline-paused', 'ai_server_agent');
+        $paused = $this->target('offline-paused', 'wp_ai_bridge');
         $paused->forceFill(['connection_state' => 'error'])->save();
         $this->delete('/admin/targets/offline-paused/forget', [
             ...$input,
