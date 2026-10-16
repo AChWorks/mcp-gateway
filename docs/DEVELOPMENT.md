@@ -297,16 +297,7 @@ The stable public protocol paths are:
 
 The required OAuth resource scope is `mcp`. For the fixed ChatGPT client, an approved `mcp` authorization is refreshable even when ChatGPT omits `offline_access`, because the client must be able to renew the bounded access token without a manual reconnect. `offline_access` remains accepted and advertised for compatibility. Refresh rotation, replay protection, expiry, exact client/resource/user binding, and authorization-wide revocation remain mandatory. If a refresh credential authorized for `mcp offline_access` is explicitly narrowed to an `mcp` access token, the Gateway does not issue a successor refresh token: RFC 6749 permits the narrower access token, while any replacement refresh token would have to retain the predecessor refresh token's identical scope.
 
-The **Target-era** Gateway MCP tool-family baseline is:
-
-```text
-targets-list
-target-context
-wordpress-abilities-read
-wordpress-ability-execute
-```
-
-SSH command and file tools are present only when their exact integration/release status allows. Do not restore retired `sites-*` aliases or register one public tool per Target or downstream WordPress Ability. A compatible new WordPress Ability is discovered using the existing Target-scoped metadata/execute tools rather than by changing the Gateway tool catalog.
+The complete public Gateway MCP Tool names, schemas, annotations and limits belong to [`GatewayMcpEndpoint.php`](../app/Infrastructure/Mcp/GatewayMcpEndpoint.php) in the **selected source revision**. Its Target inventory/context, WordPress Ability discovery/execution, SSH command/file and retained Job families are deliberately independent of the registered Target count. Do not maintain a second dated four-tool catalog in this development guide, restore retired `sites-*` aliases or register a public Tool per Target or downstream WordPress Ability. A compatible new WordPress Ability is discovered through the existing authenticated Target-scoped family, not a public Gateway Tool publication.
 
 To verify the currently configured public ChatGPT CIMD/JWKS contract without printing key material:
 
@@ -314,7 +305,7 @@ To verify the currently configured public ChatGPT CIMD/JWKS contract without pri
 php artisan gateway:oauth-client-check --refresh
 ```
 
-As verified on 2026-09-14, the current ChatGPT client metadata advertises the Client ID `https://chatgpt.com/oauth/client.json`, one connector redirect URI, `private_key_jwt`, RS256 and same-origin JWKS. The command intentionally reports only safe compatibility metadata and usable-key counts, never JWK values or assertions.
+The command validates the *currently published* compatible ChatGPT client metadata/JWKS identity against the reviewed Gateway profile and reports only safe compatibility metadata and usable-key counts—not JWK values, private keys or assertions. Never embed a previously observed external client's live redirect/JWKS snapshot as a permanent development assumption.
 
 OAuth integration tests use generated controlled RSA keys and a mocked ChatGPT CIMD/JWKS fixture. They cover resource/scope/redirect binding, S256 PKCE, wrong client/signing key/algorithm/key ID, assertion audience/expiry/`jti` replay rejection, authorization-code expiry/single use, refresh rotation/reuse/scope narrowing, RFC 9207 issuer stamping, modern MCP `2026-07-28` stateless routing, legacy 2025-era compatibility, MCP bearer validation/tool discovery/calls and revocation without requiring owner credentials.
 
