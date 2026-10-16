@@ -26,9 +26,11 @@ final class SshTargetRegistrationTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $fields = $this->fields();
+        $fields['ai_guidance'] = 'Production host: request confirmation before changes.';
         $this->post('/admin/targets', $fields)->assertRedirect('/admin/targets/ssh-alpha');
         $target = Target::query()->where('target_id', 'ssh-alpha')->sole();
         self::assertSame('ssh_direct', $target->connector_type);
+        self::assertSame($fields['ai_guidance'], $target->ai_guidance);
         self::assertSame('disconnected', $target->connection_state->value);
         $config = SshTargetConfig::query()->sole();
         self::assertSame('2606:4700:4700::1111', $config->host);
@@ -47,6 +49,7 @@ final class SshTargetRegistrationTest extends TestCase
             app(SshTargetVault::class)->open($target, $config, $credential));
 
         $this->get('/admin/targets/ssh-alpha')->assertOk()
+            ->assertSee($fields['ai_guidance'])
             ->assertSee('deploy@[2606:4700:4700::1111]:2222')
             ->assertSee('IP not yet verified')
             ->assertDontSee('password-secret-test')
@@ -168,11 +171,11 @@ final class SshTargetRegistrationTest extends TestCase
         $operator = $this->user('operator');
         $hidden = app(SshTargetRegistration::class)->register(
             'ssh-hidden', 'Hidden', '8.8.8.8', 22, 'root', $this->key(),
-            'password', 'hidden-secret', null,
+            'password', 'hidden-secret', null, 'Private host note - must not leak',
         );
         $visible = app(SshTargetRegistration::class)->register(
             'ssh-visible', 'Visible', '8.8.8.8', 2222, 'deploy', $this->key(),
-            'password', 'visible-secret', null,
+            'password', 'visible-secret', null, 'Visible host: explain risks before editing.',
         );
         DB::table('user_target_access')->insert([
             'user_id' => $operator->getKey(),
@@ -188,6 +191,10 @@ final class SshTargetRegistrationTest extends TestCase
         self::assertSame('registered_unverified', $ownerList['targets'][0]['ssh']['ip_status']);
         self::assertSame(1, count($handlers->targetsList($operator, search: '8.8.8.8')['targets']));
         self::assertSame('ssh-visible', $handlers->targetsList($operator, search: '8.8.8.8')['targets'][0]['target_id']);
+        self::assertSame('Visible host: explain risks before editing.',
+            $handlers->targetsList($operator, search: '8.8.8.8')['targets'][0]['ai_guidance']);
+        self::assertStringNotContainsString('Private host note',
+            json_encode($handlers->targetsList($operator), JSON_THROW_ON_ERROR));
         self::assertCount(1, $handlers->targetsList($owner, search: '8.8.8.8:2222')['targets']);
         self::assertSame('ssh-visible', $handlers->targetsList($owner, search: 'deploy@8.8.8.8:2222')['targets'][0]['target_id']);
         self::assertSame([], $handlers->targetsList($operator, search: '8.8.8.8:22')['targets']);
@@ -195,6 +202,7 @@ final class SshTargetRegistrationTest extends TestCase
             $handlers->targetContext($operator, 'ssh-hidden'));
         $context = $handlers->targetContext($operator, 'ssh-visible');
         self::assertSame('deploy@8.8.8.8:2222', $context['target']['ssh']['destination_label']);
+        self::assertSame('Visible host: explain risks before editing.', $context['target']['ai_guidance']);
         self::assertStringNotContainsString('visible-secret', json_encode($context, JSON_THROW_ON_ERROR));
         self::assertStringNotContainsString($this->key(), json_encode($context, JSON_THROW_ON_ERROR));
 

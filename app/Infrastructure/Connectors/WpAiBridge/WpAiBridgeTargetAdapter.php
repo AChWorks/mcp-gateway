@@ -44,6 +44,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
                 (string) $input['target_id'],
                 (string) $input['display_name'],
                 (string) $input['base_url'],
+                $input['ai_guidance'] ?? null,
             );
         } catch (BridgeDiscoveryException $exception) {
             throw new TargetConnectorFailure(

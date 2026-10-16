@@ -66,6 +66,56 @@ final class AdminUiPresentationTest extends TestCase
         );
     }
 
+    public function test_target_ai_guidance_forms_reuse_accessible_shared_responsive_controls(): void
+    {
+        $owner = $this->owner();
+        $target = Target::query()->create([
+            'target_id' => 'note-ui',
+            'display_name' => 'Production note editor',
+            'connector_type' => 'ssh_direct',
+            'ai_guidance' => "Production server\nExplain every change.",
+        ]);
+        $this->actingAs($owner);
+
+        foreach ([
+            '/admin/targets/create?connector_type=ssh_direct',
+            '/admin/targets/create?connector_type=wp_ai_bridge',
+            '/admin/targets/note-ui/edit',
+        ] as $url) {
+            $html = $this->get($url)->assertOk()->getContent();
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//label[@for="ai_guidance"])',
+            ));
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//textarea[@id="ai_guidance"][@name="ai_guidance"][@rows="3"]'
+                .'[@maxlength="800"][@aria-describedby="ai_guidance_help"])',
+            ));
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//p[@id="ai_guidance_help"][contains(@class,"field-help")])',
+            ));
+            self::assertStringContainsString('This is advice, not enforced approval.', $html);
+            self::assertStringNotContainsString('name="approval_policy"', $html);
+        }
+
+        $edit = $this->get('/admin/targets/note-ui/edit')->assertOk()->getContent();
+        self::assertStringContainsString("Production server\nExplain every change.", $edit);
+
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertStringContainsString('.field textarea {', $css);
+        self::assertStringContainsString('grid-template-columns: minmax(0, 1fr);', $css);
+        self::assertStringContainsString('.target-ai-guidance-text {', $css);
+        self::assertStringContainsString('white-space: pre-wrap;', $css);
+        self::assertStringContainsString('overflow-wrap: anywhere;', $css);
+    }
+
     public function test_adjacent_admin_panels_use_shared_spacing_without_page_specific_card_fixes(): void
     {
         $this->actingAs($this->owner())

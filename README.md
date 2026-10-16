@@ -6,7 +6,7 @@ MCP Gateway is a self-hosted PHP application that connects an authenticated MCP 
 
 ## What you can do
 
-- Register WordPress and SSH Targets, review connection status, and let the Owner **Pause/Resume Gateway operations per Target** without disconnecting or deleting access. An already-running remote SSH Job is not stopped by Pause.
+- Register WordPress and SSH Targets with optional per-Target AI guidance, review connection status, and let the Owner **Pause/Resume Gateway operations per Target** without disconnecting or deleting access. An already-running remote SSH Job is not stopped by Pause.
 - Discover and run WordPress Abilities through the existing WordPress principal and its WP AI Bridge permissions.
 - Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
 - In v2.3.0, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.

@@ -19,7 +19,7 @@ final readonly class WpAiBridgeTargetRegistration
 {
     public function __construct(private WpAiBridgeDiscovery $discovery) {}
 
-    public function register(string $targetId, string $displayName, string $baseUrl): Target
+    public function register(string $targetId, string $displayName, string $baseUrl, ?string $aiGuidance = null): Target
     {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -39,7 +39,7 @@ final readonly class WpAiBridgeTargetRegistration
         $hash = hash('sha256', $metadata->baseUrl);
 
         try {
-            return DB::transaction(static function () use ($targetId, $displayName, $metadata, $hash): Target {
+            return DB::transaction(static function () use ($targetId, $displayName, $aiGuidance, $metadata, $hash): Target {
                 // Connector-scoped reservation prevents same-endpoint registration
                 // racing against future reassignment, but never blocks SSH/Agent
                 // Targets at the same host.
@@ -55,6 +55,7 @@ final readonly class WpAiBridgeTargetRegistration
                 $target = Target::query()->create([
                     'target_id' => $targetId,
                     'display_name' => $displayName,
+                    'ai_guidance' => $aiGuidance === null || trim($aiGuidance) === '' ? null : trim($aiGuidance),
                     'connector_type' => 'wp_ai_bridge',
                     'connection_state' => TargetConnectionState::Disconnected,
                 ]);

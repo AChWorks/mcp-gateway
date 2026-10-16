@@ -34,6 +34,13 @@
         </form>
     @endif
     <p class="field-help">{{ __('Pausing does not revoke WordPress authorization or SSH credentials. Explicit administrative credential recovery and local inventory remain available.') }}</p>
+    @if ($target->ai_guidance !== null && $target->ai_guidance !== '')
+        <div class="target-subsection" aria-label="{{ __('AI guidance') }}">
+            <h3>{{ __('AI guidance') }}</h3>
+            <p class="target-ai-guidance-text">{{ $target->ai_guidance }}</p>
+            <p class="field-help">{{ __('A contextual note for AI clients. It does not grant access or require confirmation.') }}</p>
+        </div>
+    @endif
 </section>
 
 <section class="panel panel-wide target-recovery-panel" aria-labelledby="target-recovery-title">

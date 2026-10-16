@@ -65,6 +65,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
                 $method,
                 (string) ($input[$method === 'password' ? 'ssh_password' : 'ssh_private_key'] ?? ''),
                 $method === 'private_key' ? ($input['ssh_passphrase'] ?? null) : null,
+                $input['ai_guidance'] ?? null,
             );
         } catch (InvalidArgumentException|RuntimeException) {
             throw new TargetConnectorFailure(

@@ -55,6 +55,7 @@ final readonly class TargetMcpToolHandlers
             $item = [
                 'target_id' => $target->target_id,
                 'display_name' => $target->display_name,
+                'ai_guidance' => $target->ai_guidance,
                 'connector_type' => $target->connector_type,
                 'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
                 'operations_paused' => (bool) $target->operations_paused,
@@ -104,6 +105,7 @@ final readonly class TargetMcpToolHandlers
         $context = [
             'target_id' => $target->target_id,
             'display_name' => $target->display_name,
+            'ai_guidance' => $target->ai_guidance,
             'connector_type' => $target->connector_type,
             'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
             'operations_paused' => (bool) $target->operations_paused,

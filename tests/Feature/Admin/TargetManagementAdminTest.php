@@ -61,15 +61,18 @@ final class TargetManagementAdminTest extends TestCase
             'connector_type' => 'wp_ai_bridge',
             'target_id' => 'wp-blog',
             'display_name' => 'WordPress blog',
+            'ai_guidance' => 'Production WordPress: explain consequences before changing content.',
             'base_url' => 'https://wordpress.example.test/',
         ])->assertRedirect('/admin/targets/wp-blog');
 
         $wp = Target::query()->where('target_id', 'wp-blog')->firstOrFail();
         self::assertSame('wp_ai_bridge', $wp->connector_type);
+        self::assertSame('Production WordPress: explain consequences before changing content.', $wp->ai_guidance);
         self::assertSame('https://wordpress.example.test', WpAiBridgeTargetConfig::query()
             ->where('target_record_id', $wp->getKey())->value('base_url'));
         self::assertSame(0, DB::table('target_credentials')->count());
         $this->get('/admin/targets/wp-blog')->assertOk()
+            ->assertSee('Production WordPress: explain consequences before changing content.')
             ->assertSee('WordPress blog')
             ->assertSee('https://wordpress.example.test')
             ->assertSee('Authorize this Target to connect WordPress securely');
@@ -96,6 +99,7 @@ final class TargetManagementAdminTest extends TestCase
             self::assertSame(0, (int) $xpath->evaluate('count(//option[@value="ai_server_agent"])'));
             self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="target_id"])'));
             self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="display_name"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//fieldset[@data-target-shared]//textarea[@name="ai_guidance"][@maxlength="800"])'));
             self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="ssh_password"])'));
             self::assertSame(1, (int) $xpath->evaluate('count(//textarea[@name="ssh_private_key"])'));
             self::assertSame(0, (int) $xpath->evaluate('count(//option[@value="both"])'));
@@ -333,7 +337,7 @@ final class TargetManagementAdminTest extends TestCase
         self::assertSame('wp_ai_bridge', Target::query()->firstOrFail()->connector_type);
     }
 
-    public function test_owner_can_edit_label_without_mutating_immutable_target_identity_or_connector(): void
+    public function test_owner_can_edit_label_and_ai_guidance_without_mutating_target_identity_or_connector(): void
     {
         $owner = $this->user('owner', 'all');
         $viewer = $this->user('viewer', 'all');
@@ -348,6 +352,8 @@ final class TargetManagementAdminTest extends TestCase
             ->assertSee('permanent-id');
         $this->put('/admin/targets/permanent-id', [
             'display_name' => 'Updated safe label',
+            'ai_guidance' => 'Test production note
+A second line.',
             'target_id' => 'hijack',
             'connector_type' => 'ssh_direct',
             'base_url' => 'https://attacker.example.test',
@@ -358,8 +364,52 @@ final class TargetManagementAdminTest extends TestCase
         self::assertSame('permanent-id', $target->target_id);
         self::assertSame('wp_ai_bridge', $target->connector_type);
         self::assertSame('Updated safe label', $target->display_name);
+        self::assertSame('Test production note
+A second line.', $target->ai_guidance);
         $this->get('/admin/targets/permanent-id')->assertOk()
+            ->assertSee('Test production note')
             ->assertSee('Edit Target');
+        $this->put('/admin/targets/permanent-id', ['display_name' => 'Keep guidance'])
+            ->assertRedirect('/admin/targets/permanent-id');
+        self::assertSame('Test production note
+A second line.', $target->refresh()->ai_guidance);
+        $this->put('/admin/targets/permanent-id', [
+            'display_name' => 'Clear guidance',
+            'ai_guidance' => '',
+        ])->assertRedirect('/admin/targets/permanent-id');
+        self::assertNull($target->refresh()->ai_guidance);
+    }
+
+    public function test_ai_guidance_validation_rejects_oversize_and_control_bytes_without_registration(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        $fields = [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'guidance-limits',
+            'display_name' => 'Bounded guidance',
+            'base_url' => 'https://wordpress.example.test/',
+            'ai_guidance' => str_repeat('a', Target::AI_GUIDANCE_MAX_LENGTH + 1),
+        ];
+        $this->post('/admin/targets', $fields)->assertSessionHasErrors('ai_guidance');
+        self::assertSame(0, Target::query()->count());
+
+        $fields['ai_guidance'] = 'Production noteforbidden-control';
+        $this->post('/admin/targets', $fields)->assertSessionHasErrors('ai_guidance');
+        self::assertSame(0, Target::query()->count());
+
+        $fields['ai_guidance'] = '  Sensitive <script>alert(1)</script> note  ';
+        $this->post('/admin/targets', $fields)->assertRedirect('/admin/targets/guidance-limits');
+        $target = Target::query()->where('target_id', 'guidance-limits')->sole();
+        self::assertSame('Sensitive <script>alert(1)</script> note', $target->ai_guidance);
+        $this->get('/admin/targets/guidance-limits')->assertOk()
+            ->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', false)
+            ->assertDontSee('<script>alert(1)</script>', false);
+
+        $this->put('/admin/targets/guidance-limits', [
+            'display_name' => 'Bounded guidance',
+            'ai_guidance' => str_repeat('a', Target::AI_GUIDANCE_MAX_LENGTH + 1),
+        ])->assertSessionHasErrors('ai_guidance');
+        self::assertSame('Sensitive <script>alert(1)</script> note', $target->refresh()->ai_guidance);
     }
 
     public function test_remove_requires_confirmation_and_refuses_active_or_pending_connection_state(): void

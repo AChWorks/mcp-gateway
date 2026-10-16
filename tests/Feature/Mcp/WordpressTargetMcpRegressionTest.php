@@ -64,6 +64,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
     public function test_sites_list_and_context_expose_bounded_non_secret_site_state(): void
     {
         $alpha = $this->createSite('alpha');
+        $alpha->forceFill(['ai_guidance' => 'Production site: ask before risky writes.'])->save();
         $this->pair($alpha);
         $this->createSite('beta');
 
@@ -73,6 +74,8 @@ final class WordpressTargetMcpRegressionTest extends TestCase
 
         self::assertTrue($list['ok']);
         self::assertSame(['alpha', 'beta'], array_column($list['targets'], 'target_id'));
+        self::assertSame('Production site: ask before risky writes.', $list['targets'][0]['ai_guidance']);
+        self::assertNull($list['targets'][1]['ai_guidance']);
         self::assertFalse($list['truncated']);
         self::assertSame('connected', $list['targets'][0]['connection_state']);
         self::assertSame('disconnected', $list['targets'][1]['connection_state']);
@@ -80,6 +83,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         self::assertTrue($context['ok']);
         self::assertSame('alpha', $context['target']['target_id']);
         self::assertSame('wp_ai_bridge', $context['target']['connector_type']);
+        self::assertSame('Production site: ask before risky writes.', $context['target']['ai_guidance']);
         self::assertArrayNotHasKey('base_url', $context['target']);
         self::assertArrayNotHasKey('mcp_resource_url', $context['target']);
 

@@ -1,6 +1,6 @@
 # MCP Gateway v2.3.1
 
-**Corrective source candidate `2.3.1-rc.2` — NOT PUBLISHED.**
+**Corrective source candidate `2.3.1-rc.3` — NOT PUBLISHED.**
 
 Compared with the publicly released v2.3.0:
 
@@ -19,6 +19,11 @@ Compared with the publicly released v2.3.0:
   keys; destructive or sensitive optional settings remain inactive. Upgrade
   acceptance includes the latest published v2.3.0 baseline and checks that
   installed private `.env` data is preserved.
+- **Per-Target AI guidance:** an optional short operator note on new and
+  existing WordPress/SSH Targets is saved as shared Target metadata and
+  exposed only through authorized MCP inventory/context. The note is
+  advisory, never an approval token, grant or command execution policy.
+  Existing Targets need no manual configuration.
 - **Target Admin usability:** the merged Targets inventory distinguishes stored
   WordPress credentials from verified remote OAuth health and offers a clearer,
   responsive Target/Connector/connection/operations/action layout, including

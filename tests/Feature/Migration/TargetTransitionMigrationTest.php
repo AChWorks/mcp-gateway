@@ -19,6 +19,8 @@ final class TargetTransitionMigrationTest extends TestCase
 
     private const TARGET_OPERATIONS_MIGRATION = '2026_10_16_000000_add_target_operations_paused.php';
 
+    private const AI_GUIDANCE_MIGRATION = '2026_10_17_000000_add_target_ai_guidance.php';
+
     private bool $rebuildMariaDbTestSchema = false;
 
     protected function setUp(): void
@@ -280,7 +282,8 @@ final class TargetTransitionMigrationTest extends TestCase
             // breaking Target transition nor its later in-place refresh-
             // intent/network-settings/Target-pause extensions exist yet.
             if (in_array(basename($file), [self::MIGRATION, self::NETWORK_TIMEOUT_MIGRATION,
-                self::RECOVERY_FENCE_MIGRATION, self::TARGET_OPERATIONS_MIGRATION], true)) {
+                self::RECOVERY_FENCE_MIGRATION, self::TARGET_OPERATIONS_MIGRATION,
+                self::AI_GUIDANCE_MIGRATION], true)) {
                 continue;
             }
             (require $file)->up();
