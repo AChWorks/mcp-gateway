@@ -265,7 +265,7 @@ The ChatGPT-facing MCP limiter is burst-aware by default: the unauthenticated ed
 
 The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
-### Optional SSH whole-file data plane — host pre-enablement
+### Optional SSH whole-file data plane: host pre-enablement
 
 The raw-binary SSH file-transfer endpoint is controlled by installed-version support, the effective configuration and the authenticated Target/Client permission boundary. [Whole-file exchange](WHOLE-FILE-EXCHANGE.md) owns its technical wire protocol. **Do not infer production enablement from source CI, a published release or a disposable binary-client pass.**
 
