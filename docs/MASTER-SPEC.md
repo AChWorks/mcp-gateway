@@ -150,7 +150,7 @@ Product evolution must be evidenced by representative, authorized real operation
 - authorized high-risk operations remain possible within real downstream authority and immutable trust boundaries;
 - a fresh maintainer can recover **intent here**, **architecture in the technical docs**, **unresolved work from Issues**, **code identity from Git**, and **shipped/installed facts from the actual release/runtime** without prior chat state.
 
-These are enduring acceptance **directions**, not a declaration that every future capability is shipped. The archived WordPress-first V1 scope and criteria are preserved in [HISTORICAL-V1-ACCEPTANCE.md](HISTORICAL-V1-ACCEPTANCE.md) solely for provenance.
+These are enduring acceptance **directions**, not a declaration that every future capability is shipped. WordPress-first V1 scope and acceptance remain recoverable from this file's Git history and completed [V1 program Issue #1](https://github.com/AChWorks/mcp-gateway/issues/1); they are historical evidence, not competing live product requirements.
 
 ## 14. Sources of truth and change policy
 
