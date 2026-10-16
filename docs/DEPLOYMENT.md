@@ -530,15 +530,14 @@ When escalating a problem, share only the timestamp/time zone, correlation ID, s
 
 Before every migration-bearing upgrade, preserve a recoverable set containing:
 
-- a consistent MariaDB/MySQL database backup, including site registry, encrypted site credentials and OAuth-flow state owned by the deployed revision;
-- the deployment `.env` / Laravel `APP_KEY` through the site's approved secret-backup mechanism;
+- a consistent MariaDB/MySQL database backup **of the actual installed revision**, including its migration ledger, registered `targets` and connector-specific configurations, encrypted `target_credentials` and credential metadata, WordPress OAuth flows and refresh/revocation intents, Gateway OAuth client authorizations and related grant/recovery state, Target Groups, user/Target grants and denials, Activity, and retained `ssh_command_jobs` journal records **where those tables exist**. When upgrading a genuine legacy Site-era installation, also preserve the actual legacy Site records and flows before the destructive transition (see [Target transition runbook](TARGET-TRANSITION-RUNBOOK.md));
+- the deployment `.env` / Laravel `APP_KEY` through the installation's approved secret-backup mechanism;
 - `OAUTH_PRIVATE_KEY_PATH` and `OAUTH_PUBLIC_KEY_PATH` with permissions preserved;
 - `BRIDGE_CLIENT_PRIVATE_KEY_PATH` and `BRIDGE_CLIENT_PUBLIC_KEY_PATH` with permissions preserved;
+- private application storage and any host-managed files required to restore this installation, with appropriate access protections;
 - the exact deployed release identity and the corresponding repository Composer lockfile identity.
 
-Treat the database, `APP_KEY`, and both signing keypairs as one recovery set. Site access/refresh tokens are encrypted with the application encryption boundary, so restoring the database without the matching `APP_KEY` makes those credentials unusable. Restoring a different Bridge client keypair changes the `private_key_jwt` identity material advertised through the Gateway JWKS endpoint and can break approved site connections even when the database is intact.
-
-V1 recovery validation proved this set on a controlled two-site installation. Preserve the same recovery-set invariant for future releases; backup presence alone is not sufficient unless restore assumptions remain valid.
+Treat the database, matching `APP_KEY`, both signing keypairs and required private runtime state as **one coherent recovery set**. Encrypted Target credentials and protected refresh/recovery state cannot be recovered correctly without the matching application encryption key. Replacing the Bridge client keypair changes the `private_key_jwt` signing identity advertised in its Gateway-hosted JWKS and may break existing downstream authorizations even if the database is intact. An application-code backup is **not** a database restore: independently test-restore the database and verify the associated key/file compatibility in an isolated environment before relying on this set for a stateful upgrade.
 
 ## 11. Upgrade and rollback outline
 
