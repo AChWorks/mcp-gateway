@@ -1,6 +1,7 @@
 # MCP Gateway — Master Specification
 
-**Status:** Canonical, durable product specification  
+**Status:** Canonical, durable product specification
+
 **Repository:** `AChWorks/mcp-gateway`
 
 This document defines **what MCP Gateway must be and what constraints govern its evolution**, not the implementation backlog, a release note, an issue log, a deployment report, or a version-specific configuration manual. [ARCHITECTURE.md](ARCHITECTURE.md) describes how currently integrated components fit these goals. Concrete connector, protocol, resource and migration contracts live in their dedicated documents. Current delivery and outstanding acceptance belong to GitHub source, Issues, PRs, CI, releases and the actual host.
