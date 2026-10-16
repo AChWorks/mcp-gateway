@@ -6,6 +6,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -66,8 +67,8 @@ final class AdminUiPresentationTest extends TestCase
             ->get('/admin/targets')
             ->assertOk()
             ->assertSee($name)
-            ->assertSee('<span class="sr-only">Actions</span>', false)
-            ->assertSee('class="table-wrap"', false);
+            ->assertSee('<th scope="col">Actions</th>', false)
+            ->assertSee('class="table-wrap targets-table-wrap"', false);
 
         $css = file_get_contents(public_path('css/admin.css'));
         self::assertIsString($css);
@@ -99,6 +100,153 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Target-scoped')
             ->assertSee('effective Target scope')
             ->assertSee('not limited to Targets the user created');
+    }
+
+    public function test_target_inventory_separates_connection_oauth_and_pause_without_false_required_label(): void
+    {
+        $withStoredOauth = Target::query()->create([
+            'target_id' => 'wp-stored',
+            'display_name' => 'Stored OAuth WordPress',
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+        $withStoredOauth->forceFill(['connection_state' => 'connected'])->save();
+        TargetCredential::query()->create([
+            'target_record_id' => $withStoredOauth->getKey(),
+            'connector_type' => 'wp_ai_bridge',
+            'purpose' => 'wordpress_oauth',
+            'encrypted_payload' => 'opaque-test-fixture',
+        ]);
+        $withoutOauth = Target::query()->create([
+            'target_id' => 'wp-no-credential',
+            'display_name' => 'No OAuth WordPress',
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+        $withoutOauth->forceFill(['connection_state' => 'connected'])->save();
+        $pausedSsh = Target::query()->create([
+            'target_id' => 'ssh-paused-list',
+            'display_name' => 'Paused SSH',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $pausedSsh->forceFill([
+            'connection_state' => 'connected',
+            'operations_paused' => true,
+        ])->save();
+
+        $html = $this->actingAs($this->owner())->get('/admin/targets')
+            ->assertOk()
+            ->assertSee('<th scope="col">Connection</th>', false)
+            ->assertSee('<th scope="col">Gateway operations</th>', false)
+            ->assertSee('<th scope="col">Actions</th>', false)
+            ->assertSee('class="targets-table"', false)
+            ->assertSee('class="target-action-confirm"', false)
+            ->assertSee('Confirm Pause')
+            ->assertSee('Confirm Resume')
+            ->getContent();
+
+        preg_match_all('/<tbody>.*?<\/tbody>/s', $html, $tables);
+        self::assertCount(1, $tables[0]);
+        preg_match_all('/<tr>.*?<\/tr>/s', $tables[0][0], $rows);
+        $rowFor = static function (string $id) use ($rows): string {
+            foreach ($rows[0] as $row) {
+                if (str_contains($row, '>'.$id.'</code>')) {
+                    return $row;
+                }
+            }
+
+            return '';
+        };
+        $storedRow = $rowFor('wp-stored');
+        self::assertNotSame('', $storedRow);
+        self::assertStringContainsString('WordPress authorization stored', $storedRow);
+        self::assertStringNotContainsString('WordPress authorization required', $storedRow);
+        self::assertStringContainsString('Connected', $storedRow);
+        self::assertStringContainsString('Enabled', $storedRow);
+
+        $missingRow = $rowFor('wp-no-credential');
+        self::assertNotSame('', $missingRow);
+        self::assertStringContainsString('WordPress authorization required', $missingRow);
+
+        $pausedRow = $rowFor('ssh-paused-list');
+        self::assertNotSame('', $pausedRow);
+        self::assertStringContainsString('Connected', $pausedRow);
+        self::assertStringContainsString('Paused', $pausedRow);
+        self::assertStringContainsString('Confirm Resume', $pausedRow);
+        self::assertStringNotContainsString('Confirm Pause', $pausedRow);
+
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertStringContainsString('.targets-table', $css);
+        self::assertStringContainsString('.targets-mobile-label', $css);
+        self::assertStringContainsString('@media (max-width: 30rem)', $css);
+        self::assertStringContainsString('.target-action-confirm > summary:focus-visible', $css);
+
+        $operator = User::query()->create([
+            'name' => 'Read-only inventory operator',
+            'email' => 'targets-list-'.uniqid().'@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::All->value,
+            'access_enabled' => true,
+        ]);
+        $this->actingAs($operator)->get('/admin/targets')
+            ->assertOk()
+            ->assertSee('Inspect')
+            ->assertDontSee('Confirm Pause')
+            ->assertDontSee('Confirm Resume')
+            ->assertDontSee('class="target-action-confirm"', false);
+    }
+
+    public function test_target_inventory_labels_unsupported_historical_connectors_without_reclassifying_them(): void
+    {
+        $legacy = Target::query()->create([
+            'target_id' => 'legacy-unsupported',
+            'display_name' => 'Historical connector',
+            'connector_type' => 'ssh_direct',
+        ]);
+        // The immutable model disallows new unsupported connector types; only
+        // previously persisted historical records may still have one.
+        DB::table('targets')->where('id', $legacy->getKey())
+            ->update(['connector_type' => 'unrecognized_connector']);
+
+        Target::query()->create([
+            'target_id' => 'supported-ssh',
+            'display_name' => 'Supported SSH',
+            'connector_type' => 'ssh_direct',
+        ]);
+        Target::query()->create([
+            'target_id' => 'supported-wordpress',
+            'display_name' => 'Supported WordPress',
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+
+        $html = $this->actingAs($this->owner())
+            ->get('/admin/targets')
+            ->assertOk()
+            ->getContent();
+        $document = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($document);
+
+        $connectorLabelFor = static function (string $targetId) use ($xpath): array {
+            $cell = $xpath->query(
+                '//table[contains(concat(" ", normalize-space(@class), " "), " targets-table ")]'
+                .'/tbody/tr[td[1]//code[text()="'.$targetId.'"]]/td[2]',
+            )->item(0);
+            self::assertInstanceOf(\DOMElement::class, $cell);
+
+            return [
+                trim($xpath->evaluate('string(.//strong)', $cell)),
+                trim($xpath->evaluate('string(.//code)', $cell)),
+            ];
+        };
+
+        self::assertSame(['Unsupported connector', 'unrecognized_connector'], $connectorLabelFor('legacy-unsupported'));
+        self::assertSame(['Direct SSH', 'ssh_direct'], $connectorLabelFor('supported-ssh'));
+        self::assertSame(['WordPress', 'wp_ai_bridge'], $connectorLabelFor('supported-wordpress'));
+        self::assertSame('unrecognized_connector', DB::table('targets')->where('id', $legacy->getKey())->value('connector_type'));
     }
 
     public function test_target_entry_remains_neutral_and_available_connectors_have_registration_flows(): void

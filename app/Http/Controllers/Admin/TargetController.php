@@ -58,14 +58,23 @@ final class TargetController extends Controller
             ->whereIn('target_record_id', $wpIds)
             ->get(['target_record_id', 'metadata_checked_at', 'metadata_reachable'])
             ->keyBy('target_record_id');
+        // Only inspect credential presence for Targets on this authorized page.
+        // Stored OAuth authorization is not proof of a live remote token.
+        $credentialIds = $wpIds === [] ? [] : TargetCredential::query()
+            ->whereIn('target_record_id', $wpIds)
+            ->where('connector_type', 'wp_ai_bridge')
+            ->where('purpose', 'wordpress_oauth')
+            ->pluck('target_record_id')->all();
         $recoveries = [];
         foreach ($pageData['items'] as $item) {
+            $hasCredential = in_array((string) $item->getKey(), $credentialIds, true);
             $recoveries[$item->target_id] = TargetRecoveryPresentation::describe(
                 $item, $revokeById->get($item->getKey()),
                 in_array($item->getKey(), $refreshIds, true),
-                false,
+                $hasCredential,
                 $configById->get($item->getKey()),
             );
+            $recoveries[$item->target_id]['credential_present'] = $hasCredential;
         }
 
         return view('admin.targets.index', [
