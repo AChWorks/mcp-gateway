@@ -265,15 +265,9 @@ The ChatGPT-facing MCP limiter is burst-aware by default: the unauthenticated ed
 
 The rest of `.env.example` provides bounded timeout/size defaults. Change them only from evidence.
 
-### Optional SSH whole-file data plane: released but disabled; host acceptance pending
+### Optional SSH whole-file data plane — host pre-enablement
 
-The authenticated SSH whole-file HTTP sidecar was introduced by
-[PR #166](https://github.com/AChWorks/mcp-gateway/pull/166) and ships in
-public **v2.1.2**, but the route is **OFF by default**. A published code feature
-and successful disposable tests are not authorization to enable it on an operator host. Its exact wire
-contract, per-mode bounded operation limits and source-integrated client
-proof live in [WHOLE-FILE-EXCHANGE.md](WHOLE-FILE-EXCHANGE.md); keep that
-document as the only detailed protocol definition.
+The raw-binary SSH file-transfer endpoint is controlled by installed-version support, the effective configuration and the authenticated Target/Client permission boundary. [Whole-file exchange](WHOLE-FILE-EXCHANGE.md) owns its technical wire protocol. **Do not infer production enablement from source CI, a published release or a disposable binary-client pass.**
 
 **Before a future explicit production enablement**, an operator must
 validate the exact installed release and nominated host/profile, then:
@@ -311,15 +305,7 @@ validate the exact installed release and nominated host/profile, then:
   an isolated fixture passed. Model-native ChatGPT attachments and Agent
   Gateway routing are **not** implied.
 
-[#154](https://github.com/AChWorks/mcp-gateway/issues/154) owns the
-versioned effective host/client limits and measurement evidence;
-[#147](https://github.com/AChWorks/mcp-gateway/issues/147) owns
-client/Target file delivery and native model handoff;
-[#192](https://github.com/AChWorks/mcp-gateway/issues/192) owns remaining
-v2.3.0 post-upgrade operator-host acceptance. The prior [#112](https://github.com/AChWorks/mcp-gateway/issues/112)
-mixed-connector milestone is closed and is historical evidence, not a pending
-file-enable approval. These are separate from ordinary WordPress response limits.
-
+Record environment-specific capacity and receiving-client evidence with the relevant open work item, not in a duplicated dated deployment-status appendix. Keep transfer authorization, host/proxy measurements and rollout consent separate from ordinary WordPress response-size settings.
 
 ### Activity retention scheduling
 
