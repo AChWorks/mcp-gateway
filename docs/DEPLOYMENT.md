@@ -313,10 +313,12 @@ validate the exact installed release and nominated host/profile, then:
 
 [#154](https://github.com/AChWorks/mcp-gateway/issues/154) owns the
 versioned effective host/client limits and measurement evidence;
-[#112](https://github.com/AChWorks/mcp-gateway/issues/112) owns release
-and installed-host go/no-go; [#147](https://github.com/AChWorks/mcp-gateway/issues/147)
-owns supported transport/client delivery gaps. These are separate from
-ordinary WordPress response size settings and from a future Owner-paused
+[#147](https://github.com/AChWorks/mcp-gateway/issues/147) owns
+client/Target file delivery and native model handoff;
+[#192](https://github.com/AChWorks/mcp-gateway/issues/192) owns remaining
+v2.3.0 post-upgrade operator-host acceptance. The prior [#112](https://github.com/AChWorks/mcp-gateway/issues/112)
+mixed-connector milestone is closed and is historical evidence, not a pending
+file-enable approval. These are separate from ordinary WordPress response limits.
 
 
 ### Activity retention scheduling
