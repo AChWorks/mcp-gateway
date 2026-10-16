@@ -46,6 +46,7 @@ final class Target extends Model
     {
         return [
             'connection_state' => TargetConnectionState::class,
+            'operations_paused' => 'boolean',
             'last_tested_at' => MicrosecondImmutableDateTimeCast::class,
             'connected_at' => 'immutable_datetime',
             'last_success_at' => MicrosecondImmutableDateTimeCast::class,

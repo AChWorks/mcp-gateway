@@ -6,6 +6,7 @@ use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Application\Targets\TargetConnectorResult;
+use App\Application\Targets\TargetOperationGate;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Access\GatewayPermission;
@@ -215,6 +216,10 @@ final class TargetConnectionController extends Controller
     public function test(Target $target, TargetConnectorRegistry $connectors): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsTest->value, $target);
+        if (TargetOperationGate::isPaused($target)) {
+            return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+                ->withErrors(['target' => __('Resume Target operations before starting a new connection test.')]);
+        }
 
         try {
             return $this->result($target, $connectors->forTarget($target)->test($target));

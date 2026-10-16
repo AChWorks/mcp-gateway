@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Connectors\WpAiBridge;
 
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\TargetOperationGate;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Targets\Target;
@@ -120,10 +121,14 @@ final readonly class WpAiBridgeMcpClient
     ): mixed {
         $routing = $this->routingContext($target);
 
-        return $this->withLegacySession($routing, $correlationId, function (string $url, array $headers) use ($routing, $ability, $input, $correlationId, $authorizeClass): mixed {
+        return $this->withLegacySession($routing, $correlationId, function (string $url, array $headers) use ($target, $routing, $ability, $input, $correlationId, $authorizeClass): mixed {
             $executionClass = $this->abilityExecutionClass($routing, $ability, $correlationId, $headers);
             if (! $authorizeClass($executionClass)) {
                 throw new WpAiBridgeMcpException('forbidden', 'The classified WordPress Ability is not authorized.');
+            }
+
+            if (TargetOperationGate::isPaused($target)) {
+                throw new WpAiBridgeMcpException('target_paused', 'Gateway Target operations were paused before execution.');
             }
 
             return $this->callTool($url, $headers, $ability, $input, $executionClass->hasMutationRisk(), 3);
@@ -203,6 +208,7 @@ final readonly class WpAiBridgeMcpClient
             $input,
             $mutationRisk,
             $correlationId,
+            $target,
         );
     }
 
@@ -216,11 +222,18 @@ final readonly class WpAiBridgeMcpClient
         array $input,
         bool $mutationRisk,
         string $correlationId,
+        ?Target $target = null,
     ): mixed {
         return $this->withLegacySession(
             $routing,
             $correlationId,
-            fn (string $url, array $headers): mixed => $this->callTool($url, $headers, $ability, $input, $mutationRisk),
+            function (string $url, array $headers) use ($target, $ability, $input, $mutationRisk): mixed {
+                if ($target instanceof Target && TargetOperationGate::isPaused($target)) {
+                    throw new WpAiBridgeMcpException('target_paused', 'Gateway Target operations were paused before dispatch.');
+                }
+
+                return $this->callTool($url, $headers, $ability, $input, $mutationRisk);
+            },
         );
     }
 
@@ -255,6 +268,10 @@ final readonly class WpAiBridgeMcpClient
                 'unsupported_connector',
                 'Only an authorized WordPress Target can access this MCP connector.',
             );
+        }
+
+        if (TargetOperationGate::isPaused($target)) {
+            throw new WpAiBridgeMcpException('target_paused', 'This Target is paused by the Gateway Owner.');
         }
 
         return $this->targetConnections->routingContextWithRecovery($target);

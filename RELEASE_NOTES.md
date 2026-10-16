@@ -1,15 +1,20 @@
 # MCP Gateway v2.3.0
 
-**Stable v2.3.0 source promotion; publication and installation are separately verified.**
-This version collects Issues #181 and #182, including Owner-configurable
-retained SSH Job resource/lifecycle limits and high-assurance reconciliation.
-The independently approved integration RC was `2.3.0-rc.5` at
-`6e16ba20e455e3231d5e1da0a10f14ea41597520`, merged to `main` by
-`3dc3eb250052d2187ecbdde15ea9d7f26e52b491`.
-Author-separated independent review, integration, an official verified
-[GitHub Release](https://github.com/AChWorks/mcp-gateway/releases)
-and actual host installation are distinct verifiable steps; neither
-source promotion nor an unverified archive establishes deployment.
+**Stable v2.3.0 source promotion — public release and installed deployment are separately verified.**
+This release includes independently approved Direct SSH enhancements and
+safe retirement of the Agent-specific Gateway product surface (#181/#182),
+plus Owner-only per-Target Pause/Resume (#189) and Owner-accepted proportionate
+mixed WP/SSH security tests (#112). The independent rc.6 review required a
+Target-existence authorization fix and focused OAuth bearer/SSH Job tests;
+these were remediated in **rc.7**, with final independent HIGH_ASSURANCE
+**APPROVE**, five exact-head CI workflows SUCCESS, and approved source merged
+by [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190) into
+`main@e8fc920892e4b1b9a572c23e29f5699cd99d4dab` (tree
+`012912179baa77f7e7300e6ff5c131416d003403`). The release-source
+diff changes only VERSION and truthful release/operator documentation;
+it does not reinstall software, migrate an operator database or turn on
+optional file transfer. Confirm publication from the official GitHub Release
+rather than inferring it from the source VERSION.
 
 ## Direct SSH command tuning and retained Jobs
 
@@ -49,18 +54,34 @@ source promotion nor an unverified archive establishes deployment.
   Per-Job prelaunch/reconciliation snapshots survive later Owner changes;
   a fourth additive migration conservatively backfills older prerelease
   journal rows without discarding no-replay evidence.
-- The final RC serializes pre-dispatch and final Job lease renewal under
-  consistent User-before-Job locks, preventing a second same-user admission
-  while the original Job is still permitted to dispatch. Every subsequent
-  SSH/SFTP Job phase checks the original immutable Target/host-key binding
-  before dialing a replacement host and after authentication; unknown remote
-  outcomes remain non-replayable.
-- [Exact-rc.5 CI](https://github.com/AChWorks/mcp-gateway/pull/187/checks)
-  passed including disposable OpenSSH/systemd, independent MariaDB dispatch
-  expiry-race tests, WP Bridge contract, stable-baseline update and package
-  integrity, and attribution. Fresh independent high-assurance review approved
-  that exact candidate before integration. Public publication and installed-host
-  acceptance remain separate gates.
+- RC5 serializes Job launch-lease renewal and pre-dispatch lease extension
+  against new same-user admissions under the same User-before-Job database
+  locks. Every SSH/SFTP Job phase rejects a changed original Target endpoint
+  or SSH trust binding before contacting the replacement host; ambiguous
+  remote launch remains non-replayable.
+- Real disposable OpenSSH/systemd validation and MariaDB same-user
+  concurrency checks must be verified against the **current exact PR HEAD**
+  at [PR #187 checks](https://github.com/AChWorks/mcp-gateway/pull/187/checks).
+  Earlier green workflow runs (including #38791097112) are historical
+  evidence, not approval of a changed candidate. Browser/operator-host
+  acceptance, independent review and publication remain separate gates.
+
+## Per-Target Pause / Resume (#189)
+
+- The Owner can pause or resume new Gateway operations on any registered
+  WordPress or SSH Target from the Target list or details. Pause is a durable,
+  default-false **operations_paused** flag independent of Connected status.
+  It preserves the saved endpoint, credentials, OAuth grants, Target groups,
+  permission denials and SSH Job journal. Pausing is not remote revocation,
+  cancellation, or evidence that an already-running remote Job stopped.
+- MCP inventory and target-context identify an authorized paused Target,
+  while operation-mode discovery is suppressed. Fresh server-side checks on
+  WordPress Ability dispatch, SSH exec/SFTP, Job start/stages and browser/HTTP
+  file transfer deny new work with target_paused, without disclosing
+  unauthorized Targets. Safe local management and credential recovery remain.
+- An additive migration enables old/new Targets by default; Owner POST action
+  is idempotent, audited and protected by existing web/CSRF boundaries.
+  Independent R2 delta review of rc.7 APPROVED; all five exact rc.7 checks PASSED.
 
 ## SSH file exchange and connector presentation
 
@@ -77,23 +98,26 @@ source promotion nor an unverified archive establishes deployment.
 
 ## Upgrade, security and rollback
 
-- Four additive migrations: SSH command operational limits, the durable
-  `ssh_command_jobs` journal, typed Owner Job policy/reconciliation evidence,
-  and per-Job immutable admission timing snapshots for safe delayed launches.
-  **A consistent, test-restored DB backup is required before any operator
-  upgrade.** Journal rollback guards refuse dropping safety evidence while
-  any Job record remains. Do not erase unknown Jobs to force rollback;
-  browser-updater code backups do not reverse database changes.
+- Five additive migrations: SSH command operational-limit columns, durable
+  `ssh_command_jobs` journal, typed Job lifecycle/attestation policy, immutable
+  per-Job admission timing and per-Target operations-paused state (operations
+  enabled by default). **A consistent, test-restored DB backup is required
+  before an eventual operator upgrade.** The journal's rollback
+  guard refuses dropping it while any job record remains; do not erase
+  unknown jobs to force migration rollback. Browser-updater code backups do
+  not reverse database changes.
 - Refresh locked `symfony/http-foundation` from 8.1.6 to 8.1.9 to remediate
   advisory **CVE-2026-108082**, with Composer audit verified locally.
 - No production Target, OS user, host setting, OAuth credential, or
   `SSH_FILE_TRANSFER_ENABLED` setting is modified by publishing source or a
   package. Changes to an actual installed host require a separate authorized
   deployment and compatibility/rollback checks.
-- Exact-source CI of the final RC, fresh author-separated review,
-  controlled integration, verified official Release assets and any
-  installed-host upgrade are independent gates. Source promotion alone
-  never proves public release or an installed operator version.
+- rc.5's approved code was integrated via [PR #187](https://github.com/AChWorks/mcp-gateway/pull/187);
+  rc.7's Pause/Resume and authorization correction was independently approved
+  and integrated via [PR #190](https://github.com/AChWorks/mcp-gateway/pull/190).
+  Stable VERSION/docs-only promotion and official Release publication are
+  separate from these source merges; installation requires a separately
+  authorized operator-host upgrade with a verified database backup.
 
 # MCP Gateway v2.2.1
 

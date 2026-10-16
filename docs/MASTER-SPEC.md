@@ -69,6 +69,8 @@ For WP AI Bridge this means WordPress identity, WordPress capabilities, Bridge a
 
 The public MCP endpoint is stable independently of the number or connector types of registered Targets. Target additions are data/configuration changes, not new MCP server deployments.
 
+**Per-Target operational pause (#189):** Each Target has a default-enabled operational gate independent of its connection/credential state. The Owner alone may Pause or Resume Gateway-mediated **new** WordPress/SSH operations via a simple audited Admin control, without deleting Target identity, OAuth authorization, SSH login material, user/group ACL, or historical Jobs. New remote stage boundaries must freshly enforce the pause after normal Target authorization, even for an older valid MCP bearer; discovery and Admin distinguish Connected from Paused. Inventory and safe credential recovery remain available. Pause is not a remote cancellation/revocation/rollback and cannot prove in-flight external side effects stopped. Preserve fail-closed original SSH Job/host binding and no-replay evidence; no extra queue/service, per-user pause grant, or new OAuth flow is justified.
+
 The Gateway exposes a deliberately bounded tool surface whose size scales with supported capability families, **not** Target inventory size. Target identity must be explicit in every Target-specific operation. A mutable implicit "active target" must not be required for correctness, especially for writes, destructive actions, or privilege-sensitive operations.
 
 ### 4.3 Preserve supported direct connector operation

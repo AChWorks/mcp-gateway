@@ -2,11 +2,11 @@
 
 MCP Gateway is a self-hosted PHP application that connects an authenticated MCP client to the specific servers and WordPress sites you authorize. Add each connection as a **Target**, control who can use it, and manage access from one web Admin panel.
 
-**v2.3.0:** WordPress via WP AI Bridge, Direct SSH, Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). This version adds Owner-adjustable SSH command and retained Job limits, authorized browser file selection, agentless systemd SSH Jobs on supported hosts and removes obsolete Agent-specific UI. **Install or update only from a matching official [GitHub Release](https://github.com/AChWorks/mcp-gateway/releases)**; source code and draft release branches are not installation packages.
+**v2.3.0 release source:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). This release adds Owner-adjustable SSH controls, agentless retained Jobs, authorized browser file selection, and per-Target Pause/Resume. **Install or update only from the verified official [v2.3.0 GitHub Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0) once it is published**; source promotion does not install or deploy anything.
 
 ## What you can do
 
-- Register WordPress and SSH Targets and review their connection status.
+- Register WordPress and SSH Targets, review connection status, and let the Owner **Pause/Resume Gateway operations per Target** without disconnecting or deleting access. An already-running remote SSH Job is not stopped by Pause.
 - Discover and run WordPress Abilities through the existing WordPress principal and its WP AI Bridge permissions.
 - Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
 - In v2.3.0, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.
@@ -35,7 +35,7 @@ Normal operation does **not** require Redis, Docker, Node.js, a queue worker, a 
 ## Install (recommended: web installer)
 
 1. Create an HTTPS domain or subdomain and a **dedicated empty** MariaDB/MySQL database and user.
-2. Download `mcp-gateway-v2.2.1.zip` (the **deployment ZIP**, not GitHub's generic source archive) from the [v2.2.1 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.2.1). Verify the matching `.sha256`.
+2. Download `mcp-gateway-v2.3.0.zip` (the **deployment ZIP**, not GitHub's generic source archive) from the verified [v2.3.0 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0). Verify the matching `.sha256`.
 3. Extract it into a private application directory. Point the domain's **document root to its `public/` subdirectory**, for example `/www/wwwroot/mcp-gateway/public`. Never expose the application root.
 4. Make `storage/` and `bootstrap/cache/` writable by the PHP worker. Enable HTTPS before entering credentials; do not use `chmod -R 777`.
 5. Open `https://gateway.example.com/install`, supply the canonical URL, database settings and first administrator, then choose **Install MCP Gateway**.
@@ -88,7 +88,7 @@ Use **AI clients** (`/admin/oauth-clients`) to manage application profiles and g
 
 ## Available MCP tools
 
-The v2.2.1 MCP catalog provided nine tools. The **v2.3.0 catalog** registers 13, including four agentless SSH Job tools, shown below. These tools require an installed, migrated v2.3.0 release. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs are available only after that version is installed and migrated on a supported host.
+The earlier v2.2.1 MCP catalog contained nine tools. The **v2.3.0 catalog** adds four agentless SSH Job tools (13 total), shown below. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs are available only after that version is installed and migrated on a supported host.
 
 | Tool | Purpose |
 | --- | --- |
@@ -122,7 +122,7 @@ New WordPress plugin Abilities are discovered through the existing WordPress too
 
 ## Update safely
 
-**For an existing deployment-ZIP installation**, use **`mcp-gateway-update-v2.2.1.zip`** from the [same v2.2.1 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.2.1), never the fresh-install ZIP, an old release's update ZIP or the generic GitHub source archive.
+**For an existing deployment-ZIP installation**, use **`mcp-gateway-update-v2.3.0.zip`** from the [same v2.3.0 Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0), never the fresh-install ZIP, an old release's update ZIP or the generic GitHub source archive.
 
 1. Confirm the installed version and review the [release notes](RELEASE_NOTES.md). Take and **test-restore a consistent database backup**; also preserve `.env`, `APP_KEY`, both OAuth/signing key pairs, current code and private state. An updater code snapshot is **not** a database backup.
 2. Upload and extract the named update ZIP into the **existing application root** (where `artisan`, `.env`, `public/` and `storage/` reside). This stages a temporary `update/` and `public/update/`; it does not immediately replace the app.
@@ -131,7 +131,7 @@ New WordPress plugin Abilities are discovered through the existing WordPress too
 
 **Do not blindly retry failed updates.** If a migration may have started, code-only rollback is not a database rollback. Keep backup, private recovery state and logs, then follow the [deployment/recovery procedures](docs/DEPLOYMENT.md) before any further action. The private Owner-local recovery CLI is not an unauthenticated web recovery endpoint.
 
-**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. The v2.3.0 line adds four migrations: SSH command operational-limit columns, the durable SSH Job journal, configurable Job lifecycle/recovery policy and original-host evidence, and immutable per-Job admission timing snapshots; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
+**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. The v2.3.0 release adds five migrations: SSH command operational-limit columns, a durable SSH Job journal, configurable Job lifecycle/resource budgets and operator attestation, immutable per-Job admission timing snapshots, and a default-enabled Target Pause/Resume flag; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
 
 ## Troubleshooting
 

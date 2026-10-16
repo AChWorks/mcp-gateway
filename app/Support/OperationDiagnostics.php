@@ -92,6 +92,7 @@ final class OperationDiagnostics
             'transfer_timed_out' => __('The file transfer exceeded its allowed execution time.'),
             'invalid_input' => __('Some input fields or tool arguments are invalid.'),
             'forbidden', 'target_not_found' => __('This operation or Target is not available to the current user.'),
+            'target_paused' => __('Gateway operations on this Target are temporarily paused by the Owner.'),
             'server_error', 'file_unavailable' => __('An internal or downstream operation failed. Consult the server diagnostic log.'),
             default => __('The operation did not complete safely. Consult the error code and server diagnostic log.'),
         };
@@ -122,6 +123,7 @@ final class OperationDiagnostics
             'transfer_timed_out' => __('Check network performance and supported operation budgets before a safe new attempt.'),
             'invalid_input' => __('Correct the indicated input or tool parameters.'),
             'forbidden', 'target_not_found' => __('Ask the Owner to review user capability and selected Target scope; do not expose an unauthorized Target.'),
+            'target_paused' => __('Ask the Owner to resume this Target. Stored connection and permissions are unchanged.'),
             'server_error', 'file_unavailable' => __('Look up the matching diagnostic reference in the server logs, then inspect the owning component.'),
             default => __('Find the matching operation, error code, time and diagnostic reference in the Gateway logs.'),
         };

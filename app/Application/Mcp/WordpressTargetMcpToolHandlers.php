@@ -3,6 +3,7 @@
 namespace App\Application\Mcp;
 
 use App\Application\Access\AccessControl;
+use App\Application\Targets\TargetOperationGate;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Access\GatewayPermission;
@@ -37,6 +38,10 @@ final readonly class WordpressTargetMcpToolHandlers
         $target = $this->target($user, $target_id, GatewayPermission::WordpressAbilitiesInspect);
         if (! $target instanceof Target) {
             return $this->failed($operation, null, 'target_not_found', 'WordPress Target is unavailable.');
+        }
+
+        if (TargetOperationGate::isPaused($target)) {
+            return $this->failed($operation, $target, 'target_paused', 'This Target is paused by the Gateway Owner.');
         }
 
         $ability = $this->optional($ability);
@@ -93,6 +98,9 @@ final readonly class WordpressTargetMcpToolHandlers
         ]);
         if (! in_array(true, $allowed, true)) {
             return $this->failed($operation, $target, 'forbidden', 'WordPress execution is not authorized.');
+        }
+        if (TargetOperationGate::isPaused($target)) {
+            return $this->failed($operation, $target, 'target_paused', 'This Target is paused by the Gateway Owner.');
         }
 
         try {

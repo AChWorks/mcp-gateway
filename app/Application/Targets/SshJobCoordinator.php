@@ -567,6 +567,9 @@ final readonly class SshJobCoordinator
                 || ! $this->access->allows($user, GatewayPermission::SshFileRead, $target)))) {
             throw new SshTargetConnectionException('target_not_found');
         }
+        if (TargetOperationGate::isPaused($target)) {
+            throw new SshTargetConnectionException('target_paused');
+        }
 
         return $target;
     }

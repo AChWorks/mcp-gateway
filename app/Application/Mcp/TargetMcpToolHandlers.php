@@ -57,6 +57,7 @@ final readonly class TargetMcpToolHandlers
                 'display_name' => $target->display_name,
                 'connector_type' => $target->connector_type,
                 'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
+                'operations_paused' => (bool) $target->operations_paused,
             ];
             $item = [...$this->connectors->publicMetadata($target), ...$item];
             $targets[] = $item;
@@ -105,6 +106,7 @@ final readonly class TargetMcpToolHandlers
             'display_name' => $target->display_name,
             'connector_type' => $target->connector_type,
             'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
+            'operations_paused' => (bool) $target->operations_paused,
             'last_error_code' => $target->last_error_code,
             'connected_at' => $connectedAt instanceof DateTimeInterface ? $connectedAt->format(DATE_ATOM) : null,
         ];
