@@ -1,497 +1,160 @@
 # MCP Gateway — Master Specification
 
-Status: Canonical project specification
+**Status:** Canonical, durable product specification  
+**Repository:** `AChWorks/mcp-gateway`
 
-Repository: `AChWorks/mcp-gateway`
+This document defines **what MCP Gateway must be and what constraints govern its evolution**, not the implementation backlog, a release note, an issue log, a deployment report, or a version-specific configuration manual. [ARCHITECTURE.md](ARCHITECTURE.md) describes how currently integrated components fit these goals. Concrete connector, protocol, resource and migration contracts live in their dedicated documents. Current delivery and outstanding acceptance belong to GitHub source, Issues, PRs, CI, releases and the actual host.
 
-### AChWorks ecosystem relationship
+## 1. Product identity and desired outcome
 
-**Koinon** (`AChWorks/koinon`) owns ecosystem-level governance, discovery, and generic cross-project contracts. This repository remains authoritative for MCP Gateway product intent, architecture, implementation, Issues/PRs/CI, releases, and deployment behavior.
+MCP Gateway is a **lightweight, self-hosted, connector-neutral access and operations platform** for a fleet of explicitly registered remote systems (**Targets**). Its durable job is to let authorized humans and machine clients **discover available capabilities, select Targets, invoke supported actions, inspect outcomes and administer access** through one coherent application security and operation model.
 
-**AChrix** (`AChWorks/achrix`) is not currently a runtime dependency. Any future Foundation consumption or capability promotion must be justified by current executable Foundation evidence and real multi-consumer convergence rather than by organization membership alone.
+It is simultaneously:
+- a stable authenticated MCP-facing entry point for supported AI clients;
+- an administration and, progressively, an **operator-facing action surface** for direct human use;
+- an application core that can serve other explicitly supported API/automation consumers without duplicating Target or authorization logic.
 
-## 1. Purpose
+The Gateway is **not merely a protocol proxy** and its Admin is **not permanently restricted to connection management**. Equally, it must **not** become a replacement CMS, WordPress business-logic clone, universal hosting panel, arbitrary network proxy, always-on agent fleet, or speculative all-purpose workflow platform.
 
-MCP Gateway is a small self-hosted **connector-neutral Target control plane with a client-neutral MCP edge**. One stable Gateway endpoint can serve explicitly supported remote MCP client applications, and each authenticated client can reach many explicitly registered backend systems through supported first-class connectors.
+**Success:** an authorized user can reach many Targets of supported types using a single stable Gateway, perform only actions permitted by both Gateway and the actual Target authority, and obtain trustworthy outcomes. A capability already expressible through a supported connector contract can evolve at the Target without a Gateway code release for each new operation. AI and Admin use the same effective authority and operation path.
 
-WordPress/WP AI Bridge was the first connector and proved the original operational problem: connecting ChatGPT directly to many independent backends creates one client/App connection per backend. MCP Gateway provides one stable public MCP endpoint and a bounded administration surface so Targets can be added, removed, connected, tested, authorized, and routed without creating another ChatGPT App for every Target.
+## 2. Product boundary and authority of connected systems
 
-The integrated Target-era foundation replaces the former generic Site/WordPress-shaped core with Target identity, scoped persistence/access, Admin and MCP contracts, and a reviewed client-profile authorization edge. WordPress remains the first shipped Target connector. The Direct SSH family has source-integrated commands, bounded SFTP and a separately **opt-in, OAuth-authorized raw HTTP whole-file SSH mode** with permission-filtered per-Target discovery ([PR #166](https://github.com/AChWorks/mcp-gateway/pull/166)). This demonstrates a reusable client-neutral security/capability pattern, **not** automatic support in every MCP host. Authoritative per-release/installed status belongs to [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases) and #112, while independently proven external-client delivery versus unverified ChatGPT-native handoff are specified under [#147](https://github.com/AChWorks/mcp-gateway/issues/147). The canceled Agent connector (#111) is not part of current or planned Gateway delivery. Under the Owner's single-install decision (#182, 2026-10-16), no Agent-specific stored connector identity or historic Agent-denial seeding remains in the supported source. Generic Target schemas and security gates are retained. ChatGPT is the first supported client profile. For detailed Target and client identity rules see the Target Connector Foundation, Program #106 and client-edge #117; confirm PR, Release and installation state separately.
+The Gateway owns **stable Target identity**, connector registration, groups/scopes, client and user identities, access policy, credential custody, capability discovery/routing, admission, applicable resource controls, operation/outcome coordination, and safe activity and diagnostics.
 
-The project must remain simple enough to deploy on an ordinary aaPanel host or compatible shared PHP hosting while keeping clean connector boundaries so future clients, administration/automation surfaces, and backend connector types can be added without rewriting the core.
+A connector owns the Target-specific authentication/lifecycle, remote identity, discovery and schema translation, transport, and actual invocation protocol. The **Target remains authoritative** for its own content, permissions, validation, side effects and state. Gateway may narrow a principal's effective power; it must never synthesize additional downstream authority.
 
-The Gateway is a lightweight control plane, not a permanently WordPress-specific proxy and not a universal infrastructure proxy. Growth must preserve simple operation and low idle cost: a larger registered Target fleet must not by itself require proportionally more application workers, remote connections, background polling, tool registrations, or auxiliary infrastructure.
+The Gateway should prefer **coordination and authorization** over copying business data, reimplementing provider features, maintaining a shadow CMS or routing all large data bodies through PHP. Client-independent shared mechanisms are extracted only from proven common semantics; similar-looking Target operations need not have identical implementation.
 
-## 2. Primary outcome
+An AChWorks ecosystem capability or future Foundation may be consumed where it demonstrably reduces total cost; Gateway-specific runtime behavior belongs to this product. Koinon owns AChWorks-wide discovery/governance, not Gateway's runtime or product decisions. Independent projects and their repositories are not implicitly writable dependencies.
 
-The durable product outcome is that an operator can deploy one MCP Gateway instance, register many Targets of supported connector types, connect one or more explicitly supported MCP/AI client applications to the same stable Gateway endpoint, and safely inspect or operate an explicitly selected Target through that connector's own authorization and safety boundaries.
+## 3. Actors, clients, Targets and groups
 
-The completed V1 proof used multiple WP AI Bridge sites through ChatGPT. The Target-era foundation extends the **same** user/client/Target identity and authorization core to different connector-owned transports. Actual file delivery must be demonstrated independently for the selected client/Target mode: source integration, verified downloaded bytes, model-readable content, public Release and production-host enablement are distinct facts. Remaining client/host modes are tracked under #147/#112, not silently presumed by shared protocol vocabulary. Adding an authorized Target must not require a new Gateway endpoint; adding a reviewed client profile must reuse the same Target fleet and authorization core.
+Distinguish the **Gateway human principal**, actual authenticated **client application/profile** and its exact protocol identity, immutable registered **Target**, Target Group or other explicitly authorized collection, **connector type**, and **downstream principal**. A display name, requested hostname, AI conversation, or convenient role label is not authority.
 
-V1-specific WordPress success criteria remain historical product evidence below; they do not define the generic core domain for new development.
+Every Target-specific operation is bound to the exact authorized Target identity. Group operations resolve an explicit, authorized **set of Targets**; they must not rely on a mutable conversation-wide “active Target,” ambiguous aliases or client-supplied arbitrary endpoints.
 
-## 3. Intended operator and deployment model
+Gateway-wide permissions, resource-scoped grants/denials and downstream permissions form one server-authoritative decision. Roles are understandable bundles; they do not substitute for policy evaluation. Target Groups are a grouping and access mechanism, not an independent authorization engine.
 
-The supported Gateway is a private, self-hosted tool for a trusted operator or small trusted workspace, not a public multi-tenant SaaS product.
+Registered idle Targets must not generate permanent sessions, per-Target processes, one tool registration per Target, or mandatory fleet polling. Group membership/visibility and capability access must be scoped, searchable and bounded.
 
-Primary deployment target:
+## 4. One application operation path, multiple entry points
 
-- aaPanel-managed Linux host with OpenLiteSpeed, or compatible shared PHP hosting;
-- PHP 8.4;
-- MariaDB 10.11 as the primary database target, with MySQL retained as an officially supported compatibility target;
-- a dedicated HTTPS domain or subdomain such as `gateway.example.com`;
-- a deployment-ready fresh-install ZIP with production Composer dependencies bundled as the recommended operator installation path;
-- a separate release update ZIP for existing deployment-ZIP installations, runnable through a temporary authenticated browser updater without SSH, Git, or Composer on the target host;
-- every official deployment ZIP must be assembled from a clean production-only staging tree and contain only installation/runtime application files, required dependency runtime/license material, version identity, and empty writable runtime scaffolding; repository/development/test/generated state is forbidden and this invariant must remain CI-enforced for future releases;
-- Git + Composer + Artisan source deployment remains a supported advanced path;
-- the web server must expose only the application's `public/` directory;
-- no required Docker, Redis, Node.js runtime, message broker, queue daemon, or separate microservice.
+**Admin UI, MCP/AI, and later approved APIs or automations are entry adapters to common application operations**, not independent business engines. Core authorization, selected Target binding, execution admission, resource policy, outcome interpretation and activity recording must remain reusable and authoritative below the entry adapter.
 
-The application must remain usable on a conventional shared-style PHP request lifecycle. Long-running daemons must not be required for normal Gateway operation.
+An Admin action must not need to call its own public MCP endpoint to execute a local application operation. An MCP tool must not be the exclusive owner of business behavior later needed by Admin. Inbound adapters may differ in authentication, request schema and presentation, while invoking the same capability and Target-owned executor with the same effective privileges.
 
-The recommended fresh-install experience should remain intentionally small: upload/extract the official deployment ZIP, point the HTTPS domain at `public/`, open the one-page installer, provide an empty MariaDB database (recommended) or MySQL-compatible database plus first-administrator details, and finish. The installer must not become a general hosting control plane or command runner, and after a successful installation it must fail closed against reinstallation.
+This is a **target-state boundary, not a claim that current MCP and Admin controllers already share every operation**. Evolve incrementally from real consumers; do not pre-build a universal operation engine or move all current code for architectural aesthetics.
 
-The recommended manual-update experience should likewise remain small: upload the named update ZIP into the existing application root, extract it there without overwriting the running application, open a temporary `/update/` page, authenticate with the existing Gateway administrator session, review the preflight, and confirm the update. The updater must validate before mutation, preserve `.env` and persistent `storage/`, use the release-bundled dependency tree, replace managed files deterministically, run required migrations/postflight checks, and remove/disable its temporary web/staging surface after success so it cannot be reused. It must fail closed without pretending that an unknown or partial database migration can be rolled back automatically. Because `public/` is shared with the hosting layer, updater ownership there is file-scoped: only explicitly declared Gateway-owned public paths may be replaced/restored, historical owned paths must remain declared for stale cleanup, and unknown/host-managed public state must survive update and pre-migration recovery unchanged without requiring filesystem ownership/protection changes.
+The Gateway's public MCP tool set is bounded by **capability families**, not fleet size, plugin count or each downstream operation. Each relevant call names its Target(s) explicitly. Supported direct-to-Target client modes remain usable independently when the connector offers them; Gateway participation is additive, not mandatory replacement.
 
-Release packaging is a standing product/deployment requirement, not release-by-release cleanup. Runtime correctness and license/notice preservation take precedence over minimizing bytes, but dependency docs/examples/tests, development tooling/configuration, repository metadata, generated test keys/sessions/caches/logs, and source-checkout-only material must not be shipped when they are not needed to install or operate the application. The repository-owned package builder/verifier is the authoritative implementation of this boundary.
+## 5. Capability discovery and connector evolution
 
-## 4. Product principles
+Separate three axes:
+1. **Existing Target capability changes.** New operation names, schemas and compatible functionality published by an already supported/authenticated Target must normally work through that connector's existing discovery/invocation contract without a Gateway release, per-name allowlist, per-plugin review or newly registered MCP tool. A name or unfamiliar annotation alone is not a security denial.
+2. **MCP protocol/client capability evolution.** Wire-method revisions and optional protocol extensions require actual version/capability negotiation and compatible adapters. New wire behavior can require an SDK or Gateway edge change, but need not rewrite every Target connector. Unsupported is not unauthorized.
+3. **New connector family, trust model or identity protocol.** Introduce the smallest explicit, reviewed adapter and reuse the existing identity/access/operation services; a new unrelated protocol is not magically supported merely because the Gateway has a generic domain model.
 
-### 4.1 Keep the Gateway a routing and connection plane
+A registered and authenticated **MCP-speaking Target** should eventually be able to use reusable, Target-scoped standard `tools/list` / `tools/call` discovery/invocation where its actual protocol, identity and granted delegation permit; not one hard-coded gateway implementation per remote tool. WordPress's Ability discovery is an existing family-specific example, **not evidence that generic downstream MCP registration is already implemented**.
 
-MCP Gateway does not replace WordPress, WP AI Bridge, or a target system's own authorization model. It owns connection registration, client authentication, target selection, protocol routing, credential custody, and gateway-level operational controls.
+Connectors may support different capability families, direct modes, authentication, file transfer, async execution, privilege classes and lifecycle semantics. Discovery must honestly advertise **effective** availability after connector support, configured enablement, real client compatibility and principal permissions. Cache metadata with bounded identity-aware freshness/invalidation; cached descriptions never replace live authorization at execution.
 
-The target connector remains authoritative for target-specific permissions and behavior.
+The supported connector registry must not execute caller-supplied arbitrary code, dynamically load unknown PHP classes or act as an unrestricted outbound proxy. Published connector implementation/conformance guidance must make it possible for third parties to integrate without reconstructing Gateway internals.
 
-For WP AI Bridge this means WordPress identity, WordPress capabilities, Bridge access groups, provider permission callbacks, and Bridge operation schemas remain authoritative. The Gateway must never manufacture additional WordPress authority.
+## 6. Delegated access: broad and restricted
 
-### 4.2 One stable client-facing endpoint
+A deliberate, trusted **broad execution delegation** may allow new Target-advertised compatible operations through an existing generic invocation path, always limited by the actual Gateway user/client/Target grant and authenticated downstream principal.
 
-The public MCP endpoint is stable independently of the number or connector types of registered Targets. Target additions are data/configuration changes, not new MCP server deployments.
+A **restricted delegation** must be able to narrow reach to particular Targets/Groups and action types or enforceable semantics when needed by real workflows (for example, selected publishing operations, not unrestricted site administration). This is a durable **direction**, not an assertion that today's coarse WordPress effect classes already implement semantic per-Ability or per-content delegation.
 
-**Per-Target operational pause (#189):** Each Target has a default-enabled operational gate independent of its connection/credential state. The Owner alone may Pause or Resume Gateway-mediated **new** WordPress/SSH operations via a simple audited Admin control, without deleting Target identity, OAuth authorization, SSH login material, user/group ACL, or historical Jobs. New remote stage boundaries must freshly enforce the pause after normal Target authorization, even for an older valid MCP bearer; discovery and Admin distinguish Connected from Paused. Inventory and safe credential recovery remain available. Pause is not a remote cancellation/revocation/rollback and cannot prove in-flight external side effects stopped. Preserve fail-closed original SSH Job/host binding and no-replay evidence; no extra queue/service, per-user pause grant, or new OAuth flow is justified.
+An operation's effective permissions must be enforced by stable, trusted policy evidence and, where appropriate, the Target's own authorization. Tool names, mutable annotations, caller-supplied operation parameters and hidden UI buttons are **not sufficient proof** of semantic restrictions. If a narrow promise cannot be technically verified/enforced, do not advertise it. Unknown or unclassified effects use explicitly configured authority without turning novelty into an automatic ban or covert grant broadening.
 
-The Gateway exposes a deliberately bounded tool surface whose size scales with supported capability families, **not** Target inventory size. Target identity must be explicit in every Target-specific operation. A mutable implicit "active target" must not be required for correctness, especially for writes, destructive actions, or privilege-sensitive operations.
+AI clients and users must not gain extra Target or operation authority by changing entry points. Where a workflow warrants it, explicit owner-configurable approval can distinguish proposed from committed high-impact actions without introducing an unconditional ban. No privilege aggregation or accidental cross-Target credential sharing.
 
-### 4.3 Preserve supported direct connector operation
+## 7. Operation outcomes and multi-Target work
 
-Gateway integration is additive where a supported backend already has a valid direct-client mode.
+**Single-Target actions** must identify actor, client when applicable, exact Target, capability/schema, grant and execution identity. Distinguish request rejected **before dispatch**, confirmed result, provider-reported error, and **unknown outcome after possible side effects**. Never blindly retry uncertain mutations, and never claim remote rollback or absence of effects without evidence.
 
-WP AI Bridge must continue to work directly with ChatGPT exactly as it does without the Gateway.
+**Multi-Target actions** (for example publishing or editing content on a selected group of websites) are a supported **future product direction**, not proof of current delivery. They must reuse the same per-Target permission, connector admission and execution path; record per-Target success/failure/unknown outcomes and useful remote object identities when available. Partial success is a first-class result; neither an all-or-nothing fiction nor automatic replay of already dispatched writes is acceptable.
 
-The Gateway must not require an operator to disable a backend's supported direct endpoint or abandon an existing supported direct connection merely to register that backend as a Target.
+For long-running, bulk or interrupted work, introduce minimal durable operation/job identity, progress, cancellation and idempotency/repair semantics when the first real workflow requires them. Cancellation means only what the connector confirms; avoid turning an active operation into a mandatory long-lived HTTP/PHP request. Do not install a universal workflow engine or per-Target worker as a prerequisite.
 
-Future connectors must state explicitly whether a direct mode exists; the core must not invent one where the downstream product has none.
+**One-time multi-Target publishing** and **persistent synchronization/conflict resolution** are different product behaviors. The latter is not implied by the former and requires a separate accepted contract, ownership model and evidence.
 
-### 4.4 Simple now, extensible later
+## 8. Results, data and file exchange
 
-The application must avoid hard-coding the shared control plane to ChatGPT, WordPress, WP AI Bridge, or any one backend family.
+Use one common, typed contract for **permission, identity binding, capacity, integrity, availability, error/outcome and cleanup**; implement wire formats and native capabilities in the appropriate client/connector adapters.
 
-WP AI Bridge and `ssh_direct` are the implemented connector families, with SSH command, SFTP and separately gated opt-in whole-file transfer. The Target/connector foundation is described in `docs/TARGET-CONNECTOR-FOUNDATION.md`; shared contracts must be extracted from working consumers, not hypothetical providers.
+Small structured results should remain cheap single-call JSON/UTF-8 responses. Larger objects may use bounded windows, streaming, connector-native continuation, direct storage/Target handoff or a retained job according to the **actual supported client and Target modes**. Do not force a universal inline body size, Base64 duplication, shared long-lived socket or one connector's SFTP window onto another connector's legal workload.
 
-Future MCP clients and non-MCP administration/automation surfaces may reuse the same Target identity, authorization, inventory, lifecycle, activity, and routing rules without bypassing connector authorization.
+Transfer success requires actual byte/length/hash and receiving-client evidence where relevant. A server-side path, handle, file ID or URL alone does not prove that an AI model consumed bytes or a human received a file. Bidirectional host-specific modes need independent acceptance; never claim one host's extension is universally available.
 
-Do not build a plugin marketplace, dynamic connector loader, workflow engine, or universal API proxy merely for extensibility. Introduce abstractions only when current connector evidence, measured scale pressure, or a concrete consumer makes them useful.
+Provider/Target remains system of record for its content. Gateway retains only operational metadata and data actually justified by its workflow; retention, private spool and cleanup are bounded and operator-visible where appropriate.
 
-### 4.5 Scale with active work, not registered inventory
+[REMOTE-IO-CONTRACT.md](REMOTE-IO-CONTRACT.md) governs protocol/transfer details, typed limits and cross-hop failure semantics; current measured effective limits and supported implementations must be established separately.
 
-The Gateway has no fixed product-level maximum Target count. Capacity is an engineering property to be measured against the supported deployment profile, not a marketing promise inferred from a synthetic fixture.
+## 9. Proportional performance, budgets and operational cost
 
-Registered but idle Targets should have near-zero dynamic cost beyond durable database storage. A connector may perform bounded credential/lifecycle maintenance only when its real contract requires it; that must not imply a dedicated worker, persistent connection, or continuous polling loop per Target. Target inventory queries, client responses, administration pages, activity views, and future management surfaces must remain bounded rather than loading or rendering the whole fleet by default.
+**Performance and resource efficiency are requirements, not reasons to invent feature restrictions.** Limits must reflect actual resource, host, protocol and security constraints, remain finite and measured, and be **independently typed** for inline request, decoded/encoded response, stream window, whole object, temporary disk, memory, concurrency and distinct operation lifetimes.
 
-Near-term validation should prove comfortable operation for the fleet sizes that are realistically expected next (currently hundreds of registered Targets). Larger synthetic fixtures may be used to expose query, memory, response-size, or indexing limits and preserve growth headroom, but they do not create a universal supported-Target-count guarantee.
+Separate **maximum admissible budget** from **actual allocation**: a permitted large transfer should not preallocate that maximum for a small action. The owner should be able to adjust legitimate operational budgets through a single coherent, typed policy within real host/protocol/safety bounds; avoid code rewrites and one new settings subsystem per connector. Security invariants and provider credential-recovery fences are not user-tunable performance knobs.
 
-Infrastructure should scale only when active workload justifies it. Redis, dedicated queue workers, search services, extra application nodes, or similar components remain optional escalation mechanisms rather than prerequisites for storing a larger inventory.
+Registered-but-idle fleet inventory should incur approximately durable database cost only; ordinary Admin and machine listing must be indexed, paged, filtered and permission-scoped, without fleet-wide remote fan-out. Active workload, not stored fleet count, determines needed runtime resources.
 
-### 4.6 Permission-first administration
+Measure representative latency, round trips, throughput, PHP worker CPU/RSS, remote connections, database cost, temporary disk, concurrent operations and failure rates before adding queues, Redis, daemons, search clusters or other services. Optimize total lifecycle/maintenance cost as well as raw throughput. Reuse mature maintained libraries and native capabilities when they fit, avoiding both needless dependencies and bespoke reimplementations.
 
-Administrative authorization must be expressed through explicit permissions/policies at the application boundary. Named roles are convenience bundles of permissions, not hard-coded business rules.
+## 10. Security as a capability-enabling boundary
 
-The initial product may remain operationally simple, but the architecture must permit multiple local administrator/operator accounts and a small number of understandable access levels without replacing the authentication model. Resource scoping through Target Groups and direct per-Target access must use the same policy boundary rather than being reimplemented by controllers, connector code, or transport adapters.
+Security controls **permit authorized high-impact work**, rather than silently excluding useful Target functionality by name, format or perceived risk. Owner-configurable, explicit, well-audited risk acceptance is appropriate for legitimate actions, including privileged SSH operations, provided it does not bypass another principal's authority or non-negotiable trust constraints.
 
-Complex organization hierarchies, public tenancy, billing, and enterprise identity governance are not implied by this requirement.
+Always preserve correct Gateway/client authentication and consent, exact user/client/Target authorization, encrypted and segregated secrets, downstream permission enforcement, verified remote endpoint and peer (HTTPS/TLS/DNS/SSRF or pinned SSH host key as applicable), data protection, request validity, finite host/resource admission and safe logs. A remote shell with administrative OS rights is real administrative power; do not present tool-family toggles as a sandbox.
 
-### 4.7 Connector-neutral control plane
+Revoked authorization, changed identities, known unsafe destinations and unauthorized cross-scope access fail closed. A new capability unknown to Gateway is not automatically deemed malicious; offer a truthful unsupported/permission explanation and appropriate explicit delegation instead of hardcoded feature bans.
 
-A registered **Target** has stable Gateway identity independent of its connector implementation. WordPress/WP AI Bridge and Direct SSH are connector-specific implementations, not definitions of the core domain.
+Approval/confirmation, pause, disconnect, job cancellation and remote revocation have **different effects**. Pausing Gateway-mediated new operations does not retroactively undo in-flight Target changes; user acknowledgment cannot invent a remote rollback. Preserve recovery from partial/uncertain results without leaking secrets or encouraging unsafe replay.
 
-Shared application state and rules use Target semantics. Connector-specific discovery, credentials, protocol details, health semantics, setup flows, capability vocabulary, and execution logic remain behind explicit connector boundaries. Shared rules may depend on declared connector capabilities, but must not silently assume OAuth, WordPress concepts, WP AI Bridge Abilities, Linux/server semantics, or any other connector-specific contract.
+## 11. Credential lifecycle, diagnostics and evidence
 
-Connector selection is explicit and server-authoritative. The Gateway supports built-in connector implementations through a small registry/factory; it is not a dynamic third-party code loader.
+Connection authorization, last authenticated health observation and operational availability are separate facts. **Stale health is not credential revocation**. Connector-owned, renewable offline grants use bounded due-work maintenance and authorized single-use recovery where supported; never assume SSH passwords have OAuth refresh semantics or that an unverified host Cron is running.
 
-The Gateway remains a control plane by default. Large backup archives, media, exports, and similar data-plane payloads should normally move directly between the Target and an appropriate storage/destination when the downstream system supports that pattern; the Gateway should retain bounded status/metadata rather than becoming an unnecessary bandwidth or storage bottleneck. Ordinary results stay single-call; large structured payloads, command output and file transfers follow `docs/REMOTE-IO-CONTRACT.md` without fake pagination or unbounded buffers.
+Use a single safe, connector-neutral correlation and diagnostics path. Identify the **first evidenced** failure stage, preserve a stable external error contract and distinguish Gateway admission/transport, adapter/protocol, provider (only with evidence), capacity/wire and actual client handoff. When intermediaries strip upstream error codes, report original cause as unknown rather than parsing arbitrary translated text or guessing.
 
-### 4.8 Prefer maintained building blocks where they fit
+Operator-facing diagnostics and authorized Activity may be more detailed than end-user MCP errors, but must remain appropriately scoped, bounded and free of credentials, arbitrary full payloads or protected Target exposure. Administrative/security audit and high-volume operational events may require different retention semantics; avoid a duplicate logging database by default.
 
-Use Laravel/framework facilities and mature maintained libraries for security-sensitive or commodity capabilities when they fit the required semantics and reduce custom code without creating disproportionate lock-in or operational burden.
+Source implementation, passing CI, public release, installation and user/client behavior are **separate evidence claims**. None proves the next automatically.
 
-Examples include authentication/authorization primitives, queue abstractions, storage adapters, and protocol libraries. Third-party adoption must still be justified by compatibility, maintenance quality, security posture, migration cost, and the actual product need. Do not add a dependency merely because it exists, and do not reimplement a mature capability merely to avoid a small well-bounded dependency.
+## 12. Supported operating model and evolution
 
-### 4.9 Capability-first interoperability without invented restrictions
+The initial and continuing primary product is a **private self-hosted deployment for a trusted owner/small workspace**, not a public multi-tenant SaaS. Preserve a simple PHP/Laravel application usable on ordinary compatible PHP hosting, with MariaDB/MySQL-compatible persistence, HTTPS, private credentials, server-rendered Admin and no mandatory Docker, Redis, Node runtime, separate agent, message broker or long-running daemon.
 
-The Gateway is an **authenticated access and interoperability layer, not a second product-feature approval board**. Treat these as **three independent change axes**:
+Provide safe fresh-install and update packages for hosts without SSH/Composer and an advanced source-based deployment route. Installers and updaters must preserve private existing environment/data, verify managed-file ownership, protect schema migration and recovery boundaries, and never treat a code backup as a verified database restore. Public web access is confined to the intended public document root. Environment settings actually supported by this product must be discoverable consistently in the operator template and reference; dangerous/optional settings are clearly commented or safely defaulted, not silently enabled on an upgraded host.
 
-1. **A connected Target adds or updates an operation.** A supported, authenticated WordPress or another independently approved Target may publish a new name, argument schema, capability, or plugin operation. The Gateway should discover and make it usable through its existing Target-family discovery/execute path **without a Gateway code release, a hard-coded name allowlist, one MCP tool per operation, new OAuth registration, or manual approval of each operation**. A new name, previously unseen annotations, or a downstream version change is not itself a reason for denial. The current `wordpress-abilities-read` and `wordpress-ability-execute` pair is the working example; do not pretend all future connectors already implement it.
-2. **The MCP protocol or an optional MCP extension evolves.** This is **not a Target tool**. MCP method/transport/schema changes, Tasks, resource/prompt handling, subscriptions, richer output and optional extensions belong to the Gateway's reusable protocol adapter and **client↔Gateway / Gateway↔Target capability negotiation**, not to a WordPress/SSH tool allowlist. Use implemented, negotiated functionality when both relevant peers support it; preserve compatible existing protocol generations and graceful fallback when not supported. Adding a backward-compatible feature must not force a Target reinstall or rewriting every connector. A genuinely new wire behavior may still need an SDK/adapter update; **report unsupported/incompatible honestly, never relabel it a security rejection or claim it works automatically**.
-3. **A genuinely new connector/client transport or authenticated identity.** Register a new connector implementation or OAuth strategy in the smallest reviewed edge adapter, reusing Gateway Target identity, permissions, data-transfer semantics and protocol plumbing where appropriate. A new approved client or a compatible operation is not a reason to rewrite the Gateway core. Enrollment/consent of a truly new OAuth client identity may remain required even when the application code needs no changes.
+Do not mandate a SPA, Kubernetes, public tenancy, billing, enterprise hierarchy, permanent data replication, generic host/file/SQL console, arbitrary URL proxy, dynamic connector marketplace or premature Foundation extraction. These are distinct future product decisions, not hidden requirements of extensibility.
 
-**Standard downstream MCP tools need one reusable invocation route, not one Gateway adapter per tool.** When an already registered/authenticated MCP-speaking Target publishes an additional ordinary standard `tools/list` operation callable through `tools/call`, its *name and business category* must not require Gateway source changes or a new review process. The target-scoped connector may expose a single generic discover/execute family that routes the exact selected Target and named tool with the actual downstream schema, **when the Gateway principal has been deliberately granted broad execution delegation for that Target and the downstream principal permits the operation**. Target-specific narrow grants (e.g. read-only or no-root) still cannot be silently widened by a newly advertised tool. If only narrower authorization exists, surface the actual permission limitation and permit an explicit owner/admin policy choice instead of hard-coding the tool out of existence. This is not a generic arbitrary-host network proxy and does not assume that an unimplemented connector already supports dynamic downstream tool routing.
+Compatibility for existing authenticated clients, Target identities, credentials, direct connector use and public contracts is preserved where feasible; deliberate breaking changes require an explicit migration and recovery contract. Add external clients, connectors, richer Admin operations, groups, storage adapters and workload infrastructure **as concrete demand and measured evidence justify them**, without rewriting the shared core.
 
-**Security is orthogonal to feature novelty.** Continue enforcing actual authenticated Gateway user, client authorization, exact registered Target/connector/credential identity, existing *explicitly granted or denied* Target/operation permissions, the downstream WordPress or remote OS authority, request validity, destination/SSRF/host-key protections and proportional finite resource budgets. **Do not invent a second static feature allowlist, disable a capability by unknown name, or require human review of every new WordPress plugin Ability.** Missing/changed safety metadata should be represented accurately and handled under the applicable **existing configured execution permission**, not interpreted as automatic new-code or review-required denial. In the current WordPress implementation, `unclassified` is an explicit **grantable execution class** (Owner/Administrator policy), *not* a blanket "all unknown operations are forbidden" rule; downstream capability permission remains authoritative. Any future simplification of role/class defaults must preserve already-configured user/Target denials and undergo its own access-policy tests/review instead of silently broadening existing grants.
+## 13. Acceptance and growth rules
 
-The legitimate **denial** cases are unauthorized user/client/Target/operation, revoked credentials, attempted cross-Target/cross-principal escalation, forged remote identity, failed schema/protocol validation, unsafe destination or resource abuse. Classify separately and explain **unsupported/not implemented** (a peer lacks a method/extension), **temporarily unavailable** (compatibility/source change) and **denied** (actual authorization/security decision). Do not silently ignore a caller's intended operation or use false "security" language to hide an interoperability gap.
+Product evolution must be evidenced by representative, authorized real operations, not only mocks or a passing source build:
+- an existing supported Target adds a compatible capability that becomes discoverable/invocable **without changing Gateway code**, while narrower and downstream denials remain enforced;
+- identical authorized operations initiated through **MCP and Admin** converge on common policy, execution and outcome semantics once the Admin execution surface is implemented;
+- authorized multi-Target work produces individually truthful partial/unknown results with no duplicate unsafe mutation;
+- new connector families and reviewed clients reuse shared identity/access/operation/data contracts rather than duplicating the core;
+- small/large payloads and mixed workloads obey effective measured boundaries without unrelated connector limits; real client handoff is distinguished from server-side byte storage;
+- idle fleet growth does not force proportional workers, polling or per-Target registrations; meaningful work remains observable, bounded and recoverable;
+- authorized high-risk operations remain possible within real downstream authority and immutable trust boundaries;
+- a fresh maintainer can recover **intent here**, **architecture in the technical docs**, **unresolved work from Issues**, **code identity from Git**, and **shipped/installed facts from the actual release/runtime** without prior chat state.
 
-**Workload-adaptive resource budgets are a durable Gateway requirement:** Do not make one WordPress response ceiling, SFTP inline chunk or request timeout the maximum for all present and future Target operations. Use the *same* authorized, typed resource policy over actual supported client/Target/workload features, with independent finite budgets for decoded response, stream buffers, full transfer, connect/first-byte/idle, single request, total logical task and concurrency. Default values and allowed overrides are measured, operator-adjustable under immutable host/security/provider bounds, and never preallocate full limits for small inputs. A future one-hour logical stream or retained job must have safe extension seams **without assuming hour-long PHP/HTTP sockets**. The canonical [remote I/O resource contract](./REMOTE-IO-CONTRACT.md) controls semantics; #153 owns the single Owner Admin budget implementation, #154 owns effective client/Target/installed limits and #147 owns bidirectional actual bytes. Keep provider OAuth rotation fences independent of user-tuned timeouts.
+These are enduring acceptance **directions**, not a declaration that every future capability is shipped. The archived WordPress-first V1 scope and criteria are preserved in [HISTORICAL-V1-ACCEPTANCE.md](HISTORICAL-V1-ACCEPTANCE.md) solely for provenance.
 
-**Efficiency and maintainability:** Keep the public MCP tool catalog compact by *shared operation families*, not specific Targets/downstream tool names. Discover bounded live Target catalogs and actual schemas; use safe cache freshness/invalidation and real protocol negotiation without public discovery fan-out or mandatory reinitialization per operation. Prefer existing maintained SDK adapters and standard extension points. Separate maximum permitted bytes from actual allocation; small inputs consume their real bytes plus necessary overhead, while streaming handles larger data through controlled buffers. Measure representative p50/p95 latency, round trips, PHP worker memory/CPU, connections, concurrency, temp disk and failure rates before introducing extra services or arbitrary size limits. Share the client-neutral transfer/integrity/quotas mechanism across connectors under [#147](https://github.com/AChWorks/mcp-gateway/issues/147), not duplicated per client or file extension.
+## 14. Sources of truth and change policy
 
-**No accidental Gateway bottleneck:** A legitimate, authenticated, authorized, actually supported connector capability must not fail only because Gateway assumes another connector's arbitrary inline/window limit, data representation, response envelope, timeout or extension support. Capacity is negotiated/measured at the **effective client -> Gateway -> connector -> Target** path for each comparable unit; finite host/security limits remain enforceable. Prefer shared admission/limits, byte-integrity, transfer lifecycle, MCP mediation and diagnostics contracts with thin connector-owned protocol adapters. Do not write another transfer engine per Target family, weaken existing grants, or promise an unimplemented native host-file handoff. Versioned evidence belongs to #154, usable client/Target exchange to #147, and the remote I/O contract governs implementation.
+- **This MASTER-SPEC:** lasting product intent, invariants, supported operating model and non-goals.
+- **ARCHITECTURE / TARGET-CONNECTOR-FOUNDATION / REMOTE-IO-CONTRACT / connector guides:** current design, executable boundaries, standards and adapter contracts, including implementation status when explicitly marked.
+- **Git source, PRs and exact CI:** implementation and review evidence.
+- **GitHub Issues:** current acceptance gaps, sequencing, dependencies and owner decisions pending execution.
+- **Releases and actual environments:** shipped artifact and installed/runtime truth.
+- **README:** short public introduction, installation entry and usage navigation **only**; **not a project specification, durable architecture document, issue tracker, recovery log or authoritative implementation proof**.
+- **Koinon:** ecosystem-wide governance/asset discovery, not this product's live backlog or runtime.
 
-**Acceptance examples:** a new WordPress Ability is listed and, when the caller's **already granted** execute authority covers it and WordPress permits it, works without a Gateway edit; unknown classification uses its configured existing execution class instead of a name-based ban. A new supported optional MCP feature is enabled by verified peer negotiation without rewriting the WordPress connector. Legacy clients continue to work. Invalid Target/denied user/cross-Target requests still fail. A genuinely unsupported extension is labeled unsupported (not prohibited). Test these paths and represent feature availability honestly before claiming generic automatic support.
-
-This is the **durable product decision and acceptance direction**, not proof of complete current implementation. Existing public/security posture is not silently changed by this documentation-only update; any runtime authorization-contract change stays in its natural Issue and normal high-assurance gates.
-
-## 5. V1 scope
-
-This section records the integrated WordPress-first V1 baseline and remains useful regression/compatibility evidence. Program #106 intentionally replaces generic Site-shaped core terminology for the next breaking foundation; the V1 nouns below are not requirements to preserve Site as the future shared domain.
-
-### 5.1 Administration panel
-
-Provide a small server-rendered web panel with:
-
-- administrator sign-in/sign-out;
-- dashboard summary;
-- site list;
-- add/edit/remove site metadata;
-- connect/reconnect/disconnect a WP AI Bridge site;
-- test connection and show actionable connection state;
-- view bounded recent activity;
-- view the Gateway MCP endpoint and client connection information;
-- minimal application settings that are genuinely required.
-
-V1 does not require complex organization hierarchy or enterprise RBAC. The integrated baseline already supports multiple local users with lightweight Owner/Administrator/Operator/Viewer permission bundles plus denial-only resource narrowing through the same server-side authorization boundary; the Target transition must preserve that capability without turning it into a second policy engine.
-
-### 5.2 WP AI Bridge site registration
-
-An operator adds a site using a human-readable name and its HTTPS WordPress base URL.
-
-The Gateway must derive or safely discover the expected WP AI Bridge MCP/OAuth endpoints rather than asking the user to paste many implementation URLs.
-
-Registration must validate the target before persisting a usable connection. The Gateway must never turn an operator-supplied URL into an unrestricted server-side HTTP proxy.
-
-### 5.3 Site authorization
-
-Each connected WordPress site has an independent authorization relationship with the Gateway.
-
-The expected user experience is:
-
-1. Add site.
-2. Gateway discovers/validates WP AI Bridge.
-3. Operator selects Connect.
-4. Browser is sent to the site's WordPress authorization/consent flow.
-5. The operator authorizes the Gateway as a WordPress user.
-6. Gateway receives and stores the resulting credentials securely.
-7. Site becomes connected and can be tested.
-
-No WordPress username or password is stored by MCP Gateway.
-
-Disconnect/revocation for one site must not affect other sites.
-
-### 5.4 Client-facing MCP service
-
-Expose one public remote MCP endpoint over HTTPS.
-
-The endpoint must use a current supported MCP HTTP transport and proper authentication. Authentication between an MCP client and the Gateway is separate from authentication between the Gateway and a target site.
-
-For ChatGPT, V1 must support the current custom MCP App OAuth flow, including refreshable access when required by the current ChatGPT integration contract.
-
-For the Program #106 breaking foundation, ChatGPT remains the first supported client profile but must no longer define the shared client-authorization core. The Gateway must support an explicit registry of reviewed MCP client profiles so future supported AI/MCP clients can coexist without another authorization-domain rewrite. Provider/product labels are presentation metadata, not permission sources.
-
-The implementation must follow current MCP and client platform specifications at implementation time rather than preserving obsolete protocol assumptions in custom code.
-
-### 5.5 Stable WordPress routing contract
-
-The Gateway must expose a compact WordPress routing surface sufficient to:
-
-- list configured/available sites without exposing credentials;
-- inspect one selected site's context/connection state;
-- discover the selected WP AI Bridge operation/Ability contracts;
-- inspect an exact operation schema when needed;
-- execute an exact selected WP AI Bridge operation with explicit `site_id` and input.
-
-The Gateway must preserve downstream authorization and validation errors accurately enough for the client and operator to understand why an operation was denied or unavailable.
-
-Every target-specific call must identify the site explicitly. Write or destructive operations must never be routed using only conversational or request-local "current site" state.
-
-### 5.6 Connector boundary
-
-WordPress-specific protocol knowledge belongs in one WP AI Bridge connector boundary rather than being spread through controllers, UI, OAuth code, and MCP handlers.
-
-The durable Gateway identity is the registered site/target plus its declared connector type. Shared site inventory, authorization, routing, activity, and future operation-management rules must remain usable without requiring WordPress-specific fields or semantics from every connector.
-
-The internal connector contract should remain small and evidence-driven. It may cover capabilities such as discovery, connection health, schema/capability inspection, execution, and disconnect/revocation where the backend supports them. Do not invent capability methods for future systems until an actual connector or consumer requires them.
-
-Do not expose arbitrary connector-supplied URLs, HTTP methods, database queries, shell commands, or filesystem paths as a **generic** Gateway operation. The expressly supported `ssh_direct` connector instead allows an authorized Gateway user to execute **any** command against their explicitly registered SSH Target as its configured OS account, including permitted `sudo`/root. This is never a request-supplied arbitrary-host shell proxy.
-
-## 6. Authentication and authorization boundaries
-
-There are independent trust relationships at the client edge and at every downstream Target connector:
-
-```text
-Supported remote MCP client (ChatGPT first)
-        |
-        | OAuth / authenticated MCP
-        v
-MCP Gateway
-        |
-        | connector-specific, Target-bound credential
-        v
-Explicit Target
-```
-
-Examples include Gateway-to-WP-AI-Bridge OAuth credentials, a future connector-specific API credential and SSH password/private-key material. Core Target authorization must not assume every connector uses OAuth or downstream MCP.
-
-### 6.1 Client to Gateway
-
-The Gateway authenticates remote MCP clients before serving protected MCP operations. Token issuance, refresh, revocation, discovery metadata, PKCE/client authentication, and redirect validation must use maintained protocol implementations or libraries where practical; do not create an ad-hoc authentication protocol.
-
-The durable identity model separates:
-
-- the Gateway local user/principal;
-- the Gateway-supported client profile;
-- the exact authenticated protocol/OAuth client identity;
-- any external AI account/workspace subject only when the supported client protocol actually authenticates one.
-
-Current ChatGPT Client ID Metadata + `private_key_jwt` is one supported client profile, not the definition of all clients. Future client families may use different explicitly reviewed authentication adapters. Unknown/unconfigured clients fail closed, and arbitrary request-supplied client metadata/JWKS URLs are never treated as trusted onboarding input.
-
-Each exact protocol/OAuth client ID resolves one supported client profile; duplicate client identities are rejected. Client-specific refresh eligibility/recovery and authentication semantics stay with that profile rather than being promoted into universal client-edge behavior. Discovery/authorization-server metadata must advertise only methods/grants/algorithms actually supported by the configured profile set.
-
-Client application/provider labels never grant Target permissions. Authorization/token/revocation/assertion state remains exact-client bound, and one supported client must not be able to replay or revoke another client's state.
-
-Browser administrator sessions are a separate security boundary from MCP bearer authorization.
-
-### 6.2 Gateway to Target
-
-Stored downstream credentials are scoped and cryptographically bound to the exact Target, connector, and supported credential purpose. Credentials must not be reusable across unrelated Targets.
-
-Credential establishment, refresh/rotation, revocation, expiry, reconnect semantics, and maintenance are connector-owned capabilities. The shared core may provide safe encrypted storage and lifecycle orchestration but must not manufacture OAuth semantics for connectors that do not use OAuth.
-
-A failed/revoked Target credential must fail closed for that Target without breaking unrelated Targets.
-
-### 6.3 No privilege aggregation
-
-The Gateway may narrow authority but must never manufacture downstream authority.
-
-For WP AI Bridge, a WordPress/WP-AI-Bridge denial remains denied. For other implemented connectors, applicable remote privilege and operating-system policy remain authoritative. Gateway may only narrow further; no remote shell permission is a sandbox.
-
-For Direct SSH, full remote OS account privileges are intentional; Gateway command filtering or an `Allow sudo` switch must **not** pretend to restrict an arbitrary shell. Gateway still enforces exact user/client/Target/tool permission, encrypted credential custody, verified SSH host identity and bounded egress/resources. Enabling `ssh.command.run` allows file changes through shell commands even when Gateway SFTP tools are disabled. See `docs/DIRECT-SSH-CONNECTOR.md`.
-
-
-### 6.4 Administrative authorization
-
-Administrator authentication answers who is signed in; authorization independently decides which Gateway action that principal may perform.
-
-Server-side application policies/permissions are authoritative. UI visibility may reflect those decisions but must never be the enforcement boundary. Role names may provide convenient default bundles such as owner, administrator, operator, or viewer, but application code should authorize capabilities/resources rather than branching on those names.
-
-The first installed administrator must retain a recoverable ownership path. Changes to users, roles/permissions, security settings, credentials, and other high-impact administration state require appropriate authorization and bounded audit evidence when multi-user administration is enabled.
-
-## 7. Security requirements
-
-Security is part of the V1 behavior, not a post-release hardening phase.
-
-At minimum:
-
-- production operation requires HTTPS;
-- administrator passwords use a current password hash through the application framework;
-- administrator forms use CSRF protection;
-- login and sensitive endpoints have reasonable rate limiting;
-- MCP authorization validates tokens, client/resource binding, redirect URIs, state/PKCE and applicable OAuth metadata according to the supported flow;
-- supported MCP client profiles are explicit and fail closed; client/provider labels do not authorize, cross-client token/code/refresh/assertion/revocation confusion is rejected, and client metadata/JWKS retrieval cannot become an arbitrary SSRF surface;
-- session cookies use secure production settings;
-- secrets, private keys, access tokens, refresh tokens, authorization codes, and password material are never written to normal activity logs;
-- stored target credentials are encrypted at rest with application-controlled encryption; token lookup material that does not need recovery should be one-way hashed where practical;
-- signing private keys are stored outside the public web root with restrictive filesystem permissions;
-- losing the application encryption key is treated as loss of access to encrypted target credentials; backup guidance must include the key material needed for recovery;
-- outbound target URLs are validated against SSRF, redirect-to-private-network, DNS rebinding, unexpected scheme, and host-change risks;
-- downstream HTTP calls have bounded connect/request timeouts and response/body limits;
-- the Gateway does not automatically retry a target mutation/tool execution whose idempotency is unknown;
-- when a downstream safety model requires explicit approval, a user approval for one Target/operation cannot be replayed onto another Target or materially different request; any Gateway approval challenge is exact-operation-bound, short-lived and replay-safe while downstream policy remains authoritative;
-- the Gateway never holds a database row lock/transaction open across remote HTTP/MCP/OAuth work; stateful connector operations use short durable prepare/claim and finalize phases around remote I/O;
-- public MCP tools expose correct behavioral annotations and bounded structured outputs; read-only annotations never replace authorization checks;
-- Target identifiers, credentials, and responses from one Target must not leak into another Target's request;
-- errors returned to MCP clients are useful but do not expose secrets or unnecessary internal stack/configuration data;
-- destructive administration actions in the web panel require deliberate user interaction and preserve recoverable target-side state when the downstream system supports revocation rather than silent deletion;
-- every administration mutation is authorized server-side through the applicable permission/policy boundary; hiding a button is not authorization;
-- changes to administrative users, permission assignments, credentials, and security-sensitive configuration must produce bounded non-secret audit evidence when those features are enabled;
-- the fresh-install web installer accepts secrets only over HTTPS, does not log or redisplay them, only writes outside-public-root secret material, requires a dedicated empty database, and locks itself after successful installation;
-- the temporary browser updater requires HTTPS plus the existing administrator session and CSRF boundary before mutation, keeps the full update payload outside the document root, uses only a minimal temporary public entrypoint, validates exact package identity before mutation, and removes/disables its temporary staging and web entry after successful completion.
-
-## 8. Data and persistence requirements
-
-Use Laravel migrations that remain compatible with MariaDB (primary) and MySQL for durable schema changes.
-
-V1 needs only the data required for:
-
-- administrator users/sessions as required by the framework;
-- lightweight administrative role/permission assignments when multi-user administration is enabled;
-- registered Targets, connector identity, and only common metadata genuinely shared across supported implementations; connector-specific durable configuration belongs to connector-owned persistence;
-- Direct SSH has a required IP-inclusive visible identifier: normalized configured IPv4/IPv6 or last policy-approved, pinned-host-key-verified effective peer IP (with unknown/stale status), port, username, display name and stable `target_id` on authorized Admin/Target pickers/connection flows and MCP `targets-list`/`target-context`. Store SSH endpoint/IP metadata only under its connector, support bounded local authorization-filtered IP/hostname lookup, and never accept arbitrary caller IP in place of `target_id` for an SSH command or SFTP operation;
-- encrypted Target-bound connector credentials and only the lifecycle metadata needed by their supported connector contract;
-- purpose-aware credential identity so a connector can safely own more than one credential purpose without another shared-schema redesign;
-- connector-specific temporary authorization/discovery/refresh state in connector-owned persistence rather than universal OAuth columns on the shared Target row;
-- Gateway OAuth/client authorization state required for authenticated MCP access;
-- bounded operational activity and security/audit metadata appropriate to their distinct purposes;
-- minimal application settings.
-
-Do not persist full MCP request or response payloads by default.
-
-Do not introduce a second datastore or cache service unless an evidenced requirement later justifies it.
-
-## 9. Activity, health, and diagnostics
-
-The operator must be able to distinguish at least:
-
-- Gateway application is healthy/unhealthy;
-- a Target is configured but never connected;
-- a Target connection is usable or requires operator attention;
-- stale health evidence must remain independent from terminal credential loss: Stale means the last authenticated observation is old, **not** that authorization expired, so no automatic revocation, disconnect or re-consent follows from Stale alone. A renewable Target should remain authorized through extended idle time with demand-driven access-token renewal and bounded, infrequent provider refresh-token maintenance where actually necessary; no static non-expiring bearer credential is assumed;
-- connector credentials are expired/revoked/unavailable according to that connector's lifecycle;
-- a Target endpoint is unreachable or incompatible;
-- a Gateway-routed operation succeeded, failed, was denied, or has an unknown mutation outcome where applicable.
-
-Activity records should contain bounded metadata such as time, Gateway actor identity, stable supported client-profile identity when available, safe protocol-client evidence, Target ID, connector type, operation identity, outcome, and a correlation/request identifier. They must not contain access tokens, refresh tokens, bearer credentials, authorization codes, client assertions, private keys, passwords, or full arbitrary content/tool payloads.
-
-Do not invent or log an external AI account/workspace identity unless a supported protocol actually authenticated that subject.
-
-Correlation/request/trace identifiers are operational evidence and should remain server-side by default. Public MCP tool results should return product-relevant state rather than internal telemetry identifiers unless a separately justified user-visible support reference is deliberately designed.
-
-For a meaningful failure, the operator must be able to identify **which boundary failed** (client ingress/permission, Gateway admission, DNS/TLS/SSH transport, downstream protocol/adapter, Target provider/Core, response framing or client delivery) and whether the remote side effect is **known rejected, completed, or unknown**. Reuse existing Gateway Activity, correlation IDs and bounded operational diagnostics; a safe failure-only support reference may be returned to the originating caller solely to let an authorized operator locate the record. Do not infer an original provider error code that an intermediate adapter discarded. Prefer strictly schema-validated provider error classifications over free-text parsing; preserve generic errors with explicit unknown-provider-code indication when evidence is absent. Log and display bounded stage, outcome, effective limit/unit and safe next step when known; never raw credentials, request/file bodies, private server paths, stacks or arbitrary provider messages. Logging/storage failures may not change or replay the original operation. No second telemetry backend, unbounded request-log stream or permission-agnostic log reader is justified. The unresolved Gateway-only acceptance is tracked under [#199](https://github.com/AChWorks/mcp-gateway/issues/199); existing generic Activity/audit outcomes are not proof it is implemented.
-
-**Operator configuration discoverability:** Every first-party environment variable actually supported by the Gateway application, installer or maintenance paths must appear exactly once in `.env.example`, active with safe defaults or commented with a safe example and enablement warning. Important advanced/recovery/secret-bearing keys must not exist *only* in documentation. `docs/CONFIGURATION.md` owns values, units, scope, precedence, allowed ranges and safe changes. Audit the consumed-variable inventory and enforce coverage in CI; do not automatically enable optional providers, secrets, proxy trust or dangerous maintenance actions just to make keys visible. Existing private `.env` values remain untouched by updates; typed Owner operational settings keep their effective precedence over environment fallbacks. Upstream/vendor environment mechanisms are not automatically Gateway-supported integrations.
-
-Operational activity and administrative/security audit have different purposes and may require different retention/query behavior. As the administration model grows, the implementation must preserve that distinction instead of turning one ever-growing table or log stream into the authoritative record for every concern.
-
-Dashboard and health views must use stored/bounded state and cheap local queries. Merely opening an administration page must not fan out live requests to every registered Target.
-
-V1 does not require an external monitoring stack or metrics service.
-
-## 10. Compatibility and protocol policy
-
-- Use maintained official or standards-aligned MCP components where practical rather than implementing JSON-RPC/MCP framing from scratch.
-- Treat the MCP PHP SDK as a replaceable protocol adapter behind a small application boundary; it is not the application's domain model.
-- Use the maintained SDK client/transport for downstream MCP where it satisfies the connector contract; keep any compatibility shim small and protocol-focused rather than maintaining a second hand-written MCP stack.
-- Pin Composer dependencies in `composer.lock` and validate compatible protocol behavior before upgrades.
- - Support MCP protocol generations required by implemented client profiles and actual downstream MCP Targets. The WordPress adapter must retain its verified legacy/session behavior; newer profile support requires real peer negotiation and compatibility tests.
-- Prefer modern stateless downstream operation when negotiated/supported; do not require initialize/session/close churn for a stateless connector merely because another connector needs sessions.
-- Exact supported protocol revisions are compatibility/release evidence and must be revalidated when SDK/client/connector contracts change; do not hard-code one historical revision as the permanent product architecture.
-- Public Gateway server/client implementation metadata must report the actual release identity rather than a stale placeholder version.
-- Preserve backwards-compatible Gateway public behavior within a release line unless a documented breaking change is intentionally accepted. Program #106 is such an accepted breaking boundary and therefore belongs on the next major-version release line.
-- Adding a Target must not change the public Gateway tool list.
-- Adding a supported connector family may intentionally add a bounded connector tool family and may require client tool refresh; tool count must never scale with Target inventory.
-
-## 11. Scalability, capacity, and cost policy
-
-There is intentionally no fixed fleet-size promise in this specification. The supported capacity of a release must be derived from representative evidence on the supported deployment shape and the actual workload mix.
-
-The near-term engineering goal is that ordinary inventory and administration remain comfortably usable for hundreds of registered Targets (roughly the 200–500 range is a practical current planning workload, not a product ceiling). Tests may additionally exercise 1,000, 3,000, 10,000, or other larger synthetic inventories when useful for identifying headroom and nonlinear behavior. Those fixtures are diagnostic evidence, not an assertion that every shared host can sustain the same count or concurrent workload.
-
-Scale-sensitive implementation must follow these rules:
-
-- list/search/filter/sort paths are server-side, bounded, and supported by query/index evidence appropriate to their real access patterns;
-- MCP and other machine-facing inventory responses are bounded and deterministically pageable/searchable so every authorized target remains discoverable without oversized responses;
-- ordinary single-target lookup and credential routing use indexed stable identities and do not scan the fleet;
-- inactive registered Targets require no persistent outbound connection and no mandatory per-target polling/background job;
-- dashboard/overview requests do not synchronously contact the entire fleet;
-- memory and response size should scale primarily with the requested page/work unit rather than total registered inventory;
-- query counts, representative latency, memory, and database behavior are measured before introducing structural performance dependencies;
-- bulk/fan-out work that cannot safely fit one bounded request should move behind explicit operation/job state when a real workflow requires it, with idempotency, partial-failure, retry, and progress semantics designed for that workflow;
-- Laravel/database-backed background execution is a valid first escalation when it satisfies measured workload; Redis or additional workers/nodes become requirements only when evidence shows the simpler supported shape is no longer sufficient;
-- external search infrastructure is introduced only when indexed MariaDB/MySQL query-layer search cannot meet evidenced product needs;
-- large backup/media/export payloads should avoid transiting or residing in the Gateway by default when target-to-storage transfer is feasible.
-
-Performance improvements must not weaken authorization, connector isolation, correctness, recoverability, or deployment simplicity merely to achieve a benchmark number.
-
-## 12. Non-goals for V1
-
-V1 deliberately does not provide:
-
-- public multi-tenant SaaS hosting;
-- billing/subscriptions;
-- complex RBAC or organization hierarchy;
-- Redis, queues, workers, WebSockets, or scheduled background processing as mandatory infrastructure;
-- Docker/Kubernetes as a deployment requirement;
-- React/Vue/SPA administration UI;
-- arbitrary HTTP proxying;
-- raw SQL or database consoles;
-- generic Gateway-owned shell/SSH command execution **outside** an explicitly supported Target-scoped connector such as `ssh_direct`;
-- generic Gateway-owned server filesystem access outside an explicitly supported connector's bounded downstream capability contract;
-- credential extraction from WordPress;
-- bypasses around WP AI Bridge or WordPress capabilities;
-- automatic installation/modification of WP AI Bridge on remote sites;
-- copying all downstream WordPress operations into Gateway-specific implementations;
-- a workflow/orchestration engine;
-- a marketplace or dynamic third-party code loader;
-- a generic hosting control panel or reusable arbitrary-command facility in the installer.
-
-## 13. Future evolution
-
-The integrated baseline already includes lightweight multi-user roles, scoped Site Groups, bounded stored health evidence, and a selected-site bulk health-check operation. Program #106 renames/generalizes those capabilities into Target semantics; they are not future promises.
-
-Beyond that current baseline, the architecture must permit:
-
-- additional reviewed MCP/AI client profiles beyond ChatGPT and non-MCP administration/API/automation consumers that reuse the same application authorization and Target rules without changing the Target/connector domain;
-- richer Target grouping/tags or organization aids beyond the current flat Group model when a real workflow needs them;
-- additional backend connector types beyond WP AI Bridge and Direct SSH, such as other MCP servers or deliberately supported APIs/services;
-- connector capability discovery without forcing every connector into WordPress/WP AI Bridge semantics;
-- richer stored health/usage reporting while preserving the no-fleet-wide-render-fan-out rule;
-- additional explicit bulk-operation/job workflows when publishing, editing, backup, maintenance, or similar multi-Target work justifies asynchronous execution;
-- storage integrations for backup/media/export workflows where the Gateway should coordinate rather than become the data path;
-- webhooks or automation where a concrete use case justifies them;
-- optional queue/cache/search infrastructure and additional application nodes when measured active workload requires them;
-- horizontal/runtime scaling without changing stable Target identity or weakening authorization boundaries.
-
-Future features must preserve the core trust rule: the Gateway routes explicitly authorized capabilities; it does not silently convert connector access into unrestricted infrastructure access. They must also preserve the preference for the smallest reliable deployment that satisfies measured workload.
-
-## 14. V1 success criteria
-
-These criteria record the completed/integrated WordPress-first V1 acceptance baseline. They remain regression evidence for future releases, but they are not the completion criteria for the active connector-neutral Target program; Program #106 owns that next outcome.
-
-V1 is successful when all of the following are demonstrated against supported test/deployment environments:
-
-1. The application installs on the target PHP 8.4 + OpenLiteSpeed/shared-PHP + MariaDB-primary/MySQL-compatible deployment model using the official deployment ZIP and simple web installer; the Git/Composer/Artisan installation path remains supported for advanced operators.
-2. The administration panel can securely create an administrator session and manage multiple site records.
-3. At least two independent WP AI Bridge sites can be authorized and remain separately revocable.
-4. One ChatGPT custom MCP App can authenticate to the Gateway and discover the stable Gateway tools.
-5. ChatGPT can list sites, inspect the selected site's available WP AI Bridge operations, and execute authorized read and write operations against either site by explicit `site_id`.
-6. A permission denied by WordPress/WP AI Bridge remains denied through the Gateway.
-7. A disconnected/revoked site fails closed without breaking other connected sites.
-8. Adding a third site does not require another ChatGPT App or a new Gateway MCP endpoint.
-9. Direct ChatGPT-to-WP-AI-Bridge operation remains available for sites that use it.
-10. Sensitive credentials are not exposed through the panel, installer, updater, MCP responses, application logs, or activity records.
-11. A fresh developer/Master can recover project intent, architecture, current work, and validation expectations from the repository and GitHub without relying on prior chat history.
-12. An existing deployment-ZIP installation can be upgraded with the official update ZIP through the authenticated one-time browser flow without SSH, Git, or Composer while preserving `.env` and persistent private state, removing stale managed files, exercising migrations/postflight validation against a real older packaged release, and removing/disabling the temporary updater after success.
-
-V1 success criteria intentionally do not claim a fixed maximum fleet size. Capacity and growth evidence are governed by Section 11 and the current scalability work tracked in GitHub.
-
-## 15. Source-of-truth model
-
-Use these sources for different kinds of truth:
-
-- `docs/MASTER-SPEC.md` — project purpose, durable requirements, constraints, non-goals, and V1 completion criteria.
-- `docs/ARCHITECTURE.md` — current integrated technical architecture and component boundaries derived from this specification.
-- `docs/TARGET-CONNECTOR-FOUNDATION.md` — accepted breaking Target/connector target-state design for Program Issue #106 until that design is integrated and folded into the current architecture.
-- `docs/REMOTE-IO-CONTRACT.md` — accepted bounded result and large-file design (not current runtime proof).
-- `docs/DIRECT-SSH-CONNECTOR.md` — accepted SSH/SFTP connector design (not current runtime proof).
-- `README.md` — user-facing project overview, prerequisites, installation, usage, and release-level information; it is not an authoritative project-state, architecture, or recovery source.
-- GitHub Issues — active work, dependencies, acceptance criteria, risk, and current task state.
-- Pull requests/commits — implementation identity and review history.
-- CI/test evidence — validation truth for a specific commit.
-- deployment/release system — production/release truth when delivery is later authorized.
-
-Conversation history is not an authoritative project source.
-
-## 16. Change rule
-
-Change this specification only when accepted project-level intent, supported deployment constraints, security boundaries, non-goals, or completion criteria materially change.
-
-Implementation details, transient task state, branch/SHA information, and ordinary bug fixes belong in their nearer authoritative sources and must not turn this file into a work log.
+Change the MASTER-SPEC only for a materially accepted change to product purpose, lasting behavior, authority/trust model, deployment commitments or non-goals. Do not put SHAs, PR status, current versions, implementation subtasks, release timelines or arbitrary numeric tuning settings here. Specifics belong to their nearest owner. Changes to dependent architecture and Issues must be reconciled before implementation claims are made.
