@@ -2,6 +2,19 @@
 
 This is the technical wire contract for an **optional**, authenticated, complete-file client↔SSH Target HTTPS mode. Enabled behavior requires the real installed code, exact client/Target permissions, effective feature flag and a supported receiving client. Successful independently controlled client bytes do **not** establish native AI host/model file attachment ingestion.
 
+## New installations versus existing private environments
+
+The source installer and the canonical new-install template explicitly set
+`SSH_FILE_TRANSFER_ENABLED=true` for **fresh** installations. On upgrades,
+the existing private `.env` is never replaced or silently backfilled;
+when this key is absent, the runtime fallback remains `false`.
+An operator may explicitly disable the mode with `false`.
+This switch covers only authenticated Direct SSH whole-file upload/download,
+not WordPress Bridge Media, ChatGPT model attachment handoff, or any bypass
+of Target/client grants, size/time budgets, remote private staging,
+or PHP/proxy capacity admission. Verify the installed release and actual
+host configuration before claiming an effective mode.
+
 ## Browser operator fallback
 
 In the authenticated Gateway Admin, **Targets → exact Direct SSH Target** may expose a local file picker for upload and a remote-path attachment download when the installed version supports the feature, the client has the correct SFTP read/write Target grant and the effective SSH file-transfer flag is enabled. These are CSRF-protected Admin actions using the same verified SFTP whole-file service; they do **not** issue OAuth tokens or create anonymous endpoints.

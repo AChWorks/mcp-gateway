@@ -83,6 +83,71 @@ final class SimpleWebInstallerTest extends TestCase
         self::assertStringContainsString("SESSION_SAME_SITE=lax\n", $environment);
         self::assertStringContainsString("MCP_BOOTSTRAP_FIXTURE_ENABLED=false\n", $environment);
         self::assertStringContainsString("MCP_BOOTSTRAP_FIXTURE_TOKEN=\"\"\n", $environment);
+        self::assertStringContainsString("SSH_FILE_TRANSFER_ENABLED=true\n", $environment);
+    }
+
+    #[Test]
+    public function a_fresh_install_enables_ssh_only_whole_file_even_with_an_old_template(): void
+    {
+        $template = "APP_ENV=local\nSSH_FILE_TRANSFER_ENABLED=false\n";
+
+        $environment = SimpleWebInstaller::buildEnvironment(
+            $template, $this->validInput(), 'base64:test-key',
+        );
+
+        self::assertSame(1, substr_count($environment, "SSH_FILE_TRANSFER_ENABLED=true\n"));
+        self::assertStringNotContainsString("SSH_FILE_TRANSFER_ENABLED=false\n", $environment);
+    }
+
+    #[Test]
+    public function it_generates_one_secure_production_cookie_setting_from_the_http_template(): void
+    {
+        $template = file_get_contents(dirname(__DIR__, 2).'/.env.example');
+        self::assertIsString($template);
+        self::assertStringContainsString("# SESSION_SECURE_COOKIE=true\n", $template);
+        self::assertSame(0, preg_match('/^SESSION_SECURE_COOKIE=/m', $template));
+
+        $environment = SimpleWebInstaller::buildEnvironment(
+            $template, $this->validInput(), 'base64:test-key',
+        );
+        self::assertSame(1, preg_match_all('/^SESSION_SECURE_COOKIE=true$/m', $environment));
+        self::assertSame(1, preg_match_all('/^SESSION_HTTP_ONLY=true$/m', $environment));
+        self::assertSame(1, preg_match_all('/^SESSION_SAME_SITE=lax$/m', $environment));
+        self::assertSame(1, preg_match_all('/^OAUTH_ACCESS_TOKEN_TTL_SECONDS=3600$/m', $environment));
+        self::assertSame(1, preg_match_all('/^SSH_FILE_TRANSFER_ENABLED=true$/m', $environment));
+    }
+
+    #[Test]
+    public function it_keeps_advanced_and_destructive_environment_switches_inactive_on_a_fresh_install(): void
+    {
+        $template = file_get_contents(dirname(__DIR__, 2).'/.env.example');
+        self::assertIsString($template);
+
+        $environment = SimpleWebInstaller::buildEnvironment(
+            $template, $this->validInput(), 'base64:test-key',
+        );
+
+        foreach ([
+            'GATEWAY_TARGET_RESET_ACKNOWLEDGED',
+            'GATEWAY_TARGET_RESET_DATABASE_BACKUP_VERIFIED',
+            'MCP_GATEWAY_RECOVERY_TEST_LOOPBACK',
+            'APP_PREVIOUS_KEYS',
+            'DB_URL',
+            'MAIL_PASSWORD',
+            'REDIS_PASSWORD',
+            'GATEWAY_TRUSTED_PROXIES',
+            'SESSION_PARTITIONED_COOKIE',
+        ] as $sensitiveOrOptional) {
+            self::assertSame(
+                0,
+                preg_match('/^'.preg_quote($sensitiveOrOptional, '/').'=/', $environment),
+                'Optional/one-time switch must remain inactive: '.$sensitiveOrOptional,
+            );
+            self::assertStringContainsString('# '.$sensitiveOrOptional.'=', $environment);
+        }
+        self::assertSame(1, preg_match_all('/^SSH_FILE_TRANSFER_ENABLED=true$/m', $environment));
+        self::assertSame(1, preg_match_all('/^SESSION_SECURE_COOKIE=true$/m', $environment));
+        self::assertSame(0, preg_match('/^BROADCAST_CONNECTION=/m', $environment));
     }
 
     #[Test]

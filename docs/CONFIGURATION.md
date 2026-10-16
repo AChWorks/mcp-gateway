@@ -51,7 +51,7 @@ Changing `APP_URL` changes OAuth issuer/client metadata/callback identity and re
 
 ## Complete `.env.example` key reference
 
-Values below are the defaults in the sample template, **not necessarily** the production values written by the web installer. “Seconds,” “minutes,” “bytes,” “rows” and “days” are deliberately distinguished. The repository source is authoritative for validation and effective limits. Operational features such as SSH whole-file transfer have their own **disabled-by-default** release contract.
+Values below are the defaults in the sample template, **not necessarily** the production values written by the web installer. “Seconds,” “minutes,” “bytes,” “rows” and “days” are deliberately distinguished. The repository source is authoritative for validation and effective limits. For SSH whole-file transfer, distinguish older **disabled-by-default published releases** from the current source **fresh-install explicit ON** template and **legacy absent-key OFF** runtime fallback; never infer the installed host setting from either.
 
 ### Application, locale and deployment
 
@@ -91,11 +91,12 @@ Values below are the defaults in the sample template, **not necessarily** the pr
 | `SESSION_LIFETIME` | `120` minutes | Browser-login **idle timeout**, shared by admin and ordinary users |
 | `SESSION_EXPIRE_ON_CLOSE` | `false` | Browser-session cookie when `true`; not a role-specific or absolute TTL |
 | `SESSION_ENCRYPT` | `true` | Encrypt session payloads; **keep true in production** |
+| `SESSION_HTTP_ONLY` | `true` | HTTP-only session cookie, not readable by JavaScript; **keep true** |
+| `SESSION_SAME_SITE` | `lax` | Browser cookie SameSite policy; not an OAuth token TTL |
 | `SESSION_PATH` | `/` | Session-cookie path; default applies across Gateway URLs |
 | `SESSION_DOMAIN` | `null` | Host-only domain default; changing domain can break session cookie delivery |
 | `CACHE_STORE` | `file` | Default application cache backend; no Redis requirement |
 | `QUEUE_CONNECTION` | `sync` | Jobs run synchronously by default; no queue worker required |
-| `BROADCAST_CONNECTION` | `log` | Framework broadcasting backend; not an operator notification channel |
 | `FILESYSTEM_DISK` | `local` | Default private Laravel filesystem disk; do not expose stored secrets publicly |
 | `MAIL_MAILER` | `log` | Mail messages go to log rather than a real delivery provider by default |
 | `MAIL_FROM_ADDRESS` | `gateway@example.invalid` | Sender address if email delivery is configured |
@@ -158,27 +159,136 @@ Both the edge and authenticated-principal limit apply when relevant. Their effec
 
 Remote timeout/response settings are **budgets**, not guarantees of response speed or permission to bypass DNS pinning, SSRF checks, TLS verification, host-key verification or OAuth permissions.
 
-## Additional supported settings intentionally not in the basic template
+### Direct SSH whole-file and verification bounds
 
-Only genuine first-party keys consumed by the application, installer or maintenance paths should be exposed as supported Gateway configuration. Every such key belongs in the operator template with an accurate safe default or commented, clearly restricted example. Framework-internal environment knobs are not automatically supported product settings. **Check the actual installed source and private `.env` when changing any effective setting**; the sample is documentation, not runtime state.
+| Key | Example / fresh-install behavior | Effect / operator note |
+| --- | --- | --- |
+| `SSH_FILE_TRANSFER_ENABLED` | `true` for **new installer/template**; `false` when absent | Authenticated SSH Direct whole-file browser/HTTPS exchange only. Existing private `.env` is preserved during updates. No WordPress/ChatGPT attachment support follows from this flag. Real host, client, Target and resource admission remain required. |
+| `SSH_FILE_TRANSFER_MAX_BYTES` | `8388608` bytes (8 MiB) | Default per-object whole-file size budget; independent of 16 KiB per-call SFTP limits and PHP/proxy caps |
+| `SSH_FILE_TRANSFER_MAX_SECONDS` | `30` seconds | Synchronous whole-file deadline, independent of SSH Job lifetime |
+| `SSH_VERIFY_MAX_ATTEMPTS_PER_MINUTE` | `6` attempts/minute | SSH credential verification admission by Target; not a transfer throughput rate |
+| `SSH_VERIFY_DECAY_SECONDS` | `60` seconds | SSH credential verification admission decay period |
+| `SSH_VERIFY_LEASE_SECONDS` | `30` seconds | SSH verification admission lease |
 
-These are **not extra user roles, guaranteed features or release approvals**. The production installer explicitly writes several security cookie flags even though the development `.env.example` does not list them.
+## Advanced settings (commented examples in the same complete template)
 
-| Key | Effective default / meaning |
-| --- | --- |
-| `SESSION_SECURE_COOKIE` | `true` when `APP_ENV=production`; require HTTPS-only browser cookies |
-| `SESSION_HTTP_ONLY` | `true`; prevent JavaScript access to session cookie |
-| `SESSION_SAME_SITE` | `lax`; baseline CSRF-aware cross-site cookie behavior |
-| `SESSION_COOKIE` | Derived from `APP_NAME`; changing it logs out old browser sessions |
-| `GATEWAY_TRUSTED_PROXIES` | Empty = trust **no** forwarded proxy headers; when necessary, comma-separated **exact IPv4/IPv6 addresses**, maximum 64, never a wildcard. Change only after identifying the actual trusted proxy path |
-| `SSH_FILE_TRANSFER_ENABLED` | Source fallback `false` when unset; the fresh installer may explicitly write a version-specific value. Verify the actual installed private `.env`. Do not change the effective mode on a real host before separate Owner approval and host acceptance; see [whole-file contract](WHOLE-FILE-EXCHANGE.md) |
-| `SSH_FILE_TRANSFER_MAX_BYTES` | `8388608` bytes (8 MiB), bounded transfer budget when that feature is enabled |
-| `SSH_FILE_TRANSFER_MAX_SECONDS` | `30` seconds, transfer wall-time budget |
-| `SSH_VERIFY_MAX_ATTEMPTS_PER_MINUTE` | `6` attempts per Target; per-Target SSH credential verification admission |
-| `SSH_VERIFY_DECAY_SECONDS` | `60` seconds; verification admission decay interval |
-| `SSH_VERIFY_LEASE_SECONDS` | `30` seconds; verification admission lease window |
+All keys below are present **commented** in `.env.example`; they are not active settings unless the operator deliberately selects and validates them. A comment's illustrative value is not evidence that a driver is ready on the installed host. Installed PHP extensions, storage tables, network permissions and user/client/Target access gates still apply. **No extra queue worker, Redis/Memcached daemon, external mail provider or non-MySQL database is required or promised by the supported basic Gateway profile.** The first-party source/configuration-consumer coverage guard prevents quietly losing a supported key, and records excluded unsupported adapter/template entries explicitly.
 
-Advanced Laravel configuration keys beyond the list above are framework internals; avoid editing them unless the exact release and deployment procedure require it. For operational settings managed through the Gateway **Owner UI/database**, use that interface rather than presuming an equivalent `.env` key exists. The `ssh_job_max_script_kib` Owner override defaults to 16 KiB (allowed 16–64 KiB) and requires the additive script-budget migration before use; it does not change `SSH_FILE_TRANSFER_MAX_BYTES` or the 16 KiB SFTP/Job-output per-call windows.
+### Application identity, storage and database options
+
+| Key | Source default / optional example | Effect / operator note |
+| --- | --- | --- |
+| `APP_PREVIOUS_KEYS` | empty | Prior application encryption keys during a *planned* rotation; values are **secrets**; never rotate `APP_KEY` as a routine configuration change |
+| `APP_MAINTENANCE_STORE` | `database` | Laravel maintenance-store selection only when using a compatible maintenance driver; **do not change during an update/recovery** |
+| `DB_URL` | unset | Optional connection URI; may override separate DB host/user/password values; a secret and recovery identity boundary |
+| `DB_SOCKET` | empty | MySQL/MariaDB Unix socket, instead of default TCP when deliberately supported |
+| `DB_CHARSET` | `utf8mb4` | MySQL/MariaDB connection character set; requires compatible database schema |
+| `DB_COLLATION` | `utf8mb4_unicode_ci` | MySQL/MariaDB connection collation; avoid unplanned cross-DB differences |
+| `MYSQL_ATTR_SSL_CA` | unset | CA file for PDO MySQL/MariaDB SSL; verify a protected local CA path and actual server TLS |
+| `DB_FOREIGN_KEYS` | `true` | SQLite foreign-key enforcement only; SQLite is not the documented production MariaDB/MySQL deployment profile |
+
+### Cache and optional database-backed queue configuration
+
+| Key | Source default / optional example | Effect / operator note |
+| --- | --- | --- |
+| `CACHE_PREFIX` | derived from `APP_NAME` | Prefix for shared cache stores; do not collide with another installation |
+| `CACHE_STORAGE_DISK` | unset | Disk for optional Laravel `storage` cache driver; keep private; baseline `CACHE_STORE=file` unchanged |
+| `CACHE_STORAGE_PATH` | `framework/cache/data` | Relative path for optional storage cache driver, not a public upload directory |
+| `DB_CACHE_CONNECTION` | unset | Database connection for optional cache table; schema must exist |
+| `DB_CACHE_TABLE` | `cache` | Cache table for optional database cache driver |
+| `DB_CACHE_LOCK_CONNECTION` | unset | DB connection for cache locks when database cache is selected |
+| `DB_CACHE_LOCK_TABLE` | unset (example `cache_locks`) | Cache-lock table; ensure matching migration before enabling DB cache/locks |
+| `DB_QUEUE_CONNECTION` | unset | Optional database-backed queue connection; **sync remains the supported zero-worker baseline** |
+| `DB_QUEUE_TABLE` | `jobs` | Database queue table, requires schema/worker readiness when deliberately selected |
+| `DB_QUEUE` | `default` | Queue name for optional DB queue, not a Gateway remote Target/Job ID |
+| `DB_QUEUE_RETRY_AFTER` | `90` seconds | Reserved-job retry delay for optional DB queue; never an SSH Job no-replay override |
+| `QUEUE_FAILED_DRIVER` | `database-uuids` | Laravel failed-queue-job store; not Gateway's retained SSH Job journal |
+
+### Session and trusted-proxy controls
+
+| Key | Source default / optional example | Effect / operator note |
+| --- | --- | --- |
+| `SESSION_SECURE_COOKIE` | derived from production environment | **HTTPS-only browser cookie on production.** Unset in the local HTTP template; HTTPS web installer explicitly writes `true`. Do not set `false` in production. |
+| `SESSION_COOKIE` | derived from `APP_NAME` | Override shared session cookie name; changing it logs users out and may break SSO/browser continuity |
+| `GATEWAY_TRUSTED_PROXIES` | unset (trust none) | Explicit trusted reverse-proxy IPv4/IPv6 addresses, max 64; never wildcard. Configure only for verified proxy topology. |
+| `SESSION_CONNECTION` | unset | Optional DB session connection; only with matching session store/migrations |
+| `SESSION_STORE` | unset | Optional cache-backed session store; test login, CSRF, logout and availability |
+| `SESSION_TABLE` | `sessions` | Database session table when database storage is deliberately enabled |
+| `SESSION_PARTITIONED_COOKIE` | `false` | Partitioned browser cookie policy; requires evaluated HTTPS/SameSite embedding context; not a generic OAuth fix |
+
+### Logging and outbound mail adapters
+
+| Key | Source default / optional example | Effect / operator note |
+| --- | --- | --- |
+| `LOG_DEPRECATIONS_TRACE` | `false` | Adds trace to Laravel deprecation logs; may reveal sensitive metadata; avoid on production |
+| `LOG_PAPERTRAIL_HANDLER` | `SyslogUdpHandler` | Advanced Monolog handler class for optional Papertrail channel; never load untrusted class names |
+| `LOG_SLACK_EMOJI` | `:boom:` | Slack logging channel emoji, not Gateway notifications or connector capability |
+| `LOG_SLACK_USERNAME` | defaults to `APP_NAME` | Name for optional Slack error logging |
+| `LOG_SLACK_WEBHOOK_URL` | unset | **Secret** optional Slack log webhook; outgoing log export needs deliberate data/security review |
+| `LOG_STDERR_FORMATTER` | unset | Optional Monolog stderr formatter class; avoid arbitrary class loading |
+| `LOG_SYSLOG_FACILITY` | `LOG_USER` (numeric `8`) | Syslog facility when its channel is selected; ensure system logging isolation |
+| `PAPERTRAIL_URL` | unset | Papertrail log host; third-party data egress only after explicit approval |
+| `PAPERTRAIL_PORT` | unset | Papertrail log port; confirm transport/TLS policy before external logging |
+| `MAIL_EHLO_DOMAIN` | derived from `APP_URL` host | SMTP EHLO domain when `MAIL_MAILER=smtp`; not OAuth origin |
+| `MAIL_HOST` | `127.0.0.1` | SMTP host, only when optional mailer deliberately configured |
+| `MAIL_LOG_CHANNEL` | unset | Log-channel name when `MAIL_MAILER=log`; avoid sensitive mail bodies in logs |
+| `MAIL_PASSWORD` | unset | **Secret** SMTP password, never commit actual credential |
+| `MAIL_PORT` | `2525` | SMTP port when outbound mail is enabled |
+| `MAIL_SCHEME` | unset | SMTP scheme (e.g. STARTTLS/TLS option) subject to actual mail transport support |
+| `MAIL_SENDMAIL_PATH` | `/usr/sbin/sendmail -bs -i` | Local binary invocation for optional sendmail mailer; validate installed binary |
+| `MAIL_URL` | unset | Optional SMTP connection URL; may include **secrets** and override separate mailer settings |
+| `MAIL_USERNAME` | unset | SMTP login account; not Gateway user identity |
+
+### Dependency-gated cache/Redis transports (not enabled by default)
+
+The ordinary Gateway profile requires **no Redis, Memcached, external queue worker or cache daemon**. These first-party Laravel configuration inputs are real, but selecting a driver requires compatible installed extension/driver, privately provisioned service, resource bounds, deploy rollback and tests. Examples never enable them on their own.
+
+| Key | Source default / optional example | Effect / operator note |
+| --- | --- | --- |
+| `MEMCACHED_HOST` | `127.0.0.1` | Optional Memcached server; requires supported extension/server and private network binding |
+| `MEMCACHED_PORT` | `11211` | Optional Memcached port |
+| `MEMCACHED_PERSISTENT_ID` | unset | Memcached persistent connection identity |
+| `MEMCACHED_USERNAME` | unset | Optional Memcached SASL username |
+| `MEMCACHED_PASSWORD` | unset | **Secret** Memcached SASL password |
+| `REDIS_CLIENT` | `phpredis` | Redis client; requires appropriate installed extension/driver |
+| `REDIS_URL` | unset | Redis connection URL, may carry **secrets** |
+| `REDIS_HOST` | `127.0.0.1` | Redis endpoint; do not expose unauthenticated Redis over public networks |
+| `REDIS_PORT` | `6379` | Redis connection port |
+| `REDIS_USERNAME` | unset | Redis ACL username where configured |
+| `REDIS_PASSWORD` | unset | **Secret** Redis authentication |
+| `REDIS_DB` | `0` | Default Redis logical DB index |
+| `REDIS_CACHE_DB` | `1` | Separate cache Redis DB index |
+| `REDIS_PREFIX` | derived from `APP_NAME` | Key prefix to isolate installations |
+| `REDIS_PERSISTENT` | `false` | Persistent Redis PHP connections; review worker behavior before enabling |
+| `REDIS_CLUSTER` | `redis` | Redis clustering strategy when explicitly configured |
+| `REDIS_MAX_RETRIES` | `3` | Client reconnect/command retry bound; do not use to retry effectful Gateway Target operations |
+| `REDIS_BACKOFF_ALGORITHM` | `decorrelated_jitter` | Redis client connection retry backoff policy, not SSH Job replay |
+| `REDIS_BACKOFF_BASE` | `100` milliseconds | Base Redis retry backoff duration |
+| `REDIS_BACKOFF_CAP` | `1000` milliseconds | Maximum Redis retry backoff duration |
+| `REDIS_CACHE_CONNECTION` | `cache` | Redis connection name for cache store |
+| `REDIS_CACHE_LOCK_CONNECTION` | `default` | Redis connection name for cache locks |
+| `REDIS_QUEUE_CONNECTION` | `default` | Redis connection for optional queue; no Gateway queue worker is mandatory |
+| `REDIS_QUEUE` | `default` | Name of optional Redis queue |
+| `REDIS_QUEUE_RETRY_AFTER` | `90` seconds | Queue reservation retry interval; not Gateway remote-action retry permission |
+
+### One-time legacy maintenance and disposable-test switches
+
+| Key | Source default / optional example | Effect / operator note |
+| --- | --- | --- |
+| `GATEWAY_TARGET_RESET_ACKNOWLEDGED` | unset | **Danger: historical destructive Site-to-Target transition only.** Use the exact Owner-approved migration attestation in [Target transition](TARGET-TRANSITION-RUNBOOK.md), never during a normal upgrade. |
+| `GATEWAY_TARGET_RESET_DATABASE_BACKUP_VERIFIED` | unset | Separate operator attestation of an independently restorable DB backup for the same historical migration; flag does not create/verify a backup. Remove after use. |
+| `MCP_GATEWAY_RECOVERY_TEST_LOOPBACK` | unset | **Disposable APP_ENV=testing only:** guarded local loopback HTTP override in recovery CLI tests; never set on any installed operator/production host. |
+
+Unsupported framework scaffold entries (e.g. AWS/SQS/Beanstalkd/DynamoDB/Postmark/Resend/Slack-bot adapters and arbitrary auth-driver replacement) are **not** shipped Gateway capabilities; they are intentionally absent from the template, even where Laravel's example config references them. The first-party source inventory guard documents and checks these explicit exclusions. Do not install extra dependencies, enable arbitrary external services or change `AUTH_MODEL` to make the template appear complete.
+
+For values managed in **Owner → Operational settings** use the existing audited
+database-backed Owner control, **not** an invented `.env` key. In particular,
+`ssh_job_max_script_kib` defaults to **16 KiB** and may be set to **16–64 KiB**
+only after its additive `2026_10_16_010000_add_ssh_job_script_input_limit.php`
+migration is applied on the installed host. It is separate from
+`SSH_FILE_TRANSFER_MAX_BYTES`, synchronous command input, 16 KiB per-call SFTP
+read/write and Job output windows. New settings do not retroactively change
+the identity or authorization of retained Jobs.
 
 ## Operational cautions
 

@@ -149,12 +149,17 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             $row = DB::table('ssh_command_jobs')->where('id', $id)->first();
             self::assertSame(86400, (int) $row->runtime_seconds);
             self::assertSame(900, (int) $row->reconcile_grace_seconds);
+            // The Job snapshots deadlines from its own creation time. Using
+            // a second wall-clock now() races the next integer second in CI.
+            $createdAt = Carbon::parse($row->created_at);
             self::assertSame(
-                now()->addSeconds(240)->timestamp,
+                $createdAt->copy()->addSeconds(240)->timestamp,
                 Carbon::parse($row->preparing_expires_at)->timestamp,
             );
-            self::assertGreaterThan(now()->addDay()->timestamp,
-                Carbon::parse($row->admission_expires_at)->timestamp);
+            self::assertSame(
+                $createdAt->copy()->addSeconds(240 + 86400 + 900)->timestamp,
+                Carbon::parse($row->admission_expires_at)->timestamp,
+            );
         }
         self::assertSame('rate_limited',
             $tools->start($user, $target->target_id, $client, (string) Str::uuid(),

@@ -21,9 +21,11 @@ Route::post('/oauth/revoke', RevocationController::class)->middleware('throttle:
 Route::match(['POST', 'DELETE', 'OPTIONS'], '/mcp', [GatewayMcpEndpoint::class, 'handle'])
     ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
 
-// Draft #147: optional binary sidecar, protected by the SAME live OAuth and
-// principal/client/Target operation grants as the normal MCP endpoint.
-// OFF BY DEFAULT until a separately authorized protocol/security decision.
+// Direct SSH whole-file binary edge shares live OAuth and the exact
+// principal/client/Target operation grants of the MCP endpoint.
+// Fresh installer enables it explicitly; existing installs with an absent
+// SSH_FILE_TRANSFER_ENABLED key remain OFF, and explicit false disables it.
+// This does not provide native ChatGPT attachment handoff (#147).
 Route::post('/mcp/file-transfer/ssh/{targetId}/upload', [SshWholeFileController::class, 'upload'])
     ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
 Route::post('/mcp/file-transfer/ssh/{targetId}/download', [SshWholeFileController::class, 'download'])

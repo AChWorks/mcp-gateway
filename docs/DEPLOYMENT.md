@@ -642,6 +642,18 @@ php artisan gateway:check
 
 Do not promise zero-downtime schema changes unless the exact release has been designed and tested for them. Do not blindly run `migrate:rollback` after an unknown or partially completed failure. When schema/data compatibility is uncertain, restore the pre-upgrade database backup or follow release-specific roll-forward/rollback instructions.
 
+## Fresh-install SSH whole-file transfer configuration
+
+New web-installer environments and installations copied from the repository's
+current `.env.example` explicitly set `SSH_FILE_TRANSFER_ENABLED=true`.
+The existing private `.env` is preserved on update; older installations with
+no key retain the source fallback `false`. Set `false` for an explicit opt-out.
+This SSH-only policy never enables WordPress Bridge private data exchange or
+native ChatGPT attachment handling. The actual host still requires verified
+HTTPS/OAuth, Target grants, safe remote `0700` staging, finite upload/download
+budgets and PHP/proxy resource compatibility; see the
+[whole-file guide](WHOLE-FILE-EXCHANGE.md).
+
 ## Owner operational settings and recovery-safe precedence
 
 The integrated **Owner-only** `/admin/operations` page is the existing single typed, audited store for bounded WordPress HTTP request/response budgets and SSH command/transfer/Job limits. It requires a real authenticated Owner, password/CSRF, version-aware optimistic updates and applicable migration state. **Never** introduce a second settings registry per connector or treat a new release as proof the operator installed its columns. Exact implemented keys/defaults, permissible ranges and precedence are in [CONFIGURATION.md](CONFIGURATION.md) and the actual [settings service](../app/Application/Operations/OperationalSettings.php). The `ssh_job_max_script_kib` control (16 KiB default, Owner-adjustable 16–64 KiB) is independent of the synchronous command and per-call SFTP/output limits. Its additive nullable `2026_10_16_010000_add_ssh_job_script_input_limit.php` migration must be applied on the actual installation before this control is used; previously retained Job identities remain unchanged.
