@@ -58,6 +58,12 @@ At each new authorized chunk/poll/connection, re-check principal/client/Target b
 
 **Acceptance tests when each mode is actually implemented:** small requests under large allowed quotas (no max-size preallocation), response Base64/JSON overhead and decoded limit boundaries, read-only vs mutating outcome, finite chunk vs aggregate ZIP/PDF/media integrity/digest, concurrency and memory/disk cost, first-byte delay, slow-but-progressing and stalled streams, cancellation, revoked credentials, proxy resets and recoverability. Exercise a simulated hour-scale timeline plus a disposable real host soak when the relevant long-duration mode exists; short unit tests alone cannot assert one-hour production connectivity. Record observed p50/p95 latency, bytes, timeouts, memory/CPU and admission pressure and use this evidence to revise defaults. An unsupported host/client feature must be called **unsupported**, not **forbidden** or **completed**.
 
+## Shared operation plane versus transport
+
+**An Admin-initiated action and an AI/MCP-initiated action must converge on the same effective Target/capability permission and outcome semantics.** This is an **application execution contract**, not a requirement to tunnel Admin actions back through the public MCP endpoint. The current integrated Admin does not offer generic WordPress Ability execution or multi-Target publishing; those are future operation-surface acceptance under [Issue #200](https://github.com/AChWorks/mcp-gateway/issues/200).
+
+Likewise, an operation spanning multiple Targets is **not** automatically one atomic remote transaction or one file transfer. A group action should retain independent Target-specific authorization, bounded admission and dispatch-time checks, individual remote IDs, partial/unknown outcomes and no blind post-dispatch replay. File/byte integrity, streaming and effective host/client limits remain governed by **this** I/O contract, while operation selection, delegation and durable bulk state belong to the application/connector architecture. Do not create a second per-connector transfer engine to support Admin action buttons.
+
 ## Control plane versus data plane
 
 - **Control:** MCP returns bounded structured data, previews, status, errors, pagination/range metadata, and approved opaque result/transfer handles when a real backing source exists.
