@@ -151,8 +151,14 @@ final readonly class WordpressTargetMcpToolHandlers
     /** @return array<string,mixed> */
     private function safeDetails(WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception): array
     {
-        return $exception instanceof WpAiBridgeMcpException
-            ? $exception->details : $exception->diagnostics;
+        return [
+            ...($exception instanceof WpAiBridgeMcpException
+                ? $exception->details : $exception->diagnostics),
+            // Preserve the actual Gateway/connector exception message for
+            // authorized operator diagnostics, not as the public MCP message.
+            'gateway_error_message' => $exception->getMessage(),
+            'exception_class' => $exception::class,
+        ];
     }
 
     /** @param array<string,mixed> $diagnostics

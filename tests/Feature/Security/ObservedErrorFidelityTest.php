@@ -1,0 +1,383 @@
+<?php
+
+namespace Tests\Feature\Security;
+
+use App\Support\DiagnosticRedactor;
+use App\Support\OperationDiagnostics;
+use Tests\TestCase;
+
+final class ObservedErrorFidelityTest extends TestCase
+{
+    public function test_original_unknown_code_message_paths_and_structured_cause_survive_secret_redaction(): void
+    {
+        $message = 'WP_Error provider/name:unknown-42 at /var/www/html/wp-content/uploads/logo.png '
+            .'HTTP 422 https://blog.example.test/wp-json/abilities?token=SHOULD_NOT_ESCAPE&field=php_version '
+            .'Bearer BEARER_SECRET_123 password=PASSWORD_SECRET_456';
+
+        $safe = OperationDiagnostics::safeContext([
+            'failure_origin' => 'downstream_mcp',
+            'failure_stage' => 'operation',
+            'source_error_code' => 'new-provider/permission.denied:42',
+            'source_error_message' => $message,
+            'source_error_details' => [
+                'error' => [
+                    'code' => 'provider/native-723',
+                    'message' => 'Permission denied on /srv/wordpress/uploads/report.zip',
+                    'password' => 'PASSWORD_IN_STRUCTURED_DATA',
+                    'access_token' => 'ACCESS_TOKEN_IN_STRUCTURED_DATA',
+                    'clientSecret' => 'CAMEL_CASE_SECRET',
+                    'apiKey' => 'CAMEL_API_KEY_SECRET',
+                ],
+                'trace_file' => '/app/src/Provider.php',
+                'line' => 82,
+            ],
+            'exception_class' => \RuntimeException::class,
+        ]);
+
+        self::assertSame('new-provider/permission.denied:42', $safe['source_error_code']);
+        self::assertStringContainsString('provider/name:unknown-42', $safe['source_error_message']);
+        self::assertStringContainsString('/var/www/html/wp-content/uploads/logo.png', $safe['source_error_message']);
+        self::assertStringContainsString('HTTP 422', $safe['source_error_message']);
+        self::assertStringContainsString('&field=php_version', $safe['source_error_message']);
+        self::assertSame('provider/native-723', $safe['source_error_details']['error']['code']);
+        self::assertSame('Permission denied on /srv/wordpress/uploads/report.zip',
+            $safe['source_error_details']['error']['message']);
+        self::assertSame('/app/src/Provider.php', $safe['source_error_details']['trace_file']);
+        self::assertSame(\RuntimeException::class, $safe['exception_class']);
+
+        $json = json_encode($safe, JSON_THROW_ON_ERROR);
+        foreach (['SHOULD_NOT_ESCAPE', 'BEARER_SECRET_123', 'PASSWORD_SECRET_456',
+            'PASSWORD_IN_STRUCTURED_DATA', 'ACCESS_TOKEN_IN_STRUCTURED_DATA',
+            'CAMEL_CASE_SECRET', 'CAMEL_API_KEY_SECRET'] as $secret) {
+            self::assertStringNotContainsString($secret, $json);
+        }
+        self::assertSame('[REDACTED]', $safe['source_error_details']['error']['access_token']);
+        self::assertArrayNotHasKey('source_error_message_truncated', $safe);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
+    public function test_quoted_password_with_spaces_is_fully_redacted_without_losing_surrounding_php_error(): void
+    {
+        $text = 'PHP fatal at /srv/blog/wp-content/plugins/sample.php: '
+            .'password="secret with spaces and punctuation !@#" '
+            .'failed connecting to https://provider.example.test/wp-json';
+
+        $redacted = DiagnosticRedactor::text($text);
+        self::assertStringContainsString('/srv/blog/wp-content/plugins/sample.php', $redacted);
+        self::assertStringContainsString('https://provider.example.test/wp-json', $redacted);
+        self::assertStringContainsString('password="[REDACTED]"', $redacted);
+        self::assertStringNotContainsString('secret with spaces and punctuation', $redacted);
+        self::assertSame($redacted, DiagnosticRedactor::text($redacted));
+
+        $escaped = 'PHP error at /var/www/site.php: password="SECRET_PREFIX '
+            .'\"quoted\" SECRET_SUFFIX" while verifying user role';
+        $escapedRedacted = DiagnosticRedactor::text($escaped);
+        self::assertStringContainsString('/var/www/site.php', $escapedRedacted);
+        self::assertStringContainsString('password="[REDACTED]"', $escapedRedacted);
+        self::assertStringNotContainsString('SECRET_PREFIX', $escapedRedacted);
+        self::assertStringNotContainsString('SECRET_SUFFIX', $escapedRedacted);
+        self::assertSame($escapedRedacted, DiagnosticRedactor::text($escapedRedacted));
+    }
+
+    public function test_escaped_field_names_php_quoted_pairs_and_structured_keys_cannot_expose_secrets(): void
+    {
+        $embeddedJson = json_encode([
+            'password' => 'ENCODED_PREFIX "inner quoted" ENCODED_SUFFIX',
+        ], JSON_THROW_ON_ERROR);
+        $escapedFieldNameJson = str_replace('"', '\\"', $embeddedJson);
+        $message = 'Provider rejected /srv/wp/plugins/connector.php HTTP 422 '
+            .$escapedFieldNameJson.' [\'api_key\' => \'PHP_QUOTED_SECRET\'] '
+            .'with token=UNQUOTED_SECRET next_step=inspect';
+
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_message' => $message,
+            'source_error_details' => [
+                'token=SECRET_IN_STRUCTURED_KEY' => 'SECRET_VALUE_FOR_KEY',
+                'error' => [
+                    'code' => 'native/unusual-422',
+                    'message' => 'Validation failed at /var/www/blog/plugins/provider.php',
+                    'password' => 'SECRET_IN_PASSWORD_VALUE',
+                    'data' => [
+                        'trace_file' => '/app/Provider.php',
+                        'response_body' => 'SECRET_INSIDE_UNLABELLED_BODY',
+                        'payload' => ['anonymous' => 'SECRET_IN_OPAQUE_PAYLOAD'],
+                        'Bearer SECRET_IN_NESTED_KEY' => 'SECRET_IN_NESTED_KEY_VALUE',
+                    ],
+                ],
+            ],
+        ]);
+
+        $serialized = json_encode($safe, JSON_THROW_ON_ERROR);
+        foreach ([
+            'ENCODED_PREFIX', 'ENCODED_SUFFIX', 'PHP_QUOTED_SECRET',
+            'UNQUOTED_SECRET', 'SECRET_IN_STRUCTURED_KEY', 'SECRET_VALUE_FOR_KEY',
+            'SECRET_IN_PASSWORD_VALUE', 'SECRET_INSIDE_UNLABELLED_BODY',
+            'SECRET_IN_OPAQUE_PAYLOAD', 'SECRET_IN_NESTED_KEY',
+            'SECRET_IN_NESTED_KEY_VALUE',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $serialized);
+        }
+        self::assertStringContainsString('/srv/wp/plugins/connector.php', $safe['source_error_message']);
+        self::assertStringContainsString('HTTP 422', $serialized);
+        self::assertStringContainsString('next_step=inspect', $serialized);
+        self::assertSame('native/unusual-422', $safe['source_error_details']['error']['code']);
+        self::assertSame('/app/Provider.php',
+            $safe['source_error_details']['error']['data']['trace_file']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['data']['response_body']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['data']['payload']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+        self::assertSame('[REDACTED: INVALID UTF-8]',
+            DiagnosticRedactor::text("\xC3\x28"));
+    }
+
+    public function test_unusual_sensitive_structured_key_names_do_not_expose_embedded_secret_values(): void
+    {
+        $details = [
+            'token_SECRET_IN_RAW_MAP_KEY' => 'secret associated value',
+            'apiKey' => 'secret in ordinary credential value',
+            'password' => 'secret password value',
+            'source' => '/var/www/blog/wp-content/plugins/test.php',
+        ];
+
+        $safe = DiagnosticRedactor::value($details);
+        $encoded = json_encode($safe, JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString('SECRET_IN_RAW_MAP_KEY', $encoded);
+        self::assertStringNotContainsString('secret associated value', $encoded);
+        self::assertStringNotContainsString('secret password value', $encoded);
+        self::assertSame('[REDACTED]', $safe['apiKey']);
+        self::assertSame('[REDACTED]', $safe['password']);
+        self::assertSame('/var/www/blog/wp-content/plugins/test.php', $safe['source']);
+        self::assertSame($safe, DiagnosticRedactor::value($safe));
+    }
+
+    public function test_ssh_passphrases_client_assertions_and_credential_bundles_are_masked(): void
+    {
+        $text = 'SSH handshake failed at /srv/connectors/Ssh.php '
+            .'passphrase="SSH_PASSPHRASE_FIXTURE" '
+            .'client_assertion=JWT_ASSERTION_FIXTURE '
+            .'credentials="CREDENTIALS_FIXTURE"';
+
+        $safeText = DiagnosticRedactor::text($text);
+        $safeDetails = DiagnosticRedactor::value([
+            'passphrase' => 'SSH_STRUCTURED_PASSPHRASE_FIXTURE',
+            'clientAssertion' => 'STRUCTURED_ASSERTION_FIXTURE',
+            'credentials' => ['nested' => 'STRUCTURED_CREDENTIALS_FIXTURE'],
+            'file' => '/srv/connectors/Ssh.php',
+        ]);
+
+        $serialized = json_encode([$safeText, $safeDetails], JSON_THROW_ON_ERROR);
+        foreach ([
+            'SSH_PASSPHRASE_FIXTURE', 'JWT_ASSERTION_FIXTURE',
+            'CREDENTIALS_FIXTURE', 'SSH_STRUCTURED_PASSPHRASE_FIXTURE',
+            'STRUCTURED_ASSERTION_FIXTURE', 'STRUCTURED_CREDENTIALS_FIXTURE',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $serialized);
+        }
+        self::assertStringContainsString('/srv/connectors/Ssh.php', $safeText);
+        self::assertSame('[REDACTED]', $safeDetails['passphrase']);
+        self::assertSame('[REDACTED]', $safeDetails['clientAssertion']);
+        self::assertSame('[REDACTED]', $safeDetails['credentials']);
+        self::assertSame($safeText, DiagnosticRedactor::text($safeText));
+        self::assertSame($safeDetails, DiagnosticRedactor::value($safeDetails));
+    }
+
+    public function test_composite_sensitive_assignment_names_use_the_same_field_policy_as_structured_data(): void
+    {
+        $text = 'Database exception: dbPassword="DB_PASSWORD_FIXTURE" '
+            .'sshPassphrase="SSH_PASSPHRASE_FIXTURE" '
+            .'clientAssertion=JWT_ASSERTION_FIXTURE '
+            .'x-api-key: API_KEY_FIXTURE '
+            .'file=/var/www/site.php code=remote/custom-422';
+
+        $safe = DiagnosticRedactor::text($text);
+        foreach ([
+            'DB_PASSWORD_FIXTURE', 'SSH_PASSPHRASE_FIXTURE',
+            'JWT_ASSERTION_FIXTURE', 'API_KEY_FIXTURE',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $safe);
+        }
+        self::assertStringContainsString('/var/www/site.php', $safe);
+        self::assertStringContainsString('remote/custom-422', $safe);
+        self::assertSame($safe, DiagnosticRedactor::text($safe));
+    }
+
+    public function test_json_escaped_and_nested_encoded_uri_userinfo_is_redacted_without_erasing_diagnostics(): void
+    {
+        // json_encode intentionally preserves escaped forward slashes in these
+        // observed provider messages. Neither fragment is decoded before logging.
+        $encoded = json_encode([
+            'endpoint' => 'sftp://svc:ESCAPED_SFTP_USERINFO_714@files.example.test/trace/report.log',
+            'reason' => 'native/provider-423',
+        ], JSON_THROW_ON_ERROR);
+        self::assertStringContainsString('sftp:\/\/svc:', $encoded);
+        $encodedAgain = json_encode($encoded, JSON_THROW_ON_ERROR);
+
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_code' => 'provider/native-423',
+            'source_error_message' => 'Remote error /srv/wp/Provider.php: '.$encoded
+                .' second-level='.$encodedAgain.' requestId=public-192',
+            'source_error_details' => [
+                'error' => [
+                    'code' => 'native/provider-423',
+                    'serialized_message' => json_encode([
+                        'endpoint' => 'mysql://report:ESCAPED_MYSQL_USERINFO_715@db.example.test/logs',
+                        'retry' => false,
+                    ], JSON_THROW_ON_ERROR),
+                    'nested' => [
+                        'encoded_json' => $encodedAgain,
+                        'diagnostic_path' => '/var/www/html/bridge/source.php',
+                    ],
+                ],
+            ],
+        ]);
+
+        $serialized = json_encode($safe, JSON_THROW_ON_ERROR);
+        foreach (['ESCAPED_SFTP_USERINFO_714', 'ESCAPED_MYSQL_USERINFO_715'] as $secret) {
+            self::assertStringNotContainsString($secret, $serialized);
+        }
+        self::assertSame('provider/native-423', $safe['source_error_code']);
+        self::assertSame('native/provider-423', $safe['source_error_details']['error']['code']);
+        $expectedEncoded = str_replace('svc:ESCAPED_SFTP_USERINFO_714@', '[REDACTED]@', $encoded);
+        self::assertStringContainsString($expectedEncoded, $safe['source_error_message']);
+        self::assertStringContainsString(json_encode($expectedEncoded, JSON_THROW_ON_ERROR),
+            $safe['source_error_message']);
+        self::assertSame(json_encode($expectedEncoded, JSON_THROW_ON_ERROR),
+            $safe['source_error_details']['error']['nested']['encoded_json']);
+        self::assertStringContainsString('mysql:\/\/[REDACTED]@db.example.test\/logs',
+            $safe['source_error_details']['error']['serialized_message']);
+        self::assertStringContainsString('/srv/wp/Provider.php', $safe['source_error_message']);
+        self::assertStringContainsString('requestId=public-192', $safe['source_error_message']);
+        self::assertSame('/var/www/html/bridge/source.php',
+            $safe['source_error_details']['error']['nested']['diagnostic_path']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
+    public function test_json_escaped_uri_userinfo_is_redacted_before_configured_truncation(): void
+    {
+        config()->set('activity.diagnostic_message_max_bytes', 1024);
+        $encoded = json_encode([
+            'endpoint' => 'ftps://svc:ESCAPED_TRUNCATION_SECRET_716@files.example.test/dump/activity.log',
+        ], JSON_THROW_ON_ERROR);
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_message' => $encoded.' '.str_repeat('Validation at /srv/wp/Provider.php ', 90),
+        ]);
+
+        self::assertTrue($safe['source_error_message_truncated']);
+        self::assertSame(1024, strlen($safe['source_error_message']));
+        self::assertStringNotContainsString('ESCAPED_TRUNCATION_SECRET_716', $safe['source_error_message']);
+        self::assertStringContainsString(
+            str_replace('svc:ESCAPED_TRUNCATION_SECRET_716@', '[REDACTED]@', $encoded),
+            $safe['source_error_message']);
+        self::assertStringContainsString('Validation at /srv/wp/Provider.php',
+            $safe['source_error_message']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
+    public function test_signed_urls_and_non_http_userinfo_never_retain_access_bearing_values(): void
+    {
+        $message = 'Provider error 422 at /srv/wp/plugins/remote.php '
+            .'sftp://upload:SFTP_SECRET_812@files.example.test/reports/2026.log '
+            .'mysql://db:MYSQL_SECRET_921@db.example.test/orders '
+            .'https://bucket.example.test/archive?q=safe&X-Amz-Signature=AMZ_SIGNATURE_451'
+            .'&X-Amz-Credential=AMZ_CREDENTIAL_452&X-Amz-Security-Token=AMZ_SESSION_TOKEN_453'
+            .'&X-Amz-Date=20261017T050000Z '
+            .'https://storage.example.test/file?X-Goog-Signature=GOOG_SIGNATURE_631'
+            .'&X-Goog-Credential=GOOG_CREDENTIAL_632&generation=42 '
+            .'[\'X-Amz-Signature\' => \'PHP_QUOTED_SIGNATURE_711\'] '
+            .'{\"X-Goog-Signature\":\"ESCAPED_SIGNATURE_712\"}';
+
+        $safe = OperationDiagnostics::safeContext([
+            'failure_origin' => 'downstream_mcp',
+            'failure_stage' => 'operation',
+            'source_error_code' => 'vendor/custom-code.422',
+            'source_error_message' => $message,
+            'source_error_details' => [
+                'error' => [
+                    'code' => 'provider/native-422',
+                    'message' => 'Validation error at /srv/wp/lib/client.php',
+                    'endpoint' => 'ftps://acct:FTPS_SECRET_132@files.example.test/upload',
+                    'url' => 'https://storage.example.test/object?X-Goog-Signature=NESTED_SIGNATURE_811&format=json',
+                    'parameters' => [
+                        'X-Amz-Signature' => 'STRUCTURED_AMZ_SIGNATURE_901',
+                        'X-Goog-Signature' => 'STRUCTURED_GOOG_SIGNATURE_902',
+                        'X-Amz-Credential' => 'STRUCTURED_AMZ_CREDENTIAL_903',
+                        'X-Goog-Credential' => 'STRUCTURED_GOOG_CREDENTIAL_904',
+                        'X-Amz-Security-Token' => 'STRUCTURED_AMZ_SESSION_905',
+                        'X-Amz-Date' => '20261017T050000Z',
+                        'validation_field' => 'php_version',
+                    ],
+                ],
+            ],
+        ]);
+
+        $encoded = json_encode($safe, JSON_THROW_ON_ERROR);
+        foreach ([
+            'SFTP_SECRET_812', 'MYSQL_SECRET_921', 'AMZ_SIGNATURE_451',
+            'AMZ_CREDENTIAL_452', 'GOOG_SIGNATURE_631', 'GOOG_CREDENTIAL_632',
+            'PHP_QUOTED_SIGNATURE_711', 'ESCAPED_SIGNATURE_712',
+            'FTPS_SECRET_132', 'NESTED_SIGNATURE_811',
+            'STRUCTURED_AMZ_SIGNATURE_901', 'STRUCTURED_GOOG_SIGNATURE_902',
+            'STRUCTURED_AMZ_CREDENTIAL_903', 'STRUCTURED_GOOG_CREDENTIAL_904',
+            'AMZ_SESSION_TOKEN_453', 'STRUCTURED_AMZ_SESSION_905',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $encoded);
+        }
+        self::assertSame('vendor/custom-code.422', $safe['source_error_code']);
+        self::assertSame('provider/native-422', $safe['source_error_details']['error']['code']);
+        self::assertStringContainsString('sftp://[REDACTED]@files.example.test/reports/2026.log',
+            $safe['source_error_message']);
+        self::assertStringContainsString('mysql://[REDACTED]@db.example.test/orders',
+            $safe['source_error_message']);
+        self::assertStringContainsString('q=safe', $safe['source_error_message']);
+        self::assertStringContainsString('&X-Amz-Date=20261017T050000Z',
+            $safe['source_error_message']);
+        self::assertStringContainsString('&generation=42', $safe['source_error_message']);
+        self::assertSame('20261017T050000Z',
+            $safe['source_error_details']['error']['parameters']['X-Amz-Date']);
+        self::assertSame('php_version',
+            $safe['source_error_details']['error']['parameters']['validation_field']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['parameters']['X-Amz-Signature']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['parameters']['X-Goog-Signature']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['parameters']['X-Amz-Security-Token']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
+    public function test_signed_url_credentials_are_redacted_before_explicit_message_truncation(): void
+    {
+        config()->set('activity.diagnostic_message_max_bytes', 1024);
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_message' => 'https://files.example.test/file?X-Amz-Signature=TRUNCATION_SECRET_312'
+                .'&response-content-type=image/png '.str_repeat('Validation at /srv/provider.php ', 80),
+        ]);
+
+        self::assertTrue($safe['source_error_message_truncated']);
+        self::assertSame(1024, strlen($safe['source_error_message']));
+        self::assertStringNotContainsString('TRUNCATION_SECRET_312', $safe['source_error_message']);
+        self::assertStringContainsString('X-Amz-Signature=[REDACTED]',
+            $safe['source_error_message']);
+        self::assertStringContainsString('response-content-type=image/png',
+            $safe['source_error_message']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
+    public function test_configurable_length_limit_marks_truncation_instead_of_silently_erasing_it(): void
+    {
+        config()->set('activity.diagnostic_message_max_bytes', 1024);
+        $message = str_repeat('PHP provider validation: /var/www/html/wp-content/uploads/ -- ', 70);
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_message' => $message,
+            'source_error_code' => 'wordpress/very-specific-validation-code',
+        ]);
+
+        self::assertSame('wordpress/very-specific-validation-code', $safe['source_error_code']);
+        self::assertSame(true, $safe['source_error_message_truncated']);
+        self::assertSame(1024, strlen($safe['source_error_message']));
+        self::assertStringStartsWith('PHP provider validation:', $safe['source_error_message']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+}

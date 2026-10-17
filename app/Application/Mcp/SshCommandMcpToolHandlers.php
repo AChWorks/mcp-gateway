@@ -62,8 +62,9 @@ final readonly class SshCommandMcpToolHandlers
         }
 
         $unknown = $result['status'] === 'outcome_unknown';
+        $reference = CorrelationId::current();
         $this->activity->record(
-            CorrelationId::current(), $operation, $unknown ? 'unknown' : 'success',
+            $reference, $operation, $unknown ? 'unknown' : 'success',
             $target, $unknown ? 'outcome_unknown' : null,
         );
 
@@ -75,6 +76,7 @@ final readonly class SshCommandMcpToolHandlers
                 'code' => 'outcome_unknown',
                 'message' => 'Remote command may have executed; do not retry automatically.',
                 'next_step' => OperationDiagnostics::nextStep('outcome_unknown'),
+                'diagnostic_reference' => $reference,
             ]] : []),
         ];
     }
@@ -85,7 +87,14 @@ final readonly class SshCommandMcpToolHandlers
      */
     private function failed(string $operation, ?Target $target, string $code, array $limits = []): array
     {
-        $this->activity->record(CorrelationId::current(), $operation, 'failure', $target, $code);
+        $reference = CorrelationId::current();
+        $this->activity->record($reference, $operation, 'failure', $target, $code,
+            in_array($code, ['rate_limited', 'connection_busy', 'admission_unavailable'], true) ? [
+                'failure_origin' => 'gateway_admission',
+                'failure_stage' => 'admission',
+                'pre_dispatch' => true,
+                'retry_safe' => true,
+            ] : []);
 
         return [
             'ok' => false,
@@ -99,6 +108,9 @@ final readonly class SshCommandMcpToolHandlers
                     'max_command_bytes' => $limits['max_bytes'],
                     'max_timeout_seconds' => $limits['max_seconds'],
                 ]] : []),
+                ...($target instanceof Target && ! in_array($code, [
+                    'target_not_found', 'invalid_input', 'target_paused',
+                ], true) ? ['diagnostic_reference' => $reference] : []),
             ],
         ];
     }

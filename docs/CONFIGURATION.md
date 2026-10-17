@@ -109,6 +109,9 @@ Values below are the defaults in the sample template, **not necessarily** the pr
 | `ACTIVITY_RETENTION_DAYS` | `30` days | Age-based activity-metadata retention; effective minimum 1 day |
 | `ACTIVITY_MAX_ROWS` | `5000` rows | Target maximum after scheduled pruning; transient overage is possible |
 | `ACTIVITY_PAGE_SIZE_MAX` | `100` rows | Maximum items per Activity page; clamped to 1–100 |
+| `ACTIVITY_DIAGNOSTIC_CODE_MAX_BYTES` | `4096` bytes | Owner-configurable budget for retained original structured error codes; explicit truncation, minimum 128 bytes |
+| `ACTIVITY_DIAGNOSTIC_MESSAGE_MAX_BYTES` | `65536` bytes | Owner-configurable budget for actual observed error messages; credential values selectively redacted, truncation marked, minimum 1024 bytes |
+| `ACTIVITY_DIAGNOSTIC_DETAILS_MAX_BYTES` | `131072` bytes | Owner-configurable budget for original structured provider error details; keeps nonsecret paths/context, marks truncation, minimum 1024 bytes |
 | `MCP_BOOTSTRAP_FIXTURE_ENABLED` | `false` | **Test fixture only**; never enable in production |
 | `MCP_BOOTSTRAP_FIXTURE_TOKEN` | empty | Secret for test fixture; leave empty/disabled on production |
 | `MCP_SESSION_TTL_SECONDS` | `3600` seconds | Legacy MCP session continuity; **not** login/OAuth lifetime |

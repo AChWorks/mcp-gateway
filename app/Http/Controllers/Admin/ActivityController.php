@@ -23,12 +23,14 @@ final class ActivityController extends Controller
             'page' => ['nullable', 'integer', 'min:1'],
             'target_id' => ['nullable', 'string', 'max:64'],
             'operation' => ['nullable', 'string', 'max:128'],
+            'diagnostic_reference' => ['nullable', 'uuid'],
         ]);
 
         $targetId = isset($validated['target_id']) ? trim((string) $validated['target_id']) : null;
         $operation = isset($validated['operation']) ? trim((string) $validated['operation']) : null;
         $targetId = $targetId === '' ? null : $targetId;
         $operation = $operation === '' ? null : $operation;
+        $reference = $validated['diagnostic_reference'] ?? null;
 
         return view('admin.activity.index', [
             'feed' => $activity->page(
@@ -37,10 +39,12 @@ final class ActivityController extends Controller
                 25,
                 $targetId,
                 $operation,
+                $reference,
             ),
             'filters' => [
                 'target_id' => $targetId,
                 'operation' => $operation,
+                'diagnostic_reference' => $reference,
             ],
         ]);
     }
