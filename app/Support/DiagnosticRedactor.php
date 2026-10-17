@@ -15,7 +15,7 @@ final class DiagnosticRedactor
         'access_token', 'refresh_token', 'id_token', 'token', 'api_key',
         'client_secret', 'private_key', 'password', 'passwd', 'secret',
         'authorization', 'set_cookie', 'cookie', 'session_id', 'session',
-        'credential', 'passphrase', 'client_assertion',
+        'credential', 'credentials', 'passphrase', 'client_assertion',
         'body', 'payload', 'raw_data', 'raw_request', 'raw_response',
         'request_body', 'response_body', 'file_content', 'file_contents',
         'content_base64', 'attachment', 'arguments', 'user_input',
@@ -45,7 +45,7 @@ final class DiagnosticRedactor
         // JSON "key":"value", and JSON embedded as \"key\":\"value\".
         // A simple quoted-value regex can stop at an inner escaped quote and
         // inadvertently leave the remainder of the credential in the log.
-        $keys = '(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|password|passwd|secret|authorization|set[_-]?cookie|cookie|session[_-]?id|session|credential)';
+        $keys = '(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|password|passwd|secret|authorization|set[_-]?cookie|cookie|session[_-]?id|session|credentials?|passphrase|client[_-]?assertion)';
         $pattern = '~(?i)(?<![a-z0-9_-])(?:[\\\\]{0,4}[\x22\x27])?'.$keys.'(?:[\\\\]{0,4}[\x22\x27])?\s*(?::|=>|=)\s*~';
 
         $count = preg_match_all($pattern, $text, $matches, PREG_OFFSET_CAPTURE);
@@ -179,7 +179,7 @@ final class DiagnosticRedactor
     private static function isSensitiveField(string $field): bool
     {
         return preg_match(
-            '~(?:^|_)(?:password|passwd|passphrase|secret|token|authorization|cookie|credential|private_key|api_key|session_id|client_assertion|body|payload|raw_data|raw_request|raw_response|file_content|file_contents|content_base64|attachment|arguments|user_input|content|headers|file_bytes|raw_output)(?:$|_)~',
+            '~(?:^|_)(?:password|passwd|passphrase|secret|token|authorization|cookie|credentials?|private_key|api_key|session_id|client_assertion|body|payload|raw_data|raw_request|raw_response|file_content|file_contents|content_base64|attachment|arguments|user_input|content|headers|file_bytes|raw_output)(?:$|_)~',
             self::normalizedFieldName($field),
         ) === 1;
     }

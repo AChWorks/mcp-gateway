@@ -152,6 +152,37 @@ final class ObservedErrorFidelityTest extends TestCase
         self::assertSame($safe, DiagnosticRedactor::value($safe));
     }
 
+    public function test_ssh_passphrases_client_assertions_and_credential_bundles_are_masked(): void
+    {
+        $text = 'SSH handshake failed at /srv/connectors/Ssh.php '
+            .'passphrase="SSH_PASSPHRASE_FIXTURE" '
+            .'client_assertion=JWT_ASSERTION_FIXTURE '
+            .'credentials="CREDENTIALS_FIXTURE"';
+
+        $safeText = DiagnosticRedactor::text($text);
+        $safeDetails = DiagnosticRedactor::value([
+            'passphrase' => 'SSH_STRUCTURED_PASSPHRASE_FIXTURE',
+            'clientAssertion' => 'STRUCTURED_ASSERTION_FIXTURE',
+            'credentials' => ['nested' => 'STRUCTURED_CREDENTIALS_FIXTURE'],
+            'file' => '/srv/connectors/Ssh.php',
+        ]);
+
+        $serialized = json_encode([$safeText, $safeDetails], JSON_THROW_ON_ERROR);
+        foreach ([
+            'SSH_PASSPHRASE_FIXTURE', 'JWT_ASSERTION_FIXTURE',
+            'CREDENTIALS_FIXTURE', 'SSH_STRUCTURED_PASSPHRASE_FIXTURE',
+            'STRUCTURED_ASSERTION_FIXTURE', 'STRUCTURED_CREDENTIALS_FIXTURE',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $serialized);
+        }
+        self::assertStringContainsString('/srv/connectors/Ssh.php', $safeText);
+        self::assertSame('[REDACTED]', $safeDetails['passphrase']);
+        self::assertSame('[REDACTED]', $safeDetails['clientAssertion']);
+        self::assertSame('[REDACTED]', $safeDetails['credentials']);
+        self::assertSame($safeText, DiagnosticRedactor::text($safeText));
+        self::assertSame($safeDetails, DiagnosticRedactor::value($safeDetails));
+    }
+
     public function test_configurable_length_limit_marks_truncation_instead_of_silently_erasing_it(): void
     {
         config()->set('activity.diagnostic_message_max_bytes', 1024);
