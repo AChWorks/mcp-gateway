@@ -14,6 +14,7 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
 use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
+use App\Support\OperationTiming;
 use JsonException;
 
 final readonly class WordpressTargetMcpToolHandlers
@@ -35,7 +36,10 @@ final readonly class WordpressTargetMcpToolHandlers
         ?string $search = null,
     ): array {
         $operation = 'wordpress-abilities-read';
+        $timing = OperationTiming::forWordpress();
+        $lookedUpAt = $timing?->stamp() ?? 0;
         $target = $this->target($user, $target_id, GatewayPermission::WordpressAbilitiesInspect);
+        $timing?->finish('target_lookup_ms', $lookedUpAt);
         if (! $target instanceof Target) {
             return $this->failed($operation, null, 'target_not_found', 'WordPress Target is unavailable.');
         }
@@ -54,12 +58,14 @@ final readonly class WordpressTargetMcpToolHandlers
         }
 
         try {
-            $catalog = $this->bridge->readAbilities($target, CorrelationId::current(), $ability, $page, $per_page, $namespace, $search);
+            $catalog = $this->bridge->readAbilities($target, CorrelationId::current(), $ability, $page, $per_page, $namespace, $search, $timing);
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
-            return $this->failed($operation, $target, $exception->reason, 'WordPress catalog request could not complete safely.', $this->safeDetails($exception));
+            return $this->failed($operation, $target, $exception->reason, 'WordPress catalog request could not complete safely.', [
+                ...$this->safeDetails($exception), ...($timing?->details(true) ?? []),
+            ]);
         }
 
-        $this->activity->record(CorrelationId::current(), $operation, 'success', $target);
+        $this->activity->record(CorrelationId::current(), $operation, 'success', $target, null, $timing?->details() ?? []);
 
         return ['ok' => true, 'target_id' => $target->target_id, 'catalog' => $catalog];
     }
@@ -71,7 +77,10 @@ final readonly class WordpressTargetMcpToolHandlers
     public function execute(User $user, string $target_id, string $ability, array $input): array
     {
         $operation = 'wordpress-ability-execute';
+        $timing = OperationTiming::forWordpress();
+        $lookedUpAt = $timing?->stamp() ?? 0;
         $target = $this->target($user, $target_id);
+        $timing?->finish('target_lookup_ms', $lookedUpAt);
         if (! $target instanceof Target) {
             return $this->failed($operation, null, 'target_not_found', 'WordPress Target is unavailable.');
         }
@@ -90,12 +99,17 @@ final readonly class WordpressTargetMcpToolHandlers
 
         // A single Target-scoped authorization snapshot bounds DB work and
         // freezes the decisions for this one logical request (not a cache).
-        $allowed = $this->access->allowsTargetPermissions($user, $target, [
-            GatewayPermission::WordpressAbilitiesExecuteReadonly,
-            GatewayPermission::WordpressAbilitiesExecuteMutating,
-            GatewayPermission::WordpressAbilitiesExecuteDestructive,
-            GatewayPermission::WordpressAbilitiesExecuteUnclassified,
-        ]);
+        $authorizedAt = $timing?->stamp() ?? 0;
+        try {
+            $allowed = $this->access->allowsTargetPermissions($user, $target, [
+                GatewayPermission::WordpressAbilitiesExecuteReadonly,
+                GatewayPermission::WordpressAbilitiesExecuteMutating,
+                GatewayPermission::WordpressAbilitiesExecuteDestructive,
+                GatewayPermission::WordpressAbilitiesExecuteUnclassified,
+            ]);
+        } finally {
+            $timing?->finish('authorization_ms', $authorizedAt);
+        }
         if (! in_array(true, $allowed, true)) {
             return $this->failed($operation, $target, 'forbidden', 'WordPress execution is not authorized.');
         }
@@ -110,12 +124,15 @@ final readonly class WordpressTargetMcpToolHandlers
                 $input,
                 CorrelationId::current(),
                 static fn (AbilityExecutionClass $class): bool => $allowed[$class->permission()->value] ?? false,
+                $timing,
             );
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
-            return $this->failed($operation, $target, $exception->reason, 'WordPress Ability could not complete safely.', $this->safeDetails($exception));
+            return $this->failed($operation, $target, $exception->reason, 'WordPress Ability could not complete safely.', [
+                ...$this->safeDetails($exception), ...($timing?->details(true) ?? []),
+            ]);
         }
 
-        $this->activity->record(CorrelationId::current(), $operation, 'success', $target);
+        $this->activity->record(CorrelationId::current(), $operation, 'success', $target, null, $timing?->details() ?? []);
 
         return ['ok' => true, 'target_id' => $target->target_id, 'ability' => $ability, 'result' => $result];
     }

@@ -3,6 +3,7 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
@@ -54,6 +55,86 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         });
         Http::preventStrayRequests();
         Http::fake(fn (Request $request) => $this->bridgeResponse($request));
+    }
+
+    public function test_optional_wordpress_timing_tracks_success_with_existing_activity_permissions(): void
+    {
+        config()->set('bridge.timing.enabled', true);
+        config()->set('bridge.timing.minimum_ms', 0);
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+
+        $result = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'demo/read', []);
+        self::assertTrue($result['ok']);
+
+        $stored = DB::table('activity_events')
+            ->where('operation', 'wordpress-ability-execute')->first();
+        self::assertNotNull($stored);
+        $diagnostics = json_decode((string) $stored->diagnostic_context, true, 16, JSON_THROW_ON_ERROR);
+        $timing = $diagnostics['timing'];
+        self::assertSame(4, $timing['outbound_calls']);
+        self::assertSame(0, $timing['curl_observed_calls'], 'Fake HTTP must not invent cURL handshake timings.');
+        foreach (['total_ms', 'target_lookup_ms', 'authorization_ms', 'credential_ms',
+            'mcp_initialize_ms', 'mcp_classification_ms', 'mcp_execute_ms',
+            'mcp_close_ms', 'dns_policy_ms', 'http_transport_ms'] as $key) {
+            self::assertArrayHasKey($key, $timing);
+            self::assertIsInt($timing[$key]);
+            self::assertGreaterThanOrEqual(0, $timing[$key]);
+        }
+        self::assertStringNotContainsString('alpha-access', (string) $stored->diagnostic_context);
+        self::assertStringNotContainsString('example.test', (string) $stored->diagnostic_context);
+
+        $lookup = app(OperationDiagnosticsMcpToolHandlers::class)->read(
+            $owner, (string) $stored->correlation_id,
+        );
+        self::assertTrue($lookup['ok']);
+        self::assertSame($timing, $lookup['events'][0]['diagnostics']['timing']);
+        self::assertSame('success', $lookup['events'][0]['outcome']);
+    }
+
+    public function test_optional_wordpress_timing_is_off_or_below_threshold_without_new_activity_details(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $handler = app(WordpressTargetMcpToolHandlers::class);
+
+        config()->set('bridge.timing.enabled', false);
+        self::assertTrue($handler->read($owner, 'alpha', 'demo/read')['ok']);
+        config()->set('bridge.timing.enabled', true);
+        config()->set('bridge.timing.minimum_ms', 1800000);
+        self::assertTrue($handler->read($owner, 'alpha', 'demo/read')['ok']);
+
+        $rows = DB::table('activity_events')->where('operation', 'wordpress-abilities-read')->get();
+        self::assertCount(2, $rows);
+        foreach ($rows as $row) {
+            self::assertNull($row->diagnostic_context);
+        }
+    }
+
+    public function test_optional_wordpress_timing_retains_failure_without_masking_pause_or_exposing_reference(): void
+    {
+        config()->set('bridge.timing.enabled', true);
+        config()->set('bridge.timing.minimum_ms', 1800000);
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->pauseDuringCatalog = true;
+
+        $result = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'demo/read', []);
+        self::assertFalse($result['ok']);
+        self::assertSame('target_paused', $result['error']['code']);
+        self::assertArrayNotHasKey('diagnostic_reference', $result['error']);
+        self::assertSame(['wp-ai-bridge/abilities-read'], array_column($this->downstream, 'ability'));
+        self::assertSame('DELETE', $this->sessionTraffic[array_key_last($this->sessionTraffic)]['method']);
+
+        $stored = DB::table('activity_events')
+            ->where('operation', 'wordpress-ability-execute')->first();
+        self::assertNotNull($stored);
+        self::assertSame('target_paused', $stored->error_code);
+        $diagnostics = json_decode((string) $stored->diagnostic_context, true, 16, JSON_THROW_ON_ERROR);
+        self::assertSame(3, $diagnostics['timing']['outbound_calls']);
+        self::assertArrayHasKey('mcp_classification_ms', $diagnostics['timing']);
+        self::assertArrayHasKey('mcp_close_ms', $diagnostics['timing']);
+        self::assertArrayNotHasKey('mcp_execute_ms', $diagnostics['timing']);
     }
 
     public function test_exact_target_inventory_read_and_readonly_execution_route_to_the_correct_bearer(): void
@@ -149,6 +230,58 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $outboundBefore = count($this->downstream);
         self::assertSame('target_not_found', $handlers->execute($operator, 'alpha', 'demo/read', [])['error']['code']);
         self::assertCount($outboundBefore, $this->downstream);
+    }
+
+    public function test_enabled_timing_omits_pre_dispatch_rejection_details_and_references(): void
+    {
+        config()->set('bridge.timing.enabled', true);
+        config()->set('bridge.timing.minimum_ms', 0);
+        $owner = $this->user('owner');
+        $target = $this->pair('alpha');
+        $handler = app(WordpressTargetMcpToolHandlers::class);
+
+        $notFound = $handler->read($owner, 'missing-target');
+        self::assertSame('target_not_found', $notFound['error']['code']);
+
+        $invalid = $handler->read($owner, 'alpha', per_page: 101);
+        self::assertSame('invalid_input', $invalid['error']['code']);
+
+        $operator = $this->user('operator');
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
+        foreach ([
+            GatewayPermission::WordpressAbilitiesExecuteReadonly,
+            GatewayPermission::WordpressAbilitiesExecuteMutating,
+            GatewayPermission::WordpressAbilitiesExecuteDestructive,
+            GatewayPermission::WordpressAbilitiesExecuteUnclassified,
+        ] as $permission) {
+            DB::table('user_permission_denials')->insert([
+                'user_id' => $operator->getKey(),
+                'permission' => $permission->value,
+            ]);
+        }
+        $forbidden = $handler->execute($operator, 'alpha', 'demo/read', []);
+        self::assertSame('forbidden', $forbidden['error']['code']);
+
+        Target::query()->where('target_id', 'alpha')->update(['operations_paused' => true]);
+        $paused = $handler->read($owner, 'alpha');
+        self::assertSame('target_paused', $paused['error']['code']);
+
+        foreach ([$notFound, $invalid, $forbidden, $paused] as $result) {
+            self::assertArrayNotHasKey('diagnostic_reference', $result['error']);
+        }
+
+        $rows = DB::table('activity_events')->whereIn('error_code', [
+            'target_not_found', 'invalid_input', 'forbidden', 'target_paused',
+        ])->get();
+        self::assertCount(4, $rows);
+        foreach ($rows as $row) {
+            self::assertNull($row->diagnostic_context, 'Pre-dispatch rejection must not include timing data.');
+        }
+        self::assertSame([], $this->downstream);
     }
 
     public function test_target_scope_and_execution_class_denials_do_not_leak_or_send_unauthorized_requests(): void

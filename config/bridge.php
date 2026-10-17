@@ -35,6 +35,12 @@ return [
         // SafeHttpClient always clamps both limits to its absolute decoded-body ceiling.
         'readonly_tool_max_response_bytes' => (int) env('BRIDGE_REMOTE_READONLY_TOOL_MAX_RESPONSE_BYTES', 262144),
     ],
+    // Optional request-local timings on Activity; off until explicitly enabled.
+    // Only slow successes and failures are retained; no new log store or daemon.
+    'timing' => [
+        'enabled' => filter_var(env('BRIDGE_TIMING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+        'minimum_ms' => (int) env('BRIDGE_TIMING_MINIMUM_MS', 1500),
+    ],
     'health' => [
         'stale_after_hours' => 24,
     ],

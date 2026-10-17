@@ -105,6 +105,24 @@ final class OperationDiagnostics
             }
         }
 
+        // Timings are server-derived, numeric and bounded. Never accept
+        // arbitrary stage labels, URLs or payload-shaped diagnostic fields.
+        $timing = $details['timing'] ?? null;
+        if (is_array($timing)) {
+            $allowed = ['total_ms', ...OperationTiming::STAGES, 'outbound_calls', 'curl_observed_calls'];
+            $safeTiming = [];
+            foreach ($allowed as $name) {
+                $value = $timing[$name] ?? null;
+                $limit = str_ends_with($name, '_calls') ? 128 : OperationTiming::MAX_MS;
+                if (is_int($value) && $value >= 0 && $value <= $limit) {
+                    $safeTiming[$name] = $value;
+                }
+            }
+            if ($safeTiming !== []) {
+                $safe['timing'] = $safeTiming;
+            }
+        }
+
         // Preserve observed native codes and messages *alongside* classifications,
         // rather than forcing unknown provider errors into Gateway's code vocabulary.
         foreach (['source_error_code', 'source_error_message', 'source_error_structured_message', 'gateway_error_message'] as $key) {
