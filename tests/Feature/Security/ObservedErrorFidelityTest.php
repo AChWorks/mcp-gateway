@@ -68,6 +68,15 @@ final class ObservedErrorFidelityTest extends TestCase
         self::assertStringContainsString('password="[REDACTED]"', $redacted);
         self::assertStringNotContainsString('secret with spaces and punctuation', $redacted);
         self::assertSame($redacted, DiagnosticRedactor::text($redacted));
+
+        $escaped = 'PHP error at /var/www/site.php: password="SECRET_PREFIX '
+            .'\"quoted\" SECRET_SUFFIX" while verifying user role';
+        $escapedRedacted = DiagnosticRedactor::text($escaped);
+        self::assertStringContainsString('/var/www/site.php', $escapedRedacted);
+        self::assertStringContainsString('password="[REDACTED]"', $escapedRedacted);
+        self::assertStringNotContainsString('SECRET_PREFIX', $escapedRedacted);
+        self::assertStringNotContainsString('SECRET_SUFFIX', $escapedRedacted);
+        self::assertSame($escapedRedacted, DiagnosticRedactor::text($escapedRedacted));
     }
 
     public function test_configurable_length_limit_marks_truncation_instead_of_silently_erasing_it(): void

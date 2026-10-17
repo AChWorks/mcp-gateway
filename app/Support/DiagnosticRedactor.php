@@ -37,7 +37,7 @@ final class DiagnosticRedactor
         // Quoted assignment values can contain spaces and punctuation. Mask
         // the entire value, not just its first word; remain idempotent.
         $text = preg_replace(
-            '~(?is)(\b'.$keys.'\b\s*[:=]\s*)([\x22\x27])(?!\[REDACTED\])(?:(?!\2).)*\2~',
+            '~(?is)(\b'.$keys.'\b\s*[:=]\s*)([\x22\x27])(?!\[REDACTED\])(?:\\\\.|(?!\2).)*\2~',
             '$1$2[REDACTED]$2',
             $text,
         ) ?? $text;
