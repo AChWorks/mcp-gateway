@@ -92,8 +92,9 @@ final readonly class SshFileMcpToolHandlers
         }
 
         $unknown = ($result['status'] ?? '') === 'outcome_unknown';
+        $reference = CorrelationId::current();
         $this->activity->record(
-            CorrelationId::current(), $tool, $unknown ? 'unknown' : 'success',
+            $reference, $tool, $unknown ? 'unknown' : 'success',
             $target, $unknown ? 'outcome_unknown' : null,
         );
 
@@ -105,7 +106,7 @@ final readonly class SshFileMcpToolHandlers
                 'code' => 'outcome_unknown',
                 'message' => 'Remote file mutation may have occurred; inspect before any manual retry.',
                 'next_step' => OperationDiagnostics::nextStep('outcome_unknown'),
-                'diagnostic_reference' => CorrelationId::current(),
+                'diagnostic_reference' => $reference,
             ]] : []),
         ];
     }
@@ -113,7 +114,8 @@ final readonly class SshFileMcpToolHandlers
     /** @return array<string,mixed> */
     private function failed(string $tool, ?Target $target, string $code): array
     {
-        $this->activity->record(CorrelationId::current(), $tool, 'failure', $target, $code,
+        $reference = CorrelationId::current();
+        $this->activity->record($reference, $tool, 'failure', $target, $code,
             $code === 'rate_limited' ? [
                 'failure_origin' => 'gateway_admission',
                 'failure_stage' => 'admission',
@@ -131,7 +133,7 @@ final readonly class SshFileMcpToolHandlers
                 'next_step' => OperationDiagnostics::nextStep($code),
                 ...($target instanceof Target && ! in_array($code, [
                     'target_not_found', 'invalid_input', 'target_paused',
-                ], true) ? ['diagnostic_reference' => CorrelationId::current()] : []),
+                ], true) ? ['diagnostic_reference' => $reference] : []),
             ],
         ];
     }

@@ -4,12 +4,15 @@ namespace Tests\Feature\Security;
 
 use App\Application\Access\AccessControl;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
+use App\Application\Mcp\SshCommandMcpToolHandlers;
+use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -172,6 +175,50 @@ final class OperationDiagnosticsLookupTest extends TestCase
         // allowed; denial is for its diagnostic content, not Target metadata.
         self::assertTrue(app(AccessControl::class)
             ->allows($operator, GatewayPermission::TargetsView, $beta));
+    }
+
+    public function test_actual_ssh_mcp_admission_errors_are_recoverable_without_dialing_a_host(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $target = $this->target('ssh-diagnostic', 'ssh_direct');
+        $recordId = (string) $target->getKey();
+        $fileKey = 'ssh-file:'.hash('sha256', $recordId).':rate';
+        $commandKey = 'ssh-command:'.hash('sha256', $recordId).':rate';
+
+        // Exhaust the *actual* admission budget, so no socket or credential
+        // lookup can occur. This tests the real handlers, not a synthetic row.
+        foreach ([$fileKey, $commandKey] as $key) {
+            RateLimiter::clear($key);
+            for ($i = 0; $i < 30; $i++) {
+                RateLimiter::hit($key, 60);
+            }
+        }
+
+        try {
+            $file = app(SshFileMcpToolHandlers::class)
+                ->stat($owner, $target->target_id, '/tmp/nonexistent-diagnostic-fixture');
+            $command = app(SshCommandMcpToolHandlers::class)
+                ->run($owner, $target->target_id, 'echo should-not-run');
+
+            foreach ([$file, $command] as $error) {
+                self::assertFalse($error['ok']);
+                self::assertSame('rate_limited', $error['error']['code']);
+                self::assertTrue(Str::isUuid($error['error']['diagnostic_reference']));
+                $result = app(OperationDiagnosticsMcpToolHandlers::class)
+                    ->read($owner, $error['error']['diagnostic_reference']);
+                self::assertTrue($result['ok']);
+                self::assertNotEmpty($result['events']);
+                foreach ($result['events'] as $event) {
+                    self::assertSame('gateway_admission', $event['diagnostics']['failure_origin']);
+                    self::assertSame('admission', $event['diagnostics']['failure_stage']);
+                    self::assertTrue($event['diagnostics']['request_not_sent']);
+                    self::assertTrue($event['diagnostics']['retry_safe']);
+                }
+            }
+        } finally {
+            RateLimiter::clear($fileKey);
+            RateLimiter::clear($commandKey);
+        }
     }
 
     public function test_legacy_or_deleted_diagnostic_evidence_is_honestly_reported(): void
