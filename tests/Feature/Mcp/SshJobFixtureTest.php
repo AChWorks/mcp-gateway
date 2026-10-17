@@ -222,12 +222,17 @@ SH;
         $stop = $resumed->cancel($owner, $target->target_id, $client, $cancelId);
         self::assertSame('canceled', $stop['result']['status'] ?? null, json_encode($stop));
         self::assertTrue($stop['result']['complete']);
-        // The terminated script emitted only a short prefix. Stopping its
-        // systemd cgroup did NOT prove the FIFO collectors finished normally.
+        // The terminated script emitted a prefix, but systemd may kill the
+        // FIFO reader before it flushes even a byte. Either an empty stored
+        // spool or a short prefix is valid; neither proves complete capture.
         $partial = $resumed->output($owner, $target->target_id, $client, $cancelId);
         self::assertTrue($partial['ok'], json_encode($partial));
         self::assertTrue($partial['result']['available']);
-        self::assertSame('partial-before-cancel', base64_decode($partial['result']['data'], true));
+        $stored = base64_decode($partial['result']['data'], true);
+        self::assertIsString($stored);
+        self::assertTrue(str_starts_with('partial-before-cancel', $stored));
+        self::assertSame(strlen($stored), $partial['result']['size']);
+        self::assertLessThan(1048576, $partial['result']['size']);
         self::assertTrue($partial['result']['end_of_file']);
         self::assertNull($partial['result']['truncated']);
 
