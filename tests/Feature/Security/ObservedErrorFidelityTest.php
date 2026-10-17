@@ -132,6 +132,26 @@ final class ObservedErrorFidelityTest extends TestCase
             DiagnosticRedactor::text("\xC3\x28"));
     }
 
+    public function test_unusual_sensitive_structured_key_names_do_not_expose_embedded_secret_values(): void
+    {
+        $details = [
+            'token_SECRET_IN_RAW_MAP_KEY' => 'secret associated value',
+            'apiKey' => 'secret in ordinary credential value',
+            'password' => 'secret password value',
+            'source' => '/var/www/blog/wp-content/plugins/test.php',
+        ];
+
+        $safe = DiagnosticRedactor::value($details);
+        $encoded = json_encode($safe, JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString('SECRET_IN_RAW_MAP_KEY', $encoded);
+        self::assertStringNotContainsString('secret associated value', $encoded);
+        self::assertStringNotContainsString('secret password value', $encoded);
+        self::assertSame('[REDACTED]', $safe['apiKey']);
+        self::assertSame('[REDACTED]', $safe['password']);
+        self::assertSame('/var/www/blog/wp-content/plugins/test.php', $safe['source']);
+        self::assertSame($safe, DiagnosticRedactor::value($safe));
+    }
+
     public function test_configurable_length_limit_marks_truncation_instead_of_silently_erasing_it(): void
     {
         config()->set('activity.diagnostic_message_max_bytes', 1024);

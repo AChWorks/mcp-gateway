@@ -8,6 +8,20 @@ namespace App\Support;
  */
 final class DiagnosticRedactor
 {
+    // These names identify a sensitive *field*, not a secret in the key.
+    // Arbitrary extensions (e.g. token_ACTUAL_SECRET) cannot be treated
+    // as known field labels and must not be persisted verbatim.
+    private const KNOWN_SENSITIVE_KEYS = [
+        'access_token', 'refresh_token', 'id_token', 'token', 'api_key',
+        'client_secret', 'private_key', 'password', 'passwd', 'secret',
+        'authorization', 'set_cookie', 'cookie', 'session_id', 'session',
+        'credential', 'passphrase', 'client_assertion',
+        'body', 'payload', 'raw_data', 'raw_request', 'raw_response',
+        'request_body', 'response_body', 'file_content', 'file_contents',
+        'content_base64', 'attachment', 'arguments', 'user_input',
+        'content', 'headers', 'file_bytes', 'raw_output',
+    ];
+
     public static function text(string $text): string
     {
         if (! mb_check_encoding($text, 'UTF-8')) {
@@ -108,10 +122,7 @@ final class DiagnosticRedactor
 
     public static function value(mixed $value, string $field = '', int $depth = 0): mixed
     {
-        // Normalize field *names* only, not provider error codes/messages.
-        $fieldName = strtolower(preg_replace('/(?<=[a-z0-9])(?=[A-Z])/', '_', $field) ?? $field);
-        $fieldName = str_replace('-', '_', $fieldName);
-        if (preg_match('~(?:^|_)(?:password|passwd|secret|token|authorization|cookie|credential|private_key|api_key|session_id|body|payload|raw_data|raw_request|raw_response|file_content|file_contents|content_base64|attachment|arguments|user_input|content|headers|file_bytes|raw_output)(?:$|_)~', $fieldName) === 1) {
+        if (self::isSensitiveField($field)) {
             return '[REDACTED]';
         }
 
@@ -144,11 +155,32 @@ final class DiagnosticRedactor
             $originalKey = (string) $key;
             $safeKey = is_int($key) ? $key : (strlen($originalKey) > 4096
                 ? '[REDACTED: OVERSIZE KEY]' : self::text($originalKey));
+            if (! is_int($key) && self::isSensitiveField($originalKey)
+                && ! in_array(self::normalizedFieldName($originalKey), self::KNOWN_SENSITIVE_KEYS, true)) {
+                $safeKey = '[REDACTED SENSITIVE KEY #'.count($result).']';
+            }
             $keyWasRedacted = $safeKey !== $key;
             $result[$safeKey] = $keyWasRedacted ? '[REDACTED]'
                 : self::value($item, $originalKey, $depth + 1);
         }
 
         return $result;
+    }
+
+    private static function normalizedFieldName(string $field): string
+    {
+        // Only a field label is normalized; observed source codes and texts
+        // remain byte-preserved except for selective secret removal.
+        $normalized = preg_replace('/(?<=[a-z0-9])(?=[A-Z])/', '_', $field) ?? $field;
+
+        return str_replace('-', '_', strtolower($normalized));
+    }
+
+    private static function isSensitiveField(string $field): bool
+    {
+        return preg_match(
+            '~(?:^|_)(?:password|passwd|passphrase|secret|token|authorization|cookie|credential|private_key|api_key|session_id|client_assertion|body|payload|raw_data|raw_request|raw_response|file_content|file_contents|content_base64|attachment|arguments|user_input|content|headers|file_bytes|raw_output)(?:$|_)~',
+            self::normalizedFieldName($field),
+        ) === 1;
     }
 }
