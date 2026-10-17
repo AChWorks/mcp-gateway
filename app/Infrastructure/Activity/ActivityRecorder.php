@@ -35,7 +35,10 @@ final class ActivityRecorder
                 ? OperationDiagnostics::safeContext([
                     ...$diagnostics,
                     ...($outcome === 'unknown' ? ['retry_safe' => false] : []),
-                ]) : [];
+                ])
+                : ($outcome === 'success' && isset($diagnostics['timing'])
+                    ? OperationDiagnostics::safeContext(['timing' => $diagnostics['timing']])
+                    : []);
             $this->persist($correlationId, $operation, $outcome, $target, $errorCode, $safeDetails);
             // One shared operational diagnostic path across WordPress, SSH,
             // inventory, MCP and file handlers; no raw inputs or tool outputs.

@@ -159,6 +159,10 @@ Both the edge and authenticated-principal limit apply when relevant. Their effec
 | `BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS` | `5` seconds | Outbound WP AI Bridge request timeout |
 | `BRIDGE_REMOTE_MAX_RESPONSE_BYTES` | `65536` bytes (64 KiB) | Bounded regular Bridge metadata/OAuth response size |
 | `BRIDGE_REMOTE_READONLY_TOOL_MAX_RESPONSE_BYTES` | `262144` bytes (256 KiB) | Larger read-only Bridge MCP tool budget, still subject to the transport hard ceiling |
+| `BRIDGE_TIMING_ENABLED` | `false` | Opt-in, request-local WordPress operation timings in the existing scoped Activity/AI diagnostics; no new service, logging store or HTTP endpoint |
+| `BRIDGE_TIMING_MINIMUM_MS` | `1500` ms | Only successful requests at/above this total Gateway handler time are retained; when enabled, failures are always retained. Clamped to 0–1,800,000 ms. Use `0` only during bounded testing. |
+
+Timing diagnostics are limited to fixed numeric phase durations and observed request counts. They are available only through the existing authorized Activity and exact-correlation diagnostics lookup; they contain no URL, bearer, request/response body or user input. `mcp_initialize_ms`, `mcp_classification_ms`, `mcp_execute_ms`, `mcp_close_ms`, credential and authorization phases are measured within the Gateway process. `dns_policy_ms` includes public-IP/DNS validation, `http_transport_ms` includes transport time, and cURL TCP/TLS/first-byte components appear only when actually available from the handler (missing does **not** mean zero). Per-phase, transport and cURL components overlap; **do not sum them together**. `total_ms` excludes inbound OAuth/MCP client transport and the final Activity database insert, so it is **not** end-to-end ChatGPT latency. Environment-level configuration is read at request startup; keep disabled unless troubleshooting is requested. Existing Activity retention and Target/client authorization continue to apply.
 
 Remote timeout/response settings are **budgets**, not guarantees of response speed or permission to bypass DNS pinning, SSRF checks, TLS verification, host-key verification or OAuth permissions.
 

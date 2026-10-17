@@ -3,7 +3,9 @@
 namespace App\Infrastructure\Http;
 
 use App\Application\Operations\OperationalSettings;
+use App\Support\OperationTiming;
 use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
+use GuzzleHttp\TransferStats;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
@@ -37,15 +39,15 @@ final class SafeHttpClient
      * @param  array<string, mixed>  $json
      * @param  array<string, string>  $headers
      */
-    public function postJson(string $url, array $json, array $headers = [], ?int $responseLimitBytes = null): SafeHttpResponse
+    public function postJson(string $url, array $json, array $headers = [], ?int $responseLimitBytes = null, ?OperationTiming $timing = null): SafeHttpResponse
     {
-        return $this->send('POST', $url, $headers, $json, 'json', $responseLimitBytes);
+        return $this->send('POST', $url, $headers, $json, 'json', $responseLimitBytes, $timing);
     }
 
     /** @param array<string, string> $headers */
-    public function delete(string $url, array $headers = []): SafeHttpResponse
+    public function delete(string $url, array $headers = [], ?OperationTiming $timing = null): SafeHttpResponse
     {
-        return $this->send('DELETE', $url, $headers, [], 'none');
+        return $this->send('DELETE', $url, $headers, [], 'none', null, $timing);
     }
 
     /**
@@ -53,7 +55,7 @@ final class SafeHttpClient
      * @param  array<string, mixed>  $payload
      * @param  'none'|'form'|'json'  $format
      */
-    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null): SafeHttpResponse
     {
         $network = $this->settings->httpTimeoutsSeconds();
         $connectTimeout = $network['connect'];
@@ -66,7 +68,12 @@ final class SafeHttpClient
 
         // DNS and HTTPS share one request lifetime; inspect all A+AAAA records
         // before selecting the numeric, TLS-validated destination.
-        $target = $this->targets->validate($url, 2048, $deadlineNs);
+        $dnsStarted = $timing?->stamp() ?? 0;
+        try {
+            $target = $this->targets->validate($url, 2048, $deadlineNs);
+        } finally {
+            $timing?->finish('dns_policy_ms', $dnsStarted);
+        }
         $remainingSeconds = ($deadlineNs - hrtime(true)) / 1_000_000_000;
         if ($remainingSeconds <= 0) {
             throw new OutboundRequestException('network_failure', 'Outbound request deadline expired before dispatch.', ['failure_stage' => 'deadline_before_dispatch'], true);
@@ -95,12 +102,19 @@ final class SafeHttpClient
                 'progress' => [$responseBody, 'progress'],
                 'sink' => $responseBody->stream(),
                 ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),
+                ...($timing === null ? [] : [
+                    'on_stats' => static function (TransferStats $stats) use ($timing): void {
+                        $timing->curlStats($stats->getHandlerStats());
+                    },
+                ]),
             ])
                 ->connectTimeout(min($connectTimeout, $remainingSeconds))
                 ->timeout($remainingSeconds)
                 ->acceptJson()
                 ->withHeaders($headers);
 
+            $httpStarted = $timing?->stamp() ?? 0;
+            $timing?->outboundCall();
             try {
                 $response = match ($method) {
                     'POST' => $format === 'json'
@@ -142,6 +156,8 @@ final class SafeHttpClient
                 throw new OutboundRequestException($reason, 'Remote endpoint could not be reached.', [
                     'failure_stage' => $stage,
                 ], $preDispatch);
+            } finally {
+                $timing?->finish('http_transport_ms', $httpStarted);
             }
 
             if ($responseBody->limitExceeded()) {
