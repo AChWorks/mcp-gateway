@@ -1007,6 +1007,12 @@ td input[type="checkbox"] {
     }
 }
 
+.target-ai-guidance-text {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 /* Connector enrollment: one form, one active adapter, shared control styling. */
 .target-enrollment {
     max-width: 54rem;

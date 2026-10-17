@@ -2,18 +2,18 @@
 
 MCP Gateway is a self-hosted PHP application that connects an authenticated MCP client to the specific servers and WordPress sites you authorize. Add each connection as a **Target**, control who can use it, and manage access from one web Admin panel.
 
-**v2.3.0 release source:** WordPress via WP AI Bridge, Direct SSH (commands and SFTP), Target Groups, user/Target permissions and OAuth for supported clients (including ChatGPT). This release adds Owner-adjustable SSH controls, agentless retained Jobs, authorized browser file selection, and per-Target Pause/Resume. **Install or update only from the verified official [v2.3.0 GitHub Release](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0) once it is published**; source promotion does not install or deploy anything.
+**Latest published stable: [v2.3.0](https://github.com/AChWorks/mcp-gateway/releases/tag/v2.3.0).** It supports WordPress via WP AI Bridge, Direct SSH (commands, SFTP and retained Jobs), Target Groups, scoped OAuth/client permissions, browser file selection and per-Target Pause/Resume. **Install or update from official Release ZIPs only**; newer source commits and GitHub Actions candidates are not automatically installed or published.
 
 ## What you can do
 
-- Register WordPress and SSH Targets, review connection status, and let the Owner **Pause/Resume Gateway operations per Target** without disconnecting or deleting access. An already-running remote SSH Job is not stopped by Pause.
+- Register WordPress and SSH Targets with optional per-Target AI guidance, review connection status, and let the Owner **Pause/Resume Gateway operations per Target** without disconnecting or deleting access. An already-running remote SSH Job is not stopped by Pause.
 - Discover and run WordPress Abilities through the existing WordPress principal and its WP AI Bridge permissions.
 - Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
 - In v2.3.0, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.
 - Assign users, Target Groups and permission scopes; review Activity and AI client authorizations.
 - Install or update from the named GitHub Release ZIPs without requiring Git or Composer on the host.
 
-**Limits to know:** SSH runs with the privileges of its configured remote OS account; Gateway permissions do not turn root into a sandbox. Published older releases defaulted SSH whole-file HTTP transfer to OFF. This source candidate makes SSH-only whole-file transfer **ON for new installations** (`SSH_FILE_TRANSFER_ENABLED=true`), while preserved existing private environments retain their former value (absent-key OFF). This is not proof of ChatGPT-native attachment support. Other AI clients need a compatible, configured client profile; support for every MCP extension is not implied.
+**Limits to know:** SSH runs with the privileges of its configured remote OS account; Gateway permissions do not turn root into a sandbox. The released v2.3.0 default for SSH whole-file HTTP transfer was OFF. Current unreleased source makes SSH-only whole-file transfer **ON for new installations** (`SSH_FILE_TRANSFER_ENABLED=true`), while preserved existing private environments retain their former value (absent-key OFF). This is not proof of ChatGPT-native attachment support. Other AI clients need a compatible, configured client profile; support for every MCP extension is not implied.
 
 **Configuration lookup:** [`.env.example`](.env.example) exposes supported everyday
 Gateway settings with commented context-sensitive examples. The

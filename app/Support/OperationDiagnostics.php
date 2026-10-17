@@ -35,6 +35,15 @@ final class OperationDiagnostics
             'target_id' => $target?->target_id,
             'connector_type' => $target?->connector_type,
         ];
+        // Record only independently evidenced, finite machine provenance.
+        // An MCP isError result is not proof of a provider code or rollback.
+        $origin = $details['failure_origin'] ?? null;
+        if (is_string($origin) && in_array($origin, [
+            'gateway_transport', 'gateway_response', 'downstream_http',
+            'downstream_mcp', 'unknown',
+        ], true)) {
+            $safe['failure_origin'] = $origin;
+        }
         $stage = $details['failure_stage'] ?? null;
         if (is_string($stage) && in_array($stage, [
             'dns_lookup', 'dns_timeout', 'deadline_before_dispatch',
@@ -53,6 +62,24 @@ final class OperationDiagnostics
         }
         if (is_bool($details['retry_safe'] ?? null)) {
             $safe['retry_safe'] = $details['retry_safe'];
+        }
+        if (is_bool($details['effect_unconfirmed'] ?? null)) {
+            $safe['effect_unconfirmed'] = $details['effect_unconfirmed'];
+        }
+        if (($details['provider_cause_unknown'] ?? null) === true) {
+            $safe['provider_cause'] = 'unknown';
+        }
+        $phase = $details['phase'] ?? null;
+        if (is_string($phase) && in_array($phase, [
+            'content_length', 'collected_body', 'decoded_body',
+        ], true)) {
+            $safe['response_phase'] = $phase;
+        }
+        foreach (['limit_bytes', 'observed_bytes'] as $key) {
+            $value = $details[$key] ?? null;
+            if (is_int($value) && $value >= 0) {
+                $safe[$key] = $value;
+            }
         }
 
         try {
@@ -119,6 +146,7 @@ final class OperationDiagnostics
             'tcp_unreachable', 'egress_denied' => __('Check route, firewall, configured host and port, and the Gateway outbound SSH policy.'),
             'connection_busy', 'rate_limited', 'admission_unavailable' => __('Wait for the existing attempt or the advertised limit to clear; avoid parallel retries.'),
             'outcome_unknown' => __('Inspect the remote state and any transfer receipt before deciding whether another command or write is safe.'),
+            'downstream_rejected' => __('A downstream MCP Tool reported an error but its provider cause may be unavailable. Use the diagnostic reference in Gateway logs and verify remote state before retrying any mutation.'),
             'response_too_large', 'file_too_large' => __('Reduce the payload or use a supported bounded transfer mode. Do not disable resource limits.'),
             'transfer_timed_out' => __('Check network performance and supported operation budgets before a safe new attempt.'),
             'invalid_input' => __('Correct the indicated input or tool parameters.'),

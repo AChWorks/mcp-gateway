@@ -346,7 +346,7 @@ final readonly class WpAiBridgeMcpClient
                     'response_too_large',
                     'The downstream read is larger than the Gateway response limit. Use a targeted/paginated read or adjust the bounded read limit.',
                     $exception,
-                    $exception->details,
+                    [...$exception->details, 'failure_origin' => 'gateway_response'],
                 );
             }
 
@@ -354,15 +354,26 @@ final readonly class WpAiBridgeMcpClient
             $message = $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'
                 : 'WP AI Bridge could not complete the downstream read.';
-            throw new WpAiBridgeMcpException($reason, $message, $exception, $exception->details);
+            throw new WpAiBridgeMcpException($reason, $message, $exception, [
+                ...$exception->details,
+                'failure_origin' => $exception->reason === 'response_too_large'
+                    ? 'gateway_response' : 'gateway_transport',
+                'retry_safe' => false,
+            ]);
         }
 
         $this->assertAuthenticationStatus($response);
         if ($response->status !== 200) {
+            $evidence = [
+                'failure_origin' => 'downstream_http',
+                'failure_stage' => 'remote_http',
+                'http_status' => $response->status,
+                'retry_safe' => false,
+            ];
             if ($mutationRisk && ($response->status === 408 || $response->status === 429 || $response->status >= 500)) {
-                throw new WpAiBridgeMcpException('outcome_unknown', 'The downstream mutation result is unknown and was not retried.');
+                throw new WpAiBridgeMcpException('outcome_unknown', 'The downstream mutation result is unknown and was not retried.', null, $evidence);
             }
-            throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an unexpected MCP HTTP status.');
+            throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an unexpected MCP HTTP status.', null, $evidence);
         }
 
         try {
@@ -372,7 +383,12 @@ final readonly class WpAiBridgeMcpClient
             $message = $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'
                 : 'WP AI Bridge returned invalid MCP JSON.';
-            throw new WpAiBridgeMcpException($reason, $message, $exception, $exception->details);
+            throw new WpAiBridgeMcpException($reason, $message, $exception, [
+                ...$exception->details,
+                'failure_origin' => 'downstream_mcp',
+                'failure_stage' => 'response_body',
+                'retry_safe' => false,
+            ]);
         }
 
         if (($payload['jsonrpc'] ?? null) !== '2.0' || ($payload['id'] ?? null) !== $requestId) {
@@ -399,7 +415,21 @@ final readonly class WpAiBridgeMcpClient
 
         $authorization = $headers['Authorization'] ?? null;
         if (($result['isError'] ?? false) === true) {
-            throw new WpAiBridgeMcpException('downstream_rejected', $this->boundedToolErrorMessage($result, $authorization));
+            // isError is observed at MCP adapter level; the WordPress
+            // provider error code may already have been stripped. A mutating
+            // Tool may have committed an effect before reporting isError.
+            throw new WpAiBridgeMcpException(
+                'downstream_rejected',
+                $this->boundedToolErrorMessage($result, $authorization),
+                null,
+                [
+                    'failure_origin' => 'downstream_mcp',
+                    'failure_stage' => 'operation',
+                    'provider_cause_unknown' => true,
+                    'effect_unconfirmed' => $mutationRisk,
+                    'retry_safe' => false,
+                ],
+            );
         }
 
         $structured = $result['structuredContent'] ?? null;

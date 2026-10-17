@@ -129,6 +129,8 @@ final class TargetController extends Controller
             $validated = $request->validate([
                 'target_id' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
                 'display_name' => ['required', 'string', 'max:160'],
+                'ai_guidance' => ['nullable', 'string', 'max:'.Target::AI_GUIDANCE_MAX_LENGTH,
+                    'not_regex:/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/'],
                 ...$adapter->registrationRules(),
             ]);
         } catch (ValidationException $exception) {
@@ -232,15 +234,22 @@ final class TargetController extends Controller
         Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
         $validated = $request->validate([
             'display_name' => ['required', 'string', 'max:160'],
+            'ai_guidance' => ['nullable', 'string', 'max:'.Target::AI_GUIDANCE_MAX_LENGTH,
+                'not_regex:/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/'],
         ]);
 
         DB::transaction(static function () use ($target, $validated): void {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
-            $locked->forceFill(['display_name' => (string) $validated['display_name']])->save();
+            $fields = ['display_name' => (string) $validated['display_name']];
+            if (array_key_exists('ai_guidance', $validated)) {
+                $value = $validated['ai_guidance'];
+                $fields['ai_guidance'] = is_string($value) && trim($value) !== '' ? trim($value) : null;
+            }
+            $locked->forceFill($fields)->save();
         });
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
-            ->with('status', __('Target display name updated.'));
+            ->with('status', __('Target details updated.'));
     }
 
     public function destroy(Request $request, Target $target, ActivityRecorder $activity, TargetConnectorRegistry $connectors): RedirectResponse
@@ -341,6 +350,7 @@ final class TargetController extends Controller
             'connector_type',
             'target_id',
             'display_name',
+            'ai_guidance',
             ...($adapter?->safeOldInputFields() ?? []),
         ]);
     }

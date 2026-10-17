@@ -142,6 +142,7 @@ final class TargetInventory
                     'targets.id',
                     'targets.target_id',
                     'targets.display_name',
+                    'targets.ai_guidance',
                     'targets.connector_type',
                     'targets.connection_state',
                     'targets.operations_paused',

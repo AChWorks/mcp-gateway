@@ -25,10 +25,13 @@ final class Target extends Model
         'ssh_direct',
     ];
 
+    public const AI_GUIDANCE_MAX_LENGTH = 800;
+
     /** @var list<string> */
     protected $fillable = [
         'target_id',
         'display_name',
+        'ai_guidance',
         'connector_type',
         'connection_state',
         'last_error_code',
@@ -63,6 +66,13 @@ final class Target extends Model
             $id = (string) $target->getAttribute('target_id');
             if (strlen($id) > 64 || preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/', $id) !== 1) {
                 throw new DomainException('Target ID must be a lowercase slug of at most 64 characters.');
+            }
+
+            $guidance = $target->getAttribute('ai_guidance');
+            if ($guidance !== null && (! is_string($guidance)
+                || mb_strlen($guidance) > self::AI_GUIDANCE_MAX_LENGTH
+                || preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', $guidance) === 1)) {
+                throw new DomainException('Target AI guidance must be bounded plain text.');
             }
 
             if (! in_array((string) $target->getAttribute('connector_type'), self::KNOWN_CONNECTOR_TYPES, true)) {

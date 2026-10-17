@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class WordpressTargetMcpRegressionTest extends TestCase
@@ -63,6 +64,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
     public function test_sites_list_and_context_expose_bounded_non_secret_site_state(): void
     {
         $alpha = $this->createSite('alpha');
+        $alpha->forceFill(['ai_guidance' => 'Production site: ask before risky writes.'])->save();
         $this->pair($alpha);
         $this->createSite('beta');
 
@@ -72,6 +74,8 @@ final class WordpressTargetMcpRegressionTest extends TestCase
 
         self::assertTrue($list['ok']);
         self::assertSame(['alpha', 'beta'], array_column($list['targets'], 'target_id'));
+        self::assertSame('Production site: ask before risky writes.', $list['targets'][0]['ai_guidance']);
+        self::assertNull($list['targets'][1]['ai_guidance']);
         self::assertFalse($list['truncated']);
         self::assertSame('connected', $list['targets'][0]['connection_state']);
         self::assertSame('disconnected', $list['targets'][1]['connection_state']);
@@ -79,6 +83,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         self::assertTrue($context['ok']);
         self::assertSame('alpha', $context['target']['target_id']);
         self::assertSame('wp_ai_bridge', $context['target']['connector_type']);
+        self::assertSame('Production site: ask before risky writes.', $context['target']['ai_guidance']);
         self::assertArrayNotHasKey('base_url', $context['target']);
         self::assertArrayNotHasKey('mcp_resource_url', $context['target']);
 
@@ -248,6 +253,74 @@ final class WordpressTargetMcpRegressionTest extends TestCase
 
         self::assertTrue($result['ok']);
         self::assertSame(10, $result['catalog']['per_page']);
+    }
+
+    public function test_mutating_mcp_tool_rejection_retains_compatible_code_but_never_claims_rollback(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+        Log::spy();
+
+        $response = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/denied', []);
+
+        self::assertFalse($response['ok']);
+        self::assertSame('downstream_rejected', $response['error']['code']);
+        $reference = $response['error']['diagnostic_reference'] ?? null;
+        self::assertTrue(is_string($reference) && Str::isUuid($reference));
+        self::assertStringContainsString('provider cause may be unavailable', $response['error']['next_step']);
+        $event = DB::table('activity_events')->where('operation', 'wordpress-ability-execute')
+            ->where('error_code', 'downstream_rejected')->firstOrFail();
+        self::assertSame('unknown', $event->outcome);
+        self::assertSame($reference, $event->correlation_id);
+        self::assertSame(1, collect($this->toolCalls)
+            ->where('ability', 'demo/denied')->count(), 'The rejected mutation must not be replayed.');
+
+        Log::shouldHaveReceived('warning')->withArgs(
+            static function (string $message, array $context) use ($reference): bool {
+                $encoded = json_encode($context, JSON_THROW_ON_ERROR);
+
+                return $message === 'Gateway operation failure.'
+                    && ($context['correlation_id'] ?? null) === $reference
+                    && ($context['failure_origin'] ?? null) === 'downstream_mcp'
+                    && ($context['failure_stage'] ?? null) === 'operation'
+                    && ($context['provider_cause'] ?? null) === 'unknown'
+                    && ($context['effect_unconfirmed'] ?? null) === true
+                    && ($context['retry_safe'] ?? null) === false
+                    && ! str_contains($encoded, 'alpha-access')
+                    && ! str_contains($encoded, 'Permission denied by WordPress.');
+            },
+        )->once();
+    }
+
+    public function test_readonly_mcp_tool_rejection_is_a_failure_not_an_unknown_write(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+        $this->fakeBridge(function (Request $request) {
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'tools/call'
+                && ($payload['params']['arguments']['ability_name'] ?? null) === 'demo/read') {
+                return Http::response([
+                    'jsonrpc' => '2.0', 'id' => $payload['id'] ?? null,
+                    'result' => [
+                        'isError' => true,
+                        'content' => [['type' => 'text', 'text' => 'Provider secret detail']],
+                    ],
+                ], 200);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+        $result = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/read', []);
+
+        self::assertSame('downstream_rejected', $result['error']['code']);
+        $event = DB::table('activity_events')->where('operation', 'wordpress-ability-execute')
+            ->where('error_code', 'downstream_rejected')->firstOrFail();
+        self::assertSame('failure', $event->outcome);
+        self::assertSame($event->correlation_id, $result['error']['diagnostic_reference']);
+        self::assertStringNotContainsString('Provider secret detail', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function test_readonly_transport_failure_is_not_reported_as_mutation_uncertainty_or_retried(): void
@@ -583,6 +656,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
             return Http::response(str_repeat('x', 2048), 200, ['Content-Type' => 'application/json']);
         });
 
+        Log::spy();
         $result = app(WordpressTargetMcpToolHandlers::class)->read($this->principal, 'alpha', null, 1, 25);
 
         self::assertFalse($result['ok']);
@@ -590,6 +664,18 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         self::assertStringNotContainsString(str_repeat('x', 1024), $result['error']['message']);
         self::assertArrayNotHasKey('details', $result['error']);
         self::assertStringNotContainsString(str_repeat('x', 1024), json_encode($result, JSON_THROW_ON_ERROR));
+        $reference = $result['error']['diagnostic_reference'] ?? null;
+        self::assertTrue(is_string($reference) && Str::isUuid($reference));
+        Log::shouldHaveReceived('warning')->withArgs(
+            static fn (string $message, array $context): bool => $message === 'Gateway operation failure.'
+                && ($context['correlation_id'] ?? null) === $reference
+                && ($context['failure_origin'] ?? null) === 'gateway_response'
+                && ($context['limit_bytes'] ?? null) === 1024
+                && ($context['observed_bytes'] ?? 0) > 1024
+                && in_array(($context['response_phase'] ?? null), [
+                    'content_length', 'collected_body', 'decoded_body',
+                ], true),
+        )->once();
     }
 
     public function test_oversized_mutating_result_is_unknown_and_not_retried(): void
@@ -619,6 +705,65 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         self::assertSame('outcome_unknown', $result['error']['code']);
         self::assertSame(1, $mutationCalls);
         self::assertStringNotContainsString('secret-mutation-result', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_effect_scoped_decoded_http_limits_account_for_duplicated_mcp_content(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+        config()->set('bridge.http.max_response_bytes', 65536);
+        config()->set('bridge.http.readonly_tool_max_response_bytes', 262144);
+
+        $dataBytes = 65536;
+        $calls = [];
+        $this->fakeBridge(function (Request $request) use (&$dataBytes, &$calls) {
+            $payload = $request->data();
+            $ability = (string) ($payload['params']['arguments']['ability_name'] ?? '');
+            if (($payload['method'] ?? null) === 'tools/call'
+                && in_array($ability, ['demo/read', 'demo/write'], true)) {
+                $calls[] = $ability;
+                $data = ['payload' => str_repeat('x', $dataBytes)];
+                $structured = ['success' => true, 'data' => $data];
+
+                // The real adapter can echo structuredContent as text. Both
+                // copies consume the *decoded HTTP envelope* budget.
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'] ?? null,
+                    'result' => [
+                        'isError' => false,
+                        'structuredContent' => $structured,
+                        'content' => [[
+                            'type' => 'text',
+                            'text' => json_encode($structured, JSON_THROW_ON_ERROR),
+                        ]],
+                    ],
+                ], 200);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $read = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/read', []);
+        self::assertTrue($read['ok']);
+        self::assertSame(65536, strlen($read['result']['payload']));
+
+        $mutation = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/write', ['action' => 'bounded']);
+        self::assertSame('outcome_unknown', $mutation['error']['code']);
+        self::assertArrayHasKey('diagnostic_reference', $mutation['error']);
+
+        $dataBytes = 131072;
+        $oversizeRead = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/read', []);
+        self::assertSame('response_too_large', $oversizeRead['error']['code']);
+        self::assertSame(['demo/read', 'demo/write', 'demo/read'], $calls,
+            'An unknown mutation must never be resent to recover a large result.');
+        $this->assertDatabaseHas('activity_events', [
+            'target_id' => 'alpha', 'operation' => 'wordpress-ability-execute',
+            'error_code' => 'outcome_unknown', 'outcome' => 'unknown',
+        ]);
     }
 
     public function test_readonly_ability_result_can_be_larger_than_metadata_budget(): void

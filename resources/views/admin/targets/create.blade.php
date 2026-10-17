@@ -56,6 +56,15 @@
                         placeholder="{{ __('Production blog or staging server') }}" value="{{ old('display_name') }}">
                     @error('display_name')<p class="field-error" role="alert">{{ $message }}</p>@enderror
                 </div>
+                <div class="field target-span-all">
+                    <label for="ai_guidance">{{ __('AI guidance (optional)') }}</label>
+                    <textarea id="ai_guidance" name="ai_guidance" rows="3"
+                        maxlength="{{ \App\Domain\Targets\Target::AI_GUIDANCE_MAX_LENGTH }}"
+                        aria-describedby="ai_guidance_help" autocomplete="off"
+                        placeholder="{{ __('Example: This is a production server. Explain risks and ask before making changes.') }}">{{ old('ai_guidance') }}</textarea>
+                    <p id="ai_guidance_help" class="field-help">{{ __('Shown to authorized AI clients as Target-specific context. This is advice, not enforced approval. Never include credentials or secrets.') }}</p>
+                    @error('ai_guidance')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                </div>
             </div>
         </fieldset>
 

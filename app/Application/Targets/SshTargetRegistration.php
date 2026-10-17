@@ -22,7 +22,7 @@ final readonly class SshTargetRegistration
     public function register(
         string $targetId, string $displayName, string $host, int $port,
         string $username, string $hostPublicKey, string $authMethod,
-        string $secret, ?string $passphrase,
+        string $secret, ?string $passphrase, ?string $aiGuidance = null,
     ): Target {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -37,11 +37,12 @@ final readonly class SshTargetRegistration
 
         try {
             return DB::transaction(function () use (
-                $targetId, $displayName, $endpoint, $pin, $authMethod, $secret, $passphrase,
+                $targetId, $displayName, $aiGuidance, $endpoint, $pin, $authMethod, $secret, $passphrase,
             ): Target {
                 $target = Target::query()->create([
                     'target_id' => $targetId,
                     'display_name' => $displayName,
+                    'ai_guidance' => $aiGuidance === null || trim($aiGuidance) === '' ? null : trim($aiGuidance),
                     'connector_type' => 'ssh_direct',
                     'connection_state' => TargetConnectionState::Disconnected,
                 ]);

@@ -54,7 +54,8 @@ final class TargetInventoryMcpTest extends TestCase
         self::assertTrue($context['ok']);
         self::assertSame('wp_ai_bridge', $context['target']['connector_type']);
         self::assertSame('disconnected', $context['target']['connection_state']);
-        self::assertSame(['target_id', 'display_name', 'connector_type', 'connection_state', 'operations_paused', 'last_error_code', 'connected_at', 'file_transfer'],
+        self::assertNull($context['target']['ai_guidance']);
+        self::assertSame(['target_id', 'display_name', 'ai_guidance', 'connector_type', 'connection_state', 'operations_paused', 'last_error_code', 'connected_at', 'file_transfer'],
             array_keys($context['target']));
 
         $unauthorized = $handlers->targetContext($operator, 'b-ssh');
