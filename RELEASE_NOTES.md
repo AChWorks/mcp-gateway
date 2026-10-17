@@ -1,6 +1,6 @@
 # MCP Gateway v2.3.1
 
-**Corrective source candidate `2.3.1-rc.3` — NOT PUBLISHED.**
+**Stable v2.3.1 — official GitHub Release and installed-host status must be verified separately.**
 
 Compared with the publicly released v2.3.0:
 
@@ -39,8 +39,10 @@ Compared with the publicly released v2.3.0:
   deterministic connector fixtures. Real host limits and model file handoff
   still require separate post-install evidence.
 
-This source candidate is not a GitHub Release or an installed runtime. Publication,
-migration and live-host configuration changes require their separate approvals.
+Stable source promotion does not itself publish a GitHub Release, update an installed
+Gateway, run migrations or enable host features. The Owner-approved manual Release
+workflow verifies and publishes immutable artifacts from the exact promoted main SHA;
+operator-controlled deployment and installed-host acceptance remain separate.
 
 # MCP Gateway v2.3.0
 
