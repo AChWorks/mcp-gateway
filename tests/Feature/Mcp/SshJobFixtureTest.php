@@ -215,13 +215,21 @@ SH;
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
 
         $cancel = $resumed->start($owner, $target->target_id, $client, (string) Str::uuid(),
-            'sleep 120; printf "unexpected"; exit 0', 180);
+            'printf "partial-before-cancel"; sleep 120; printf "unexpected"; exit 0', 180);
         self::assertTrue($cancel['ok'], json_encode($cancel));
         $cancelId = $cancel['result']['job_id'];
         sleep(1);
         $stop = $resumed->cancel($owner, $target->target_id, $client, $cancelId);
         self::assertSame('canceled', $stop['result']['status'] ?? null, json_encode($stop));
         self::assertTrue($stop['result']['complete']);
+        // The terminated script emitted only a short prefix. Stopping its
+        // systemd cgroup did NOT prove the FIFO collectors finished normally.
+        $partial = $resumed->output($owner, $target->target_id, $client, $cancelId);
+        self::assertTrue($partial['ok'], json_encode($partial));
+        self::assertTrue($partial['result']['available']);
+        self::assertSame('partial-before-cancel', base64_decode($partial['result']['data'], true));
+        self::assertTrue($partial['result']['end_of_file']);
+        self::assertNull($partial['result']['truncated']);
 
         DB::table('ssh_command_jobs')->whereIn('id', [$id, $cancelId])
             ->update(['expires_at' => now()->subMinute()]);

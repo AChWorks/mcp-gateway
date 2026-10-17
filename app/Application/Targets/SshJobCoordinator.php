@@ -403,29 +403,32 @@ final readonly class SshJobCoordinator
             ];
         }
 
-        // Capture readers drain excess bytes and write a private marker only
-        // when the cap was exceeded. A full-size legacy log without a marker
-        // is indeterminate, not evidence that no bytes were discarded.
-        $truncated = null;
+        // The overflow marker proves dropped bytes, even for a canceled Job.
+        // A short SFTP spool at EOF does NOT prove both FIFO readers finished.
+        // The wrapper writes exit-code only after waiting for both readers,
+        // and converts any reader failure to 125. A legitimate overflow
+        // always fills the 1 MiB spool: do not make a needless, rate-limited
+        // second SFTP call for ordinary small outputs.
+        $overflowConfirmed = false;
         if (($file['end_of_file'] ?? false) === true
+            && (int) $file['size'] >= self::MAX_OUTPUT_BYTES
             && in_array($row->status, ['completed', 'failed', 'canceled'], true)) {
-            if ($file['size'] < self::MAX_OUTPUT_BYTES) {
-                $truncated = false;
-            } elseif ($file['size'] === self::MAX_OUTPUT_BYTES) {
-                try {
-                    // Marker inspection must keep the original Job's exact
-                    // Target binding even if the Target is reconfigured.
-                    $this->files->read($user, $target,
-                        $this->directory($jobId).'/'.$stream.'.truncated',
-                        0, 1, expectedTargetBinding: (string) $row->target_binding_hash);
-                    $truncated = true;
-                } catch (SshTargetConnectionException $exception) {
-                    if (! $this->isMissingJobOutput($exception)) {
-                        throw $exception;
-                    }
+            try {
+                // Keep the marker probe bound to the original Job Target.
+                $this->files->read($user, $target,
+                    $this->directory($jobId).'/'.$stream.'.truncated',
+                    0, 1, expectedTargetBinding: (string) $row->target_binding_hash);
+                $overflowConfirmed = true;
+            } catch (SshTargetConnectionException $exception) {
+                if (! $this->isMissingJobOutput($exception)) {
+                    throw $exception;
                 }
             }
         }
+        $truncated = $this->captureTruncation(
+            $row, (int) $file['size'], ($file['end_of_file'] ?? false) === true,
+            $overflowConfirmed,
+        );
 
         return [
             'job_id' => $jobId, 'stream' => $stream, 'available' => true,
@@ -436,6 +439,33 @@ final readonly class SshJobCoordinator
             'source_check' => $file['source_check'],
             'status' => $row->status,
         ];
+    }
+
+    /**
+     * Tristate result about capture loss, not whether the script succeeded.
+     * A durable script_exit with a non-125 exit code proves the wrapper waited
+     * for BOTH readers; 125 is reserved for a collector failure too, so do
+     * not infer completeness from it. systemd terminal status or cancellation
+     * without this proof remains indeterminate, even for a short spool.
+     */
+    private function captureTruncation(
+        object $row, int $fileSize, bool $endOfFile, bool $overflowConfirmed,
+    ): ?bool {
+        if (! $endOfFile || ! in_array($row->status, ['completed', 'failed', 'canceled'], true)) {
+            return null;
+        }
+        if ($overflowConfirmed) {
+            return true;
+        }
+        if ($fileSize >= self::MAX_OUTPUT_BYTES
+            || ! in_array($row->status, ['completed', 'failed'], true)
+            || $row->terminal_reason !== 'script_exit'
+            || $row->exit_code === null
+            || (int) $row->exit_code === 125) {
+            return null;
+        }
+
+        return false;
     }
 
     /** Only native SFTP missing-path replies justify an unavailable spool. */
