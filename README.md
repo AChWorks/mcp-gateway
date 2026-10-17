@@ -2,7 +2,7 @@
 
 MCP Gateway is a self-hosted PHP application that connects an authenticated MCP client to the specific servers and WordPress sites you authorize. Add each connection as a **Target**, control who can use it, and manage access from one web Admin panel.
 
-**Official downloads and latest published version:** [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases). The v2.3.1 release line supports WordPress via WP AI Bridge, Direct SSH (commands, SFTP and retained Jobs), Target Groups, scoped OAuth/client permissions, browser file selection, per-Target Pause/Resume and optional AI guidance for each Target. **Install or update only from official published Release ZIPs**; merged source commits and GitHub Actions candidates are not installed or published automatically.
+**Official downloads and latest published version:** [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases). The current release supports WordPress via WP AI Bridge, Direct SSH (commands, SFTP and retained Jobs), Target Groups, scoped OAuth/client permissions, browser file selection, per-Target Pause/Resume, optional AI guidance and permissioned Admin/AI error diagnostics. **Install or update only from official published Release ZIPs**; merged source commits and GitHub Actions candidates are not installed or published automatically.
 
 ## What you can do
 
@@ -10,7 +10,7 @@ MCP Gateway is a self-hosted PHP application that connects an authenticated MCP 
 - Discover and run WordPress Abilities through the existing WordPress principal and its WP AI Bridge permissions.
 - Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
 - In v2.3.0, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.
-- Assign users, Target Groups and permission scopes; review Activity and AI client authorizations.
+- Assign users, Target Groups and permission scopes; review Activity, credential-redacted error diagnostics and AI client authorizations.
 - Install or update from the named GitHub Release ZIPs without requiring Git or Composer on the host.
 
 **Limits to know:** SSH runs with the privileges of its configured remote OS account; Gateway permissions do not turn root into a sandbox. v2.3.0 defaulted SSH whole-file HTTP transfer to OFF; **v2.3.1 new installations** explicitly enable SSH-only whole-file transfer (`SSH_FILE_TRANSFER_ENABLED=true`), while existing private environments retain their original value (absent-key OFF). This is not proof of ChatGPT-native attachment support. AI guidance is advisory, not enforced approval. Other AI clients need a compatible, configured client profile; support for every MCP extension is not implied.
@@ -98,12 +98,13 @@ Use **AI clients** (`/admin/oauth-clients`) to manage application profiles and g
 
 ## Available MCP tools
 
-The earlier v2.2.1 MCP catalog contained nine tools. The **v2.3.0 catalog** adds four agentless SSH Job tools (13 total), shown below. Available operations remain constrained by the authenticated client, Gateway user and exact Target access permissions. SSH Jobs are available only after that version is installed and migrated on a supported host.
+The **v2.3.2 MCP catalog** exposes 14 tools, including a read-only diagnostics lookup alongside WordPress and Direct SSH operations. Available operations remain constrained by the authenticated client, Gateway user and effective Target permissions. SSH Jobs and diagnostic lookups are available only when their supporting release and database migrations are installed.
 
 | Tool | Purpose |
 | --- | --- |
 | `targets-list` | List authorized Targets without credentials. |
 | `target-context` | Read non-secret context for one explicitly authorized `target_id`. |
+| `operation-diagnostics-read` | Read selectively credential-redacted errors using a `diagnostic_reference` UUID, or bounded recent failures for one authorized `target_id`; requires current `activity.view` and applicable actor/client/Target scope. |
 | `wordpress-abilities-read` | Inspect WordPress Ability metadata on one authorized WordPress Target. |
 | `wordpress-ability-execute` | Execute a schema-valid Ability for an explicitly authorized WordPress Target, subject to effect-class and downstream permissions. |
 | `ssh-command-run` | Run a bounded non-interactive command on an explicitly authorized, host-key-verified Direct SSH Target, within its OS privileges and Gateway permission policy. |
@@ -127,7 +128,7 @@ New WordPress plugin Abilities are discovered through the existing WordPress too
 | `/admin/target-groups` | Target Group assignments |
 | `/admin/users` | Gateway users and access |
 | `/admin/oauth-clients` | AI client profiles, grants and password-confirmed revocation |
-| `/admin/activity` | Bounded Activity |
+| `/admin/activity` | Bounded Activity and authorized diagnostic-reference lookup |
 | `/admin/connection` | MCP and OAuth connection metadata |
 
 ## Update safely
@@ -141,13 +142,14 @@ New WordPress plugin Abilities are discovered through the existing WordPress too
 
 **Do not blindly retry failed updates.** If a migration may have started, code-only rollback is not a database rollback. Keep backup, private recovery state and logs, then follow the [deployment/recovery procedures](docs/DEPLOYMENT.md) before any further action. The private Owner-local recovery CLI is not an unauthenticated web recovery endpoint.
 
-**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. The v2.3.0 release adds five migrations: SSH command operational-limit columns, a durable SSH Job journal, configurable Job lifecycle/resource budgets and operator attestation, immutable per-Job admission timing snapshots, and a default-enabled Target Pause/Resume flag; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. v2.3.1 adds two non-destructive Target-era migrations for the SSH Job script-input setting and optional AI guidance; a rollback must not silently discard operator-written notes. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
+**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. The v2.3.0 release adds five migrations: SSH command operational-limit columns, a durable SSH Job journal, configurable Job lifecycle/resource budgets and operator attestation, immutable per-Job admission timing snapshots, and a default-enabled Target Pause/Resume flag; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. v2.3.1 adds two non-destructive Target-era migrations for the SSH Job script-input setting and optional AI guidance; a rollback must not silently discard operator-written notes. v2.3.2 adds nullable `activity_events.diagnostic_context` for selectively redacted observed error details; reverting this migration drops retained diagnostic evidence, so a code rollback is not a safe database rollback. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
 
 ## Troubleshooting
 
 - **Cannot install:** check PHP/extensions, TLS, correct `public/` web root, writable runtime paths and an empty dedicated database. Never relax private file permissions globally.
 - **WordPress `invalid_client`:** verify that WordPress approved Gateway's exact client metadata URL, then check the real Target status and pending OAuth operation before reconnecting. Do not regenerate Gateway keys to fix this error.
 - **AI client disconnected:** verify Gateway health and OAuth discovery first; inspect and reconnect the correct client authorization when appropriate, without resetting healthy WordPress credentials.
+- **Operation failure:** use the returned `diagnostic_reference` in authorized Admin Activity or the read-only `operation-diagnostics-read` MCP tool to inspect the original *observed* code, message and stage after selective credential redaction. A provider cause already hidden upstream remains unknown; do not blindly retry a potentially executed mutation.
 - **Updater stalled/failed:** preserve backup and recovery evidence. Do not assume Laravel CLI readiness proves actual HTTP availability or that migrations can be reversed.
 
 Use [Deployment](docs/DEPLOYMENT.md) and [Configuration](docs/CONFIGURATION.md) for detailed diagnostics, session lifetime (default `SESSION_LIFETIME=120` minutes of inactivity, `SESSION_EXPIRE_ON_CLOSE=false`), PHP-worker permissions and safe recovery. Do not publish passwords, tokens, `.env` or private keys in issue reports.
