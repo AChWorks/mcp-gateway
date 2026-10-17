@@ -413,8 +413,11 @@ final readonly class SshJobCoordinator
                 $truncated = false;
             } elseif ($file['size'] === self::MAX_OUTPUT_BYTES) {
                 try {
-                    $this->files->stat($user, $target,
-                        $this->directory($jobId).'/'.$stream.'.truncated');
+                    // Marker inspection must keep the original Job's exact
+                    // Target binding even if the Target is reconfigured.
+                    $this->files->read($user, $target,
+                        $this->directory($jobId).'/'.$stream.'.truncated',
+                        0, 1, expectedTargetBinding: (string) $row->target_binding_hash);
                     $truncated = true;
                 } catch (SshTargetConnectionException $exception) {
                     if (! $this->isMissingJobOutput($exception)) {
