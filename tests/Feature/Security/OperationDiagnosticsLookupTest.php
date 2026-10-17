@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Security;
 
+use App\Application\Access\AccessControl;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -89,6 +90,88 @@ final class OperationDiagnosticsLookupTest extends TestCase
         ]);
         self::assertSame($hidden, $tool->read($operator, $a));
         $this->actingAs($operator)->get('/admin/activity')->assertForbidden();
+    }
+
+    public function test_direct_and_group_activity_denials_hide_error_details_from_admin_and_ai(): void
+    {
+        $operator = $this->user('operator', 'selected');
+        $alpha = $this->target('alpha', 'wp_ai_bridge');
+        $beta = $this->target('beta', 'ssh_direct');
+        foreach ([$alpha, $beta] as $target) {
+            DB::table('user_target_access')->insert([
+                'user_id' => $operator->getKey(),
+                'target_record_id' => $target->getKey(),
+                'allowed' => true,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+
+        $alphaRef = (string) Str::uuid();
+        $betaRef = (string) Str::uuid();
+        $recorder = app(ActivityRecorder::class);
+        $recorder->record($alphaRef, 'wordpress-ability-execute', 'failure', $alpha,
+            'downstream_rejected', ['source_error_message' => 'Internal PHP error at /site/wp/alpha.php']);
+        $recorder->record($betaRef, 'ssh-file-read', 'failure', $beta,
+            'rate_limited', ['source_error_message' => 'SSH error at /root/beta/file.log']);
+
+        $diagnostics = app(OperationDiagnosticsMcpToolHandlers::class);
+        self::assertTrue($diagnostics->read($operator, $alphaRef)['ok']);
+        self::assertTrue($diagnostics->read($operator, $betaRef)['ok']);
+        $unavailable = $diagnostics->read($operator, (string) Str::uuid());
+
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $alpha->getKey(),
+            'permission' => GatewayPermission::ActivityView->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        self::assertSame($unavailable, $diagnostics->read($operator, $alphaRef));
+        self::assertSame($unavailable, $diagnostics->read($operator, null, 'alpha'));
+        self::assertTrue($diagnostics->read($operator, $betaRef)['ok']);
+        $this->actingAs($operator)->get('/admin/activity?target_id=alpha')
+            ->assertOk()->assertSee('No activity matches these filters.')
+            ->assertDontSee('Internal PHP error at /site/wp/alpha.php');
+        $this->actingAs($operator)->get('/admin/activity')
+            ->assertOk()->assertDontSee('Internal PHP error at /site/wp/alpha.php')
+            ->assertSee('SSH error at /root/beta/file.log');
+
+        // The original Activity permission is restored on alpha, but a
+        // group-scoped Activity denial hides beta independently of TargetsView.
+        DB::table('user_target_permission_denials')
+            ->where('user_id', $operator->getKey())
+            ->where('target_record_id', $alpha->getKey())
+            ->delete();
+        self::assertTrue($diagnostics->read($operator, $alphaRef)['ok']);
+
+        $groupId = (string) Str::ulid();
+        DB::table('target_groups')->insert([
+            'id' => $groupId, 'name' => 'Hidden diagnostics group',
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('target_group_targets')->insert([
+            'target_group_id' => $groupId, 'target_record_id' => $beta->getKey(),
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('target_group_users')->insert([
+            'target_group_id' => $groupId, 'user_id' => $operator->getKey(),
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $groupId,
+            'permission' => GatewayPermission::ActivityView->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        self::assertSame($unavailable, $diagnostics->read($operator, $betaRef));
+        self::assertSame($unavailable, $diagnostics->read($operator, null, 'beta'));
+        self::assertTrue($diagnostics->read($operator, $alphaRef)['ok']);
+        $this->actingAs($operator)->get('/admin/activity?diagnostic_reference='.$betaRef)
+            ->assertOk()->assertSee('No activity matches these filters.')
+            ->assertDontSee('/root/beta/file.log');
+
+        // The user may still see the Target's existence if TargetsView is
+        // allowed; denial is for its diagnostic content, not Target metadata.
+        self::assertTrue(app(AccessControl::class)
+            ->allows($operator, GatewayPermission::TargetsView, $beta));
     }
 
     public function test_legacy_or_deleted_diagnostic_evidence_is_honestly_reported(): void

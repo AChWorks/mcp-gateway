@@ -41,10 +41,17 @@ final readonly class ActivityFeed
             throw new InvalidArgumentException('Invalid diagnostic reference.');
         }
 
+        // Activity visibility is the intersection of Target visibility AND
+        // current per-Target activity.view. A direct/group activity denial
+        // must hide both the Admin row and the new AI diagnostic details.
         $allowedTargets = $this->access->scopeTargets(
-            Target::query()->select('id'),
+            $this->access->scopeTargets(
+                Target::query()->select('id'),
+                $user,
+                GatewayPermission::TargetsView,
+            ),
             $user,
-            GatewayPermission::TargetsView,
+            GatewayPermission::ActivityView,
         );
 
         $query = DB::table('activity_events')
@@ -81,9 +88,13 @@ final readonly class ActivityFeed
                 $query->where('target_id', $targetId);
             } else {
                 $scopedTarget = $this->access->scopeTargets(
-                    Target::query()->where('target_id', $targetId),
+                    $this->access->scopeTargets(
+                        Target::query()->where('target_id', $targetId),
+                        $user,
+                        GatewayPermission::TargetsView,
+                    ),
                     $user,
-                    GatewayPermission::TargetsView,
+                    GatewayPermission::ActivityView,
                 )->first(['id']);
                 $query->where('target_record_id', $scopedTarget?->getKey() ?? '');
             }
