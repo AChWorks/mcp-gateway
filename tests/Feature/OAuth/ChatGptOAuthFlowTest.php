@@ -213,6 +213,7 @@ final class ChatGptOAuthFlowTest extends TestCase
         self::assertSame([
             'targets-list',
             'target-context',
+            'operation-diagnostics-read',
             'wordpress-abilities-read',
             'wordpress-ability-execute',
             'ssh-command-run',
@@ -245,6 +246,26 @@ final class ChatGptOAuthFlowTest extends TestCase
             ->assertJsonPath('result.structuredContent.ok', true)
             ->assertJsonPath('result.structuredContent.targets', [])
             ->assertJsonPath('result.structuredContent.truncated', false);
+
+        // An OAuth-authenticated AI can invoke the same scoped diagnostics
+        // lookup as Admin, not merely discover its Tool definition.
+        $this->withHeaders([
+            ...$mcpHeaders,
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+            'Mcp-Name' => 'operation-diagnostics-read',
+        ])->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 13,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'operation-diagnostics-read',
+                'arguments' => ['diagnostic_reference' => (string) Str::uuid()],
+                '_meta' => $modernMeta,
+            ],
+        ])->assertOk()
+            ->assertJsonPath('result.structuredContent.ok', false)
+            ->assertJsonPath('result.structuredContent.error.code', 'diagnostic_unavailable');
 
         $this->withHeaders([
             ...$mcpHeaders,
@@ -293,6 +314,7 @@ final class ChatGptOAuthFlowTest extends TestCase
         self::assertSame([
             'targets-list',
             'target-context',
+            'operation-diagnostics-read',
             'wordpress-abilities-read',
             'wordpress-ability-execute',
             'ssh-command-run',

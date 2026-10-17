@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
@@ -273,6 +274,8 @@ final class WordpressTargetMcpRegressionTest extends TestCase
             ->where('error_code', 'downstream_rejected')->firstOrFail();
         self::assertSame('unknown', $event->outcome);
         self::assertSame($reference, $event->correlation_id);
+        self::assertSame('Permission denied by WordPress.', json_decode($event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR)['source_error_message']);
+        self::assertStringNotContainsString('Permission denied by WordPress.', json_encode($response, JSON_THROW_ON_ERROR));
         self::assertSame(1, collect($this->toolCalls)
             ->where('ability', 'demo/denied')->count(), 'The rejected mutation must not be replayed.');
 
@@ -288,7 +291,9 @@ final class WordpressTargetMcpRegressionTest extends TestCase
                     && ($context['effect_unconfirmed'] ?? null) === true
                     && ($context['retry_safe'] ?? null) === false
                     && ! str_contains($encoded, 'alpha-access')
-                    && ! str_contains($encoded, 'Permission denied by WordPress.');
+                    // The exact observed downstream message is intentionally
+                    // retained for authorized diagnostics, not flattened away.
+                    && str_contains($encoded, 'Permission denied by WordPress.');
             },
         )->once();
     }
@@ -321,6 +326,114 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         self::assertSame('failure', $event->outcome);
         self::assertSame($event->correlation_id, $result['error']['diagnostic_reference']);
         self::assertStringNotContainsString('Provider secret detail', json_encode($result, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_exact_unknown_downstream_error_code_message_and_structured_details_reach_authorized_ai(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+        $this->fakeBridge(function (Request $request) {
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'tools/call'
+                && ($payload['params']['arguments']['ability_name'] ?? null) === 'demo/read') {
+                return Http::response([
+                    'jsonrpc' => '2.0', 'id' => $payload['id'] ?? null,
+                    'result' => [
+                        'isError' => true,
+                        'content' => [[
+                            'type' => 'text',
+                            'text' => 'WP_Error /var/www/blog/plugins/tool.php: validation failed on php_version; '
+                                .'Authorization: Bearer alpha-access password=REMOTE_PASSWORD_123',
+                        ]],
+                        'structuredContent' => [
+                            'error' => [
+                                'code' => 'vendor-new/errors:not_known_to_gateway.422',
+                                'message' => 'Validation failed at /var/www/blog/plugins/tool.php',
+                                'data' => [
+                                    'file' => '/var/www/blog/plugins/tool.php',
+                                    'parameter' => 'php_version',
+                                    'password' => 'REMOTE_PASSWORD_123',
+                                    'access_token' => 'REMOTE_ACCESS_TOKEN_456',
+                                    'unlabelled_debug_note' => 'Observed bare credential alpha-access in a downstream note',
+                                ],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $result = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/read', []);
+
+        self::assertSame('downstream_rejected', $result['error']['code']);
+        $event = DB::table('activity_events')
+            ->where('operation', 'wordpress-ability-execute')
+            ->where('error_code', 'downstream_rejected')->firstOrFail();
+        $details = json_decode($event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+
+        self::assertSame('vendor-new/errors:not_known_to_gateway.422', $details['source_error_code']);
+        self::assertSame('Validation failed at /var/www/blog/plugins/tool.php',
+            $details['source_error_structured_message']);
+        self::assertStringContainsString('/var/www/blog/plugins/tool.php', $details['source_error_message']);
+        self::assertStringContainsString('validation failed on php_version', $details['source_error_message']);
+        self::assertSame('/var/www/blog/plugins/tool.php', $details['source_error_details']['file']);
+        self::assertSame('php_version', $details['source_error_details']['parameter']);
+        self::assertSame('[REDACTED]', $details['source_error_details']['password']);
+        self::assertSame('[REDACTED]', $details['source_error_details']['access_token']);
+        self::assertSame('unknown', $details['provider_cause']);
+        self::assertStringContainsString('Observed bare credential [redacted]',
+            $details['source_error_details']['unlabelled_debug_note']);
+        self::assertStringNotContainsString('alpha-access', json_encode($details, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('REMOTE_PASSWORD_123', json_encode($details, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('REMOTE_ACCESS_TOKEN_456', json_encode($details, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('/var/www/blog/plugins/tool.php', json_encode($result, JSON_THROW_ON_ERROR));
+
+        $lookup = app(OperationDiagnosticsMcpToolHandlers::class)
+            ->read($this->principal, (string) $event->correlation_id);
+        self::assertTrue($lookup['ok']);
+        self::assertSame($details, $lookup['events'][0]['diagnostics']);
+    }
+
+    public function test_json_rpc_protocol_error_keeps_exact_observed_code_and_message_for_diagnostics(): void
+    {
+        $alpha = $this->createSite('alpha');
+        $this->pair($alpha);
+        $this->fakeBridge(function (Request $request) {
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'tools/call'
+                && ($payload['params']['arguments']['ability_name'] ?? null) === 'demo/read') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'] ?? null,
+                    'error' => [
+                        'code' => -32602,
+                        'message' => 'Invalid parameter on /srv/site/plugins/news.php; access_token=TOP_SECRET_998',
+                        'data' => ['field' => 'php_version', 'password' => 'SECRET_IN_ERROR_DATA'],
+                    ],
+                ], 200);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $result = app(WordpressTargetMcpToolHandlers::class)
+            ->execute($this->principal, 'alpha', 'demo/read', []);
+        self::assertSame('protocol_error', $result['error']['code']);
+
+        $event = DB::table('activity_events')->where('operation', 'wordpress-ability-execute')
+            ->where('error_code', 'protocol_error')->firstOrFail();
+        $safe = json_decode($event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame(-32602, $safe['source_error_code']);
+        self::assertStringContainsString('Invalid parameter on /srv/site/plugins/news.php',
+            $safe['source_error_message']);
+        self::assertSame('php_version', $safe['source_error_details']['field']);
+        self::assertSame('[REDACTED]', $safe['source_error_details']['password']);
+        self::assertStringNotContainsString('TOP_SECRET_998', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('SECRET_IN_ERROR_DATA', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('/srv/site/plugins/news.php', json_encode($result, JSON_THROW_ON_ERROR));
     }
 
     public function test_readonly_transport_failure_is_not_reported_as_mutation_uncertainty_or_retried(): void

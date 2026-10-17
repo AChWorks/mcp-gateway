@@ -75,6 +75,7 @@ final readonly class SshCommandMcpToolHandlers
                 'code' => 'outcome_unknown',
                 'message' => 'Remote command may have executed; do not retry automatically.',
                 'next_step' => OperationDiagnostics::nextStep('outcome_unknown'),
+                'diagnostic_reference' => CorrelationId::current(),
             ]] : []),
         ];
     }
@@ -85,7 +86,13 @@ final readonly class SshCommandMcpToolHandlers
      */
     private function failed(string $operation, ?Target $target, string $code, array $limits = []): array
     {
-        $this->activity->record(CorrelationId::current(), $operation, 'failure', $target, $code);
+        $this->activity->record(CorrelationId::current(), $operation, 'failure', $target, $code,
+            $code === 'rate_limited' ? [
+                'failure_origin' => 'gateway_admission',
+                'failure_stage' => 'admission',
+                'pre_dispatch' => true,
+                'retry_safe' => true,
+            ] : []);
 
         return [
             'ok' => false,
@@ -99,6 +106,9 @@ final readonly class SshCommandMcpToolHandlers
                     'max_command_bytes' => $limits['max_bytes'],
                     'max_timeout_seconds' => $limits['max_seconds'],
                 ]] : []),
+                ...($target instanceof Target && ! in_array($code, [
+                    'target_not_found', 'invalid_input', 'target_paused',
+                ], true) ? ['diagnostic_reference' => CorrelationId::current()] : []),
             ],
         ];
     }

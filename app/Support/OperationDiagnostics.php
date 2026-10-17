@@ -11,9 +11,9 @@ use Throwable;
  * Operator-safe diagnostics for every connector and transport.
  *
  * Error codes are stable machine identities; explanations and next steps are
- * UI-only guidance. Only an explicit allowlist of scalar diagnostics is logged.
- * Never pass exception messages, request URLs, headers, bodies, shell commands,
- * tokens, paths, credentials or remote response content into this reporter.
+ * UI-only guidance, never replacements for original observed error codes/text.
+ * Preserve useful provider/transport detail for permissioned diagnostics;
+ * redact secret values instead of blindly hiding paths, messages or URLs.
  */
 final class OperationDiagnostics
 {
@@ -35,52 +35,7 @@ final class OperationDiagnostics
             'target_id' => $target?->target_id,
             'connector_type' => $target?->connector_type,
         ];
-        // Record only independently evidenced, finite machine provenance.
-        // An MCP isError result is not proof of a provider code or rollback.
-        $origin = $details['failure_origin'] ?? null;
-        if (is_string($origin) && in_array($origin, [
-            'gateway_transport', 'gateway_response', 'downstream_http',
-            'downstream_mcp', 'unknown',
-        ], true)) {
-            $safe['failure_origin'] = $origin;
-        }
-        $stage = $details['failure_stage'] ?? null;
-        if (is_string($stage) && in_array($stage, [
-            'dns_lookup', 'dns_timeout', 'deadline_before_dispatch',
-            'tcp_connect', 'tls_handshake', 'request_timeout',
-            'connection_setup', 'response_transfer', 'response_body',
-            'remote_http', 'operation', 'unknown',
-        ], true)) {
-            $safe['failure_stage'] = $stage;
-        }
-        $status = $details['http_status'] ?? null;
-        if (is_int($status) && $status >= 100 && $status <= 599) {
-            $safe['remote_http_status'] = $status;
-        }
-        if (is_bool($details['pre_dispatch'] ?? null)) {
-            $safe['request_not_sent'] = $details['pre_dispatch'];
-        }
-        if (is_bool($details['retry_safe'] ?? null)) {
-            $safe['retry_safe'] = $details['retry_safe'];
-        }
-        if (is_bool($details['effect_unconfirmed'] ?? null)) {
-            $safe['effect_unconfirmed'] = $details['effect_unconfirmed'];
-        }
-        if (($details['provider_cause_unknown'] ?? null) === true) {
-            $safe['provider_cause'] = 'unknown';
-        }
-        $phase = $details['phase'] ?? null;
-        if (is_string($phase) && in_array($phase, [
-            'content_length', 'collected_body', 'decoded_body',
-        ], true)) {
-            $safe['response_phase'] = $phase;
-        }
-        foreach (['limit_bytes', 'observed_bytes'] as $key) {
-            $value = $details[$key] ?? null;
-            if (is_int($value) && $value >= 0) {
-                $safe[$key] = $value;
-            }
-        }
+        $safe = [...$safe, ...self::safeContext($details)];
 
         try {
             Log::warning('Gateway operation failure.', $safe);
@@ -89,6 +44,117 @@ final class OperationDiagnostics
         }
 
         return $reference;
+    }
+
+    /**
+     * Canonical redacted diagnostic context shared by Activity, MCP, Admin and logs.
+     * Keep source messages/codes as received, marking configured truncation.
+     * The same selective redaction applies on both storage and retrieval.
+     *
+     * @param  array<string,mixed>  $details
+     * @return array<string,mixed>
+     */
+    public static function safeContext(array $details): array
+    {
+        $safe = [];
+        $origin = $details['failure_origin'] ?? null;
+        if (is_string($origin) && in_array($origin, [
+            'gateway_admission', 'gateway_transport', 'gateway_response',
+            'downstream_http', 'downstream_mcp', 'unknown',
+        ], true)) {
+            $safe['failure_origin'] = $origin;
+        }
+        $stage = $details['failure_stage'] ?? null;
+        if (is_string($stage) && in_array($stage, [
+            'dns_lookup', 'dns_timeout', 'deadline_before_dispatch',
+            'tcp_connect', 'tls_handshake', 'request_timeout',
+            'connection_setup', 'response_transfer', 'response_body',
+            'remote_http', 'operation', 'admission', 'unknown',
+        ], true)) {
+            $safe['failure_stage'] = $stage;
+        }
+        $status = $details['http_status'] ?? $details['remote_http_status'] ?? null;
+        if (is_int($status) && $status >= 100 && $status <= 599) {
+            $safe['remote_http_status'] = $status;
+        }
+        $notSent = $details['pre_dispatch'] ?? $details['request_not_sent'] ?? null;
+        if (is_bool($notSent)) {
+            $safe['request_not_sent'] = $notSent;
+        }
+        if (is_bool($details['retry_safe'] ?? null)) {
+            $safe['retry_safe'] = $details['retry_safe'];
+        }
+        if (is_bool($details['effect_unconfirmed'] ?? null)) {
+            $safe['effect_unconfirmed'] = $details['effect_unconfirmed'];
+        }
+        if (($details['provider_cause_unknown'] ?? null) === true
+            || ($details['provider_cause'] ?? null) === 'unknown') {
+            $safe['provider_cause'] = 'unknown';
+        }
+        $phase = $details['phase'] ?? $details['response_phase'] ?? null;
+        if (is_string($phase) && in_array($phase, [
+            'content_length', 'collected_body', 'decoded_body',
+        ], true)) {
+            $safe['response_phase'] = $phase;
+        }
+        foreach (['limit_bytes', 'observed_bytes'] as $key) {
+            $value = $details[$key] ?? null;
+            if (is_int($value) && $value >= 0 && $value <= 1099511627776) {
+                $safe[$key] = $value;
+            }
+        }
+
+        // Preserve observed native codes and messages *alongside* classifications,
+        // rather than forcing unknown provider errors into Gateway's code vocabulary.
+        foreach (['source_error_code', 'source_error_message', 'source_error_structured_message', 'gateway_error_message'] as $key) {
+            $value = $details[$key] ?? null;
+            if (! is_string($value) && ! is_int($value)) {
+                continue;
+            }
+
+            if (is_int($value)) {
+                $safe[$key] = $value;
+
+                continue;
+            }
+
+            $redacted = DiagnosticRedactor::text($value);
+            $limit = (int) config('activity.'.($key === 'source_error_code'
+                ? 'diagnostic_code_max_bytes' : 'diagnostic_message_max_bytes'), 65536);
+            $limit = max(128, $limit);
+            $safe[$key] = strlen($redacted) > $limit
+                ? mb_strcut($redacted, 0, $limit, 'UTF-8') : $redacted;
+            if (strlen($redacted) > $limit || ($details[$key.'_truncated'] ?? false) === true) {
+                $safe[$key.'_truncated'] = true;
+            }
+        }
+
+        $exceptionClass = $details['exception_class'] ?? null;
+        if (is_string($exceptionClass) && strlen($exceptionClass) <= 256
+            && ctype_alnum(str_replace(['\\', '_'], '', $exceptionClass))) {
+            $safe['exception_class'] = $exceptionClass;
+        }
+
+        if (array_key_exists('source_error_details', $details)) {
+            $redacted = DiagnosticRedactor::value($details['source_error_details']);
+            $json = json_encode($redacted, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if (is_string($json)) {
+                $limit = max(1024, (int) config('activity.diagnostic_details_max_bytes', 131072));
+                if (strlen($json) > $limit) {
+                    $safe['source_error_details_excerpt'] = mb_strcut($json, 0, $limit, 'UTF-8');
+                    $safe['source_error_details_truncated'] = true;
+                } else {
+                    $safe['source_error_details'] = $redacted;
+                }
+            }
+        } elseif (is_string($details['source_error_details_excerpt'] ?? null)) {
+            $limit = max(1024, (int) config('activity.diagnostic_details_max_bytes', 131072));
+            $value = DiagnosticRedactor::text($details['source_error_details_excerpt']);
+            $safe['source_error_details_excerpt'] = mb_strcut($value, 0, $limit, 'UTF-8');
+            $safe['source_error_details_truncated'] = true;
+        }
+
+        return $safe;
     }
 
     public static function summary(string $code): string
@@ -146,13 +212,13 @@ final class OperationDiagnostics
             'tcp_unreachable', 'egress_denied' => __('Check route, firewall, configured host and port, and the Gateway outbound SSH policy.'),
             'connection_busy', 'rate_limited', 'admission_unavailable' => __('Wait for the existing attempt or the advertised limit to clear; avoid parallel retries.'),
             'outcome_unknown' => __('Inspect the remote state and any transfer receipt before deciding whether another command or write is safe.'),
-            'downstream_rejected' => __('A downstream MCP Tool reported an error but its provider cause may be unavailable. Use the diagnostic reference in Gateway logs and verify remote state before retrying any mutation.'),
+            'downstream_rejected' => __('A downstream MCP Tool reported an error but its provider cause may be unavailable. Use the diagnostic reference in authorized Admin Activity or the operation-diagnostics-read MCP Tool to inspect the original observed error. If the upstream Adapter stripped the provider cause, inspect Bridge/WordPress. Reconcile uncertain remote effects before any retry.'),
             'response_too_large', 'file_too_large' => __('Reduce the payload or use a supported bounded transfer mode. Do not disable resource limits.'),
             'transfer_timed_out' => __('Check network performance and supported operation budgets before a safe new attempt.'),
             'invalid_input' => __('Correct the indicated input or tool parameters.'),
             'forbidden', 'target_not_found' => __('Ask the Owner to review user capability and selected Target scope; do not expose an unauthorized Target.'),
             'target_paused' => __('Ask the Owner to resume this Target. Stored connection and permissions are unchanged.'),
-            'server_error', 'file_unavailable' => __('Look up the matching diagnostic reference in the server logs, then inspect the owning component.'),
+            'server_error', 'file_unavailable' => __('Look up the diagnostic reference in authorized Admin Activity or operation-diagnostics-read. Inspect the owning component if its original cause was not received.'),
             default => __('Find the matching operation, error code, time and diagnostic reference in the Gateway logs.'),
         };
     }

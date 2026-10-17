@@ -8,7 +8,7 @@
         <div class="eyebrow">{{ __('Activity') }}</div>
         <h1>{{ __('Operator activity view') }}</h1>
         <p class="muted">{{ __('Only bounded metadata is shown. Raw MCP payloads and credentials are not stored in this feed.') }}</p>
-        <p class="muted">{{ __('Use the Correlation ID to find the matching server diagnostic event. Expand any failed row for a plain-language explanation and suggested checks.') }}</p>
+        <p class="muted">{{ __('Filter by an exact diagnostic reference, then expand the failure for recorded evidence and suggested checks. Older events may have only the error code; detailed stages are never inferred.') }}</p>
     </div>
 </div>
 
@@ -21,6 +21,10 @@
         <div class="field">
             <label for="operation">{{ __('Operation') }}</label>
             <input id="operation" name="operation" type="text" maxlength="128" value="{{ $filters['operation'] ?? '' }}">
+        </div>
+        <div class="field">
+            <label for="diagnostic_reference">{{ __('Diagnostic reference') }}</label>
+            <input id="diagnostic_reference" name="diagnostic_reference" type="text" maxlength="36" spellcheck="false" value="{{ $filters['diagnostic_reference'] ?? '' }}" placeholder="00000000-0000-0000-0000-000000000000">
         </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Filter') }}</button>
@@ -59,6 +63,13 @@
                                     <summary>{{ __('Explain error') }}</summary>
                                     <p>{{ \App\Support\OperationDiagnostics::summary($item['error_code']) }}</p>
                                     <p><strong>{{ __('Suggested checks') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep($item['error_code']) }}</p>
+                                    @if ($item['diagnostics'] !== [])
+                                        @foreach ($item['diagnostics'] as $field => $value)
+                                            <p><strong>{{ __(ucwords(str_replace('_', ' ', $field))) }}:</strong> <code style="white-space: pre-wrap; overflow-wrap: anywhere;">{{ is_bool($value) ? ($value ? 'true' : 'false') : (is_array($value) ? json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) : $value) }}</code></p>
+                                        @endforeach
+                                    @else
+                                        <p class="muted">{{ __('Structured stage details were not retained for this event; do not infer a provider cause.') }}</p>
+                                    @endif
                                 </details>
                             @endif
                         </td>
@@ -74,6 +85,7 @@
         $baseQuery = array_filter([
             'target_id' => $filters['target_id'] ?? null,
             'operation' => $filters['operation'] ?? null,
+            'diagnostic_reference' => $filters['diagnostic_reference'] ?? null,
         ], static fn ($value) => $value !== null && $value !== '');
     @endphp
     <nav class="pagination" aria-label="{{ __('Activity pages') }}">

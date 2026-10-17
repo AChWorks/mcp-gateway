@@ -400,9 +400,31 @@ final readonly class WpAiBridgeMcpClient
 
         if (isset($payload['error'])) {
             $reason = $mutationRisk ? 'outcome_unknown' : 'protocol_error';
+            $observed = is_array($payload['error']) ? $payload['error'] : [];
+            $evidence = [
+                'failure_origin' => 'downstream_mcp',
+                'failure_stage' => 'operation',
+                'effect_unconfirmed' => $mutationRisk,
+                'retry_safe' => false,
+            ];
+            if (is_string($observed['code'] ?? null) || is_int($observed['code'] ?? null)) {
+                $evidence['source_error_code'] = $this->redactBearerCredential(
+                    $observed['code'], $headers['Authorization'] ?? null,
+                );
+            }
+            if (is_string($observed['message'] ?? null)) {
+                $evidence['source_error_message'] = $this->redactBearerCredential(
+                    $observed['message'], $headers['Authorization'] ?? null,
+                );
+            }
+            if (array_key_exists('data', $observed)) {
+                $evidence['source_error_details'] = $this->redactBearerCredential(
+                    $observed['data'], $headers['Authorization'] ?? null,
+                );
+            }
             throw new WpAiBridgeMcpException($reason, $mutationRisk
                 ? 'The downstream mutation result is unknown and was not retried.'
-                : 'WP AI Bridge returned an MCP protocol error.');
+                : 'WP AI Bridge returned an MCP protocol error.', null, $evidence);
         }
 
         $result = $payload['result'] ?? null;
@@ -415,20 +437,47 @@ final readonly class WpAiBridgeMcpClient
 
         $authorization = $headers['Authorization'] ?? null;
         if (($result['isError'] ?? false) === true) {
-            // isError is observed at MCP adapter level; the WordPress
-            // provider error code may already have been stripped. A mutating
-            // Tool may have committed an effect before reporting isError.
+            // Keep the original authenticated downstream error fields where
+            // present. A provider WP_Error code may already be missing in the
+            // upstream Adapter; do not manufacture it by parsing prose.
+            $observedMessage = $this->observedToolErrorMessage($result, $authorization);
+            $structured = is_array($result['structuredContent'] ?? null)
+                ? $result['structuredContent'] : [];
+            $remoteError = is_array($structured['error'] ?? null)
+                ? $structured['error'] : [];
+            $nativeCode = $this->redactBearerCredential(
+                $remoteError['code'] ?? $structured['error_code'] ?? null, $authorization,
+            );
+            $nativeMessage = $this->redactBearerCredential(
+                $remoteError['message'] ?? $structured['error'] ?? null, $authorization,
+            );
+            $nativeData = $remoteError['data'] ?? $structured['error_data'] ?? null;
+            $details = [
+                'failure_origin' => 'downstream_mcp',
+                'failure_stage' => 'operation',
+                // Authenticated MCP-level error identity need not be the original
+                // provider/WordPress WP_Error identity (Adapter can strip it).
+                'provider_cause_unknown' => true,
+                'effect_unconfirmed' => $mutationRisk,
+                'retry_safe' => false,
+            ];
+            if (is_string($nativeCode) || is_int($nativeCode)) {
+                $details['source_error_code'] = $nativeCode;
+            }
+            if (is_string($observedMessage) || is_string($nativeMessage)) {
+                $details['source_error_message'] = $observedMessage ?? $nativeMessage;
+            }
+            if (is_string($nativeMessage) && $nativeMessage !== $observedMessage) {
+                $details['source_error_structured_message'] = $nativeMessage;
+            }
+            if (array_key_exists('data', $remoteError) || array_key_exists('error_data', $structured)) {
+                $details['source_error_details'] = $this->redactBearerCredential($nativeData, $authorization);
+            }
             throw new WpAiBridgeMcpException(
                 'downstream_rejected',
-                $this->boundedToolErrorMessage($result, $authorization),
+                $observedMessage ?? (is_string($nativeMessage) ? $nativeMessage : 'WP AI Bridge rejected the Ability request.'),
                 null,
-                [
-                    'failure_origin' => 'downstream_mcp',
-                    'failure_stage' => 'operation',
-                    'provider_cause_unknown' => true,
-                    'effect_unconfirmed' => $mutationRisk,
-                    'retry_safe' => false,
-                ],
+                $details,
             );
         }
 
@@ -456,37 +505,38 @@ final readonly class WpAiBridgeMcpClient
     private function assertAuthenticationStatus(SafeHttpResponse $response): void
     {
         if ($response->status === 401 || $response->status === 403) {
-            throw new WpAiBridgeMcpException('downstream_auth', 'WP AI Bridge rejected the selected site credential.');
+            throw new WpAiBridgeMcpException('downstream_auth', 'WP AI Bridge rejected the selected site credential.', null, [
+                'failure_origin' => 'downstream_http',
+                'failure_stage' => 'remote_http',
+                'http_status' => $response->status,
+                'retry_safe' => false,
+            ]);
         }
     }
 
     /** @param array<string, mixed> $result */
-    private function boundedToolErrorMessage(array $result, ?string $authorization): string
+    private function observedToolErrorMessage(array $result, ?string $authorization): ?string
     {
         $content = $result['content'] ?? null;
         if (! is_array($content)) {
-            return 'WP AI Bridge rejected the Ability request.';
+            return null;
         }
 
+        $texts = [];
         foreach ($content as $block) {
             if (! is_array($block) || ($block['type'] ?? null) !== 'text' || ! is_string($block['text'] ?? null)) {
                 continue;
             }
 
-            $message = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', trim($block['text']));
-            if (! is_string($message) || $message === '') {
-                continue;
+            // Preserve the exact received wording and useful multi-block
+            // diagnostics; remove only the known Gateway credential here.
+            $message = $this->redactBearerCredential($block['text'], $authorization);
+            if (is_string($message) && trim($message) !== '') {
+                $texts[] = $message;
             }
-
-            $message = $this->redactBearerCredential($message, $authorization);
-            if (! is_string($message)) {
-                return 'WP AI Bridge rejected the Ability request.';
-            }
-
-            return mb_substr($message, 0, 512);
         }
 
-        return 'WP AI Bridge rejected the Ability request.';
+        return $texts === [] ? null : implode("\n", $texts);
     }
 
     private function redactBearerCredential(mixed $value, ?string $authorization): mixed

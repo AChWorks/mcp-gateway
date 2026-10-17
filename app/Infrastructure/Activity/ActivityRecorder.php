@@ -28,8 +28,16 @@ final class ActivityRecorder
             $errorCode,
         );
 
+        // Preserve observed errors with selective credential redaction in the
+        // existing Activity store. Unknown effects remain non-retryable.
+        $safeDetails = in_array($outcome, ['failure', 'unknown'], true)
+            ? OperationDiagnostics::safeContext([
+                ...$diagnostics,
+                ...($outcome === 'unknown' ? ['retry_safe' => false] : []),
+            ]) : [];
+
         try {
-            $this->persist($correlationId, $operation, $outcome, $target, $errorCode);
+            $this->persist($correlationId, $operation, $outcome, $target, $errorCode, $safeDetails);
             // One shared operational diagnostic path across WordPress, SSH,
             // inventory, MCP and file handlers; no raw inputs or tool outputs.
             // Routine rejected/invalid requests remain in Activity only so
@@ -95,12 +103,14 @@ final class ActivityRecorder
         ];
     }
 
+    /** @param array<string,mixed> $safeDetails */
     private function persist(
         string $correlationId,
         string $operation,
         string $outcome,
         ?Target $target,
         ?string $errorCode,
+        array $safeDetails = [],
     ): void {
         [$actorType, $actorId, $clientHash] = $this->actor();
         $request = app()->bound('request') ? app('request') : null;
@@ -121,6 +131,8 @@ final class ActivityRecorder
             'operation' => $operation,
             'outcome' => $outcome,
             'error_code' => $errorCode,
+            'diagnostic_context' => $safeDetails === [] ? null
+                : json_encode($safeDetails, JSON_THROW_ON_ERROR),
             'created_at' => now(),
         ]);
     }
