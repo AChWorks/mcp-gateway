@@ -28,6 +28,8 @@ final readonly class SshJobCoordinator
 {
     private const MAX_SCRIPT_BYTES = 65536;
 
+    private const MAX_OUTPUT_BYTES = 1048576;
+
     private const MAX_INLINE_SCRIPT_BYTES = 16384;
 
     private const MIN_RUNTIME_SECONDS = 16;
@@ -173,14 +175,45 @@ final readonly class SshJobCoordinator
             return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
         }
 
+        // The detached script may legitimately write large files (e.g. package
+        // installation). Bound only its stdout/stderr spools: systemd
+        // LimitFSIZE would apply to ALL descendants and break those writes.
         $wrapper = implode("\n", [
             '#!/bin/sh',
             'umask 077',
-            '/bin/sh '.escapeshellarg($directory.'/script.sh')
-                .' > '.escapeshellarg($directory.'/stdout')
-                .' 2> '.escapeshellarg($directory.'/stderr'),
+            'limit='.self::MAX_OUTPUT_BYTES,
+            'stdout_pipe='.escapeshellarg($directory.'/stdout.pipe'),
+            'stderr_pipe='.escapeshellarg($directory.'/stderr.pipe'),
+            'stdout_file='.escapeshellarg($directory.'/stdout'),
+            'stderr_file='.escapeshellarg($directory.'/stderr'),
+            'stdout_marker='.escapeshellarg($directory.'/stdout.truncated'),
+            'stderr_marker='.escapeshellarg($directory.'/stderr.truncated'),
+            'exit_file='.escapeshellarg($directory.'/exit-code'),
+            'if ! mkfifo -m 600 -- "$stdout_pipe" "$stderr_pipe"; then',
+            '  printf "125\\n" > "$exit_file"',
+            '  exit 125',
+            'fi',
+            // Keep each FIFO open across head and wc: exceeding the capture
+            // ceiling drains, rather than SIGPIPE-ing the installer.
+            '(',
+            '  head -c "$limit" || exit 125',
+            '  overflow=$(wc -c) || exit 125',
+            '  if [ "$overflow" -gt 0 ]; then : > "$stdout_marker" || exit 125; fi',
+            ') < "$stdout_pipe" > "$stdout_file" &',
+            'stdout_reader=$!',
+            '(',
+            '  head -c "$limit" || exit 125',
+            '  overflow=$(wc -c) || exit 125',
+            '  if [ "$overflow" -gt 0 ]; then : > "$stderr_marker" || exit 125; fi',
+            ') < "$stderr_pipe" > "$stderr_file" &',
+            'stderr_reader=$!',
+            '/bin/sh '.escapeshellarg($directory.'/script.sh').' > "$stdout_pipe" 2> "$stderr_pipe"',
             'exit_status=$?',
-            'printf "%s\\n" "$exit_status" > '.escapeshellarg($directory.'/exit-code'),
+            'wait "$stdout_reader"; stdout_capture=$?',
+            'wait "$stderr_reader"; stderr_capture=$?',
+            'if [ "$stdout_capture" -ne 0 ] || [ "$stderr_capture" -ne 0 ]; then exit_status=125; fi',
+            'rm -f -- "$stdout_pipe" "$stderr_pipe" || exit_status=125',
+            'printf "%s\\n" "$exit_status" > "$exit_file"',
             'exit "$exit_status"',
             '',
         ]);
@@ -235,7 +268,6 @@ final readonly class SshJobCoordinator
         $launch = $this->managerEnvironment($mode).'systemd-run '.($mode === 'user' ? '--user ' : '')
             .'--unit='.escapeshellarg($unit)
             .' --property='.escapeshellarg('RuntimeMaxSec='.$runtimeSeconds)
-            .' --property='.escapeshellarg('LimitFSIZE=1048576')
             .' --property='.escapeshellarg('KillMode=control-group')
             .' -- /bin/sh '.escapeshellarg($directory.'/wrapper.sh');
 
@@ -347,7 +379,7 @@ final readonly class SshJobCoordinator
             throw new SshTargetConnectionException('job_unavailable');
         }
         if (! in_array($stream, ['stdout', 'stderr'], true)
-            || $offset < 0 || $offset > 1048576 || $length < 1 || $length > 16384) {
+            || $offset < 0 || $offset > self::MAX_OUTPUT_BYTES || $length < 1 || $length > 16384) {
             throw new SshTargetConnectionException('invalid_input');
         }
         try {
@@ -371,14 +403,69 @@ final readonly class SshJobCoordinator
             ];
         }
 
+        // The overflow marker proves dropped bytes, even for a canceled Job.
+        // A short SFTP spool at EOF does NOT prove both FIFO readers finished.
+        // The wrapper writes exit-code only after waiting for both readers,
+        // and converts any reader failure to 125. A legitimate overflow
+        // always fills the 1 MiB spool: do not make a needless, rate-limited
+        // second SFTP call for ordinary small outputs.
+        $overflowConfirmed = false;
+        if (($file['end_of_file'] ?? false) === true
+            && (int) $file['size'] >= self::MAX_OUTPUT_BYTES
+            && in_array($row->status, ['completed', 'failed', 'canceled'], true)) {
+            try {
+                // Keep the marker probe bound to the original Job Target.
+                $this->files->read($user, $target,
+                    $this->directory($jobId).'/'.$stream.'.truncated',
+                    0, 1, expectedTargetBinding: (string) $row->target_binding_hash);
+                $overflowConfirmed = true;
+            } catch (SshTargetConnectionException $exception) {
+                if (! $this->isMissingJobOutput($exception)) {
+                    throw $exception;
+                }
+            }
+        }
+        $truncated = $this->captureTruncation(
+            $row, (int) $file['size'], ($file['end_of_file'] ?? false) === true,
+            $overflowConfirmed,
+        );
+
         return [
             'job_id' => $jobId, 'stream' => $stream, 'available' => true,
             'offset' => $file['offset'], 'size' => $file['size'],
             'length' => $file['length'], 'encoding' => $file['encoding'],
             'data' => $file['data'], 'end_of_file' => $file['end_of_file'],
+            'truncated' => $truncated,
             'source_check' => $file['source_check'],
             'status' => $row->status,
         ];
+    }
+
+    /**
+     * Tristate result about capture loss, not whether the script succeeded.
+     * A durable script_exit with a non-125 exit code proves the wrapper waited
+     * for BOTH readers; 125 is reserved for a collector failure too, so do
+     * not infer completeness from it. systemd terminal status or cancellation
+     * without this proof remains indeterminate, even for a short spool.
+     */
+    private function captureTruncation(
+        object $row, int $fileSize, bool $endOfFile, bool $overflowConfirmed,
+    ): ?bool {
+        if (! $endOfFile || ! in_array($row->status, ['completed', 'failed', 'canceled'], true)) {
+            return null;
+        }
+        if ($overflowConfirmed) {
+            return true;
+        }
+        if ($fileSize >= self::MAX_OUTPUT_BYTES
+            || ! in_array($row->status, ['completed', 'failed'], true)
+            || $row->terminal_reason !== 'script_exit'
+            || $row->exit_code === null
+            || (int) $row->exit_code === 125) {
+            return null;
+        }
+
+        return false;
     }
 
     /** Only native SFTP missing-path replies justify an unavailable spool. */
@@ -557,7 +644,8 @@ final readonly class SshJobCoordinator
                     .' && test "$(stat -c %u -- '.escapeshellarg($directory).')" = "$(id -u)"'
                     .' && rm -f -- '.implode(' ', array_map(
                         static fn (string $file): string => escapeshellarg($directory.'/'.$file),
-                        ['script.sh', 'wrapper.sh', 'stdout', 'stderr', 'exit-code'],
+                        ['script.sh', 'wrapper.sh', 'stdout', 'stderr', 'exit-code',
+                            'stdout.pipe', 'stderr.pipe', 'stdout.truncated', 'stderr.truncated'],
                     ))
                     .' && rmdir -- '.escapeshellarg($directory);
                 $result = $this->safeCommand($user, $target, $clean, 8, (string) $row->target_binding_hash);
@@ -665,7 +753,9 @@ final readonly class SshJobCoordinator
 
     private function probe(User $user, Target $target, string $expectedTargetBinding): ?string
     {
-        $command = 'if [ "$(id -u)" = 0 ]; then command -v systemd-run >/dev/null'
+        $command = 'command -v mkfifo >/dev/null && command -v head >/dev/null'
+            .' && command -v wc >/dev/null && command -v rm >/dev/null'
+            .' && if [ "$(id -u)" = 0 ]; then command -v systemd-run >/dev/null'
             .' && test "$(cat /proc/1/comm)" = systemd && printf system; else '
             .'test "$(loginctl show-user "$(id -u)" -p Linger --value 2>/dev/null)" = yes'
             .' && command -v systemd-run >/dev/null'

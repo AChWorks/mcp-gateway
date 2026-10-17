@@ -254,6 +254,45 @@ final class SshJobMcpTest extends TestCase
         }
     }
 
+    public function test_capture_truncation_never_claims_completeness_without_reader_proof(): void
+    {
+        $method = new \ReflectionMethod(SshJobCoordinator::class, 'captureTruncation');
+        $jobs = app(SshJobCoordinator::class);
+        $belowCap = 200;
+        $atCap = 1048576;
+
+        // The wrapper emits its durable script_exit marker AFTER waiting for
+        // both readers. A non-125 status therefore proves capture completion.
+        // Legacy or systemd-only terminal states carry no such evidence.
+        $cases = [
+            'completed below cap' => ['completed', 'script_exit', 0, $belowCap, true, false, false],
+            'failed script below cap' => ['failed', 'script_exit', 7, $belowCap, true, false, false],
+            'completed confirmed overflow' => ['completed', 'script_exit', 0, $atCap, true, true, true],
+            'canceled confirmed overflow' => ['canceled', 'systemd_signal', null, $atCap, true, true, true],
+            'canceled partial spool' => ['canceled', 'systemd_signal', null, $belowCap, true, false, null],
+            'canceled with stale exit code' => ['canceled', 'script_exit', 0, $belowCap, true, false, null],
+            'systemd timeout partial spool' => ['failed', 'systemd_timeout', null, $belowCap, true, false, null],
+            'systemd signal partial spool' => ['failed', 'systemd_signal', null, $belowCap, true, false, null],
+            'systemd exit without wrapper proof' => ['failed', 'systemd_exit-code', 9, $belowCap, true, false, null],
+            'collector failure 125' => ['failed', 'script_exit', 125, $belowCap, true, false, null],
+            'successful script exit 125 indistinguishable' => ['failed', 'script_exit', 125, $belowCap, true, false, null],
+            'legacy full-size log without overflow marker' => ['completed', 'script_exit', 0, $atCap, true, false, null],
+            'running short file eof' => ['running', null, null, $belowCap, true, false, null],
+            'completed without stored-file eof' => ['completed', 'script_exit', 0, $belowCap, false, false, null],
+            'short partial file with confirmed overflow' => ['failed', 'systemd_timeout', null, $belowCap, true, true, true],
+        ];
+
+        foreach ($cases as $label => [$status, $reason, $code, $size, $eof, $overflow, $expected]) {
+            $record = (object) [
+                'status' => $status,
+                'terminal_reason' => $reason,
+                'exit_code' => $code,
+            ];
+            self::assertSame($expected,
+                $method->invoke($jobs, $record, $size, $eof, $overflow), $label);
+        }
+    }
+
     public function test_native_job_output_permission_error_is_redacted_in_activity_ai_and_admin(): void
     {
         $owner = $this->user('owner');
