@@ -347,7 +347,20 @@ final readonly class SshFileRuntime
                     // After staging starts, a failed reply or cleanup cannot
                     // prove whether remote bytes were published. Keep that
                     // effect certainty separate from the observed SFTP cause.
-                    $diagnostics = $this->writeStagingDiagnostics($exception);
+                    try {
+                        $diagnostics = $this->writeStagingDiagnostics($exception);
+                    } catch (Throwable) {
+                        // A redaction/diagnostic failure must not skip
+                        // cleanup or turn an uncertain remote effect into
+                        // a falsely safe/retryable failure response.
+                        $diagnostics = [
+                            'failure_origin' => 'unknown',
+                            'failure_stage' => 'operation',
+                            'provider_cause_unknown' => true,
+                            'effect_unconfirmed' => true,
+                            'retry_safe' => false,
+                        ];
+                    }
                     $removed = false;
                     $directoryRemoved = false;
                     try {
