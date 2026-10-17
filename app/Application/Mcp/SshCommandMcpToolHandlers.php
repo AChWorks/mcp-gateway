@@ -89,7 +89,7 @@ final readonly class SshCommandMcpToolHandlers
     {
         $reference = CorrelationId::current();
         $this->activity->record($reference, $operation, 'failure', $target, $code,
-            $code === 'rate_limited' ? [
+            in_array($code, ['rate_limited', 'connection_busy', 'admission_unavailable'], true) ? [
                 'failure_origin' => 'gateway_admission',
                 'failure_stage' => 'admission',
                 'pre_dispatch' => true,

@@ -28,16 +28,17 @@ final class OperationDiagnostics
     ): string {
         $reference = is_string($correlationId) && Str::isUuid($correlationId)
             ? $correlationId : CorrelationId::current();
-        $safe = [
-            'correlation_id' => $reference,
-            'operation' => self::identifier($operation, 128),
-            'error_code' => self::identifier($code, 64),
-            'target_id' => $target?->target_id,
-            'connector_type' => $target?->connector_type,
-        ];
-        $safe = [...$safe, ...self::safeContext($details)];
-
         try {
+            // An error during redaction must not fall back to logging raw
+            // upstream evidence, nor change an already completed remote effect.
+            $safe = [
+                'correlation_id' => $reference,
+                'operation' => self::identifier($operation, 128),
+                'error_code' => self::identifier($code, 64),
+                'target_id' => $target?->target_id,
+                'connector_type' => $target?->connector_type,
+                ...self::safeContext($details),
+            ];
             Log::warning('Gateway operation failure.', $safe);
         } catch (Throwable) {
             // Logging failures must not change OAuth/SSH side effects or responses.

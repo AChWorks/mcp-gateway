@@ -79,6 +79,59 @@ final class ObservedErrorFidelityTest extends TestCase
         self::assertSame($escapedRedacted, DiagnosticRedactor::text($escapedRedacted));
     }
 
+    public function test_escaped_field_names_php_quoted_pairs_and_structured_keys_cannot_expose_secrets(): void
+    {
+        $embeddedJson = json_encode([
+            'password' => 'ENCODED_PREFIX "inner quoted" ENCODED_SUFFIX',
+        ], JSON_THROW_ON_ERROR);
+        $escapedFieldNameJson = str_replace('"', '\\"', $embeddedJson);
+        $message = 'Provider rejected /srv/wp/plugins/connector.php HTTP 422 '
+            .$escapedFieldNameJson.' [\'api_key\' => \'PHP_QUOTED_SECRET\'] '
+            .'with token=UNQUOTED_SECRET next_step=inspect';
+
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_message' => $message,
+            'source_error_details' => [
+                'token=SECRET_IN_STRUCTURED_KEY' => 'SECRET_VALUE_FOR_KEY',
+                'error' => [
+                    'code' => 'native/unusual-422',
+                    'message' => 'Validation failed at /var/www/blog/plugins/provider.php',
+                    'password' => 'SECRET_IN_PASSWORD_VALUE',
+                    'data' => [
+                        'trace_file' => '/app/Provider.php',
+                        'response_body' => 'SECRET_INSIDE_UNLABELLED_BODY',
+                        'payload' => ['anonymous' => 'SECRET_IN_OPAQUE_PAYLOAD'],
+                        'Bearer SECRET_IN_NESTED_KEY' => 'SECRET_IN_NESTED_KEY_VALUE',
+                    ],
+                ],
+            ],
+        ]);
+
+        $serialized = json_encode($safe, JSON_THROW_ON_ERROR);
+        foreach ([
+            'ENCODED_PREFIX', 'ENCODED_SUFFIX', 'PHP_QUOTED_SECRET',
+            'UNQUOTED_SECRET', 'SECRET_IN_STRUCTURED_KEY', 'SECRET_VALUE_FOR_KEY',
+            'SECRET_IN_PASSWORD_VALUE', 'SECRET_INSIDE_UNLABELLED_BODY',
+            'SECRET_IN_OPAQUE_PAYLOAD', 'SECRET_IN_NESTED_KEY',
+            'SECRET_IN_NESTED_KEY_VALUE',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $serialized);
+        }
+        self::assertStringContainsString('/srv/wp/plugins/connector.php', $safe['source_error_message']);
+        self::assertStringContainsString('HTTP 422', $serialized);
+        self::assertStringContainsString('next_step=inspect', $serialized);
+        self::assertSame('native/unusual-422', $safe['source_error_details']['error']['code']);
+        self::assertSame('/app/Provider.php',
+            $safe['source_error_details']['error']['data']['trace_file']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['data']['response_body']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['data']['payload']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+        self::assertSame('[REDACTED: INVALID UTF-8]',
+            DiagnosticRedactor::text("\xC3\x28"));
+    }
+
     public function test_configurable_length_limit_marks_truncation_instead_of_silently_erasing_it(): void
     {
         config()->set('activity.diagnostic_message_max_bytes', 1024);

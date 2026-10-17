@@ -30,13 +30,12 @@ final class ActivityRecorder
 
         // Preserve observed errors with selective credential redaction in the
         // existing Activity store. Unknown effects remain non-retryable.
-        $safeDetails = in_array($outcome, ['failure', 'unknown'], true)
-            ? OperationDiagnostics::safeContext([
-                ...$diagnostics,
-                ...($outcome === 'unknown' ? ['retry_safe' => false] : []),
-            ]) : [];
-
         try {
+            $safeDetails = in_array($outcome, ['failure', 'unknown'], true)
+                ? OperationDiagnostics::safeContext([
+                    ...$diagnostics,
+                    ...($outcome === 'unknown' ? ['retry_safe' => false] : []),
+                ]) : [];
             $this->persist($correlationId, $operation, $outcome, $target, $errorCode, $safeDetails);
             // One shared operational diagnostic path across WordPress, SSH,
             // inventory, MCP and file handlers; no raw inputs or tool outputs.

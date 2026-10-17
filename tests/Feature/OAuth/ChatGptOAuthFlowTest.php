@@ -6,7 +6,9 @@ use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
@@ -21,6 +23,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -246,6 +249,67 @@ final class ChatGptOAuthFlowTest extends TestCase
             ->assertJsonPath('result.structuredContent.ok', true)
             ->assertJsonPath('result.structuredContent.targets', [])
             ->assertJsonPath('result.structuredContent.truncated', false);
+
+        // Real OAuth ingress must bind the verified client/profile to
+        // diagnostic Activity records, not only check the Target grant.
+        $diagnosticTarget = Target::query()->create([
+            'target_id' => 'oauth-diagnostics',
+            'display_name' => 'OAuth diagnostics',
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+        DB::table('user_target_access')->insert([
+            'user_id' => $user->getKey(),
+            'target_record_id' => $diagnosticTarget->getKey(),
+            'allowed' => true,
+        ]);
+
+        $ownReference = (string) Str::uuid();
+        $otherClientReference = (string) Str::uuid();
+        request()->attributes->set('oauth_user_id', (string) $user->getAuthIdentifier());
+        request()->attributes->set('oauth_client_profile_key', 'chatgpt');
+        request()->attributes->set('oauth_client_id', self::CLIENT_ID);
+        app(ActivityRecorder::class)->record($ownReference, 'wordpress-ability-execute',
+            'failure', $diagnosticTarget, 'downstream_rejected', [
+                'source_error_message' => 'Readable authorized diagnostic at /srv/app/source.php',
+            ]);
+
+        request()->attributes->set('oauth_client_id', 'https://different.example.test/oauth/client.json');
+        request()->attributes->set('oauth_client_profile_key', 'fixture');
+        app(ActivityRecorder::class)->record($otherClientReference, 'wordpress-ability-execute',
+            'failure', $diagnosticTarget, 'downstream_rejected', [
+                'source_error_message' => 'Foreign client diagnostic must not be read',
+            ]);
+
+        $diagnosticHeaders = [
+            ...$mcpHeaders,
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+            'Mcp-Name' => 'operation-diagnostics-read',
+        ];
+        $ownRead = $this->withHeaders($diagnosticHeaders)->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 14,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'operation-diagnostics-read',
+                'arguments' => ['diagnostic_reference' => $ownReference],
+                '_meta' => $modernMeta,
+            ],
+        ]);
+        $ownRead->assertOk()
+            ->assertJsonPath('result.structuredContent.ok', true)
+            ->assertJsonPath('result.structuredContent.events.0.diagnostic_reference', $ownReference);
+        $this->withHeaders($diagnosticHeaders)->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 15,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'operation-diagnostics-read',
+                'arguments' => ['diagnostic_reference' => $otherClientReference],
+                '_meta' => $modernMeta,
+            ],
+        ])->assertOk()
+            ->assertJsonPath('result.structuredContent.error.code', 'diagnostic_unavailable');
 
         // An OAuth-authenticated AI can invoke the same scoped diagnostics
         // lookup as Admin, not merely discover its Tool definition.

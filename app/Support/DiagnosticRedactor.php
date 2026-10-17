@@ -3,67 +3,115 @@
 namespace App\Support;
 
 /**
- * Keep observed errors recognizable. Remove credentials, not diagnostic facts.
- *
- * This is defence in depth for permissioned diagnostics, not a justification
- * for exposing arbitrary remote payloads or bypassing existing Target scopes.
+ * Retain useful observed errors while removing identifiable secrets and opaque
+ * payload fields. Unparseable redaction input must never fall back to raw data.
  */
 final class DiagnosticRedactor
 {
     public static function text(string $text): string
     {
-        $text = preg_replace(
-            '~-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----~s',
-            '[REDACTED PRIVATE KEY]',
-            $text,
-        ) ?? $text;
+        if (! mb_check_encoding($text, 'UTF-8')) {
+            return '[REDACTED: INVALID UTF-8]';
+        }
 
-        // Token schemes and explicit credential assignments in exceptions,
-        // including URL queries. Keep the surrounding error/path/URL intact.
-        $text = preg_replace(
-            '~(?i)\b(Bearer|Basic)(\s+)[a-z0-9._\~+/=-]+~',
-            '$1$2[REDACTED]',
-            $text,
-        ) ?? $text;
+        foreach ([
+            ['~-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----~s', '[REDACTED PRIVATE KEY]'],
+            ['~(?i)\b(Bearer|Basic)(\s+)[a-z0-9._\~+/=-]+~', '$1$2[REDACTED]'],
+            ['~(?i)\b(https?://)[^\s/@]+@~', '$1[REDACTED]@'],
+        ] as [$pattern, $replacement]) {
+            $redacted = preg_replace($pattern, $replacement, $text);
+            if ($redacted === null) {
+                return '[REDACTED: INVALID CONTENT]';
+            }
+            $text = $redacted;
+        }
 
-        $keys = '(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|password|passwd|secret|authorization|set[_-]?cookie|cookie|session[_-]?id|session)';
+        // Match the *name and separator* first, then scan the value using its
+        // actual quote/escape delimiter. This covers PHP 'key' => 'value',
+        // JSON "key":"value", and JSON embedded as \"key\":\"value\".
+        // A simple quoted-value regex can stop at an inner escaped quote and
+        // inadvertently leave the remainder of the credential in the log.
+        $keys = '(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|password|passwd|secret|authorization|set[_-]?cookie|cookie|session[_-]?id|session|credential)';
+        $pattern = '~(?i)(?<![a-z0-9_-])(?:[\\\\]{0,4}[\x22\x27])?'.$keys.'(?:[\\\\]{0,4}[\x22\x27])?\s*(?::|=>|=)\s*~';
 
-        $text = preg_replace(
-            '~(?i)(\x22'.$keys.'\x22\s*:\s*\x22)(?:[^\x22\\\\]|\\\\.)*(\x22)~',
-            '$1[REDACTED]$2',
-            $text,
-        ) ?? $text;
+        $count = preg_match_all($pattern, $text, $matches, PREG_OFFSET_CAPTURE);
+        if ($count === false) {
+            return '[REDACTED: INVALID CONTENT]';
+        }
 
-        // Quoted assignment values can contain spaces and punctuation. Mask
-        // the entire value, not just its first word; remain idempotent.
-        $text = preg_replace(
-            '~(?is)(\b'.$keys.'\b\s*[:=]\s*)([\x22\x27])(?!\[REDACTED\])(?:\\\\.|(?!\2).)*\2~',
-            '$1$2[REDACTED]$2',
-            $text,
-        ) ?? $text;
+        $result = '';
+        $cursor = 0;
+        foreach ($matches[0] as [$prefix, $offset]) {
+            if ($offset < $cursor) {
+                continue;
+            }
 
-        $text = preg_replace(
-            '~(?i)(\b'.$keys.'\b\s*[:=]\s*[\x22\x27]?)(?!\[REDACTED\]|(?:Bearer|Basic)\s+\[REDACTED\])[^\s\x22\x27,;&#}\]\)]+~',
-            '$1[REDACTED]',
-            $text,
-        ) ?? $text;
+            $valueStart = $offset + strlen($prefix);
+            [$replacement, $end] = self::maskAssignedValue($text, $valueStart);
+            $result .= substr($text, $cursor, $valueStart - $cursor).$replacement;
+            $cursor = $end;
+        }
 
-        // Credentials embedded in URL userinfo, leaving host/path/query for
-        // operators when those are needed to understand the failure.
-        return preg_replace(
-            '~(?i)\b(https?://)[^\s/@]+@~',
-            '$1[REDACTED]@',
-            $text,
-        ) ?? $text;
+        return $result.substr($text, $cursor);
+    }
+
+    /**
+     * @return array{string,int}
+     */
+    private static function maskAssignedValue(string $text, int $start): array
+    {
+        $length = strlen($text);
+        if (substr($text, $start, 10) === '[REDACTED]') {
+            return ['[REDACTED]', $start + 10];
+        }
+        if ($start >= $length) {
+            return ['[REDACTED]', $length];
+        }
+
+        $slashes = 0;
+        while ($start + $slashes < $length && $text[$start + $slashes] === '\\') {
+            $slashes++;
+        }
+        $quotePos = $start + $slashes;
+        $quote = $quotePos < $length ? $text[$quotePos] : '';
+        if ($slashes <= 4 && ($quote === '"' || $quote === "'")) {
+            $begin = $quotePos + 1;
+            $scan = $begin;
+            while (($end = strpos($text, $quote, $scan)) !== false) {
+                $preceding = 0;
+                for ($i = $end - 1; $i >= $begin && $text[$i] === '\\'; $i--) {
+                    $preceding++;
+                }
+                // For plain quotes, backslash-escaped inner quotes cannot
+                // terminate the value. For escaped JSON, an inner quoted
+                // fragment carries more slashes than the enclosing delimiter.
+                if (($slashes === 0 && $preceding % 2 === 0)
+                    || ($slashes > 0 && $preceding === $slashes)) {
+                    $delimiter = str_repeat('\\', $slashes).$quote;
+
+                    return [$delimiter.'[REDACTED]'.$delimiter, $end + 1];
+                }
+                $scan = $end + 1;
+            }
+
+            // Unterminated quoted content: discard the tail rather than
+            // risking disclosure from a guessed closing boundary.
+            return [str_repeat('\\', $slashes).$quote.'[REDACTED]', $length];
+        }
+
+        // Unquoted assignments are delimited conservatively; an opaque
+        // multiword payload must be explicitly quoted to establish its bounds.
+        $end = $start + strcspn($text, " \t\r\n,;&#}])", $start);
+
+        return ['[REDACTED]', $end];
     }
 
     public static function value(mixed $value, string $field = '', int $depth = 0): mixed
     {
-        // Normalize the *field name only* to recognize camelCase secret keys;
-        // never normalize the actual error code/message being diagnosed.
+        // Normalize field *names* only, not provider error codes/messages.
         $fieldName = strtolower(preg_replace('/(?<=[a-z0-9])(?=[A-Z])/', '_', $field) ?? $field);
         $fieldName = str_replace('-', '_', $fieldName);
-        if (preg_match('~(?:^|_)(?:password|passwd|secret|token|authorization|cookie|credential|private_key|api_key|session_id)(?:$|_)~', $fieldName) === 1) {
+        if (preg_match('~(?:^|_)(?:password|passwd|secret|token|authorization|cookie|credential|private_key|api_key|session_id|body|payload|raw_data|raw_request|raw_response|file_content|file_contents|content_base64|attachment|arguments|user_input|content|headers|file_bytes|raw_output)(?:$|_)~', $fieldName) === 1) {
             return '[REDACTED]';
         }
 
@@ -90,7 +138,15 @@ final class DiagnosticRedactor
                 break;
             }
 
-            $result[$key] = self::value($item, (string) $key, $depth + 1);
+            // Remote JSON object keys are untrusted too. A credential can
+            // appear *inside the key* (e.g. token=SECRET or Bearer SECRET).
+            // Mask both the affected key and its associated opaque value.
+            $originalKey = (string) $key;
+            $safeKey = is_int($key) ? $key : (strlen($originalKey) > 4096
+                ? '[REDACTED: OVERSIZE KEY]' : self::text($originalKey));
+            $keyWasRedacted = $safeKey !== $key;
+            $result[$safeKey] = $keyWasRedacted ? '[REDACTED]'
+                : self::value($item, $originalKey, $depth + 1);
         }
 
         return $result;

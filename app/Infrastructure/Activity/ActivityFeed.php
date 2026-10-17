@@ -4,6 +4,7 @@ namespace App\Infrastructure\Activity;
 
 use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
+use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Models\User;
 use App\Support\OperationDiagnostics;
@@ -17,7 +18,10 @@ final readonly class ActivityFeed
 {
     public function __construct(private AccessControl $access) {}
 
-    /** @return array{items:list<array<string,mixed>>,page:int,per_page:int,has_more:bool} */
+    /**
+     * @param  array{client_id:string,profile_key:string}|null  $oauthReader
+     * @return array{items:list<array<string,mixed>>,page:int,per_page:int,has_more:bool}
+     */
     public function page(
         User $user,
         int $page = 1,
@@ -26,6 +30,7 @@ final readonly class ActivityFeed
         ?string $operation = null,
         ?string $correlationId = null,
         bool $failuresOnly = false,
+        ?array $oauthReader = null,
     ): array {
         if (! $this->access->allows($user, GatewayPermission::ActivityView)) {
             throw new AuthorizationException;
@@ -70,6 +75,18 @@ final readonly class ActivityFeed
                 'diagnostic_context',
                 'created_at',
             ]);
+
+        // MCP's richer error evidence is isolated to its original OAuth
+        // actor AND verified client/profile, even for users with All Targets.
+        // The browser Admin Activity feed keeps its existing policy. Only
+        // Owner's explicit recovery authority permits cross-actor MCP reads.
+        if ($oauthReader !== null && ! $this->access->hasUnrestrictedTargetScope($user)) {
+            $query
+                ->where('actor_type', 'oauth_user')
+                ->where('actor_id', (string) $user->getAuthIdentifier())
+                ->where('client_id_hash', hash('sha256', $oauthReader['client_id']))
+                ->where('client_profile_key', $oauthReader['profile_key']);
+        }
 
         if (! $this->access->hasUnrestrictedTargetScope($user)) {
             $query->where(function ($query) use ($user, $allowedTargets): void {
@@ -120,6 +137,17 @@ final readonly class ActivityFeed
                 ? json_decode($row->diagnostic_context, true) : null;
             $diagnostics = is_array($stored)
                 ? OperationDiagnostics::safeContext($stored) : [];
+            // Preserve the historical cross-actor Activity metadata feed,
+            // without extending it into cross-actor rich provider diagnostics
+            // for Operator/Viewer roles. Owner/Admin retains scoped recovery.
+            $privileged = in_array($user->getAttribute('role'), [
+                GatewayRole::Owner, GatewayRole::Administrator,
+            ], true);
+            $ownActor = in_array($row->actor_type, ['oauth_user', 'administrator'], true)
+                && (string) ($row->actor_id ?? '') === (string) $user->getAuthIdentifier();
+            if (! $privileged && ! $ownActor) {
+                $diagnostics = [];
+            }
             $items[] = [
                 'id' => (string) $row->id,
                 'correlation_id' => (string) $row->correlation_id,

@@ -2,6 +2,7 @@
 
 namespace App\Application\Mcp;
 
+use App\Application\Access\AccessControl;
 use App\Infrastructure\Activity\ActivityFeed;
 use App\Models\User;
 use App\Support\OperationDiagnostics;
@@ -14,11 +15,16 @@ use Illuminate\Support\Str;
  */
 final readonly class OperationDiagnosticsMcpToolHandlers
 {
-    public function __construct(private ActivityFeed $activity) {}
+    public function __construct(
+        private ActivityFeed $activity,
+        private AccessControl $access,
+    ) {}
 
     /** @return array<string,mixed> */
-    public function read(User $user, ?string $diagnostic_reference = null, ?string $target_id = null, int $page = 1): array
-    {
+    public function read(
+        User $user, ?string $diagnostic_reference = null, ?string $target_id = null, int $page = 1,
+        ?string $oauthClientId = null, ?string $oauthProfileKey = null,
+    ): array {
         // Require either an exact reference or an exact Target, never a
         // global unscoped recent-error sweep. Unauthorized/unknown lookups
         // use the same failure to avoid cross-Target enumeration.
@@ -30,11 +36,22 @@ final readonly class OperationDiagnosticsMcpToolHandlers
             return $this->unavailable();
         }
 
+        // Missing OAuth identity cannot silently fall back to the broader
+        // browser Admin feed. The authenticated MCP request supplies both.
+        $owner = $this->access->hasUnrestrictedTargetScope($user);
+        if (! $owner && ($oauthClientId === null || $oauthClientId === ''
+            || $oauthProfileKey === null || $oauthProfileKey === '')) {
+            return $this->unavailable();
+        }
+
         try {
-            // ActivityFeed enforces current activity.view, Target scopes,
-            // group/direct denials and visibility against current Target IDs.
+            // ActivityFeed enforces activity.view and current Target scopes;
+            // OAuth identity further restricts the rows for non-Owner callers.
             $feed = $this->activity->page($user, $page, 10, $target_id, null,
-                $diagnostic_reference, $diagnostic_reference === null);
+                $diagnostic_reference, $diagnostic_reference === null, [
+                    'client_id' => $oauthClientId ?? '',
+                    'profile_key' => $oauthProfileKey ?? '',
+                ]);
         } catch (AuthorizationException) {
             return $this->unavailable();
         }
