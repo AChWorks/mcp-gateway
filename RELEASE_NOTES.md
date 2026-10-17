@@ -1,3 +1,51 @@
+# MCP Gateway v2.3.2
+
+**Stable v2.3.2 — source and published GitHub Release identities are distinct from any installed Gateway.**
+
+Compared with publicly released v2.3.1:
+
+- **Observed error fidelity:** preserve the original provider/MCP/transport error code,
+  message and useful structured details as actually received, separate from the
+  Gateway compatibility classification. Record the evidenced operation origin,
+  stage, outcome certainty, correlation and retry safety; never fabricate a
+  WordPress `WP_Error` code stripped upstream.
+- **Authorized AI and Admin diagnostics:** a read-only
+  `operation-diagnostics-read` MCP Tool and the existing Admin Activity view
+  resolve the same canonical, bounded Activity evidence. Per-Target
+  `activity.view`, actor/client/profile isolation and effective permissions
+  remain enforced at retrieval, including negative/denied lookups; no raw log
+  reader or new diagnostics datastore is introduced.
+- **Selective confidentiality:** mask credentials, signed URLs and other secret
+  values in plain, JSON-escaped and double-serialized URI representations
+  before persistence or output, retaining useful nonsecret paths and native
+  error context. Budget-limited text marks truncation explicitly. SSH
+  pre-dispatch admission denials retain accurate provenance, and ambiguous
+  remote effects are **not** reclassified as safe to retry.
+- **Additive database migration:** the new
+  `2026_10_17_010000_add_activity_diagnostic_context.php` adds one nullable
+  JSON `activity_events.diagnostic_context` field to the existing Activity
+  records. Existing records require no backfill. The supported updater applies
+  the migration when installing this release; rolling it back drops stored
+  diagnostic evidence and must not be treated as a harmless code rollback.
+- **Upgrade evidence:** source PR #204 passed independent R4
+  `COMPLETE / APPROVE` with no blocking or required findings. Its exact
+  reviewed HEAD passed six GitHub workflows/seven checks, including MariaDB,
+  WP AI Bridge contract and released-baseline update verification.
+  The stable promotion also adds the publicly released v2.3.1 baseline
+  to the reproducible package/update and backup-integrity acceptance suites.
+
+**Limits:** [Issue #199](https://github.com/AChWorks/mcp-gateway/issues/199)
+remains open for wider OAuth/ingress/async provenance, load/retention,
+persistence-failure and installed-host Admin/AI verification.
+[WordPress/mcp-adapter#298](https://github.com/WordPress/mcp-adapter/issues/298)
+can strip original provider codes before Gateway receives them.
+
+A source merge or published GitHub Release does **not** install or update any
+operator host, run live migrations, enable features or authorize remote
+operations. Use the official checksum-verified release assets and the
+operator-controlled supported update path; protect private `.env`, keys,
+persistent storage and a verified database backup before a future upgrade.
+
 # MCP Gateway v2.3.1
 
 **Stable v2.3.1 — official GitHub Release and installed-host status must be verified separately.**
