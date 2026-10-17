@@ -1,3 +1,18 @@
+# MCP Gateway v2.3.3
+
+**Stable v2.3.3 — SSH/SFTP error fidelity and bounded, authorized diagnostics reliability.**
+
+Compared with officially published v2.3.2:
+
+- **SSH Job diagnostics and privacy:** actionable Job admission and connector failures use the existing, Target-scoped Activity store and the existing authorized Admin/AI diagnostics reader. Paused Targets do not reveal or generate error records for unrelated, malformed, expired or revoked Job handles. Known pre-dispatch contention remains visible in Activity without duplicating routine PHP warning logs.
+- **Truthful SSH output and SFTP failures:** only an observed native SFTP missing-file/path status marks an unfinished Job spool as not yet available; permission, connection and other native failures retain their actual observed code and message in selectively redacted diagnostics instead of becoming successful envelopes.
+- **Reliable file writes:** distinguish actual missing destinations from native permission/transport failures during overwrite preflight. Preserve safe source-error evidence for uncertain SFTP staging and SSH Job preparation, without exposing internal diagnostic context to public MCP responses or treating a possibly applied operation as safe to retry. If diagnostic redaction fails, best-effort temporary cleanup still runs and the result remains unknown and non-retryable.
+- **Compatibility and maintenance:** no new migration, OAuth grant, Target permission, MCP tool, installation requirement, default file-transfer setting or new logging backend. The existing v2.3.2 `activity_events.diagnostic_context` migration must already be applied on an installed Gateway. This source change was independently HIGH_ASSURANCE reviewed (**R2 COMPLETE / APPROVE, 0 BLOCKER / 0 REQUIRED**) and integrated through [PR #207](https://github.com/AChWorks/mcp-gateway/pull/207). The previous release v2.3.2 is included in the published-baseline browser-update and backup-integrity CI checks.
+
+**Known limitations:** [Issue #199](https://github.com/AChWorks/mcp-gateway/issues/199) remains open for additional ingress/OAuth/async provenance and real installed-host Admin/AI error, retention, load, memory, latency and log-volume acceptance. Upstream [WordPress MCP Adapter #298](https://github.com/WordPress/mcp-adapter/issues/298) can still remove a native provider error code before Gateway sees it; Gateway cannot reconstruct unobserved codes.
+
+**Operator update:** Install only the official, checksum-verified v2.3.3 fresh-install ZIP or browser-update ZIP from its GitHub Release. If upgrading the existing v2.3.2 installation, preserve its private `.env`, encryption/signing keys, database and storage; take and test-restore a consistent database backup and use the supported browser-update procedure in [README](README.md) and [Deployment](docs/DEPLOYMENT.md). Publishing does **not** modify any running Gateway, run migrations on a host, grant new client permissions, or change a WordPress/SSH Target.
+
 # MCP Gateway v2.3.2
 
 **Stable v2.3.2 — source and published GitHub Release identities are distinct from any installed Gateway.**
