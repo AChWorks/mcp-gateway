@@ -203,6 +203,78 @@ final class ObservedErrorFidelityTest extends TestCase
         self::assertSame($safe, DiagnosticRedactor::text($safe));
     }
 
+    public function test_json_escaped_and_nested_encoded_uri_userinfo_is_redacted_without_erasing_diagnostics(): void
+    {
+        // json_encode intentionally preserves escaped forward slashes in these
+        // observed provider messages. Neither fragment is decoded before logging.
+        $encoded = json_encode([
+            'endpoint' => 'sftp://svc:ESCAPED_SFTP_USERINFO_714@files.example.test/trace/report.log',
+            'reason' => 'native/provider-423',
+        ], JSON_THROW_ON_ERROR);
+        self::assertStringContainsString('sftp:\/\/svc:', $encoded);
+        $encodedAgain = json_encode($encoded, JSON_THROW_ON_ERROR);
+
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_code' => 'provider/native-423',
+            'source_error_message' => 'Remote error /srv/wp/Provider.php: '.$encoded
+                .' second-level='.$encodedAgain.' requestId=public-192',
+            'source_error_details' => [
+                'error' => [
+                    'code' => 'native/provider-423',
+                    'serialized_message' => json_encode([
+                        'endpoint' => 'mysql://report:ESCAPED_MYSQL_USERINFO_715@db.example.test/logs',
+                        'retry' => false,
+                    ], JSON_THROW_ON_ERROR),
+                    'nested' => [
+                        'encoded_json' => $encodedAgain,
+                        'diagnostic_path' => '/var/www/html/bridge/source.php',
+                    ],
+                ],
+            ],
+        ]);
+
+        $serialized = json_encode($safe, JSON_THROW_ON_ERROR);
+        foreach (['ESCAPED_SFTP_USERINFO_714', 'ESCAPED_MYSQL_USERINFO_715'] as $secret) {
+            self::assertStringNotContainsString($secret, $serialized);
+        }
+        self::assertSame('provider/native-423', $safe['source_error_code']);
+        self::assertSame('native/provider-423', $safe['source_error_details']['error']['code']);
+        $expectedEncoded = str_replace('svc:ESCAPED_SFTP_USERINFO_714@', '[REDACTED]@', $encoded);
+        self::assertStringContainsString($expectedEncoded, $safe['source_error_message']);
+        self::assertStringContainsString(json_encode($expectedEncoded, JSON_THROW_ON_ERROR),
+            $safe['source_error_message']);
+        self::assertSame(json_encode($expectedEncoded, JSON_THROW_ON_ERROR),
+            $safe['source_error_details']['error']['nested']['encoded_json']);
+        self::assertStringContainsString('mysql:\/\/[REDACTED]@db.example.test\/logs',
+            $safe['source_error_details']['error']['serialized_message']);
+        self::assertStringContainsString('/srv/wp/Provider.php', $safe['source_error_message']);
+        self::assertStringContainsString('requestId=public-192', $safe['source_error_message']);
+        self::assertSame('/var/www/html/bridge/source.php',
+            $safe['source_error_details']['error']['nested']['diagnostic_path']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
+    public function test_json_escaped_uri_userinfo_is_redacted_before_configured_truncation(): void
+    {
+        config()->set('activity.diagnostic_message_max_bytes', 1024);
+        $encoded = json_encode([
+            'endpoint' => 'ftps://svc:ESCAPED_TRUNCATION_SECRET_716@files.example.test/dump/activity.log',
+        ], JSON_THROW_ON_ERROR);
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_message' => $encoded.' '.str_repeat('Validation at /srv/wp/Provider.php ', 90),
+        ]);
+
+        self::assertTrue($safe['source_error_message_truncated']);
+        self::assertSame(1024, strlen($safe['source_error_message']));
+        self::assertStringNotContainsString('ESCAPED_TRUNCATION_SECRET_716', $safe['source_error_message']);
+        self::assertStringContainsString(
+            str_replace('svc:ESCAPED_TRUNCATION_SECRET_716@', '[REDACTED]@', $encoded),
+            $safe['source_error_message']);
+        self::assertStringContainsString('Validation at /srv/wp/Provider.php',
+            $safe['source_error_message']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
     public function test_signed_urls_and_non_http_userinfo_never_retain_access_bearing_values(): void
     {
         $message = 'Provider error 422 at /srv/wp/plugins/remote.php '
