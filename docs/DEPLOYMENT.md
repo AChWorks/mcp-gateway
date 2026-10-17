@@ -23,6 +23,16 @@ Stable v2.3.1 introduces two additive Target-era migrations:
 
 The supported updater must apply them before the new fields are used. A rollback refuses to discard non-null operator notes silently. Publication alone is **not** evidence an installed v2.3.0 host has either migration.
 
+**Stable v2.3.2 adds one additive Activity migration:**
+
+- `2026_10_17_010000_add_activity_diagnostic_context.php` adds a nullable
+  JSON `activity_events.diagnostic_context` field for bounded, selectively
+  credential-redacted observed source errors. Existing rows and the existing
+  correlation/Activity storage remain intact; there is no new datastore.
+  Apply the migration through the supported updater before using the new
+  diagnostics view/MCP lookup. Reversing this migration **drops retained
+  diagnostic context**; a code rollback does not safely undo database DDL.
+
 The supported Job journal enforces immutable original user/client/Target/host binding and **no-replay** of an uncertain launch. Journal-bearing Job rollback refuses unsafe destructive schema cleanup; reconciliation requires evidence on the **original** remote host and the guarded command in [Direct SSH](DIRECT-SSH-CONNECTOR.md). Owner-only Target Pause blocks new Gateway-mediated stages, **not** an in-flight remote effect. Historic Agent connector type/support was retired; no Agent data cleanup/replay of the old Target migration is implied. v2.3.1's **fresh-install-only** SSH binary transfer default does **not** change an existing private `.env` or guarantee effective enablement on an installed host. Existing missing-key installs retain OFF; a new installation enables the mode but still requires genuine host/proxy/private-staging capacity and grants.
 
 **Upgrade safety:** Independently test-restore the consistent database backup, protect `.env`, `APP_KEY`, OAuth/Bridge signing keys, storage and host-managed public files. A browser updater's application-file backup **cannot** undo MariaDB/MySQL DDL or revocations. Never replay a possibly dispatched WordPress refresh/revoke, SSH command/Job or migration after unknown progress to guess its result. Preserve original recovery fences and follow the updater's authenticated recovery path.
