@@ -183,6 +183,26 @@ final class ObservedErrorFidelityTest extends TestCase
         self::assertSame($safeDetails, DiagnosticRedactor::value($safeDetails));
     }
 
+    public function test_composite_sensitive_assignment_names_use_the_same_field_policy_as_structured_data(): void
+    {
+        $text = 'Database exception: dbPassword="DB_PASSWORD_FIXTURE" '
+            .'sshPassphrase="SSH_PASSPHRASE_FIXTURE" '
+            .'clientAssertion=JWT_ASSERTION_FIXTURE '
+            .'x-api-key: API_KEY_FIXTURE '
+            .'file=/var/www/site.php code=remote/custom-422';
+
+        $safe = DiagnosticRedactor::text($text);
+        foreach ([
+            'DB_PASSWORD_FIXTURE', 'SSH_PASSPHRASE_FIXTURE',
+            'JWT_ASSERTION_FIXTURE', 'API_KEY_FIXTURE',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $safe);
+        }
+        self::assertStringContainsString('/var/www/site.php', $safe);
+        self::assertStringContainsString('remote/custom-422', $safe);
+        self::assertSame($safe, DiagnosticRedactor::text($safe));
+    }
+
     public function test_configurable_length_limit_marks_truncation_instead_of_silently_erasing_it(): void
     {
         config()->set('activity.diagnostic_message_max_bytes', 1024);

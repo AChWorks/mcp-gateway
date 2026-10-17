@@ -45,8 +45,7 @@ final class DiagnosticRedactor
         // JSON "key":"value", and JSON embedded as \"key\":\"value\".
         // A simple quoted-value regex can stop at an inner escaped quote and
         // inadvertently leave the remainder of the credential in the log.
-        $keys = '(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|api[_-]?key|client[_-]?secret|private[_-]?key|password|passwd|secret|authorization|set[_-]?cookie|cookie|session[_-]?id|session|credentials?|passphrase|client[_-]?assertion)';
-        $pattern = '~(?i)(?<![a-z0-9_-])(?:[\\\\]{0,4}[\x22\x27])?'.$keys.'(?:[\\\\]{0,4}[\x22\x27])?\s*(?::|=>|=)\s*~';
+        $pattern = '~(?i)(?<![a-z0-9_-])(?:[\\\\]{0,4}[\x22\x27])?([a-z][a-z0-9_-]{0,127})(?:[\\\\]{0,4}[\x22\x27])?\s*(?::|=>|=)\s*~';
 
         $count = preg_match_all($pattern, $text, $matches, PREG_OFFSET_CAPTURE);
         if ($count === false) {
@@ -55,8 +54,12 @@ final class DiagnosticRedactor
 
         $result = '';
         $cursor = 0;
-        foreach ($matches[0] as [$prefix, $offset]) {
-            if ($offset < $cursor) {
+        foreach ($matches[0] as $index => [$prefix, $offset]) {
+            // Apply one shared sensitive-field policy to quoted JSON/PHP
+            // names, camelCase, prefixed names and URL/query assignments.
+            // Unrelated codes, paths and validation fields remain unchanged.
+            if (! self::isSensitiveField((string) $matches[1][$index][0])
+                || $offset < $cursor) {
                 continue;
             }
 
