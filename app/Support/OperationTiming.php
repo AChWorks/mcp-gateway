@@ -79,26 +79,39 @@ final class OperationTiming
      */
     public function curlStats(array $stats): void
     {
-        if ($stats === []) {
-            return;
-        }
-
-        $this->curlObservedCalls = min(128, $this->curlObservedCalls + 1);
-
         $lookup = $this->seconds($stats, 'namelookup_time');
         $connect = $this->seconds($stats, 'connect_time');
         $tls = $this->seconds($stats, 'appconnect_time');
         $firstByte = $this->seconds($stats, 'starttransfer_time');
 
-        if ($lookup !== null && $connect !== null && $connect >= $lookup) {
+        // libcurl reports zero for milestones not reached, as well as for
+        // connections it reused. A positive raw value is the evidence that a
+        // milestone occurred; the resulting sub-millisecond delta may round
+        // legitimately to zero.
+        $newConnection = ! in_array($stats['num_connects'] ?? null, [0, 0.0], true)
+            && $connect !== null && $connect > 0;
+        $tlsReached = $newConnection && $tls !== null && $tls > 0 && $tls >= $connect;
+        $observed = false;
+
+        if ($newConnection && $lookup !== null && $connect >= $lookup) {
             $this->add('tcp_connect_ms', (int) round(($connect - $lookup) * 1000));
+            $observed = true;
         }
-        if ($connect !== null && $tls !== null && $tls >= $connect) {
+        if ($tlsReached) {
             $this->add('tls_handshake_ms', (int) round(($tls - $connect) * 1000));
+            $observed = true;
         }
-        $ready = max($tls ?? 0, $connect ?? 0);
-        if ($firstByte !== null && $firstByte >= $ready) {
+
+        // On a reused connection, a positive starttransfer_time still proves
+        // first-byte arrival, even though TCP and TLS setup were not repeated.
+        $ready = $tlsReached ? $tls : ($newConnection ? $connect : 0.0);
+        if ($firstByte !== null && $firstByte > 0 && $firstByte >= $ready) {
             $this->add('first_byte_wait_ms', (int) round(($firstByte - $ready) * 1000));
+            $observed = true;
+        }
+
+        if ($observed) {
+            $this->curlObservedCalls = min(128, $this->curlObservedCalls + 1);
         }
     }
 

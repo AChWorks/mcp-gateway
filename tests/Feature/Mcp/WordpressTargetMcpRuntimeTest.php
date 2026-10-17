@@ -232,6 +232,58 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertCount($outboundBefore, $this->downstream);
     }
 
+    public function test_enabled_timing_omits_pre_dispatch_rejection_details_and_references(): void
+    {
+        config()->set('bridge.timing.enabled', true);
+        config()->set('bridge.timing.minimum_ms', 0);
+        $owner = $this->user('owner');
+        $target = $this->pair('alpha');
+        $handler = app(WordpressTargetMcpToolHandlers::class);
+
+        $notFound = $handler->read($owner, 'missing-target');
+        self::assertSame('target_not_found', $notFound['error']['code']);
+
+        $invalid = $handler->read($owner, 'alpha', per_page: 101);
+        self::assertSame('invalid_input', $invalid['error']['code']);
+
+        $operator = $this->user('operator');
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
+        foreach ([
+            GatewayPermission::WordpressAbilitiesExecuteReadonly,
+            GatewayPermission::WordpressAbilitiesExecuteMutating,
+            GatewayPermission::WordpressAbilitiesExecuteDestructive,
+            GatewayPermission::WordpressAbilitiesExecuteUnclassified,
+        ] as $permission) {
+            DB::table('user_permission_denials')->insert([
+                'user_id' => $operator->getKey(),
+                'permission' => $permission->value,
+            ]);
+        }
+        $forbidden = $handler->execute($operator, 'alpha', 'demo/read', []);
+        self::assertSame('forbidden', $forbidden['error']['code']);
+
+        Target::query()->where('target_id', 'alpha')->update(['operations_paused' => true]);
+        $paused = $handler->read($owner, 'alpha');
+        self::assertSame('target_paused', $paused['error']['code']);
+
+        foreach ([$notFound, $invalid, $forbidden, $paused] as $result) {
+            self::assertArrayNotHasKey('diagnostic_reference', $result['error']);
+        }
+
+        $rows = DB::table('activity_events')->whereIn('error_code', [
+            'target_not_found', 'invalid_input', 'forbidden', 'target_paused',
+        ])->get();
+        self::assertCount(4, $rows);
+        foreach ($rows as $row) {
+            self::assertNull($row->diagnostic_context, 'Pre-dispatch rejection must not include timing data.');
+        }
+        self::assertSame([], $this->downstream);
+    }
+
     public function test_target_scope_and_execution_class_denials_do_not_leak_or_send_unauthorized_requests(): void
     {
         $operator = $this->user('operator');
