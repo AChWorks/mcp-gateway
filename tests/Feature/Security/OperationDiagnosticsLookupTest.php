@@ -325,6 +325,39 @@ final class OperationDiagnosticsLookupTest extends TestCase
         }
     }
 
+    public function test_bounded_diagnostics_feed_uses_constant_queries_and_no_contention_log_flood(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $target = $this->target('activity-perf', 'ssh_direct');
+        $recorder = app(ActivityRecorder::class);
+        Log::spy();
+        for ($i = 0; $i < 13; $i++) {
+            $recorder->record((string) Str::uuid(), 'ssh-file-read', 'failure',
+                $target, 'connection_busy', [
+                    'failure_origin' => 'gateway_admission',
+                    'failure_stage' => 'admission',
+                    'request_not_sent' => true,
+                    'retry_safe' => true,
+                ]);
+        }
+        Log::shouldNotHaveReceived('warning');
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            $page = app(OperationDiagnosticsMcpToolHandlers::class)->read(
+                $owner, target_id: $target->target_id,
+            );
+            $count = count(DB::getQueryLog());
+        } finally {
+            DB::disableQueryLog();
+        }
+        self::assertTrue($page['ok']);
+        self::assertCount(10, $page['events']);
+        self::assertTrue($page['has_more']);
+        self::assertLessThanOrEqual(8, $count, 'A bounded Activity lookup must not issue per-event queries.');
+        self::assertSame('available', $page['events'][0]['diagnostic_state']);
+    }
+
     public function test_legacy_or_deleted_diagnostic_evidence_is_honestly_reported(): void
     {
         $owner = $this->user('owner', 'all');

@@ -16,6 +16,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
 use App\Models\User;
+use App\Support\OperationDiagnostics;
 use Closure;
 use phpseclib4\Exception\FileSystemException;
 use phpseclib4\Net\SFTP;
@@ -61,8 +62,10 @@ final readonly class SshFileRuntime
                     // Preserve an explicit no-SFTP-subsystem result; never
                     // replace it with a generic file-not-found outcome.
                     throw $exception;
-                } catch (Throwable) {
-                    throw new SshTargetConnectionException('file_unavailable');
+                } catch (FileSystemException $exception) {
+                    throw $this->observedSftpFailure($exception);
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
                 }
 
                 return [
@@ -110,8 +113,10 @@ final readonly class SshFileRuntime
                     $sftp->rawlist($path, false, $onFile);
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
-                } catch (Throwable) {
-                    throw new SshTargetConnectionException('file_unavailable');
+                } catch (FileSystemException $exception) {
+                    throw $this->observedSftpFailure($exception);
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
                 }
 
                 usort($entries, static fn (array $a, array $b): int => strcmp($a['name'], $b['name']));
@@ -156,8 +161,10 @@ final readonly class SshFileRuntime
                     $this->requireVersion($after, $before['size'], $before['mtime']);
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
-                } catch (Throwable) {
-                    throw new SshTargetConnectionException('file_unavailable');
+                } catch (FileSystemException $exception) {
+                    throw $this->observedSftpFailure($exception);
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
                 }
 
                 return [
@@ -222,17 +229,14 @@ final readonly class SshFileRuntime
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
                 } catch (FileSystemException $exception) {
-                    // Only an exact SFTP "missing path" status can establish
-                    // create-only intent; authorization, transport, and server
-                    // errors MUST NOT masquerade as a missing file.
-                    if ($overwrite) {
-                        throw new SshTargetConnectionException('source_changed');
+                    // An SFTP missing-path status can establish create-only
+                    // intent. Other native failures are not source changes.
+                    $failure = $this->writePreflightFailure($exception, $overwrite);
+                    if ($failure !== null) {
+                        throw $failure;
                     }
-                    if (! in_array($exception->getCode(), [2, 10], true)) {
-                        throw new SshTargetConnectionException('file_unavailable');
-                    }
-                } catch (Throwable) {
-                    throw new SshTargetConnectionException('file_unavailable');
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
                 }
 
                 $parentDir = dirname($path);
@@ -339,7 +343,24 @@ final readonly class SshFileRuntime
                     }
                     // Successful POSIX rename consumes the staging inode.
                     $sftp->rmdir($stagingDir);
-                } catch (Throwable) {
+                } catch (Throwable $exception) {
+                    // After staging starts, a failed reply or cleanup cannot
+                    // prove whether remote bytes were published. Keep that
+                    // effect certainty separate from the observed SFTP cause.
+                    try {
+                        $diagnostics = $this->writeStagingDiagnostics($exception);
+                    } catch (Throwable) {
+                        // A redaction/diagnostic failure must not skip
+                        // cleanup or turn an uncertain remote effect into
+                        // a falsely safe/retryable failure response.
+                        $diagnostics = [
+                            'failure_origin' => 'unknown',
+                            'failure_stage' => 'operation',
+                            'provider_cause_unknown' => true,
+                            'effect_unconfirmed' => true,
+                            'retry_safe' => false,
+                        ];
+                    }
                     $removed = false;
                     $directoryRemoved = false;
                     try {
@@ -362,6 +383,10 @@ final readonly class SshFileRuntime
                         'complete' => false,
                         'possible_remote_effect' => true,
                         'temporary_cleanup_confirmed' => $removed && $directoryRemoved,
+                        // Private in-process evidence. Public MCP output MUST
+                        // strip it before serialization; ActivityRecorder then
+                        // persists only selectively redacted, bounded values.
+                        '__diagnostic_context' => $diagnostics,
                     ];
                 }
 
@@ -527,6 +552,83 @@ final readonly class SshFileRuntime
             || ($mtime !== null && $mtime < 0)) {
             throw new SshTargetConnectionException('invalid_input');
         }
+    }
+
+    /**
+     * A native missing path is the only create-only admission case. Overwrite
+     * of an absent expected destination is a source change, but an observed
+     * permission/transport error must retain its original native identity.
+     */
+    private function writePreflightFailure(
+        FileSystemException $exception, bool $overwrite,
+    ): ?SshTargetConnectionException {
+        $observed = $this->observedSftpFailure($exception);
+        if (! in_array($exception->getCode(), [2, 10], true)) {
+            return $observed;
+        }
+
+        return $overwrite
+            ? new SshTargetConnectionException('source_changed', $observed->diagnostics)
+            : null;
+    }
+
+    /**
+     * Post-staging failures always preserve unknown-effect classification.
+     * Native provider codes/messages survive selective credential redaction;
+     * no unknown provider cause is invented as a specific SFTP status.
+     *
+     * @return array<string,mixed>
+     */
+    private function writeStagingDiagnostics(Throwable $exception): array
+    {
+        if ($exception instanceof FileSystemException) {
+            $details = $this->observedSftpFailure($exception)->diagnostics;
+        } elseif ($exception instanceof SshTargetConnectionException) {
+            $details = $exception->diagnostics;
+            if ($details === []) {
+                $details = [
+                    'provider_cause_unknown' => true,
+                    'gateway_error_message' => 'SFTP write failed during staging: '.$exception->reason,
+                ];
+            }
+        } else {
+            $details = $this->unexpectedSftpFailure($exception)->diagnostics;
+        }
+
+        return OperationDiagnostics::safeContext([
+            'failure_origin' => 'unknown',
+            'failure_stage' => 'operation',
+            'effect_unconfirmed' => true,
+            'retry_safe' => false,
+            ...$details,
+        ]);
+    }
+
+    /**
+     * Retain native error evidence only where the SFTP library exposed it.
+     * ActivityRecorder selectively redacts the message before persistence.
+     */
+    private function observedSftpFailure(FileSystemException $exception): SshTargetConnectionException
+    {
+        return new SshTargetConnectionException('file_unavailable', [
+            'failure_origin' => 'unknown',
+            'failure_stage' => 'operation',
+            'exception_class' => $exception::class,
+            'source_error_code' => $exception->getCode(),
+            'source_error_message' => $exception->getMessage(),
+        ]);
+    }
+
+    /** Do not expose generic PHP exception text as an assumed provider error. */
+    private function unexpectedSftpFailure(Throwable $exception): SshTargetConnectionException
+    {
+        return new SshTargetConnectionException('file_unavailable', [
+            'failure_origin' => 'unknown',
+            'failure_stage' => 'operation',
+            'provider_cause_unknown' => true,
+            'exception_class' => $exception::class,
+            'gateway_error_message' => 'SFTP operation raised an exception without verified provider details.',
+        ]);
     }
 
     /** @return array{size:int,mtime:int} */

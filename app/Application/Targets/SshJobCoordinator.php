@@ -16,6 +16,7 @@ use App\Support\CorrelationId;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use phpseclib4\Exception\FileSystemException;
 use Throwable;
 
 /**
@@ -210,16 +211,22 @@ final readonly class SshJobCoordinator
                 }
             }
             if (($scriptFile['status'] ?? '') !== 'completed') {
-                // Uncertain staging is never followed by wrapper creation.
-                throw new SshTargetConnectionException('outcome_unknown');
+                // No wrapper/launch after an uncertain file stage. Retain any
+                // observed native SFTP evidence from the in-process result.
+                throw new SshTargetConnectionException('outcome_unknown',
+                    is_array($scriptFile['__diagnostic_context'] ?? null)
+                        ? $scriptFile['__diagnostic_context'] : []);
             }
             $wrapperFile = $this->files->write($user, $target, $directory.'/wrapper.sh',
                 base64_encode($wrapper), expectedTargetBinding: $binding);
             if (($wrapperFile['status'] ?? '') !== 'completed') {
-                throw new SshTargetConnectionException('outcome_unknown');
+                throw new SshTargetConnectionException('outcome_unknown',
+                    is_array($wrapperFile['__diagnostic_context'] ?? null)
+                        ? $wrapperFile['__diagnostic_context'] : []);
             }
-        } catch (Throwable) {
-            $this->record($target, 'ssh-job-start', 'unknown', 'outcome_unknown');
+        } catch (Throwable $exception) {
+            $this->record($target, 'ssh-job-start', 'unknown', 'outcome_unknown',
+                $exception instanceof SshTargetConnectionException ? $exception->diagnostics : []);
 
             return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
         }
@@ -348,7 +355,10 @@ final readonly class SshJobCoordinator
                 $this->directory($jobId).'/'.$stream, $offset, $length,
                 expectedTargetBinding: (string) $row->target_binding_hash);
         } catch (SshTargetConnectionException $exception) {
-            if ($exception->reason !== 'file_unavailable') {
+            if (! $this->isMissingJobOutput($exception)) {
+                // A provider permission failure, lost transport, or unknown
+                // cause is NOT evidence of a not-yet-created output spool.
+                // Retain the observed source status for Activity/AI/Admin.
                 throw $exception;
             }
 
@@ -369,6 +379,14 @@ final readonly class SshJobCoordinator
             'source_check' => $file['source_check'],
             'status' => $row->status,
         ];
+    }
+
+    /** Only native SFTP missing-path replies justify an unavailable spool. */
+    private function isMissingJobOutput(SshTargetConnectionException $exception): bool
+    {
+        return $exception->reason === 'file_unavailable'
+            && ($exception->diagnostics['exception_class'] ?? null) === FileSystemException::class
+            && in_array($exception->diagnostics['source_error_code'] ?? null, [2, 10], true);
     }
 
     /** @return array<string,mixed> */
@@ -563,7 +581,10 @@ final readonly class SshJobCoordinator
     private function existing(
         User $user, string $targetId, string $clientHash, string $jobId, bool $requireFileRead,
     ): array {
-        $target = $this->authorized($user, $targetId, false);
+        // Resolve the caller-visible Target without revealing pause state.
+        // Job ownership/client/binding and current read permissions must
+        // be verified before a paused Target is reported or audited.
+        $target = $this->authorized($user, $targetId, false, checkPause: false);
         if (strlen($jobId) !== 26 || preg_match('/^[0-9A-HJKMNP-TV-Z]{26}$/D', $jobId) !== 1
             || strlen($clientHash) !== 64 || ! ctype_xdigit($clientHash)) {
             throw new SshTargetConnectionException('target_not_found');
@@ -580,11 +601,18 @@ final readonly class SshJobCoordinator
             throw new SshTargetConnectionException('target_not_found');
         }
 
+        if (TargetOperationGate::isPaused($target)) {
+            // This rejection belongs to a verified Job principal/client
+            // binding, never an attacker-supplied or unrelated Job handle.
+            throw new SshTargetConnectionException('target_paused');
+        }
+
         return [$target, $row];
     }
 
-    private function authorized(User $user, string $targetId, bool $requiresFileWrite): Target
-    {
+    private function authorized(
+        User $user, string $targetId, bool $requiresFileWrite, bool $checkPause = true,
+    ): Target {
         if (strlen($targetId) > 64
             || preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $targetId) !== 1) {
             throw new SshTargetConnectionException('target_not_found');
@@ -596,7 +624,7 @@ final readonly class SshJobCoordinator
                 || ! $this->access->allows($user, GatewayPermission::SshFileRead, $target)))) {
             throw new SshTargetConnectionException('target_not_found');
         }
-        if (TargetOperationGate::isPaused($target)) {
+        if ($checkPause && TargetOperationGate::isPaused($target)) {
             throw new SshTargetConnectionException('target_paused');
         }
 
@@ -875,8 +903,23 @@ final readonly class SshJobCoordinator
         return 'mgw-'.strtolower($id).'.service';
     }
 
-    private function record(Target $target, string $operation, string $outcome, ?string $code): void
-    {
-        $this->activity->record(CorrelationId::current(), $operation, $outcome, $target, $code);
+    /** @param array<string,mixed> $observed */
+    private function record(
+        Target $target, string $operation, string $outcome, ?string $code, array $observed = [],
+    ): void {
+        $this->activity->record(CorrelationId::current(), $operation, $outcome, $target, $code, [
+            ...($outcome === 'unknown' ? [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'operation',
+                'effect_unconfirmed' => true,
+                'retry_safe' => false,
+            ] : ($code === 'job_unsupported' ? [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'connection_setup',
+                'provider_cause_unknown' => true,
+                'gateway_error_message' => 'Job manager preflight could not confirm support; network or host capability may be unavailable.',
+            ] : [])),
+            ...$observed,
+        ]);
     }
 }

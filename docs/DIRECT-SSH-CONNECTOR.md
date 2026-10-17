@@ -69,6 +69,22 @@ Job admission requires all three Gateway SSH capabilities: command + SFTP read +
 - A provably abandoned **pre-dispatch** preparing attempt can fail without remote I/O. Genuine remotely uncertain Jobs cannot be automatically pruned merely because a runtime/lease or terminal-retention threshold passed.
 - Cancellation is not remote rollback. Cleanup of original spool/unit and terminal status must be verified before any operator-led retirement.
 
+**Diagnosing read/admission failures:** An authenticated SSH MCP caller can use the
+`diagnostic_reference` returned by an actionable `ssh-job-*` or `ssh-file-*`
+failure with the read-only `operation-diagnostics-read` tool, subject to
+current `activity.view` and Target/client scope. Retained/idempotent
+`launch_unknown` or `job_unsupported` summaries may not carry a new
+reference; instead read bounded recent errors for the authorized `target_id`.
+Never invent a new reference for an old response. The Admin Activity view uses
+the same bounded, selectively redacted Activity record. A pre-dispatch
+`connection_busy`/`rate_limited` refusal is recorded there without an
+additional per-attempt PHP log warning; internal or remotely uncertain failures
+retain operator warning evidence. Native SFTP error codes/messages are kept
+**only when received**; an unknown provider cause stays unknown. No remote Job
+script, stdout/stderr content, command body or file bytes are written to
+diagnostic logs. An unavailable reference does not justify replaying a Job
+launch, cancel or write whose outcome is uncertain.
+
 ### Operator recovery for uncertain Jobs
 
 Use the **installed Gateway's trusted local Artisan CLI** with the ordinary unprivileged site PHP user and approved operating procedures:

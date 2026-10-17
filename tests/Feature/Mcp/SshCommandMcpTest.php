@@ -3,6 +3,7 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshTargetRegistration;
@@ -50,6 +51,7 @@ final class SshCommandMcpTest extends TestCase
 
     public function test_selected_target_and_explicit_capability_are_both_required_without_network_leakage(): void
     {
+        $owner = $this->user('owner');
         $operator = $this->user('operator');
         $target = $this->target();
         // A previously successful pinned-host login is a prerequisite before
@@ -78,6 +80,12 @@ final class SshCommandMcpTest extends TestCase
         self::assertSame('egress_denied', $authorized['error']['code']);
         self::assertSame('SSH command could not be started safely.', $authorized['error']['message']);
         self::assertStringNotContainsString($command, json_encode($authorized, JSON_THROW_ON_ERROR));
+        $diagnostics = app(OperationDiagnosticsMcpToolHandlers::class)
+            ->read($owner, $authorized['error']['diagnostic_reference']);
+        self::assertTrue($diagnostics['ok']);
+        self::assertSame('gateway_admission', $diagnostics['events'][0]['diagnostics']['failure_origin']);
+        self::assertSame('connection_setup', $diagnostics['events'][0]['diagnostics']['failure_stage']);
+        self::assertTrue($diagnostics['events'][0]['diagnostics']['request_not_sent']);
 
         DB::table('user_target_permission_denials')->insert([
             'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(),

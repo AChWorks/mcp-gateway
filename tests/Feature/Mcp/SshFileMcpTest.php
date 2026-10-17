@@ -3,6 +3,7 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
@@ -13,9 +14,11 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
+use App\Support\OperationDiagnostics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use phpseclib4\Exception\FileSystemException;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -81,7 +84,14 @@ final class SshFileMcpTest extends TestCase
         self::assertSame('invalid_input', $files->write($owner, $id, '/sample', 'AA==', false, 1, 1)['error']['code']);
         self::assertSame('egress_denied', $files->write($owner, $id, '/sample', 'AA==', true)['error']['code']);
         self::assertSame('invalid_input', $files->write($owner, $id, '/sample', base64_encode(str_repeat('z', 16385)))['error']['code']);
-        self::assertSame('egress_denied', $files->stat($owner, $id, '/')['error']['code']);
+        $stat = $files->stat($owner, $id, '/');
+        self::assertSame('egress_denied', $stat['error']['code']);
+        $diagnostics = app(OperationDiagnosticsMcpToolHandlers::class)
+            ->read($owner, $stat['error']['diagnostic_reference']);
+        self::assertTrue($diagnostics['ok']);
+        self::assertSame('gateway_admission', $diagnostics['events'][0]['diagnostics']['failure_origin']);
+        self::assertSame('connection_setup', $diagnostics['events'][0]['diagnostics']['failure_stage']);
+        self::assertTrue($diagnostics['events'][0]['diagnostics']['request_not_sent']);
 
         // Read only: the explicit global read grant cannot elevate write.
         DB::table('user_permission_denials')->where('user_id', $operator->getKey())
@@ -113,6 +123,127 @@ final class SshFileMcpTest extends TestCase
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('target_not_found', $exception->reason);
         }
+    }
+
+    public function test_native_sftp_status_keeps_original_error_fields_only_in_redacted_diagnostics(): void
+    {
+        // Pure in-process fixture: no SFTP transport, server write, or secrets.
+        $observed = new FileSystemException(
+            'Permission denied /var/log/service.log; token=FIXTURE_SECRET_999', 3,
+        );
+        $convert = new \ReflectionMethod(SshFileRuntime::class, 'observedSftpFailure');
+        $error = $convert->invoke(app(SshFileRuntime::class), $observed);
+        self::assertInstanceOf(SshTargetConnectionException::class, $error);
+        self::assertSame('file_unavailable', $error->reason);
+        self::assertSame('SSH connection cannot be completed safely.', $error->getMessage());
+        $safe = OperationDiagnostics::safeContext($error->diagnostics);
+        self::assertSame(3, $safe['source_error_code']);
+        self::assertSame('operation', $safe['failure_stage']);
+        self::assertStringContainsString('/var/log/service.log', $safe['source_error_message']);
+        self::assertStringNotContainsString('FIXTURE_SECRET_999', $safe['source_error_message']);
+        self::assertStringContainsString('token=[REDACTED]', $safe['source_error_message']);
+    }
+
+    public function test_write_preflight_preserves_native_status_without_fabricating_source_changes(): void
+    {
+        $runtime = app(SshFileRuntime::class);
+        $classify = new \ReflectionMethod(SshFileRuntime::class, 'writePreflightFailure');
+        $denied = new FileSystemException(
+            'Permission denied /var/reports/report.txt token=FIXTURE_WRITE_SECRET', 3,
+        );
+        foreach ([false, true] as $overwrite) {
+            $error = $classify->invoke($runtime, $denied, $overwrite);
+            self::assertInstanceOf(SshTargetConnectionException::class, $error);
+            self::assertSame('file_unavailable', $error->reason);
+            self::assertSame(3, $error->diagnostics['source_error_code']);
+            self::assertStringContainsString('Permission denied /var/reports/report.txt',
+                $error->diagnostics['source_error_message']);
+            self::assertSame('SSH connection cannot be completed safely.', $error->getMessage());
+        }
+        foreach ([2, 10] as $missingCode) {
+            $missing = new FileSystemException('No such destination /var/reports/report.txt', $missingCode);
+            self::assertNull($classify->invoke($runtime, $missing, false),
+                'Only native missing paths can proceed to create-only staging.');
+            $replaced = $classify->invoke($runtime, $missing, true);
+            self::assertSame('source_changed', $replaced->reason);
+            self::assertSame($missingCode, $replaced->diagnostics['source_error_code']);
+            self::assertStringContainsString('/var/reports/report.txt',
+                $replaced->diagnostics['source_error_message']);
+        }
+        $unexpected = new FileSystemException('Native SFTP failure, cause unexpected', 11);
+        self::assertSame('file_unavailable', $classify->invoke($runtime, $unexpected, true)->reason);
+        self::assertSame(11, $classify->invoke($runtime, $unexpected, false)->diagnostics['source_error_code']);
+    }
+
+    public function test_staged_write_native_failure_stays_unknown_and_exposes_only_redacted_admin_ai_evidence(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $runtime = app(SshFileRuntime::class);
+        $detailsMethod = new \ReflectionMethod(SshFileRuntime::class, 'writeStagingDiagnostics');
+        $original = new FileSystemException(
+            'Permission denied /srv/remote/output.log password=FIXTURE_STAGE_SECRET_333', 3,
+        );
+        $details = $detailsMethod->invoke($runtime, $original);
+        self::assertSame(3, $details['source_error_code']);
+        self::assertSame('unknown', $details['failure_origin']);
+        self::assertSame('operation', $details['failure_stage']);
+        self::assertTrue($details['effect_unconfirmed']);
+        self::assertFalse($details['retry_safe']);
+        self::assertStringContainsString('Permission denied /srv/remote/output.log',
+            $details['source_error_message']);
+        self::assertStringNotContainsString('FIXTURE_STAGE_SECRET_333',
+            json_encode($details, JSON_THROW_ON_ERROR));
+        self::assertStringContainsString('password=[REDACTED]', $details['source_error_message']);
+
+        $dispatch = new \ReflectionMethod(SshFileMcpToolHandlers::class, 'dispatch');
+        $result = $dispatch->invoke(
+            app(SshFileMcpToolHandlers::class), $owner, $target->target_id,
+            'ssh-file-write', GatewayPermission::SshFileWrite,
+            static fn (Target $target): array => [
+                'status' => 'outcome_unknown',
+                'complete' => false,
+                'possible_remote_effect' => true,
+                'temporary_cleanup_confirmed' => false,
+                '__diagnostic_context' => $details,
+            ],
+        );
+        self::assertFalse($result['ok']);
+        self::assertSame('outcome_unknown', $result['error']['code']);
+        self::assertFalse($result['result']['complete']);
+        self::assertTrue($result['result']['possible_remote_effect']);
+        self::assertArrayNotHasKey('__diagnostic_context', $result['result']);
+        self::assertStringNotContainsString('Permission denied',
+            json_encode($result, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('FIXTURE_STAGE_SECRET_333',
+            json_encode($result, JSON_THROW_ON_ERROR));
+        $reference = $result['error']['diagnostic_reference'];
+        $stored = DB::table('activity_events')->where('correlation_id', $reference)->first();
+        self::assertNotNull($stored);
+        self::assertSame('unknown', $stored->outcome);
+        self::assertSame('outcome_unknown', $stored->error_code);
+        self::assertStringNotContainsString('FIXTURE_STAGE_SECRET_333', $stored->diagnostic_context);
+        $ai = app(OperationDiagnosticsMcpToolHandlers::class)->read($owner, $reference);
+        self::assertTrue($ai['ok']);
+        self::assertSame(3, $ai['events'][0]['diagnostics']['source_error_code']);
+        self::assertSame('Permission denied /srv/remote/output.log password=[REDACTED]',
+            $ai['events'][0]['diagnostics']['source_error_message']);
+        self::assertFalse($ai['events'][0]['diagnostics']['retry_safe']);
+        $this->actingAs($owner)->get('/admin/activity?diagnostic_reference='.$reference)
+            ->assertOk()->assertSee($reference)
+            ->assertSee('Permission denied /srv/remote/output.log')
+            ->assertDontSee('FIXTURE_STAGE_SECRET_333');
+
+        // No provider cause is invented when a generic runtime error has no
+        // verifiable native code; effects remain uncertain and non-retryable.
+        $unknown = $detailsMethod->invoke($runtime, new RuntimeException('token=FIXTURE_UNKNOWN_SECRET'));
+        self::assertSame('unknown', $unknown['provider_cause']);
+        self::assertArrayNotHasKey('source_error_code', $unknown);
+        self::assertArrayNotHasKey('source_error_message', $unknown);
+        self::assertFalse($unknown['retry_safe']);
+        self::assertTrue($unknown['effect_unconfirmed']);
+        self::assertStringNotContainsString('FIXTURE_UNKNOWN_SECRET', json_encode($unknown));
     }
 
     private function target(): Target
