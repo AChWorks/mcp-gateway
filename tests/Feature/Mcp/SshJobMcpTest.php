@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshJobCoordinator;
@@ -15,6 +16,8 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -47,6 +50,16 @@ final class SshJobMcpTest extends TestCase
         $first = $tool->start($user, $target->target_id, $client, $requestId, 'echo safe', 30);
         self::assertFalse($first['ok']);
         self::assertSame('job_unsupported', $first['error']['code']);
+        self::assertStringContainsString('could not be verified', $first['error']['message']);
+        self::assertStringNotContainsString('lacks a supported', $first['error']['message']);
+        $failure = DB::table('activity_events')->where('operation', 'ssh-job-start')
+            ->where('error_code', 'job_unsupported')->first();
+        self::assertNotNull($failure);
+        $details = app(OperationDiagnosticsMcpToolHandlers::class)
+            ->read($user, (string) $failure->correlation_id);
+        self::assertTrue($details['ok']);
+        self::assertSame('unknown', $details['events'][0]['diagnostics']['provider_cause']);
+        self::assertSame('connection_setup', $details['events'][0]['diagnostics']['failure_stage']);
         $id = $first['result']['job_id'];
         self::assertSame('unsupported', $first['result']['status']);
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
@@ -136,6 +149,66 @@ final class SshJobMcpTest extends TestCase
         self::assertSame('rate_limited',
             $tool->start($user, $target->target_id, $client, (string) Str::uuid(), 'echo third')['error']['code']);
         self::assertSame(2, DB::table('ssh_command_jobs')->count());
+    }
+
+    public function test_job_output_admission_failure_has_one_authorized_canonical_activity_and_no_denial_flood(): void
+    {
+        $owner = $this->user('owner');
+        $other = $this->user('operator');
+        $target = $this->target();
+        $client = hash('sha256', 'job-diagnostic-client');
+        $jobs = app(SshJobMcpToolHandlers::class);
+        // The synthetic host declines all outbound SSH, but its durable
+        // unsupported handle is sufficient for a bounded read admission test.
+        $created = $jobs->start($owner, $target->target_id, $client, (string) Str::uuid(), 'echo no-send');
+        self::assertSame('unsupported', $created['result']['status']);
+        $jobId = $created['result']['job_id'];
+        $rateKey = 'ssh-file:'.hash('sha256', (string) $target->getKey()).':rate';
+        RateLimiter::clear($rateKey);
+        for ($i = 0; $i < 30; $i++) {
+            RateLimiter::hit($rateKey, 60);
+        }
+        try {
+            $before = DB::table('activity_events')->count();
+            Log::spy();
+            $denied = $jobs->output($owner, $target->target_id, $client, $jobId);
+            self::assertFalse($denied['ok']);
+            self::assertSame('rate_limited', $denied['error']['code']);
+            $reference = $denied['error']['diagnostic_reference'];
+            self::assertTrue(Str::isUuid($reference));
+            self::assertSame($before + 1, DB::table('activity_events')->count());
+
+            $read = app(OperationDiagnosticsMcpToolHandlers::class)->read($owner, $reference);
+            self::assertTrue($read['ok']);
+            self::assertCount(1, $read['events']);
+            $event = $read['events'][0];
+            self::assertSame('ssh-job-output', $event['operation']);
+            self::assertSame($target->target_id, $event['target_id']);
+            self::assertSame('rate_limited', $event['error_code']);
+            self::assertSame('available', $event['diagnostic_state']);
+            self::assertSame('gateway_admission', $event['diagnostics']['failure_origin']);
+            self::assertSame('admission', $event['diagnostics']['failure_stage']);
+            self::assertTrue($event['diagnostics']['request_not_sent']);
+            self::assertTrue($event['diagnostics']['retry_safe']);
+
+            // Wrong client/user and malformed identities never acquire a
+            // privileged diagnostic reference or cause a new DB/log storm.
+            foreach ([
+                $jobs->output($other, $target->target_id, $client, $jobId),
+                $jobs->output($owner, $target->target_id, hash('sha256', 'other-client'), $jobId),
+                $jobs->output($owner, 'target-not-found', $client, $jobId),
+            ] as $unavailable) {
+                self::assertSame('target_not_found', $unavailable['error']['code']);
+                self::assertArrayNotHasKey('diagnostic_reference', $unavailable['error']);
+            }
+            self::assertSame($before + 1, DB::table('activity_events')->count());
+            self::assertSame(1, DB::table('ssh_command_jobs')->count());
+            // This known, recorded pre-dispatch refusal does not emit a
+            // duplicate per-attempt WARNING into the PHP daily log.
+            Log::shouldNotHaveReceived('warning');
+        } finally {
+            RateLimiter::clear($rateKey);
+        }
     }
 
     public function test_owner_script_budget_checks_actual_bytes_and_keeps_existing_uuid_durable_when_lowered(): void

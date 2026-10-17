@@ -3,6 +3,7 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
@@ -13,9 +14,11 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
+use App\Support\OperationDiagnostics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use phpseclib4\Exception\FileSystemException;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -81,7 +84,14 @@ final class SshFileMcpTest extends TestCase
         self::assertSame('invalid_input', $files->write($owner, $id, '/sample', 'AA==', false, 1, 1)['error']['code']);
         self::assertSame('egress_denied', $files->write($owner, $id, '/sample', 'AA==', true)['error']['code']);
         self::assertSame('invalid_input', $files->write($owner, $id, '/sample', base64_encode(str_repeat('z', 16385)))['error']['code']);
-        self::assertSame('egress_denied', $files->stat($owner, $id, '/')['error']['code']);
+        $stat = $files->stat($owner, $id, '/');
+        self::assertSame('egress_denied', $stat['error']['code']);
+        $diagnostics = app(OperationDiagnosticsMcpToolHandlers::class)
+            ->read($owner, $stat['error']['diagnostic_reference']);
+        self::assertTrue($diagnostics['ok']);
+        self::assertSame('gateway_admission', $diagnostics['events'][0]['diagnostics']['failure_origin']);
+        self::assertSame('connection_setup', $diagnostics['events'][0]['diagnostics']['failure_stage']);
+        self::assertTrue($diagnostics['events'][0]['diagnostics']['request_not_sent']);
 
         // Read only: the explicit global read grant cannot elevate write.
         DB::table('user_permission_denials')->where('user_id', $operator->getKey())
@@ -113,6 +123,25 @@ final class SshFileMcpTest extends TestCase
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('target_not_found', $exception->reason);
         }
+    }
+
+    public function test_native_sftp_status_keeps_original_error_fields_only_in_redacted_diagnostics(): void
+    {
+        // Pure in-process fixture: no SFTP transport, server write, or secrets.
+        $observed = new FileSystemException(
+            'Permission denied /var/log/service.log; token=FIXTURE_SECRET_999', 3,
+        );
+        $convert = new \ReflectionMethod(SshFileRuntime::class, 'observedSftpFailure');
+        $error = $convert->invoke(app(SshFileRuntime::class), $observed);
+        self::assertInstanceOf(SshTargetConnectionException::class, $error);
+        self::assertSame('file_unavailable', $error->reason);
+        self::assertSame('SSH connection cannot be completed safely.', $error->getMessage());
+        $safe = OperationDiagnostics::safeContext($error->diagnostics);
+        self::assertSame(3, $safe['source_error_code']);
+        self::assertSame('operation', $safe['failure_stage']);
+        self::assertStringContainsString('/var/log/service.log', $safe['source_error_message']);
+        self::assertStringNotContainsString('FIXTURE_SECRET_999', $safe['source_error_message']);
+        self::assertStringContainsString('token=[REDACTED]', $safe['source_error_message']);
     }
 
     private function target(): Target

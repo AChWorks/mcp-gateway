@@ -877,6 +877,17 @@ final readonly class SshJobCoordinator
 
     private function record(Target $target, string $operation, string $outcome, ?string $code): void
     {
-        $this->activity->record(CorrelationId::current(), $operation, $outcome, $target, $code);
+        $this->activity->record(CorrelationId::current(), $operation, $outcome, $target, $code,
+            $outcome === 'unknown' ? [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'operation',
+                'effect_unconfirmed' => true,
+                'retry_safe' => false,
+            ] : ($code === 'job_unsupported' ? [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'connection_setup',
+                'provider_cause_unknown' => true,
+                'gateway_error_message' => 'Job manager preflight could not confirm support; network or host capability may be unavailable.',
+            ] : []));
     }
 }

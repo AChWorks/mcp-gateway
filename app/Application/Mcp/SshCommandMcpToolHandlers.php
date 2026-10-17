@@ -56,9 +56,14 @@ final readonly class SshCommandMcpToolHandlers
         try {
             $result = $this->runtime->run($user, $target, $command, $timeout_seconds);
         } catch (SshTargetConnectionException $exception) {
-            return $this->failed($operation, $target, $exception->reason);
-        } catch (Throwable) {
-            return $this->failed($operation, $target, 'connection_unavailable');
+            return $this->failed($operation, $target, $exception->reason, observed: $exception->diagnostics);
+        } catch (Throwable $exception) {
+            return $this->failed($operation, $target, 'connection_unavailable', observed: [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'unknown',
+                'provider_cause_unknown' => true,
+                'exception_class' => $exception::class,
+            ]);
         }
 
         $unknown = $result['status'] === 'outcome_unknown';
@@ -66,6 +71,12 @@ final readonly class SshCommandMcpToolHandlers
         $this->activity->record(
             $reference, $operation, $unknown ? 'unknown' : 'success',
             $target, $unknown ? 'outcome_unknown' : null,
+            $unknown ? [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'operation',
+                'effect_unconfirmed' => true,
+                'retry_safe' => false,
+            ] : [],
         );
 
         return [
@@ -83,18 +94,28 @@ final readonly class SshCommandMcpToolHandlers
 
     /**
      * @param  array{max_bytes:int,max_seconds:int}|array{}  $limits
+     * @param  array<string,mixed>  $observed
      * @return array<string,mixed>
      */
-    private function failed(string $operation, ?Target $target, string $code, array $limits = []): array
-    {
+    private function failed(
+        string $operation, ?Target $target, string $code, array $limits = [], array $observed = [],
+    ): array {
         $reference = CorrelationId::current();
-        $this->activity->record($reference, $operation, 'failure', $target, $code,
-            in_array($code, ['rate_limited', 'connection_busy', 'admission_unavailable'], true) ? [
+        $admission = in_array($code, ['rate_limited', 'connection_busy', 'admission_unavailable'], true);
+        $this->activity->record($reference, $operation, 'failure', $target, $code, [
+            ...($admission ? [
                 'failure_origin' => 'gateway_admission',
                 'failure_stage' => 'admission',
-                'pre_dispatch' => true,
+                'request_not_sent' => true,
                 'retry_safe' => true,
-            ] : []);
+            ] : []),
+            ...($code === 'egress_denied' && $observed === [] ? [
+                'failure_origin' => 'gateway_admission',
+                'failure_stage' => 'connection_setup',
+                'request_not_sent' => true,
+            ] : []),
+            ...$observed,
+        ]);
 
         return [
             'ok' => false,

@@ -41,7 +41,15 @@ final class ActivityRecorder
             // inventory, MCP and file handlers; no raw inputs or tool outputs.
             // Routine rejected/invalid requests remain in Activity only so
             // hostile traffic cannot amplify the daily server log.
+            // Proven pre-dispatch contention already has an exact Activity
+            // reference. Avoid re-logging each rate-limited attempt to the
+            // PHP daily log; keep unexpected admission failures and unknown
+            // remote effects visible as WARNINGS.
+            $routineContention = in_array($errorCode, ['rate_limited', 'connection_busy'], true)
+                && ($safeDetails['failure_origin'] ?? null) === 'gateway_admission'
+                && ($safeDetails['request_not_sent'] ?? null) === true;
             if (in_array($outcome, ['failure', 'unknown'], true)
+                && ! $routineContention
                 && ! in_array($errorCode, ['target_not_found', 'forbidden', 'invalid_input', 'mcp_principal_rate_limited', 'mcp_edge_rate_limited'], true)) {
                 OperationDiagnostics::failure($operation, $errorCode ?? 'operation_failed', $target, [
                     ...$diagnostics,

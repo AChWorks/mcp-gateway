@@ -61,8 +61,10 @@ final readonly class SshFileRuntime
                     // Preserve an explicit no-SFTP-subsystem result; never
                     // replace it with a generic file-not-found outcome.
                     throw $exception;
-                } catch (Throwable) {
-                    throw new SshTargetConnectionException('file_unavailable');
+                } catch (FileSystemException $exception) {
+                    throw $this->observedSftpFailure($exception);
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
                 }
 
                 return [
@@ -110,8 +112,10 @@ final readonly class SshFileRuntime
                     $sftp->rawlist($path, false, $onFile);
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
-                } catch (Throwable) {
-                    throw new SshTargetConnectionException('file_unavailable');
+                } catch (FileSystemException $exception) {
+                    throw $this->observedSftpFailure($exception);
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
                 }
 
                 usort($entries, static fn (array $a, array $b): int => strcmp($a['name'], $b['name']));
@@ -156,8 +160,10 @@ final readonly class SshFileRuntime
                     $this->requireVersion($after, $before['size'], $before['mtime']);
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
-                } catch (Throwable) {
-                    throw new SshTargetConnectionException('file_unavailable');
+                } catch (FileSystemException $exception) {
+                    throw $this->observedSftpFailure($exception);
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
                 }
 
                 return [
@@ -229,10 +235,10 @@ final readonly class SshFileRuntime
                         throw new SshTargetConnectionException('source_changed');
                     }
                     if (! in_array($exception->getCode(), [2, 10], true)) {
-                        throw new SshTargetConnectionException('file_unavailable');
+                        throw $this->observedSftpFailure($exception);
                     }
-                } catch (Throwable) {
-                    throw new SshTargetConnectionException('file_unavailable');
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
                 }
 
                 $parentDir = dirname($path);
@@ -527,6 +533,33 @@ final readonly class SshFileRuntime
             || ($mtime !== null && $mtime < 0)) {
             throw new SshTargetConnectionException('invalid_input');
         }
+    }
+
+    /**
+     * Retain native error evidence only where the SFTP library exposed it.
+     * ActivityRecorder selectively redacts the message before persistence.
+     */
+    private function observedSftpFailure(FileSystemException $exception): SshTargetConnectionException
+    {
+        return new SshTargetConnectionException('file_unavailable', [
+            'failure_origin' => 'unknown',
+            'failure_stage' => 'operation',
+            'exception_class' => $exception::class,
+            'source_error_code' => $exception->getCode(),
+            'source_error_message' => $exception->getMessage(),
+        ]);
+    }
+
+    /** Do not expose generic PHP exception text as an assumed provider error. */
+    private function unexpectedSftpFailure(Throwable $exception): SshTargetConnectionException
+    {
+        return new SshTargetConnectionException('file_unavailable', [
+            'failure_origin' => 'unknown',
+            'failure_stage' => 'operation',
+            'provider_cause_unknown' => true,
+            'exception_class' => $exception::class,
+            'gateway_error_message' => 'SFTP operation raised an exception without verified provider details.',
+        ]);
     }
 
     /** @return array{size:int,mtime:int} */

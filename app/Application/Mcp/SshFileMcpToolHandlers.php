@@ -86,9 +86,14 @@ final readonly class SshFileMcpToolHandlers
         try {
             $result = $action($target);
         } catch (SshTargetConnectionException $exception) {
-            return $this->failed($tool, $target, $exception->reason);
-        } catch (Throwable) {
-            return $this->failed($tool, $target, 'file_unavailable');
+            return $this->failed($tool, $target, $exception->reason, $exception->diagnostics);
+        } catch (Throwable $exception) {
+            return $this->failed($tool, $target, 'file_unavailable', [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'unknown',
+                'provider_cause_unknown' => true,
+                'exception_class' => $exception::class,
+            ]);
         }
 
         $unknown = ($result['status'] ?? '') === 'outcome_unknown';
@@ -96,6 +101,12 @@ final readonly class SshFileMcpToolHandlers
         $this->activity->record(
             $reference, $tool, $unknown ? 'unknown' : 'success',
             $target, $unknown ? 'outcome_unknown' : null,
+            $unknown ? [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'operation',
+                'effect_unconfirmed' => true,
+                'retry_safe' => false,
+            ] : [],
         );
 
         return [
@@ -111,17 +122,33 @@ final readonly class SshFileMcpToolHandlers
         ];
     }
 
-    /** @return array<string,mixed> */
-    private function failed(string $tool, ?Target $target, string $code): array
+    /**
+     * @param  array<string,mixed>  $observed
+     * @return array<string,mixed>
+     */
+    private function failed(string $tool, ?Target $target, string $code, array $observed = []): array
     {
         $reference = CorrelationId::current();
-        $this->activity->record($reference, $tool, 'failure', $target, $code,
-            in_array($code, ['rate_limited', 'connection_busy', 'admission_unavailable'], true) ? [
+        $admission = in_array($code, ['rate_limited', 'connection_busy', 'admission_unavailable'], true);
+        $this->activity->record($reference, $tool, 'failure', $target, $code, [
+            ...($admission ? [
                 'failure_origin' => 'gateway_admission',
                 'failure_stage' => 'admission',
                 'pre_dispatch' => true,
                 'retry_safe' => true,
-            ] : []);
+            ] : []),
+            ...($code === 'egress_denied' && $observed === [] ? [
+                'failure_origin' => 'gateway_admission',
+                'failure_stage' => 'connection_setup',
+                'request_not_sent' => true,
+            ] : []),
+            ...($code === 'file_unavailable' && $observed === [] ? [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'operation',
+                'provider_cause_unknown' => true,
+            ] : []),
+            ...$observed,
+        ]);
 
         return [
             'ok' => false,
