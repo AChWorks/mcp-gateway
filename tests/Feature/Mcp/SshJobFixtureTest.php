@@ -204,7 +204,17 @@ SH;
         self::assertSame(16384, $a['result']['length']);
         self::assertSame(3616, $b['result']['length']);
         self::assertTrue($b['result']['end_of_file']);
-        self::assertFalse($b['result']['truncated']);
+        // The same exact exit code can be recovered either from the
+        // wrapper's durable exit-code file (capture readers were waited)
+        // or directly from systemd (no independent capture proof). Only
+        // the first route licenses truncated=false for a short spool.
+        $terminalReason = DB::table('ssh_command_jobs')->where('id', $id)->value('terminal_reason');
+        if ($terminalReason === 'script_exit') {
+            self::assertFalse($b['result']['truncated']);
+        } else {
+            self::assertSame('systemd_exit-code', $terminalReason);
+            self::assertNull($b['result']['truncated']);
+        }
         self::assertSame(str_pad('7', 20000, '0', STR_PAD_LEFT),
             base64_decode($a['result']['data'], true).base64_decode($b['result']['data'], true));
         $err = $resumed->output($owner, $target->target_id, $client, $id, 'stderr');
