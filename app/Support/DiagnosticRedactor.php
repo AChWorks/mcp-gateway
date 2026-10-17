@@ -20,6 +20,8 @@ final class DiagnosticRedactor
         'request_body', 'response_body', 'file_content', 'file_contents',
         'content_base64', 'attachment', 'arguments', 'user_input',
         'content', 'headers', 'file_bytes', 'raw_output',
+        'x_amz_signature', 'x_goog_signature',
+        'x_amz_credential', 'x_goog_credential', 'x_amz_security_token',
     ];
 
     public static function text(string $text): string
@@ -31,7 +33,9 @@ final class DiagnosticRedactor
         foreach ([
             ['~-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----~s', '[REDACTED PRIVATE KEY]'],
             ['~(?i)\b(Bearer|Basic)(\s+)[a-z0-9._\~+/=-]+~', '$1$2[REDACTED]'],
-            ['~(?i)\b(https?://)[^\s/@]+@~', '$1[REDACTED]@'],
+            // Target only credential-bearing URI userinfo, not hosts or paths.
+            // Retain the original scheme and useful host/path diagnostics.
+            ['~(?i)\b((?:https?|sftp|ftps?|ssh|mysql|mariadb|postgres(?:ql)?|mongodb(?:\+srv)?|redis(?:s)?|amqp(?:s)?|smtp(?:s)?|imap(?:s)?|ldap(?:s)?|git\+ssh)://)[^\s/@?#]+@~', '$1[REDACTED]@'],
         ] as [$pattern, $replacement]) {
             $redacted = preg_replace($pattern, $replacement, $text);
             if ($redacted === null) {
@@ -182,7 +186,7 @@ final class DiagnosticRedactor
     private static function isSensitiveField(string $field): bool
     {
         return preg_match(
-            '~(?:^|_)(?:password|passwd|passphrase|secret|token|authorization|cookie|credentials?|private_key|api_key|session_id|client_assertion|body|payload|raw_data|raw_request|raw_response|file_content|file_contents|content_base64|attachment|arguments|user_input|content|headers|file_bytes|raw_output)(?:$|_)~',
+            '~(?:^|_)(?:password|passwd|passphrase|secret|token|authorization|cookie|credentials?|private_key|api_key|session_id|client_assertion|body|payload|raw_data|raw_request|raw_response|file_content|file_contents|content_base64|attachment|arguments|user_input|content(?!_(?:type|length|encoding|disposition|range)(?:$|_))|headers|file_bytes|raw_output|x_amz_signature|x_goog_signature|x_amz_credential|x_goog_credential|x_amz_security_token)(?:$|_)~',
             self::normalizedFieldName($field),
         ) === 1;
     }

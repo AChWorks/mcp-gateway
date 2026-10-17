@@ -203,6 +203,96 @@ final class ObservedErrorFidelityTest extends TestCase
         self::assertSame($safe, DiagnosticRedactor::text($safe));
     }
 
+    public function test_signed_urls_and_non_http_userinfo_never_retain_access_bearing_values(): void
+    {
+        $message = 'Provider error 422 at /srv/wp/plugins/remote.php '
+            .'sftp://upload:SFTP_SECRET_812@files.example.test/reports/2026.log '
+            .'mysql://db:MYSQL_SECRET_921@db.example.test/orders '
+            .'https://bucket.example.test/archive?q=safe&X-Amz-Signature=AMZ_SIGNATURE_451'
+            .'&X-Amz-Credential=AMZ_CREDENTIAL_452&X-Amz-Security-Token=AMZ_SESSION_TOKEN_453'
+            .'&X-Amz-Date=20261017T050000Z '
+            .'https://storage.example.test/file?X-Goog-Signature=GOOG_SIGNATURE_631'
+            .'&X-Goog-Credential=GOOG_CREDENTIAL_632&generation=42 '
+            .'[\'X-Amz-Signature\' => \'PHP_QUOTED_SIGNATURE_711\'] '
+            .'{\"X-Goog-Signature\":\"ESCAPED_SIGNATURE_712\"}';
+
+        $safe = OperationDiagnostics::safeContext([
+            'failure_origin' => 'downstream_mcp',
+            'failure_stage' => 'operation',
+            'source_error_code' => 'vendor/custom-code.422',
+            'source_error_message' => $message,
+            'source_error_details' => [
+                'error' => [
+                    'code' => 'provider/native-422',
+                    'message' => 'Validation error at /srv/wp/lib/client.php',
+                    'endpoint' => 'ftps://acct:FTPS_SECRET_132@files.example.test/upload',
+                    'url' => 'https://storage.example.test/object?X-Goog-Signature=NESTED_SIGNATURE_811&format=json',
+                    'parameters' => [
+                        'X-Amz-Signature' => 'STRUCTURED_AMZ_SIGNATURE_901',
+                        'X-Goog-Signature' => 'STRUCTURED_GOOG_SIGNATURE_902',
+                        'X-Amz-Credential' => 'STRUCTURED_AMZ_CREDENTIAL_903',
+                        'X-Goog-Credential' => 'STRUCTURED_GOOG_CREDENTIAL_904',
+                        'X-Amz-Security-Token' => 'STRUCTURED_AMZ_SESSION_905',
+                        'X-Amz-Date' => '20261017T050000Z',
+                        'validation_field' => 'php_version',
+                    ],
+                ],
+            ],
+        ]);
+
+        $encoded = json_encode($safe, JSON_THROW_ON_ERROR);
+        foreach ([
+            'SFTP_SECRET_812', 'MYSQL_SECRET_921', 'AMZ_SIGNATURE_451',
+            'AMZ_CREDENTIAL_452', 'GOOG_SIGNATURE_631', 'GOOG_CREDENTIAL_632',
+            'PHP_QUOTED_SIGNATURE_711', 'ESCAPED_SIGNATURE_712',
+            'FTPS_SECRET_132', 'NESTED_SIGNATURE_811',
+            'STRUCTURED_AMZ_SIGNATURE_901', 'STRUCTURED_GOOG_SIGNATURE_902',
+            'STRUCTURED_AMZ_CREDENTIAL_903', 'STRUCTURED_GOOG_CREDENTIAL_904',
+            'AMZ_SESSION_TOKEN_453', 'STRUCTURED_AMZ_SESSION_905',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $encoded);
+        }
+        self::assertSame('vendor/custom-code.422', $safe['source_error_code']);
+        self::assertSame('provider/native-422', $safe['source_error_details']['error']['code']);
+        self::assertStringContainsString('sftp://[REDACTED]@files.example.test/reports/2026.log',
+            $safe['source_error_message']);
+        self::assertStringContainsString('mysql://[REDACTED]@db.example.test/orders',
+            $safe['source_error_message']);
+        self::assertStringContainsString('q=safe', $safe['source_error_message']);
+        self::assertStringContainsString('&X-Amz-Date=20261017T050000Z',
+            $safe['source_error_message']);
+        self::assertStringContainsString('&generation=42', $safe['source_error_message']);
+        self::assertSame('20261017T050000Z',
+            $safe['source_error_details']['error']['parameters']['X-Amz-Date']);
+        self::assertSame('php_version',
+            $safe['source_error_details']['error']['parameters']['validation_field']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['parameters']['X-Amz-Signature']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['parameters']['X-Goog-Signature']);
+        self::assertSame('[REDACTED]',
+            $safe['source_error_details']['error']['parameters']['X-Amz-Security-Token']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
+    public function test_signed_url_credentials_are_redacted_before_explicit_message_truncation(): void
+    {
+        config()->set('activity.diagnostic_message_max_bytes', 1024);
+        $safe = OperationDiagnostics::safeContext([
+            'source_error_message' => 'https://files.example.test/file?X-Amz-Signature=TRUNCATION_SECRET_312'
+                .'&response-content-type=image/png '.str_repeat('Validation at /srv/provider.php ', 80),
+        ]);
+
+        self::assertTrue($safe['source_error_message_truncated']);
+        self::assertSame(1024, strlen($safe['source_error_message']));
+        self::assertStringNotContainsString('TRUNCATION_SECRET_312', $safe['source_error_message']);
+        self::assertStringContainsString('X-Amz-Signature=[REDACTED]',
+            $safe['source_error_message']);
+        self::assertStringContainsString('response-content-type=image/png',
+            $safe['source_error_message']);
+        self::assertSame($safe, OperationDiagnostics::safeContext($safe));
+    }
+
     public function test_configurable_length_limit_marks_truncation_instead_of_silently_erasing_it(): void
     {
         config()->set('activity.diagnostic_message_max_bytes', 1024);

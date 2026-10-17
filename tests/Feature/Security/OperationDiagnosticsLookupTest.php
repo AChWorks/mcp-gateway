@@ -10,6 +10,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
+use App\Support\OperationDiagnostics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -70,11 +71,22 @@ final class OperationDiagnosticsLookupTest extends TestCase
                 'failure_origin' => 'downstream_mcp',
                 'failure_stage' => 'operation',
                 'source_error_message' => 'Error in /app/provider.php: '.$json
-                    .' [\'token\' => \'SECRET_QUOTED_VALUE\']',
+                    .' [\'token\' => \'SECRET_QUOTED_VALUE\'] '
+                    .'sftp://logs:SFTP_SECRET_231@files.example.test/trace/provider.log '
+                    .'https://bucket.example.test/object?X-Amz-Signature=AMZ_SIGNATURE_232'
+                    .'&X-Amz-Date=20261017T050000Z',
                 'source_error_details' => [
                     'Bearer SECRET_IN_STRUCTURED_KEY' => 'SECRET_KEY_VALUE',
                     'raw_response' => 'SECRET_RAW_PAYLOAD',
                     'code' => 'provider/native-specific-422',
+                    'signed_url' => 'https://storage.example.test/file?X-Goog-Signature=GOOG_SIGNATURE_234'
+                        .'&response-content-type=application/json',
+                    'database_url' => 'mysql://audit:MYSQL_SECRET_233@db.example.test/retention',
+                    'remote_error' => [
+                        'X-Amz-Signature' => 'STRUCTURED_AMZ_SIGNATURE_235',
+                        'X-Goog-Signature' => 'STRUCTURED_GOOG_SIGNATURE_236',
+                        'X-Amz-Date' => '20261017T050000Z',
+                    ],
                 ],
             ]);
 
@@ -84,7 +96,11 @@ final class OperationDiagnosticsLookupTest extends TestCase
 
                 return $message === 'Gateway operation failure.'
                     && ($context['source_error_details']['code'] ?? null) === 'provider/native-specific-422'
-                    && ! str_contains($logged, 'SECRET_');
+                    && ($context['source_error_details']['remote_error']['X-Amz-Date'] ?? null)
+                        === '20261017T050000Z'
+                    && ! str_contains($logged, 'SECRET_')
+                    && ! str_contains($logged, 'SIGNATURE_')
+                    && ! str_contains($logged, 'MYSQL_SECRET_');
             });
 
         $stored = (string) DB::table('activity_events')
@@ -97,6 +113,9 @@ final class OperationDiagnosticsLookupTest extends TestCase
         foreach ([
             'SECRET_ESCAPED_FIELD_VALUE', 'SECRET_QUOTED_VALUE',
             'SECRET_IN_STRUCTURED_KEY', 'SECRET_KEY_VALUE', 'SECRET_RAW_PAYLOAD',
+            'SFTP_SECRET_231', 'AMZ_SIGNATURE_232', 'MYSQL_SECRET_233',
+            'GOOG_SIGNATURE_234', 'STRUCTURED_AMZ_SIGNATURE_235',
+            'STRUCTURED_GOOG_SIGNATURE_236',
         ] as $secret) {
             self::assertStringNotContainsString($secret, $stored);
             self::assertStringNotContainsString($secret, $mcpPayload);
@@ -106,7 +125,18 @@ final class OperationDiagnosticsLookupTest extends TestCase
             $lookup['events'][0]['diagnostics']['source_error_message']);
         self::assertSame('provider/native-specific-422',
             $lookup['events'][0]['diagnostics']['source_error_details']['code']);
-
+        self::assertStringContainsString('sftp://[REDACTED]@files.example.test/trace/provider.log',
+            $lookup['events'][0]['diagnostics']['source_error_message']);
+        self::assertStringContainsString('X-Amz-Date=20261017T050000Z',
+            $lookup['events'][0]['diagnostics']['source_error_message']);
+        self::assertStringContainsString('response-content-type=application/json',
+            $lookup['events'][0]['diagnostics']['source_error_details']['signed_url']);
+        self::assertSame('20261017T050000Z',
+            $lookup['events'][0]['diagnostics']['source_error_details']['remote_error']['X-Amz-Date']);
+        self::assertSame('[REDACTED]',
+            $lookup['events'][0]['diagnostics']['source_error_details']['remote_error']['X-Goog-Signature']);
+        self::assertSame($lookup['events'][0]['diagnostics'],
+            OperationDiagnostics::safeContext($lookup['events'][0]['diagnostics']));
     }
 
     public function test_target_and_activity_view_scope_apply_to_ai_and_admin_lookup(): void
