@@ -98,7 +98,7 @@ Use **AI clients** (`/admin/oauth-clients`) to manage application profiles and g
 
 ## Available MCP tools
 
-The **v2.3.2 MCP catalog** exposes 14 tools, including a read-only diagnostics lookup alongside WordPress and Direct SSH operations. Available operations remain constrained by the authenticated client, Gateway user and effective Target permissions. SSH Jobs and diagnostic lookups are available only when their supporting release and database migrations are installed.
+The **MCP catalog (14 tools since v2.3.2)** includes a read-only diagnostics lookup alongside WordPress and Direct SSH operations. Available operations remain constrained by the authenticated client, Gateway user and effective Target permissions. SSH Jobs and diagnostic lookups are available only when their supporting release and database migrations are installed.
 
 | Tool | Purpose |
 | --- | --- |
