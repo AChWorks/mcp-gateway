@@ -42,6 +42,11 @@ sudo runuser -u "$user" -- env \
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
   --filter=test_job_longer_than_http_budget_has_bounded_output_durable_exit_and_verified_cancel
 
+# Regression: no systemd-wide file-size cap may prevent a legitimate >1 MiB
+# child write; oversized stdout/stderr alone must stay bounded and harmless.
+php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
+  --filter=test_job_can_write_large_regular_files_while_capturing_bounded_stdout_and_stderr
+
 sudo loginctl disable-linger "$user"
 # The guard must reject new detached work while the user manager may linger
 # briefly from its last session; don't assume the bus vanishes immediately.
