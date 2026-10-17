@@ -16,6 +16,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
 use App\Models\User;
+use App\Support\OperationDiagnostics;
 use Closure;
 use phpseclib4\Exception\FileSystemException;
 use phpseclib4\Net\SFTP;
@@ -228,14 +229,11 @@ final readonly class SshFileRuntime
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
                 } catch (FileSystemException $exception) {
-                    // Only an exact SFTP "missing path" status can establish
-                    // create-only intent; authorization, transport, and server
-                    // errors MUST NOT masquerade as a missing file.
-                    if ($overwrite) {
-                        throw new SshTargetConnectionException('source_changed');
-                    }
-                    if (! in_array($exception->getCode(), [2, 10], true)) {
-                        throw $this->observedSftpFailure($exception);
+                    // An SFTP missing-path status can establish create-only
+                    // intent. Other native failures are not source changes.
+                    $failure = $this->writePreflightFailure($exception, $overwrite);
+                    if ($failure !== null) {
+                        throw $failure;
                     }
                 } catch (Throwable $exception) {
                     throw $this->unexpectedSftpFailure($exception);
@@ -345,7 +343,11 @@ final readonly class SshFileRuntime
                     }
                     // Successful POSIX rename consumes the staging inode.
                     $sftp->rmdir($stagingDir);
-                } catch (Throwable) {
+                } catch (Throwable $exception) {
+                    // After staging starts, a failed reply or cleanup cannot
+                    // prove whether remote bytes were published. Keep that
+                    // effect certainty separate from the observed SFTP cause.
+                    $diagnostics = $this->writeStagingDiagnostics($exception);
                     $removed = false;
                     $directoryRemoved = false;
                     try {
@@ -368,6 +370,10 @@ final readonly class SshFileRuntime
                         'complete' => false,
                         'possible_remote_effect' => true,
                         'temporary_cleanup_confirmed' => $removed && $directoryRemoved,
+                        // Private in-process evidence. Public MCP output MUST
+                        // strip it before serialization; ActivityRecorder then
+                        // persists only selectively redacted, bounded values.
+                        '__diagnostic_context' => $diagnostics,
                     ];
                 }
 
@@ -533,6 +539,56 @@ final readonly class SshFileRuntime
             || ($mtime !== null && $mtime < 0)) {
             throw new SshTargetConnectionException('invalid_input');
         }
+    }
+
+    /**
+     * A native missing path is the only create-only admission case. Overwrite
+     * of an absent expected destination is a source change, but an observed
+     * permission/transport error must retain its original native identity.
+     */
+    private function writePreflightFailure(
+        FileSystemException $exception, bool $overwrite,
+    ): ?SshTargetConnectionException {
+        $observed = $this->observedSftpFailure($exception);
+        if (! in_array($exception->getCode(), [2, 10], true)) {
+            return $observed;
+        }
+
+        return $overwrite
+            ? new SshTargetConnectionException('source_changed', $observed->diagnostics)
+            : null;
+    }
+
+    /**
+     * Post-staging failures always preserve unknown-effect classification.
+     * Native provider codes/messages survive selective credential redaction;
+     * no unknown provider cause is invented as a specific SFTP status.
+     *
+     * @return array<string,mixed>
+     */
+    private function writeStagingDiagnostics(Throwable $exception): array
+    {
+        if ($exception instanceof FileSystemException) {
+            $details = $this->observedSftpFailure($exception)->diagnostics;
+        } elseif ($exception instanceof SshTargetConnectionException) {
+            $details = $exception->diagnostics;
+            if ($details === []) {
+                $details = [
+                    'provider_cause_unknown' => true,
+                    'gateway_error_message' => 'SFTP write failed during staging: '.$exception->reason,
+                ];
+            }
+        } else {
+            $details = $this->unexpectedSftpFailure($exception)->diagnostics;
+        }
+
+        return OperationDiagnostics::safeContext([
+            'failure_origin' => 'unknown',
+            'failure_stage' => 'operation',
+            'effect_unconfirmed' => true,
+            'retry_safe' => false,
+            ...$details,
+        ]);
     }
 
     /**

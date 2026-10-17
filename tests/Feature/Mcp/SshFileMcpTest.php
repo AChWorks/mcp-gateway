@@ -144,6 +144,108 @@ final class SshFileMcpTest extends TestCase
         self::assertStringContainsString('token=[REDACTED]', $safe['source_error_message']);
     }
 
+    public function test_write_preflight_preserves_native_status_without_fabricating_source_changes(): void
+    {
+        $runtime = app(SshFileRuntime::class);
+        $classify = new \ReflectionMethod(SshFileRuntime::class, 'writePreflightFailure');
+        $denied = new FileSystemException(
+            'Permission denied /var/reports/report.txt token=FIXTURE_WRITE_SECRET', 3,
+        );
+        foreach ([false, true] as $overwrite) {
+            $error = $classify->invoke($runtime, $denied, $overwrite);
+            self::assertInstanceOf(SshTargetConnectionException::class, $error);
+            self::assertSame('file_unavailable', $error->reason);
+            self::assertSame(3, $error->diagnostics['source_error_code']);
+            self::assertStringContainsString('Permission denied /var/reports/report.txt',
+                $error->diagnostics['source_error_message']);
+            self::assertSame('SSH connection cannot be completed safely.', $error->getMessage());
+        }
+        foreach ([2, 10] as $missingCode) {
+            $missing = new FileSystemException('No such destination /var/reports/report.txt', $missingCode);
+            self::assertNull($classify->invoke($runtime, $missing, false),
+                'Only native missing paths can proceed to create-only staging.');
+            $replaced = $classify->invoke($runtime, $missing, true);
+            self::assertSame('source_changed', $replaced->reason);
+            self::assertSame($missingCode, $replaced->diagnostics['source_error_code']);
+            self::assertStringContainsString('/var/reports/report.txt',
+                $replaced->diagnostics['source_error_message']);
+        }
+        $unexpected = new FileSystemException('Native SFTP failure, cause unexpected', 11);
+        self::assertSame('file_unavailable', $classify->invoke($runtime, $unexpected, true)->reason);
+        self::assertSame(11, $classify->invoke($runtime, $unexpected, false)->diagnostics['source_error_code']);
+    }
+
+    public function test_staged_write_native_failure_stays_unknown_and_exposes_only_redacted_admin_ai_evidence(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $runtime = app(SshFileRuntime::class);
+        $detailsMethod = new \ReflectionMethod(SshFileRuntime::class, 'writeStagingDiagnostics');
+        $original = new FileSystemException(
+            'Permission denied /srv/remote/output.log password=FIXTURE_STAGE_SECRET_333', 3,
+        );
+        $details = $detailsMethod->invoke($runtime, $original);
+        self::assertSame(3, $details['source_error_code']);
+        self::assertSame('unknown', $details['failure_origin']);
+        self::assertSame('operation', $details['failure_stage']);
+        self::assertTrue($details['effect_unconfirmed']);
+        self::assertFalse($details['retry_safe']);
+        self::assertStringContainsString('Permission denied /srv/remote/output.log',
+            $details['source_error_message']);
+        self::assertStringNotContainsString('FIXTURE_STAGE_SECRET_333',
+            json_encode($details, JSON_THROW_ON_ERROR));
+        self::assertStringContainsString('password=[REDACTED]', $details['source_error_message']);
+
+        $dispatch = new \ReflectionMethod(SshFileMcpToolHandlers::class, 'dispatch');
+        $result = $dispatch->invoke(
+            app(SshFileMcpToolHandlers::class), $owner, $target->target_id,
+            'ssh-file-write', GatewayPermission::SshFileWrite,
+            static fn (Target $target): array => [
+                'status' => 'outcome_unknown',
+                'complete' => false,
+                'possible_remote_effect' => true,
+                'temporary_cleanup_confirmed' => false,
+                '__diagnostic_context' => $details,
+            ],
+        );
+        self::assertFalse($result['ok']);
+        self::assertSame('outcome_unknown', $result['error']['code']);
+        self::assertFalse($result['result']['complete']);
+        self::assertTrue($result['result']['possible_remote_effect']);
+        self::assertArrayNotHasKey('__diagnostic_context', $result['result']);
+        self::assertStringNotContainsString('Permission denied',
+            json_encode($result, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('FIXTURE_STAGE_SECRET_333',
+            json_encode($result, JSON_THROW_ON_ERROR));
+        $reference = $result['error']['diagnostic_reference'];
+        $stored = DB::table('activity_events')->where('correlation_id', $reference)->first();
+        self::assertNotNull($stored);
+        self::assertSame('unknown', $stored->outcome);
+        self::assertSame('outcome_unknown', $stored->error_code);
+        self::assertStringNotContainsString('FIXTURE_STAGE_SECRET_333', $stored->diagnostic_context);
+        $ai = app(OperationDiagnosticsMcpToolHandlers::class)->read($owner, $reference);
+        self::assertTrue($ai['ok']);
+        self::assertSame(3, $ai['events'][0]['diagnostics']['source_error_code']);
+        self::assertSame('Permission denied /srv/remote/output.log password=[REDACTED]',
+            $ai['events'][0]['diagnostics']['source_error_message']);
+        self::assertFalse($ai['events'][0]['diagnostics']['retry_safe']);
+        $this->actingAs($owner)->get('/admin/activity?diagnostic_reference='.$reference)
+            ->assertOk()->assertSee($reference)
+            ->assertSee('Permission denied /srv/remote/output.log')
+            ->assertDontSee('FIXTURE_STAGE_SECRET_333');
+
+        // No provider cause is invented when a generic runtime error has no
+        // verifiable native code; effects remain uncertain and non-retryable.
+        $unknown = $detailsMethod->invoke($runtime, new RuntimeException('token=FIXTURE_UNKNOWN_SECRET'));
+        self::assertSame('unknown', $unknown['provider_cause']);
+        self::assertArrayNotHasKey('source_error_code', $unknown);
+        self::assertArrayNotHasKey('source_error_message', $unknown);
+        self::assertFalse($unknown['retry_safe']);
+        self::assertTrue($unknown['effect_unconfirmed']);
+        self::assertStringNotContainsString('FIXTURE_UNKNOWN_SECRET', json_encode($unknown));
+    }
+
     private function target(): Target
     {
         return app(SshTargetRegistration::class)->register(

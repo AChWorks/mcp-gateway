@@ -6,7 +6,9 @@ use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshJobCoordinator;
+use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
@@ -19,6 +21,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
+use phpseclib4\Exception\FileSystemException;
 use Tests\TestCase;
 
 final class SshJobMcpTest extends TestCase
@@ -105,6 +108,185 @@ final class SshJobMcpTest extends TestCase
             ->update(['username' => 'rotated-account']);
         self::assertSame('target_not_found',
             $tool->status($user, $target->target_id, $client, $id)['error']['code']);
+    }
+
+    public function test_paused_target_verifies_job_handle_before_emitting_diagnostic_activity(): void
+    {
+        $owner = $this->user('owner');
+        $foreign = $this->user('owner');
+        $target = $this->target();
+        $client = hash('sha256', 'paused-authenticated-client');
+        $otherClient = hash('sha256', 'other-paused-client');
+        $jobs = app(SshJobMcpToolHandlers::class);
+
+        $ownedId = $jobs->start(
+            $owner, $target->target_id, $client, (string) Str::uuid(), 'echo owned',
+        )['result']['job_id'];
+        $foreignId = $jobs->start(
+            $foreign, $target->target_id, $otherClient, (string) Str::uuid(), 'echo foreign',
+        )['result']['job_id'];
+        $otherClientId = $jobs->start(
+            $owner, $target->target_id, $otherClient, (string) Str::uuid(), 'echo other-client',
+        )['result']['job_id'];
+        $target->forceFill(['operations_paused' => true])->save();
+
+        $before = DB::table('activity_events')->count();
+        Log::spy();
+        $unknown = (string) Str::ulid();
+        foreach (['status', 'output', 'cancel'] as $method) {
+            foreach ([
+                [$owner, $client, 'not-a-ulid'],
+                [$owner, $client, $unknown],
+                [$owner, $client, $foreignId],
+                [$owner, $client, $otherClientId],
+                [$owner, $otherClient, $ownedId],
+                [$foreign, $client, $ownedId],
+            ] as [$actor, $identity, $handle]) {
+                $result = $jobs->{$method}($actor, $target->target_id, $identity, $handle);
+                self::assertFalse($result['ok']);
+                self::assertSame('target_not_found', $result['error']['code']);
+                self::assertArrayNotHasKey('diagnostic_reference', $result['error']);
+            }
+        }
+        self::assertSame($before, DB::table('activity_events')->count(),
+            'Pausing must not make invented or foreign Job handles auditable.');
+        Log::shouldNotHaveReceived('warning');
+
+        foreach (['status', 'output', 'cancel'] as $method) {
+            $result = $jobs->{$method}($owner, $target->target_id, $client, $ownedId);
+            self::assertSame('target_paused', $result['error']['code']);
+            $reference = $result['error']['diagnostic_reference'] ?? null;
+            self::assertIsString($reference);
+            $evidence = app(OperationDiagnosticsMcpToolHandlers::class)->read($owner, $reference);
+            self::assertTrue($evidence['ok']);
+            self::assertSame('target_paused', $evidence['events'][0]['error_code']);
+        }
+        self::assertSame($before + 3, DB::table('activity_events')->count());
+        self::assertSame(3, DB::table('ssh_command_jobs')->count());
+
+        // Removing current rights or actor access must not disclose pause
+        // status, Job existence, or emit any diagnostic for this handle.
+        // Owners intentionally bypass individual permission denials;
+        // disabling the entire principal actually revokes an Owner.
+        $owner->forceFill(['access_enabled' => false])->save();
+        $revoked = $jobs->status($owner, $target->target_id, $client, $ownedId);
+        self::assertSame('target_not_found', $revoked['error']['code']);
+        self::assertArrayNotHasKey('diagnostic_reference', $revoked['error']);
+        self::assertSame($before + 3, DB::table('activity_events')->count());
+    }
+
+    public function test_paused_job_cannot_reveal_target_status_after_selected_operator_permission_is_denied(): void
+    {
+        $operator = $this->user('operator');
+        $operator->forceFill(['target_scope_mode' => 'selected'])->save();
+        $target = $this->target();
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $client = hash('sha256', 'operator-paused-job-client');
+        $handler = app(SshJobMcpToolHandlers::class);
+        $created = $handler->start(
+            $operator, $target->target_id, $client, (string) Str::uuid(), 'echo owned operator job',
+        );
+        self::assertSame('unsupported', $created['result']['status']);
+        $jobId = $created['result']['job_id'];
+        $target->forceFill(['operations_paused' => true])->save();
+
+        $first = $handler->status($operator, $target->target_id, $client, $jobId);
+        self::assertSame('target_paused', $first['error']['code']);
+        $before = DB::table('activity_events')->count();
+
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Log::spy();
+        foreach (['status', 'output', 'cancel'] as $operation) {
+            $denied = $handler->{$operation}($operator, $target->target_id, $client, $jobId);
+            self::assertSame('target_not_found', $denied['error']['code']);
+            self::assertArrayNotHasKey('diagnostic_reference', $denied['error']);
+        }
+        self::assertSame($before, DB::table('activity_events')->count());
+        Log::shouldNotHaveReceived('warning');
+    }
+
+    public function test_only_native_missing_output_status_is_treated_as_not_yet_available(): void
+    {
+        $method = new \ReflectionMethod(SshJobCoordinator::class, 'isMissingJobOutput');
+        $jobs = app(SshJobCoordinator::class);
+        foreach ([2, 10] as $missingCode) {
+            $missing = new SshTargetConnectionException('file_unavailable', [
+                'exception_class' => FileSystemException::class,
+                'source_error_code' => $missingCode,
+                'source_error_message' => 'No such path',
+            ]);
+            self::assertTrue($method->invoke($jobs, $missing));
+        }
+        foreach ([3, 4, 5, 0, 11] as $failureCode) {
+            $failure = new SshTargetConnectionException('file_unavailable', [
+                'exception_class' => FileSystemException::class,
+                'source_error_code' => $failureCode,
+                'source_error_message' => 'Observed native SFTP error',
+            ]);
+            self::assertFalse($method->invoke($jobs, $failure));
+        }
+        foreach ([
+            new SshTargetConnectionException('file_unavailable'),
+            new SshTargetConnectionException('file_unavailable', [
+                'provider_cause_unknown' => true,
+            ]),
+            new SshTargetConnectionException('file_unavailable', [
+                'exception_class' => \RuntimeException::class, 'source_error_code' => 2,
+            ]),
+            new SshTargetConnectionException('connection_busy', [
+                'exception_class' => FileSystemException::class,
+                'source_error_code' => 2,
+            ]),
+        ] as $unproven) {
+            self::assertFalse($method->invoke($jobs, $unproven));
+        }
+    }
+
+    public function test_native_job_output_permission_error_is_redacted_in_activity_ai_and_admin(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $handler = app(SshJobMcpToolHandlers::class);
+        $dispatch = new \ReflectionMethod(SshJobMcpToolHandlers::class, 'dispatch');
+        $result = $dispatch->invoke(
+            $handler, $owner, $target->target_id, 'ssh-job-output',
+            static fn (): never => throw new SshTargetConnectionException('file_unavailable', [
+                'exception_class' => FileSystemException::class,
+                'source_error_code' => 3,
+                'source_error_message' => 'Permission denied /var/log/ssh-job/stdout token=FIXTURE_SFTP_OUTPUT_SECRET',
+            ]),
+        );
+        self::assertFalse($result['ok']);
+        self::assertSame('file_unavailable', $result['error']['code']);
+        self::assertStringNotContainsString('FIXTURE_SFTP_OUTPUT_SECRET', json_encode($result, JSON_THROW_ON_ERROR));
+        $reference = $result['error']['diagnostic_reference'];
+        $evidence = app(OperationDiagnosticsMcpToolHandlers::class)->read($owner, $reference);
+        self::assertTrue($evidence['ok']);
+        self::assertSame('ssh-job-output', $evidence['events'][0]['operation']);
+        self::assertSame(3, $evidence['events'][0]['diagnostics']['source_error_code']);
+        self::assertStringContainsString('Permission denied /var/log/ssh-job/stdout',
+            $evidence['events'][0]['diagnostics']['source_error_message']);
+        self::assertStringNotContainsString('FIXTURE_SFTP_OUTPUT_SECRET',
+            json_encode($evidence, JSON_THROW_ON_ERROR));
+        $stored = DB::table('activity_events')->where('correlation_id', $reference)->value('diagnostic_context');
+        self::assertIsString($stored);
+        self::assertStringNotContainsString('FIXTURE_SFTP_OUTPUT_SECRET', $stored);
+        $this->actingAs($owner)->get('/admin/activity?diagnostic_reference='.$reference)
+            ->assertOk()->assertSee($reference)
+            ->assertSee('Permission denied /var/log/ssh-job/stdout')
+            ->assertDontSee('FIXTURE_SFTP_OUTPUT_SECRET');
     }
 
     public function test_job_input_and_per_principal_active_admission_are_bounded(): void

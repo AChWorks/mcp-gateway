@@ -97,6 +97,11 @@ final readonly class SshFileMcpToolHandlers
         }
 
         $unknown = ($result['status'] ?? '') === 'outcome_unknown';
+        $diagnostics = $unknown && is_array($result['__diagnostic_context'] ?? null)
+            ? $result['__diagnostic_context'] : [];
+        // Internal raw-source evidence (already safely redacted by runtime)
+        // must never appear in public MCP result bodies.
+        unset($result['__diagnostic_context']);
         $reference = CorrelationId::current();
         $this->activity->record(
             $reference, $tool, $unknown ? 'unknown' : 'success',
@@ -106,6 +111,7 @@ final readonly class SshFileMcpToolHandlers
                 'failure_stage' => 'operation',
                 'effect_unconfirmed' => true,
                 'retry_safe' => false,
+                ...$diagnostics,
             ] : [],
         );
 

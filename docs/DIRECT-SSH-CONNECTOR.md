@@ -72,7 +72,10 @@ Job admission requires all three Gateway SSH capabilities: command + SFTP read +
 **Diagnosing read/admission failures:** An authenticated SSH MCP caller can use the
 `diagnostic_reference` returned by an actionable `ssh-job-*` or `ssh-file-*`
 failure with the read-only `operation-diagnostics-read` tool, subject to
-current `activity.view` and Target/client scope. The Admin Activity view uses
+current `activity.view` and Target/client scope. Retained/idempotent
+`launch_unknown` or `job_unsupported` summaries may not carry a new
+reference; instead read bounded recent errors for the authorized `target_id`.
+Never invent a new reference for an old response. The Admin Activity view uses
 the same bounded, selectively redacted Activity record. A pre-dispatch
 `connection_busy`/`rate_limited` refusal is recorded there without an
 additional per-attempt PHP log warning; internal or remotely uncertain failures
