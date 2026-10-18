@@ -454,6 +454,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
     public function test_public_gateway_tool_manifest_contains_wp_and_ssh_without_unsupported_connectors(): void
     {
         $owner = $this->user('owner');
+        $this->pair('alpha');
         $host = parse_url((string) config('oauth.resource'), PHP_URL_HOST);
         self::assertIsString($host);
         $endpoint = app(GatewayMcpEndpoint::class);
@@ -473,6 +474,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             ],
         ], JSON_THROW_ON_ERROR));
         $initialize->attributes->set('oauth_user', $owner);
+        $initialize->attributes->set('oauth_client_profile_key', 'chatgpt');
         $initialized = $endpoint->handle($initialize);
         self::assertSame(200, $initialized->getStatusCode());
         $session = $initialized->headers->get('Mcp-Session-Id');
@@ -483,6 +485,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             'jsonrpc' => '2.0', 'id' => 2, 'method' => 'tools/list', 'params' => (object) [],
         ], JSON_THROW_ON_ERROR));
         $request->attributes->set('oauth_user', $owner);
+        $request->attributes->set('oauth_client_profile_key', 'chatgpt');
         $response = $endpoint->handle($request);
         self::assertSame(200, $response->getStatusCode());
 
@@ -511,7 +514,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertSame(['file'], $genericFile['_meta']['openai/fileParams']);
         self::assertSame($fileInput['inputSchema']['properties']['file'],
             $genericFile['inputSchema']['properties']['file']);
-        self::assertSame(['wordpress_media_stage', 'ssh_sftp_upload'],
+        self::assertSame(['wordpress_media_stage'],
             $genericFile['inputSchema']['properties']['mode']['enum']);
         $ssh = collect($document['result']['tools'])->firstWhere('name', 'ssh-command-run');
         self::assertSame(8192, $ssh['inputSchema']['properties']['command']['maxLength']);
@@ -827,6 +830,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             ],
         ], JSON_THROW_ON_ERROR));
         $request->attributes->set('oauth_user', $owner);
+        $request->attributes->set('oauth_client_profile_key', 'chatgpt');
         $response = app(GatewayMcpEndpoint::class)->handle($request);
         self::assertSame(400, $response->getStatusCode(), 'Unexpected extra import field must be rejected by the actual MCP tool schema.');
         ob_start();
@@ -961,6 +965,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             ],
         ], JSON_THROW_ON_ERROR));
         $request->attributes->set('oauth_user', $owner);
+        $request->attributes->set('oauth_client_profile_key', 'chatgpt');
         $response = app(GatewayMcpEndpoint::class)->handle($request);
         self::assertSame(200, $response->getStatusCode());
         ob_start();
@@ -1009,6 +1014,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             ],
         ], JSON_THROW_ON_ERROR));
         $request->attributes->set('oauth_user', $owner);
+        $request->attributes->set('oauth_client_profile_key', 'chatgpt');
         $response = app(GatewayMcpEndpoint::class)->handle($request);
         self::assertSame(200, $response->getStatusCode());
         ob_start();

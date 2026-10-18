@@ -2,8 +2,11 @@
 
 namespace Tests\Feature\OAuth;
 
+use App\Application\Targets\SshTargetRegistration;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Models\User;
@@ -14,6 +17,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -111,16 +115,62 @@ final class ClientProfileIsolationTest extends TestCase
             ->postJson('/mcp', $mcp)->assertOk();
 
         foreach ([$fixtureTools, $chatTools] as $toolResult) {
-            self::assertSame(['targets-list', 'target-context', 'operation-diagnostics-read', 'wordpress-abilities-read', 'wordpress-ability-execute', 'wordpress-file-input', 'target-file-input', 'ssh-command-run', 'ssh-job-start', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'],
+            self::assertSame(['targets-list', 'target-context', 'operation-diagnostics-read', 'wordpress-abilities-read', 'wordpress-ability-execute', 'ssh-command-run', 'ssh-job-start', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'],
                 array_column((array) $toolResult->json('result.tools'), 'name'));
             foreach ((array) $toolResult->json('result.tools') as $tool) {
-                $isExecute = in_array($tool['name'], ['wordpress-ability-execute', 'wordpress-file-input', 'target-file-input', 'ssh-command-run', 'ssh-job-start', 'ssh-job-cancel', 'ssh-file-write'], true);
-                $isWordPress = str_starts_with($tool['name'], 'wordpress-') || $tool['name'] === 'target-file-input';
+                $isExecute = in_array($tool['name'], ['wordpress-ability-execute', 'ssh-command-run', 'ssh-job-start', 'ssh-job-cancel', 'ssh-file-write'], true);
+                $isWordPress = str_starts_with($tool['name'], 'wordpress-');
                 self::assertSame(! $isExecute, $tool['annotations']['readOnlyHint'] ?? null);
                 self::assertSame($isExecute, $tool['annotations']['destructiveHint'] ?? null);
                 self::assertSame($isWordPress || str_starts_with($tool['name'], 'ssh-'), $tool['annotations']['openWorldHint'] ?? null);
             }
         }
+        // The profile must be the authenticated OAuth registration, never an
+        // untrusted clientInfo or caller-claimed host feature. Target-level
+        // permissions and the installed SSH transfer feature govern discovery.
+        config()->set('ssh.file_transfer.enabled', true);
+        $ssh = app(SshTargetRegistration::class)->register(
+            'oauth-ssh-file', 'OAuth SSH file', '127.0.0.1', 22, 'deploy',
+            'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat("\x33", 32)),
+            'password', 'non-production-test-only', null,
+        );
+        $ssh->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('user_target_access')->insert([
+            'user_id' => $user->getKey(), 'target_record_id' => $ssh->getKey(), 'allowed' => true,
+        ]);
+        $available = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
+        $availableTools = collect((array) $available->json('result.tools'));
+        self::assertNull($availableTools->firstWhere('name', 'wordpress-file-input'));
+        $fileTool = $availableTools->firstWhere('name', 'target-file-input');
+        self::assertIsArray($fileTool);
+        self::assertSame(['ssh_sftp_upload'], $fileTool['inputSchema']['properties']['mode']['enum']);
+        self::assertSame(['file'], $fileTool['_meta']['openai/fileParams']);
+
+        $otherClient = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
+        self::assertNotContains('target-file-input', array_column((array) $otherClient->json('result.tools'), 'name'));
+        self::assertNotContains('wordpress-file-input', array_column((array) $otherClient->json('result.tools'), 'name'));
+
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $user->getKey(), 'target_record_id' => $ssh->getKey(),
+            'permission' => GatewayPermission::SshFileWrite->value,
+        ]);
+        $revoked = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
+        self::assertNotContains('target-file-input', array_column((array) $revoked->json('result.tools'), 'name'));
+        DB::table('user_target_permission_denials')->where('user_id', $user->getKey())->delete();
+
+        $ssh->forceFill(['operations_paused' => true])->save();
+        $paused = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
+        self::assertNotContains('target-file-input', array_column((array) $paused->json('result.tools'), 'name'));
+        $ssh->forceFill(['operations_paused' => false])->save();
+        config()->set('ssh.file_transfer.enabled', false);
+        $disabled = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
+        self::assertNotContains('target-file-input', array_column((array) $disabled->json('result.tools'), 'name'));
+
         $this->withHeaders([...$headers, 'Mcp-Method' => 'tools/call', 'Mcp-Name' => 'targets-list',
             'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
             ->postJson('/mcp', [
@@ -135,7 +185,7 @@ final class ClientProfileIsolationTest extends TestCase
             ])
             ->assertOk()
             ->assertJsonPath('result.structuredContent.ok', true)
-            ->assertJsonPath('result.structuredContent.targets', []);
+            ->assertJsonPath('result.structuredContent.targets.0.target_id', 'oauth-ssh-file');
 
         // A refresh issued to one client cannot be used by a different authenticated client.
         $this->refresh($fixtureTokens['refresh_token'], self::CHATGPT, $this->chatPrivateKey, 'chat-key')

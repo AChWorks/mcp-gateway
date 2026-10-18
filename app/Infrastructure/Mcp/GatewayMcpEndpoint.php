@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Mcp;
 
+use App\Application\Mcp\ChatGptFileToolAvailability;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
@@ -32,6 +33,7 @@ final readonly class GatewayMcpEndpoint
         private WordpressTargetMcpToolHandlers $wordpress,
         private WordpressFileInputMcpToolHandlers $wordpressFiles,
         private TargetFileInputMcpToolHandlers $targetFiles,
+        private ChatGptFileToolAvailability $fileAvailability,
         private SshCommandMcpToolHandlers $sshCommands,
         private SshFileMcpToolHandlers $sshFiles,
         private OperationalSettings $settings,
@@ -43,6 +45,9 @@ final readonly class GatewayMcpEndpoint
     {
         $commandLimits = $this->settings->sshCommandLimits();
         $jobLimits = $this->settings->sshJobLimits();
+        $authenticatedProfile = $request->attributes->get('oauth_client_profile_key');
+        $fileModes = $this->fileAvailability->modes($this->user($request),
+            is_string($authenticatedProfile) ? $authenticatedProfile : null);
         // Exact OpenAI FileParams object schema, shared across both MCP tools.
         $fileParamSchema = [
             'type' => 'object',
@@ -57,7 +62,7 @@ final readonly class GatewayMcpEndpoint
         ];
         // Expose only operationally implemented tool families. Connector
         // execution tools will be enabled after their runtime/credentials land.
-        $server = Server::builder()
+        $builder = Server::builder()
             ->setServerInfo(
                 name: 'mcp-gateway',
                 version: (string) config('app.release_version'),
@@ -193,8 +198,9 @@ final readonly class GatewayMcpEndpoint
                     'required' => ['target_id', 'ability'],
                     'additionalProperties' => false,
                 ],
-            )
-            ->addTool(
+            );
+        if ($fileModes['wordpress']) {
+            $builder->addTool(
                 handler: fn (string $target_id, array $file): array => $this->wordpressFiles->receive(
                     $this->user($request), $target_id, $file,
                 ),
@@ -211,8 +217,10 @@ final readonly class GatewayMcpEndpoint
                     'additionalProperties' => false,
                 ],
                 meta: ['openai/fileParams' => ['file']],
-            )
-            ->addTool(
+            );
+        }
+        if ($fileModes['wordpress'] || $fileModes['ssh']) {
+            $builder->addTool(
                 handler: fn (string $target_id, array $file, string $mode, ?array $ssh_destination = null): array => $this->targetFiles->receive(
                     $this->user($request), $target_id, $file, $mode, $ssh_destination,
                 ),
@@ -224,7 +232,10 @@ final readonly class GatewayMcpEndpoint
                     'properties' => [
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                         'file' => $fileParamSchema,
-                        'mode' => ['type' => 'string', 'enum' => ['wordpress_media_stage', 'ssh_sftp_upload']],
+                        'mode' => ['type' => 'string', 'enum' => [
+                            ...($fileModes['wordpress'] ? ['wordpress_media_stage'] : []),
+                            ...($fileModes['ssh'] ? ['ssh_sftp_upload'] : []),
+                        ]],
                         'ssh_destination' => [
                             'type' => 'object',
                             'properties' => [
@@ -242,7 +253,9 @@ final readonly class GatewayMcpEndpoint
                     'additionalProperties' => false,
                 ],
                 meta: ['openai/fileParams' => ['file']],
-            )
+            );
+        }
+        $server = $builder
             ->addTool(
                 handler: fn (string $target_id, string $command, int $timeout_seconds = 10): array => $this->sshCommands->run(
                     $this->user($request), $target_id, $command, $timeout_seconds,

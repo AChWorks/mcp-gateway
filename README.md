@@ -9,7 +9,11 @@ for selected authorized WordPress private staging or SSH SFTP upload
 ([Gateway #147](https://github.com/AChWorks/mcp-gateway/issues/147)). Its presence
 in source is **not** evidence an operator has installed that release or that a
 connected ChatGPT plugin injects real files correctly. Native host file input
-and reverse output attachment handling still require separate acceptance. Consult
+and reverse output attachment handling still require separate acceptance. The
+FileParams Tool appears only for the authenticated ChatGPT OAuth profile with
+an eligible connected, unpaused and authorized WordPress or SSH Target, after
+the client refreshes its tool catalogue. It is not advertised to unrelated
+OAuth clients; downstream provider permissions still fail closed. Consult
 [the technical contract](docs/REMOTE-IO-CONTRACT.md#chatgpt-file-parameter-ingress-to-a-selected-target-gateway-source-candidate)
 for exact modes and limits.
 

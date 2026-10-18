@@ -69,6 +69,25 @@ entrypoint. Both use the same FileParams shape: required `file_id` and
 connection injects or returns a real attachment. The host and actual connected
 client must be tested separately.
 
+**Host-specific capability advertisement (review A2):** the OAuth-verified
+`chatgpt` client profile, **not** an untrusted MCP `clientInfo`, gates
+`openai/fileParams` Tool discovery. No file-input Tool is advertised to
+other approved OAuth client profiles. The legacy WordPress Tool is listed only
+when the same Gateway principal has at least one currently connected, unpaused
+WordPress Target, stored provider credentials, and both exact destructive and
+readonly WordPress-Ability permissions; the generic Tool is listed when that
+mode or an eligible SSH/SFTP write mode exists. A connected SSH Target must
+have its registered SSH config and credential, an effective `ssh.file.write`
+grant, and enabled optional SSH whole-file mode. The generic Tool's `mode`
+enum contains **only** locally eligible modes. Discovery performs **no**
+Bridge/SFTP network call and cannot promise downstream Builder Write,
+`upload_files`, private staging directory or fresh OAuth validity: all
+provider and dynamic permissions are rechecked **before signed-file GET** and
+at the effectful operation. The connected ChatGPT Tool catalogue must be
+refreshed after any local Target/grant/feature change; absence from discovery
+is not a retained access grant. This is deliberately conservative optional
+capability discovery, not a new authorization system.
+
 Shared ingress validates the exact signed HTTPS origin
 `files.oaiusercontent.com`, public A/AAAA DNS, pinned peer IP and verified
 TLS hostname/certificate. No redirects, embedded authentication, fragment,
