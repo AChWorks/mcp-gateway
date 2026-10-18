@@ -4,6 +4,7 @@ namespace Tests\Feature\Targets;
 
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
+use App\Application\Mcp\TargetFileInputMcpToolHandlers;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
@@ -11,9 +12,12 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
+use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 /** Actual disposable OpenSSH SFTP fixture with an explicit loopback-only policy. */
@@ -745,6 +749,67 @@ final class SshFileFixtureTest extends TestCase
         self::assertTrue($marker['ok'], json_encode($marker));
         self::assertSame('write-observed', $marker['result']['stdout']);
         self::assertSame(0, $marker['result']['exit_code']);
+    }
+
+    public function test_chatgpt_file_param_uses_existing_ssh_sftp_private_atomic_upload_and_hash(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        config()->set('ssh.file_transfer.enabled', true);
+        config()->set('ssh.file_transfer.max_bytes', 1048576);
+        $bytes = str_repeat("\x00\xff\xa1\x7f", 80000);
+        $sha256 = hash('sha256', $bytes);
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $host === 'files.oaiusercontent.com' ? ['1.1.1.1'] : [];
+            }
+        });
+        Http::preventStrayRequests();
+        Http::fake(static fn (Request $request) => Http::response($bytes, 200, [
+            'Content-Length' => (string) strlen($bytes),
+        ]));
+        $path = $this->home().'/chatgpt-file-'.bin2hex(random_bytes(6)).'.bin';
+        $input = [
+            'download_url' => 'https://files.oaiusercontent.com/private/fixture?sig=opaque',
+            'file_id' => 'test-file-id',
+            'file_name' => 'fixture.bin',
+        ];
+        $destination = [
+            'path' => $path,
+            'private_staging_dir' => $this->env('SSH_FIXTURE_PRIVATE_STAGING'),
+        ];
+        $result = app(TargetFileInputMcpToolHandlers::class)->receive(
+            $owner, $target->target_id, $input, 'ssh_sftp_upload', $destination,
+        );
+        self::assertTrue($result['ok'], json_encode($result, JSON_THROW_ON_ERROR));
+        self::assertSame('verified_ssh_file', $result['state']);
+        self::assertSame(strlen($bytes), $result['bytes']);
+        self::assertSame($sha256, $result['sha256']);
+        self::assertFalse($result['retry_safe']);
+
+        $readback = fopen('php://temp/maxmemory:65536', 'w+b');
+        self::assertIsResource($readback);
+        try {
+            $remote = app(SshFileRuntime::class)->downloadToStream(
+                $owner, $target, $path, $readback, 1048576, 30, $sha256,
+            );
+            self::assertSame(strlen($bytes), $remote['bytes_read']);
+            self::assertSame($sha256, $remote['sha256']);
+            rewind($readback);
+            self::assertSame($bytes, stream_get_contents($readback));
+        } finally {
+            fclose($readback);
+        }
+
+        $again = app(TargetFileInputMcpToolHandlers::class)->receive(
+            $owner, $target->target_id, $input, 'ssh_sftp_upload', $destination,
+        );
+        self::assertFalse($again['ok']);
+        self::assertSame('file_exists', $again['error']['code']);
+        self::assertFalse($again['error']['retry_safe']);
+        Http::assertSent(fn (Request $request) => $request->url() === $input['download_url']);
     }
 
     private function target(string $method, ?int $port = null): Target

@@ -9,7 +9,11 @@ use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\TargetOperationGate;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use App\Support\CorrelationId;
 use Throwable;
@@ -28,6 +32,7 @@ final readonly class SshWholeFileTransfer
         private SshFileRuntime $ssh,
         private ActivityRecorder $activity,
         private OperationalSettings $settings,
+        private SshTargetVault $vault,
     ) {}
 
     public function target(User $user, string $id, GatewayPermission $permission): Target
@@ -50,6 +55,46 @@ final readonly class SshWholeFileTransfer
         return $target;
     }
 
+    /**
+     * ChatGPT signed-file prefetch requires a destination that is CURRENTLY
+     * ready, not merely an in-scope/unused SSH Target. It must not request
+     * confidential source bytes for disconnected or missing-credential Targets.
+     * The effect-time SFTP engine still performs its independent live gates.
+     */
+    public function readyForChatgptFile(User $user, string $id): Target
+    {
+        $target = $this->target($user, $id, GatewayPermission::SshFileWrite);
+        if ($target->getAttribute('connection_state') !== TargetConnectionState::Connected) {
+            throw new SshTargetConnectionException('target_not_connected');
+        }
+
+        $config = $target->sshConfig()->first();
+        $credential = TargetCredential::query()
+            ->where('target_record_id', $target->getKey())
+            ->where('connector_type', 'ssh_direct')
+            ->where('purpose', SshTargetVault::PURPOSE)
+            ->first();
+        if (! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
+            throw new SshTargetConnectionException('target_not_connected');
+        }
+
+        try {
+            // Verification is local only: do not dial the SSH server, reveal
+            // the secret or log the decrypt/binding error in the file response.
+            $this->vault->open($target, $config, $credential);
+        } catch (Throwable) {
+            throw new SshTargetConnectionException('target_not_connected');
+        }
+
+        if (TargetOperationGate::isPaused($target)
+            || ! $this->access->allows($user, GatewayPermission::SshFileWrite, $target)) {
+            // Recheck the scope against the current revision just before GET.
+            throw new SshTargetConnectionException('target_not_found');
+        }
+
+        return $target;
+    }
+
     /** The wire is an optional, explicitly configured SSH transfer profile. */
     /** @return array{max_bytes:int,max_seconds:int} */
     public function limits(): array
@@ -62,12 +107,12 @@ final readonly class SshWholeFileTransfer
      * @param  array<string,mixed>  $metadata
      * @return array<string,mixed>
      */
-    public function upload(User $user, Target $target, string $path, mixed $input, array $metadata): array
+    public function upload(User $user, Target $target, string $path, mixed $input, array $metadata, ?int $overallDeadlineNs = null): array
     {
         $this->validatePath($path);
         $this->validatePath($metadata['private_staging_dir']);
         $budget = $this->limits();
-        $deadline = hrtime(true) + $budget['max_seconds'] * 1_000_000_000;
+        $deadline = min(hrtime(true) + $budget['max_seconds'] * 1_000_000_000, $overallDeadlineNs ?? PHP_INT_MAX);
 
         $stream = VerifiedTransferSpool::capture(
             $input, $metadata['size'], $metadata['sha256'], $budget['max_bytes'], $deadline,

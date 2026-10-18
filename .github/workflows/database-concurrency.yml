@@ -7,6 +7,7 @@ on:
     paths:
       - 'app/Application/Access/**'
       - 'app/Application/Mcp/**'
+      - 'app/Application/Files/**'
       - 'app/Application/Sites/**'
       - 'app/Application/Targets/**'
       - 'app/Domain/Access/**'
@@ -36,6 +37,8 @@ on:
       - 'tests/Support/oauth_concurrent_token_request.php'
       - 'tests/Support/wp_target_concurrent_action.php'
       - 'tests/Feature/Mcp/SshJob*'
+      - 'tests/Feature/Mcp/ChatGptFileCapacityConcurrencyTest.php'
+      - 'tests/Support/chatgpt_file_capacity_race.php'
       - 'tests/Support/ssh_job_concurrent_start.php'
       - 'tests/Support/ssh_job_dispatch_race.php'
       - 'tests/Support/site_lifecycle_concurrent_action.php'
@@ -52,6 +55,7 @@ on:
     paths:
       - 'app/Application/Access/**'
       - 'app/Application/Mcp/**'
+      - 'app/Application/Files/**'
       - 'app/Application/Sites/**'
       - 'app/Application/Targets/**'
       - 'app/Domain/Access/**'
@@ -81,6 +85,8 @@ on:
       - 'tests/Support/oauth_concurrent_token_request.php'
       - 'tests/Support/wp_target_concurrent_action.php'
       - 'tests/Feature/Mcp/SshJob*'
+      - 'tests/Feature/Mcp/ChatGptFileCapacityConcurrencyTest.php'
+      - 'tests/Support/chatgpt_file_capacity_race.php'
       - 'tests/Support/ssh_job_concurrent_start.php'
       - 'tests/Support/ssh_job_dispatch_race.php'
       - 'tests/Support/site_lifecycle_concurrent_action.php'

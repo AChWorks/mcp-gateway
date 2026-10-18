@@ -2,6 +2,28 @@
 
 This is the technical wire contract for an **optional**, authenticated, complete-file client↔SSH Target HTTPS mode. Enabled behavior requires the real installed code, exact client/Target permissions, effective feature flag and a supported receiving client. Successful independently controlled client bytes do **not** establish native AI host/model file attachment ingestion.
 
+The optional `target-file-input` MCP Tool is a **separate client-specific
+signed-file ingress adapter** that can use the same authorized SSH SFTP
+whole-file engine. Its top-level FileParams object is **not** raw binary
+HTTP to the sidecar. Only the selected `ssh_direct` Target, permitted
+`ssh.file.write`, enabled SSH whole-file mode, explicit absolute destination
+and private 0700 staging directory make it eligible. It reuses the existing
+per-mode Owner limits and source/destination SHA-256 verification; a registered
+ChatGPT connection still has to prove real file-parameter injection. The selected
+SSH Target must also remain Connected with locally valid SSH configuration
+and decryptable, endpoint-bound credentials **before** any signed file GET.
+Every inbound FileParams request pre-reserves a bounded active slot and
+pessimistic local temporary spool bytes in the shared v2.3.5 DB admission
+ledger, before fetching its signed source. WordPress reserves 1x and SSH
+reserves 2x its per-mode object maximum (source plus private verification
+spool). For the signed HTTP receive, the bounded response filter writes
+**directly** into the caller's same `php://temp` stream: there is no second
+HTTP response body staging/copy. After download, the SSH path deliberately
+has exactly one additional private stream for SFTP verification; the
+WordPress path keeps its single spool until Media private-stage completion. A capacity reject performs neither signed GET nor SFTP side effect;
+short-lived admission reservations release on closure/failure or expire
+after process death.
+
 ## New installations versus existing private environments
 
 The source installer and the canonical new-install template explicitly set
@@ -288,7 +310,14 @@ private keys, MariaDB files or test users into GitHub.
 
 Before enabling binary HTTP transfer for a real environment, follow the [operator deployment preflight](DEPLOYMENT.md#optional-ssh-whole-file-data-plane-host-pre-enablement). Verify HTTPS/TLS, authentication, Target permissions, the pre-provisioned restricted remote SFTP staging directory, PHP/proxy body limits, request/idle deadlines, disk/inode headroom, concurrent ingress and **actual** client byte/SHA-256 receipt.
 
-**HTTP ingress pressure is separate from remote SFTP admission:** several authenticated requests may occupy PHP temporary spool and worker capacity before acquiring the per-Target SSH/SFTP lease. Bound request/worker/temporary-disk concurrency under actual host conditions and add new admission machinery only when measured resource pressure warrants it.
+**HTTP ingress pressure is separate from remote SFTP admission:** for the optional
+ChatGPT `target-file-input` mode, an authoritative database-serialized global
+temporary-byte and transfer-count reservation is REQUIRED **before signed
+HTTP GET**, independently of the remote per-Target SFTP lease. Ordinary
+browser/HTTPS whole-file exchange follows its own existing operator and
+request admission profile; do not treat FileParams quotas as covering those
+independent routes. Verify PHP temporary-storage availability and host
+limits for both modes in the intended installed environment.
 
 **A download Activity success is not recipient confirmation:** it can record a verified remote read and local staging before streaming completes. Receiving clients must validate Content-Length/hash and discard incomplete files. Do not label server-side staging as completed human download or AI-model ingestion.
 

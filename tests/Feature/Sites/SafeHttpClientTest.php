@@ -16,6 +16,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Assert;
 use Psr\Http\Message\RequestInterface;
+use Tests\Support\PrivatePhpTempSpoolInspector;
 use Tests\TestCase;
 
 final class SafeHttpClientTest extends TestCase
@@ -32,6 +33,184 @@ final class SafeHttpClientTest extends TestCase
             }
         });
         Http::preventStrayRequests();
+    }
+
+    public function test_chatgpt_signed_file_url_retains_private_query_and_bounded_integrity(): void
+    {
+        $bytes = "synthetic file bytes\0\xff";
+        $url = 'https://files.oaiusercontent.com/private/file_123?sig=temporary%2Fopaque%3D&exp=123';
+        Http::fake(fn (Request $request) => Http::response($bytes, 200));
+        $received = app(SafeHttpClient::class)->getChatgptFile($url, 1024);
+        self::assertSame(200, $received->status);
+        self::assertSame($bytes, $received->body);
+        Http::assertSent(fn (Request $request) => $request->url() === $url
+            && $request->hasHeader('Accept', '*/*'));
+    }
+
+    public function test_chatgpt_streamed_file_uses_separate_bounded_disk_backed_budget(): void
+    {
+        // Deliberately larger than the shared 8-MiB in-memory response ceiling.
+        $content = str_repeat("streamed\0binary\xff", 630000);
+        $url = 'https://files.oaiusercontent.com/private/large?signature=opaque';
+        Http::fake(fn (Request $request) => Http::response($content, 200, [
+            'Content-Length' => (string) strlen($content),
+        ]));
+        $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+        self::assertIsResource($sink);
+        try {
+            $result = app(SafeHttpClient::class)->streamChatgptFile($url, strlen($content), $sink, 30);
+            self::assertSame(200, $result->status);
+            self::assertSame('', $result->body, 'The streamed path must not materialize the entire file in a JSON response.');
+            self::assertSame(strlen($content), ftell($sink));
+            self::assertSame(0, fseek($sink, 0));
+            $digest = hash_init('sha256');
+            self::assertGreaterThan(0, hash_update_stream($digest, $sink));
+            self::assertSame(hash('sha256', $content), hash_final($digest));
+            Http::assertSent(fn (Request $request) => $request->url() === $url
+                && $request->hasHeader('Accept-Encoding', 'identity'));
+        } finally {
+            fclose($sink);
+        }
+    }
+
+    public function test_chatgpt_http_transport_spills_directly_to_exactly_one_private_caller_spool(): void
+    {
+        // An actual Linux php://temp spill is measured DURING the HTTP
+        // response, not only after SafeHttpClient closes internal resources.
+        // The old HTTP-buffer-then-copy path would fail the sink-identity
+        // check even though its post-download FD count looked correct.
+        $payload = str_repeat('signed-file'.chr(0).chr(255), 25000);
+        $url = 'https://files.oaiusercontent.com/private/direct?sig=opaque';
+        $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+        self::assertIsResource($sink);
+        $baseline = PrivatePhpTempSpoolInspector::openDiskSpools();
+        $factory = new SingleSpoolTransportHttpFactory($payload, $sink, $baseline);
+
+        // This exact-path Guzzle handler is a transport fixture, not a
+        // Laravel facade fake. It cannot open a real outbound connection.
+        Http::swap($factory);
+
+        try {
+            $result = app(SafeHttpClient::class)->streamChatgptFile($url, strlen($payload), $sink, 30);
+            self::assertSame(200, $result->status);
+            self::assertSame('', $result->body);
+            self::assertTrue($factory->usedExactCallerSink, 'HTTP must write through the caller spool, not a second response spool.');
+            self::assertGreaterThanOrEqual(2, count($factory->capturedDiskSpools), 'Multiple network body chunks must be observed.');
+            foreach ($factory->capturedDiskSpools as $sample) {
+                self::assertCount(1, $sample, 'No independent HTTP file copy may be open while the caller spool spills.');
+                self::assertLessThanOrEqual(strlen($payload), array_sum($sample));
+            }
+            $open = PrivatePhpTempSpoolInspector::additionalSince($baseline);
+            self::assertCount(1, $open);
+            self::assertSame(strlen($payload), array_sum($open));
+            self::assertSame(strlen($payload), ftell($sink));
+            rewind($sink);
+            self::assertSame(hash('sha256', $payload), hash('sha256', stream_get_contents($sink)));
+        } finally {
+            fclose($sink);
+        }
+        self::assertSame($baseline, PrivatePhpTempSpoolInspector::openDiskSpools(),
+            'The borrowed spool must be fully released by its actual caller.');
+    }
+
+    public function test_chatgpt_streamed_file_rejects_short_body_and_encoded_payload(): void
+    {
+        $url = 'https://files.oaiusercontent.com/private/test?sig=x';
+        $client = app(SafeHttpClient::class);
+        foreach ([
+            ['abc', ['Content-Length' => '5'], 'file_download_incomplete'],
+            ['abc', ['Content-Encoding' => 'gzip'], 'unsupported_content_encoding'],
+            ['not-found', [], 'file_download_unavailable', 404],
+        ] as $case) {
+            [$body, $headers, $expected] = $case;
+            $status = $case[3] ?? 200;
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(fn (Request $request) => Http::response($body, $status, $headers));
+            $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+            self::assertIsResource($sink);
+            try {
+                $client->streamChatgptFile($url, 1024, $sink, 5);
+                self::fail('The incomplete, encoded or unavailable file was accepted.');
+            } catch (OutboundRequestException $exception) {
+                self::assertSame($expected, $exception->reason);
+            } finally {
+                fclose($sink);
+            }
+        }
+    }
+
+    public function test_chatgpt_streamed_file_refuses_oversize_and_untrusted_origin(): void
+    {
+        $client = app(SafeHttpClient::class);
+        Http::fake(fn (Request $request) => Http::response(str_repeat('z', 1025), 200));
+        $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+        self::assertIsResource($sink);
+        try {
+            $client->streamChatgptFile('https://files.oaiusercontent.com/private/large?sig=x', 1024, $sink, 5);
+            self::fail('An oversized file was accepted.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('response_too_large', $exception->reason);
+        } finally {
+            fclose($sink);
+        }
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => Http::response('should never fetch'));
+        $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+        self::assertIsResource($sink);
+        try {
+            $client->streamChatgptFile('https://evil.example.test/payload?sig=x', 1024, $sink, 5);
+            self::fail('An untrusted file URL was accepted.');
+        } catch (\Throwable) {
+            Http::assertNothingSent();
+        } finally {
+            fclose($sink);
+        }
+    }
+
+    public function test_chatgpt_signed_file_url_rejects_untrusted_hosts_before_http_dispatch(): void
+    {
+        Http::fake(fn (Request $request) => Http::response('should-not-arrive'));
+        $client = app(SafeHttpClient::class);
+        foreach ([
+            'https://files.oaiusercontent.com.evil.example.test/x?sig=z',
+            'https://files.oaiusercontent.com@evil.example.test/x?sig=z',
+            'https://files.oaiusercontent.com:444/x?sig=z',
+            'http://files.oaiusercontent.com/x?sig=z',
+            'https://files.oaiusercontent.com/../private?sig=z',
+            'https://files.oaiusercontent.com/x?sig=z#fragment',
+        ] as $url) {
+            $rejected = false;
+            try {
+                $client->getChatgptFile($url, 1024);
+            } catch (\Throwable) {
+                $rejected = true;
+            }
+            self::assertTrue($rejected, 'Untrusted file URL must be denied without dispatch.');
+        }
+        Http::assertNothingSent();
+    }
+
+    public function test_chatgpt_file_url_redirect_and_oversize_are_denied(): void
+    {
+        Http::fake(fn (Request $request) => Http::response('', 302, ['Location' => 'https://evil.example.test/']));
+        $client = app(SafeHttpClient::class);
+        try {
+            $client->getChatgptFile('https://files.oaiusercontent.com/x?sig=z', 1024);
+            self::fail('Redirect was accepted.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('unsafe_redirect', $exception->reason);
+        }
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => Http::response(str_repeat('z', 1030), 200));
+        try {
+            $client->getChatgptFile('https://files.oaiusercontent.com/x?sig=z', 1024);
+            self::fail('An oversized file was accepted.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('response_too_large', $exception->reason);
+        }
     }
 
     public function test_redirects_are_not_followed(): void
@@ -356,6 +535,56 @@ final class CapturingHttpFactory extends Factory
         $request = parent::newPendingRequest();
         $request->beforeSending(function (Request $request, array $options): void {
             $this->lastOptions = $options;
+        });
+
+        return $request;
+    }
+}
+
+/**
+ * The real Guzzle sink option is inspected at the network-writing boundary.
+ * This fixture avoids any actual outbound request and writes multiple binary
+ * chunks large enough for php://temp to spill to disk.
+ */
+final class SingleSpoolTransportHttpFactory extends Factory
+{
+    public bool $usedExactCallerSink = false;
+
+    /** @var list<array<string,int>> */
+    public array $capturedDiskSpools = [];
+
+    /**
+     * @param  resource  $expectedSink
+     * @param  array<string,int>  $baseline
+     */
+    public function __construct(
+        private readonly string $body,
+        private $expectedSink,
+        private readonly array $baseline,
+    ) {
+        parent::__construct();
+    }
+
+    protected function newPendingRequest(): PendingRequest
+    {
+        $request = parent::newPendingRequest();
+
+        $request->setHandler(function (RequestInterface $request, array $options) {
+            $sink = $options[RequestOptions::SINK] ?? null;
+            if (! is_resource($sink)) {
+                throw new \RuntimeException('The streaming request must supply a private resource sink.');
+            }
+            $this->usedExactCallerSink = $sink === $this->expectedSink;
+            for ($offset = 0; $offset < strlen($this->body); $offset += 125000) {
+                $chunk = substr($this->body, $offset, 125000);
+                if (fwrite($sink, $chunk) !== strlen($chunk)) {
+                    throw new \RuntimeException('Synthetic network sink write failed.');
+                }
+                $this->capturedDiskSpools[] = PrivatePhpTempSpoolInspector::additionalSince($this->baseline);
+            }
+
+            return Create::promiseFor(new Psr7Response(200,
+                ['Content-Length' => (string) strlen($this->body)]));
         });
 
         return $request;

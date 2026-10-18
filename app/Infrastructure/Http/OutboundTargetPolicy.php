@@ -18,6 +18,38 @@ final class OutboundTargetPolicy
         return $canonical;
     }
 
+    /**
+     * Narrow exception for a ChatGPT-issued expiring file download URL.
+     *
+     * General remote endpoint validation deliberately prohibits queries.
+     * Here, query parameters are opaque bearer-like tokens and MUST remain
+     * private and unmodified. Only one exact trusted file origin is eligible;
+     * the existing DNS/public-IP pinning, TLS and no-redirect rules still apply.
+     */
+    public function validateChatgptFileUrl(string $url, ?int $deadlineNs = null): ValidatedOutboundUrl
+    {
+        if ($url === '' || strlen($url) > 8192 || preg_match('/[\x00-\x20\x7f]/', $url) === 1) {
+            throw new UnsafeOutboundTarget('Private file URL is invalid.');
+        }
+        $parts = parse_url($url);
+        if (! is_array($parts)
+            || strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
+            || strtolower((string) ($parts['host'] ?? '')) !== 'files.oaiusercontent.com'
+            || ! is_string($parts['path'] ?? null) || $parts['path'] === ''
+            || isset($parts['port']) || isset($parts['user']) || isset($parts['pass'])
+            || isset($parts['fragment'])) {
+            throw new UnsafeOutboundTarget('Private file URL origin is not allowed.');
+        }
+        // Reuse the normal strict path/canonical-host and DNS checks, without
+        // interpreting signed query bytes as a new origin, or logging them.
+        $base = $this->validate('https://files.oaiusercontent.com'.$parts['path'], 8192, $deadlineNs);
+
+        return new ValidatedOutboundUrl(
+            $base->url.(isset($parts['query']) ? '?'.$parts['query'] : ''),
+            $base->host, $base->port, $base->addresses,
+        );
+    }
+
     public function validate(string $url, int $maxLength = 2048, ?int $deadlineNs = null): ValidatedOutboundUrl
     {
         $parts = $this->parseHttpsUrl($url, $maxLength);
