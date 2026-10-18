@@ -610,6 +610,69 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertSame(0, $this->syntheticImportCalls);
     }
 
+    public function test_chatgpt_file_input_oversized_download_does_not_allocate_private_lease(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = str_repeat('x', WordpressFileInputMcpToolHandlers::MAX_INLINE_FILE_BYTES + 1);
+        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
+            'download_url' => 'https://files.oaiusercontent.com/private/huge?sig=short-lived',
+            'file_id' => 'file_huge', 'file_name' => 'oversized.pdf',
+        ], true);
+        self::assertFalse($result['ok']);
+        self::assertSame('response_too_large', $result['error']['code']);
+        self::assertSame(['limits'], $this->syntheticTransferActions);
+        self::assertSame([], $this->syntheticPrivateLease);
+        self::assertSame(0, $this->syntheticImportCalls);
+    }
+
+    public function test_chatgpt_file_input_executes_through_real_mcp_tool_dispatch(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'small-real-mcp-tool-dispatch';
+        $host = parse_url((string) config('oauth.resource'), PHP_URL_HOST);
+        self::assertIsString($host);
+        $request = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], [
+            'HTTP_HOST' => $host,
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+            'HTTP_MCP_PROTOCOL_VERSION' => '2026-07-28',
+            'HTTP_MCP_METHOD' => 'tools/call',
+            'HTTP_MCP_NAME' => 'wordpress-file-input',
+        ], json_encode([
+            'jsonrpc' => '2.0', 'id' => 44, 'method' => 'tools/call',
+            'params' => [
+                'name' => 'wordpress-file-input',
+                'arguments' => [
+                    'target_id' => 'alpha',
+                    'file' => [
+                        'download_url' => 'https://files.oaiusercontent.com/private/abc?sig=short-lived',
+                        'file_id' => 'file_abc',
+                    ],
+                ],
+                '_meta' => [
+                    'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                    'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                    'io.modelcontextprotocol/clientInfo' => ['name' => 'file-param-test', 'version' => '1.0'],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR));
+        $request->attributes->set('oauth_user', $owner);
+        $response = app(GatewayMcpEndpoint::class)->handle($request);
+        self::assertSame(200, $response->getStatusCode());
+        ob_start();
+        $response->sendContent();
+        $json = json_decode((string) ob_get_clean(), true, 32, JSON_THROW_ON_ERROR);
+        self::assertFalse($json['result']['isError'] ?? false, json_encode($json, JSON_THROW_ON_ERROR));
+        $received = $json['result']['structuredContent'];
+        self::assertTrue($received['ok']);
+        self::assertSame('verified_private_transfer', $received['state']);
+        self::assertSame(hash('sha256', $this->chatFilePayload), $received['sha256']);
+        self::assertSame($this->chatFilePayload, $this->syntheticPrivateLease['payload']);
+        self::assertSame(0, $this->syntheticImportCalls);
+    }
+
     private function user(string $role): User
     {
         return app(UserAccessManager::class)->create([
