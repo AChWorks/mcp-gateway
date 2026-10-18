@@ -13,13 +13,19 @@ final class TargetTransitionMigrationTest extends TestCase
 {
     private const MIGRATION = '2026_10_09_000000_transition_site_domain_to_targets.php';
 
-    private const NETWORK_TIMEOUT_MIGRATION = '2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php';
-
     private const RECOVERY_FENCE_MIGRATION = '2026_10_13_000000_fence_wordpress_disconnect_recovery.php';
 
-    private const TARGET_OPERATIONS_MIGRATION = '2026_10_16_000000_add_target_operations_paused.php';
-
-    private const AI_GUIDANCE_MIGRATION = '2026_10_17_000000_add_target_ai_guidance.php';
+    // Independent post-transition additions that remain meaningful on the
+    // historical pre-Target schema. New connector migrations cannot be applied
+    // before the transition: MySQL enforces those target FKs immediately.
+    private const LEGACY_COMPAT_MIGRATIONS = [
+        '2026_10_09_190000_create_oauth_client_profile_bindings.php',
+        '2026_10_11_000000_create_operational_settings.php',
+        '2026_10_12_010000_add_ssh_transfer_operational_limits.php',
+        '2026_10_15_000000_add_ssh_command_operational_limits.php',
+        '2026_10_16_010000_add_ssh_job_script_input_limit.php',
+        '2026_10_17_010000_add_activity_diagnostic_context.php',
+    ];
 
     private bool $rebuildMariaDbTestSchema = false;
 
@@ -278,12 +284,12 @@ final class TargetTransitionMigrationTest extends TestCase
     private function migrateLegacy(): void
     {
         foreach (glob(database_path('migrations/*.php')) ?: [] as $file) {
-            // The fixture models a pre-Target database, so neither the
-            // breaking Target transition nor its later in-place refresh-
-            // intent/network-settings/Target-pause extensions exist yet.
-            if (in_array(basename($file), [self::MIGRATION, self::NETWORK_TIMEOUT_MIGRATION,
-                self::RECOVERY_FENCE_MIGRATION, self::TARGET_OPERATIONS_MIGRATION,
-                self::AI_GUIDANCE_MIGRATION], true)) {
+            // Include original pre-transition migrations plus independent
+            // later settings/OAuth/Activity additions. Exclude all connector
+            // migrations referencing the not-yet-created targets table.
+            $name = basename($file);
+            if (strcmp($name, self::MIGRATION) >= 0
+                && ! in_array($name, self::LEGACY_COMPAT_MIGRATIONS, true)) {
                 continue;
             }
             (require $file)->up();
