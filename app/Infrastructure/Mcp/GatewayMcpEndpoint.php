@@ -7,6 +7,7 @@ use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
+use App\Application\Mcp\WordpressFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\TargetConnectorRegistry;
@@ -28,6 +29,7 @@ final readonly class GatewayMcpEndpoint
         private TargetConnectorRegistry $connectors,
         private TargetMcpToolHandlers $handlers,
         private WordpressTargetMcpToolHandlers $wordpress,
+        private WordpressFileInputMcpToolHandlers $wordpressFiles,
         private SshCommandMcpToolHandlers $sshCommands,
         private SshFileMcpToolHandlers $sshFiles,
         private OperationalSettings $settings,
@@ -177,6 +179,35 @@ final readonly class GatewayMcpEndpoint
                     'required' => ['target_id', 'ability'],
                     'additionalProperties' => false,
                 ],
+            )
+            ->addTool(
+                handler: fn (string $target_id, array $file, bool $import_to_media = false): array => $this->wordpressFiles->receive(
+                    $this->user($request), $target_id, $file, $import_to_media,
+                ),
+                name: 'wordpress-file-input',
+                description: 'Receive a genuine ChatGPT file parameter into an authorized WordPress private Media transfer. Optionally consume as a native Media Library item only with import_to_media=true. No arbitrary URL fetch, no automatic retry, no package execution. Limited to 256 KiB by this synchronous client adapter, not by Bridge; larger files require a supported separate transport.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'file' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'download_url' => ['type' => 'string'],
+                                'file_id' => ['type' => 'string'],
+                                'mime_type' => ['type' => 'string'],
+                                'file_name' => ['type' => 'string'],
+                            ],
+                            'required' => ['download_url', 'file_id'],
+                            'additionalProperties' => false,
+                        ],
+                        'import_to_media' => ['type' => 'boolean', 'default' => false],
+                    ],
+                    'required' => ['target_id', 'file'],
+                    'additionalProperties' => false,
+                ],
+                meta: ['openai/fileParams' => ['file']],
             )
             ->addTool(
                 handler: fn (string $target_id, string $command, int $timeout_seconds = 10): array => $this->sshCommands->run(

@@ -34,6 +34,62 @@ final class SafeHttpClientTest extends TestCase
         Http::preventStrayRequests();
     }
 
+    public function test_chatgpt_signed_file_url_retains_private_query_and_bounded_integrity(): void
+    {
+        $bytes = "synthetic file bytes\0\xff";
+        $url = 'https://files.oaiusercontent.com/private/file_123?sig=temporary%2Fopaque%3D&exp=123';
+        Http::fake(fn (Request $request) => Http::response($bytes, 200));
+        $received = app(SafeHttpClient::class)->getChatgptFile($url, 1024);
+        self::assertSame(200, $received->status);
+        self::assertSame($bytes, $received->body);
+        Http::assertSent(fn (Request $request) => $request->url() === $url
+            && $request->hasHeader('Accept', '*/*'));
+    }
+
+    public function test_chatgpt_signed_file_url_rejects_untrusted_hosts_before_http_dispatch(): void
+    {
+        Http::fake(fn (Request $request) => Http::response('should-not-arrive'));
+        $client = app(SafeHttpClient::class);
+        foreach ([
+            'https://files.oaiusercontent.com.evil.example.test/x?sig=z',
+            'https://files.oaiusercontent.com@evil.example.test/x?sig=z',
+            'https://files.oaiusercontent.com:444/x?sig=z',
+            'http://files.oaiusercontent.com/x?sig=z',
+            'https://files.oaiusercontent.com/../private?sig=z',
+            'https://files.oaiusercontent.com/x?sig=z#fragment',
+        ] as $url) {
+            $rejected = false;
+            try {
+                $client->getChatgptFile($url, 1024);
+            } catch (\Throwable) {
+                $rejected = true;
+            }
+            self::assertTrue($rejected, 'Untrusted file URL must be denied without dispatch.');
+        }
+        Http::assertNothingSent();
+    }
+
+    public function test_chatgpt_file_url_redirect_and_oversize_are_denied(): void
+    {
+        Http::fake(fn (Request $request) => Http::response('', 302, ['Location' => 'https://evil.example.test/']));
+        $client = app(SafeHttpClient::class);
+        try {
+            $client->getChatgptFile('https://files.oaiusercontent.com/x?sig=z', 1024);
+            self::fail('Redirect was accepted.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('unsafe_redirect', $exception->reason);
+        }
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => Http::response(str_repeat('z', 1030), 200));
+        try {
+            $client->getChatgptFile('https://files.oaiusercontent.com/x?sig=z', 1024);
+            self::fail('An oversized file was accepted.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('response_too_large', $exception->reason);
+        }
+    }
+
     public function test_redirects_are_not_followed(): void
     {
         Http::fake(fn (Request $request) => Http::response('', 302, [

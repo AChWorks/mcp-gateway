@@ -26,6 +26,12 @@ final class SafeHttpClient
         return $this->send('GET', $url, $headers, [], 'none');
     }
 
+    /** Only the allowlisted ChatGPT file origin may include signed queries. */
+    public function getChatgptFile(string $url, int $maxBytes): SafeHttpResponse
+    {
+        return $this->send('GET', $url, [], [], 'none', $maxBytes, null, true);
+    }
+
     /**
      * @param  array<string, scalar|null>  $form
      * @param  array<string, string>  $headers
@@ -55,7 +61,7 @@ final class SafeHttpClient
      * @param  array<string, mixed>  $payload
      * @param  'none'|'form'|'json'  $format
      */
-    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false): SafeHttpResponse
     {
         $network = $this->settings->httpTimeoutsSeconds();
         $connectTimeout = $network['connect'];
@@ -70,7 +76,9 @@ final class SafeHttpClient
         // before selecting the numeric, TLS-validated destination.
         $dnsStarted = $timing?->stamp() ?? 0;
         try {
-            $target = $this->targets->validate($url, 2048, $deadlineNs);
+            $target = $chatgptFile
+                ? $this->targets->validateChatgptFileUrl($url, $deadlineNs)
+                : $this->targets->validate($url, 2048, $deadlineNs);
         } finally {
             $timing?->finish('dns_policy_ms', $dnsStarted);
         }
@@ -110,7 +118,7 @@ final class SafeHttpClient
             ])
                 ->connectTimeout(min($connectTimeout, $remainingSeconds))
                 ->timeout($remainingSeconds)
-                ->acceptJson()
+                ->accept($chatgptFile ? '*/*' : 'application/json')
                 ->withHeaders($headers);
 
             $httpStarted = $timing?->stamp() ?? 0;
