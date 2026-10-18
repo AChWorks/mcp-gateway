@@ -108,7 +108,10 @@ final class SafeHttpClient
         $maxBytes = $fileSink === null
             ? min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $requestedBytes))
             : max(1, $requestedBytes);
-        $responseBody = new BoundedResponseBody($maxBytes, $fileSink !== null);
+        // FileParams must have ONE caller-owned bounded spool. Sending into
+        // an intermediate BoundedResponseBody spool and copying later would
+        // double temporary disk usage before the WP capacity ledger notices.
+        $responseBody = new BoundedResponseBody($maxBytes, $fileSink);
 
         try {
             $curlOptions = [];
@@ -205,12 +208,11 @@ final class SafeHttpClient
                 throw $this->oversize($maxBytes, 'content_length', (int) $lengthHeader);
             }
 
-            $stream = $responseBody->stream();
-            if (! rewind($stream)) {
-                throw new OutboundRequestException('network_failure', 'Remote response body could not be read.', ['failure_stage' => 'response_body']);
-            }
-
             if (is_resource($fileSink)) {
+                // Guzzle wrote every decoded byte directly through our size
+                // filter into the SAME caller-owned spool. It remains private
+                // and is discarded by the caller if status/encoding/length
+                // checks fail. No intermediate on-disk copy ever exists.
                 if ($status !== 200) {
                     throw new OutboundRequestException('file_download_unavailable', 'The signed private file was not available.');
                 }
@@ -218,18 +220,29 @@ final class SafeHttpClient
                 if ($encoding !== '' && $encoding !== 'identity') {
                     throw new OutboundRequestException('unsupported_content_encoding', 'Compressed private file responses are unsupported.');
                 }
-                $copied = stream_copy_to_stream($stream, $fileSink);
-                if ($copied === false) {
-                    throw new OutboundRequestException('file_staging_unavailable', 'Private file staging could not be completed.');
+                $received = $responseBody->decodedBytes();
+                $stat = fstat($fileSink);
+                // Some HTTP handlers rewind their sink when constructing a
+                // PSR-7 response. Use fstat as the authoritative persisted
+                // length and restore the caller's expected EOF cursor.
+                if (! is_array($stat) || $stat['size'] !== $received
+                    || fseek($fileSink, 0, SEEK_END) !== 0
+                    || ftell($fileSink) !== $received) {
+                    throw new OutboundRequestException('file_staging_unavailable', 'Private file staging could not be verified.');
                 }
-                if ($lengthHeader !== '' && (! ctype_digit($lengthHeader) || (int) $lengthHeader !== $copied)) {
+                if ($lengthHeader !== '' && (! ctype_digit($lengthHeader) || (int) $lengthHeader !== $received)) {
                     throw new OutboundRequestException('file_download_incomplete', 'Private file length did not match the response.');
                 }
-                if ($copied > $maxBytes) {
-                    throw $this->oversize($maxBytes, 'collected_body', $copied);
+                if ($received > $maxBytes) {
+                    throw $this->oversize($maxBytes, 'collected_body', $received);
                 }
 
                 return new SafeHttpResponse($status, $psrResponse->getHeaders(), '');
+            }
+
+            $stream = $responseBody->stream();
+            if (! rewind($stream)) {
+                throw new OutboundRequestException('network_failure', 'Remote response body could not be read.', ['failure_stage' => 'response_body']);
             }
 
             $body = stream_get_contents($stream);

@@ -16,7 +16,11 @@ Every inbound FileParams request pre-reserves a bounded active slot and
 pessimistic local temporary spool bytes in the shared v2.3.5 DB admission
 ledger, before fetching its signed source. WordPress reserves 1x and SSH
 reserves 2x its per-mode object maximum (source plus private verification
-spool). A capacity reject performs neither signed GET nor SFTP side effect;
+spool). For the signed HTTP receive, the bounded response filter writes
+**directly** into the caller's same `php://temp` stream: there is no second
+HTTP response body staging/copy. After download, the SSH path deliberately
+has exactly one additional private stream for SFTP verification; the
+WordPress path keeps its single spool until Media private-stage completion. A capacity reject performs neither signed GET nor SFTP side effect;
 short-lived admission reservations release on closure/failure or expire
 after process death.
 
@@ -306,7 +310,14 @@ private keys, MariaDB files or test users into GitHub.
 
 Before enabling binary HTTP transfer for a real environment, follow the [operator deployment preflight](DEPLOYMENT.md#optional-ssh-whole-file-data-plane-host-pre-enablement). Verify HTTPS/TLS, authentication, Target permissions, the pre-provisioned restricted remote SFTP staging directory, PHP/proxy body limits, request/idle deadlines, disk/inode headroom, concurrent ingress and **actual** client byte/SHA-256 receipt.
 
-**HTTP ingress pressure is separate from remote SFTP admission:** several authenticated requests may occupy PHP temporary spool and worker capacity before acquiring the per-Target SSH/SFTP lease. Bound request/worker/temporary-disk concurrency under actual host conditions and add new admission machinery only when measured resource pressure warrants it.
+**HTTP ingress pressure is separate from remote SFTP admission:** for the optional
+ChatGPT `target-file-input` mode, an authoritative database-serialized global
+temporary-byte and transfer-count reservation is REQUIRED **before signed
+HTTP GET**, independently of the remote per-Target SFTP lease. Ordinary
+browser/HTTPS whole-file exchange follows its own existing operator and
+request admission profile; do not treat FileParams quotas as covering those
+independent routes. Verify PHP temporary-storage availability and host
+limits for both modes in the intended installed environment.
 
 **A download Activity success is not recipient confirmation:** it can record a verified remote read and local staging before streaming completes. Receiving clients must validate Content-Length/hash and discard incomplete files. Do not label server-side staging as completed human download or AI-model ingestion.
 

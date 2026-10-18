@@ -157,9 +157,22 @@ worst-case reserved local spool space. `CHATGPT_FILE_MAX_ACTIVE`,
 `CHATGPT_FILE_WP_MAX_ACTIVE` and `CHATGPT_FILE_SSH_MAX_ACTIVE` are
 private operator-configured integers clamped to 1–16. Shared
 `CHATGPT_FILE_MAX_RESERVED_BYTES` is clamped to 1–512 MiB.
-For WordPress, reserve the entire per-file byte maximum for one local
-`php://temp` stream; SSH reserves **twice** its per-file byte maximum
-because its verified SFTP upload uses a second local spool. Reservations
+For WordPress, reserve the entire per-file byte maximum for **one** local
+`php://temp/maxmemory:65536` stream. This is a physical-spool invariant:
+`SafeHttpClient::streamChatgptFile` attaches its bounded write filter
+**directly** to that fresh caller-owned stream. It must NOT create an
+independent `BoundedResponseBody` stream or buffer the entire signed HTTP
+response and later call `stream_copy_to_stream`, because that would
+temporarily double WordPress disk use without an accompanying reservation.
+Non-200 status, unacceptable Content-Encoding, Content-Length/actual-length
+mismatch, byte-limit breach, timeout and transfer failure discard this
+private, never-published stream; `ChatGptFileIngress` owns the eventual
+hash/byte verification and cleanup.
+
+SSH reserves **twice** its per-file byte maximum because its verified SFTP
+upload allocates a second temporary stream, after the HTTP receive stage,
+while the original received source stream remains open. These phases have
+a maximum of two concurrent local spools, never three. Reservations
 are pessimistic, independent of untrusted Content-Length, and count ALL
 in-flight WordPress/SSH FileParams requests across PHP workers and
 Gateway nodes sharing the authoritative MariaDB/MySQL database.
@@ -181,6 +194,15 @@ ledger**, not a new file store or background daemon. The Gateway nodes must
 use the same database and synchronized clocks. Changing quotas while
 transfers are active does not retrospectively cancel them; new
 admissions enforce current limits.
+
+Linux FD-level >64 KiB synthetic HTTP fixture tests verify that the
+actual Guzzle response sink IS the caller's private PHP stream, exactly
+one disk-backed spool is open at each observed network chunk for WordPress,
+and exactly two are open during SSH `VerifiedTransferSpool::capture`.
+The one-megabyte aggregate-capacity regression checks a real WordPress
+signed-file download and refuses a second signed GET while full. Separate
+MariaDB-process tests prove atomic admission; neither fixture alone is
+proof of a live host-installed ChatGPT attachment.
 
 Host PHP/FPM workers, temporary disk, proxy and transport limits may be
 stricter; accounting reserves an upper bound **among Gateway FileParams

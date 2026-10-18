@@ -11,6 +11,11 @@ final class BoundedResponseBody
     /** @var resource|null */
     private $stream = null;
 
+    /** @var resource|null */
+    private $writeFilter = null;
+
+    private bool $ownsStream = true;
+
     private int $decodedBytes = 0;
 
     private bool $limitExceeded = false;
@@ -19,7 +24,14 @@ final class BoundedResponseBody
 
     private ?int $observedBytes = null;
 
-    public function __construct(private readonly int $maxBytes, bool $spillEarly = false)
+    /**
+     * For signed-file downloads, borrow the caller's ONLY writable private
+     * spool; do not create a second response buffer or copy the full body.
+     * The caller owns closing and discarding incomplete/invalid file bytes.
+     *
+     * @param  resource|null  $borrowedStream
+     */
+    public function __construct(private readonly int $maxBytes, mixed $borrowedStream = null)
     {
         if ($this->maxBytes < 1) {
             throw new RuntimeException('Response body limit must be positive.');
@@ -27,21 +39,35 @@ final class BoundedResponseBody
 
         $this->registerFilter();
 
-        // Large private file responses spill after 64 KiB; ordinary HTTP responses
-        // retain their original memory/disk behavior and body budget.
-        $stream = fopen($spillEarly ? 'php://temp/maxmemory:65536' : 'php://temp', 'w+b');
+        if ($borrowedStream !== null) {
+            if (! is_resource($borrowedStream)
+                || stream_get_meta_data($borrowedStream)['seekable'] !== true
+                || ftell($borrowedStream) !== 0
+                || ($stat = fstat($borrowedStream)) === false
+                || $stat['size'] !== 0) {
+                throw new RuntimeException('A fresh seekable private file stream is required.');
+            }
+        }
+
+        // Ordinary in-memory responses retain their existing buffering.
+        // Only the FileParams streaming path uses an externally owned spool.
+        $stream = $borrowedStream ?? fopen('php://temp', 'w+b');
         if ($stream === false) {
             throw new RuntimeException('Unable to create bounded response stream.');
         }
 
         $filter = stream_filter_append($stream, self::FILTER_NAME, STREAM_FILTER_WRITE, $this);
         if ($filter === false) {
-            fclose($stream);
+            if ($borrowedStream === null) {
+                fclose($stream);
+            }
 
             throw new RuntimeException('Unable to attach bounded response stream filter.');
         }
 
         $this->stream = $stream;
+        $this->writeFilter = $filter;
+        $this->ownsStream = $borrowedStream === null;
     }
 
     /** @return resource */
@@ -111,10 +137,17 @@ final class BoundedResponseBody
 
     public function close(): void
     {
-        if (is_resource($this->stream)) {
+        // Remove our write limiter without closing the caller-owned stream;
+        // the caller still needs that SAME verified spool for SHA-256 and
+        // destination delivery. Ordinary response streams remain owned here.
+        if (is_resource($this->writeFilter)) {
+            stream_filter_remove($this->writeFilter);
+        }
+        $this->writeFilter = null;
+
+        if ($this->ownsStream && is_resource($this->stream)) {
             fclose($this->stream);
         }
-
         $this->stream = null;
     }
 

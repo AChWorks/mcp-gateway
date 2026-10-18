@@ -4,6 +4,7 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Files\ChatGptFileCapacity;
 use App\Application\Files\ChatGptFileIngress;
+use App\Application\Files\VerifiedTransferSpool;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\OutboundRequestException;
 use GuzzleHttp\Promise\PromiseInterface;
@@ -13,6 +14,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Tests\Support\PrivatePhpTempSpoolInspector;
 use Tests\TestCase;
 
 final class ChatGptFileCapacityTest extends TestCase
@@ -101,6 +103,108 @@ final class ChatGptFileCapacityTest extends TestCase
         $ssh->release();
         $wp->release();
         self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+    }
+
+    public function test_real_one_megabyte_wordpress_spool_fits_one_megabyte_capacity_and_denies_second_get(): void
+    {
+        // The actual physical spill is inspected while the private source
+        // remains open, not inferred from admission-only ledger arithmetic.
+        $max = 1048576;
+        config()->set('bridge.file_input.capacity.max_active', 2);
+        config()->set('bridge.file_input.capacity.wordpress_max_active', 2);
+        config()->set('bridge.file_input.capacity.max_reserved_bytes', $max);
+
+        $payload = str_repeat("WP\x00\xff", 209715); // Over 64 KiB but below the 1 MiB admission limit.
+        self::assertLessThanOrEqual($max, strlen($payload));
+        $baseline = PrivatePhpTempSpoolInspector::openDiskSpools();
+        Http::fake(static fn (Request $request) => Http::response($payload, 200, [
+            'Content-Length' => (string) strlen($payload),
+        ]));
+        $received = app(ChatGptFileIngress::class)->download(self::FILE, $max, 30, 'wordpress');
+        try {
+            self::assertSame(strlen($payload), $received['bytes']);
+            self::assertSame(hash('sha256', $payload), $received['sha256']);
+            self::assertSame($max, (int) DB::table('chatgpt_file_admission_leases')->sum('reserved_bytes'));
+            $actual = PrivatePhpTempSpoolInspector::additionalSince($baseline);
+            self::assertCount(1, $actual, 'WP must hold only its one charged private disk spool.');
+            self::assertSame(strlen($payload), array_sum($actual));
+
+            try {
+                app(ChatGptFileIngress::class)->download(self::FILE, 1, 30, 'wordpress');
+                self::fail('The ledger may not oversubscribe the source buffer once capacity is reserved.');
+            } catch (OutboundRequestException $error) {
+                self::assertSame('file_capacity_exceeded', $error->reason);
+            }
+            Http::assertSentCount(1);
+        } finally {
+            fclose($received['stream']);
+            $received['capacity_lease']->release();
+        }
+
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+        self::assertSame($baseline, PrivatePhpTempSpoolInspector::openDiskSpools());
+    }
+
+    public function test_real_ssh_download_and_verification_spools_fit_two_times_reservation(): void
+    {
+        $max = 500000;
+        config()->set('bridge.file_input.capacity.max_active', 3);
+        config()->set('bridge.file_input.capacity.max_reserved_bytes', 1048576);
+
+        $payload = str_repeat("SSH\x00\xff", 45000); // Over the spill threshold.
+        $baseline = PrivatePhpTempSpoolInspector::openDiskSpools();
+        Http::fake(static fn (Request $request) => Http::response($payload, 200, [
+            'Content-Length' => (string) strlen($payload),
+        ]));
+        $received = app(ChatGptFileIngress::class)->download(self::FILE, $max, 30, 'ssh');
+        $verification = null;
+        try {
+            self::assertSame(2 * $max, (int) DB::table('chatgpt_file_admission_leases')->sum('reserved_bytes'));
+            self::assertCount(1, PrivatePhpTempSpoolInspector::additionalSince($baseline),
+                'SSH download first holds only the signed-source spool.');
+            $verification = VerifiedTransferSpool::capture(
+                $received['stream'], $received['bytes'], $received['sha256'],
+                $max, hrtime(true) + 15 * 1000000000,
+            );
+            $actual = PrivatePhpTempSpoolInspector::additionalSince($baseline);
+            self::assertCount(2, $actual, 'SSH holds exactly two local spools during source verification.');
+            self::assertSame(2 * strlen($payload), array_sum($actual));
+            self::assertLessThanOrEqual(2 * $max, array_sum($actual));
+
+            try {
+                app(ChatGptFileIngress::class)->download(self::FILE, 100000, 30, 'wordpress');
+                self::fail('The shared disk budget must reject the third simultaneous spool.');
+            } catch (OutboundRequestException $error) {
+                self::assertSame('file_capacity_exceeded', $error->reason);
+            }
+            Http::assertSentCount(1);
+        } finally {
+            if (is_resource($verification)) {
+                fclose($verification);
+            }
+            fclose($received['stream']);
+            $received['capacity_lease']->release();
+        }
+
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+        self::assertSame($baseline, PrivatePhpTempSpoolInspector::openDiskSpools());
+    }
+
+    public function test_large_truncated_signed_file_drops_private_spool_and_releases_reserved_capacity(): void
+    {
+        $payload = str_repeat('x', 200000);
+        $baseline = PrivatePhpTempSpoolInspector::openDiskSpools();
+        Http::fake(static fn (Request $request) => Http::response($payload, 200, [
+            'Content-Length' => (string) (strlen($payload) + 1),
+        ]));
+        try {
+            app(ChatGptFileIngress::class)->download(self::FILE, 500000, 30, 'wordpress');
+            self::fail('The incomplete signed file may never be committed to a Target.');
+        } catch (OutboundRequestException $error) {
+            self::assertSame('file_download_incomplete', $error->reason);
+        }
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+        self::assertSame($baseline, PrivatePhpTempSpoolInspector::openDiskSpools());
     }
 
     public function test_download_failure_and_transport_abort_release_capacity(): void
