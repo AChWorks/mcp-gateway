@@ -43,7 +43,23 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
     /** @var array<string, mixed> */
     private array $syntheticPrivateLease = [];
 
-    private bool $syntheticWrongDigest = false;
+    private bool $syntheticBuilderWriteEnabled = true;
+
+    private bool $syntheticUploadFilesAllowed = true;
+
+    /** @var array<string,mixed> */
+    private array $syntheticBeginOverrides = [];
+
+    /** @var array<string,mixed> */
+    private array $syntheticVerifyOverrides = [];
+
+    private int $syntheticBeginCount = 0;
+
+    /** @var array<string,array<string,mixed>> */
+    private array $syntheticLeases = [];
+
+    /** @var array<string,array<string,mixed>> */
+    private array $syntheticCommittedLeases = [];
 
     private bool $syntheticImportUnknown = false;
 
@@ -484,6 +500,8 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $fileInput = collect($document['result']['tools'])->firstWhere('name', 'wordpress-file-input');
         self::assertSame(['file'], $fileInput['_meta']['openai/fileParams']);
         self::assertSame(['download_url', 'file_id'], $fileInput['inputSchema']['properties']['file']['required']);
+        self::assertArrayNotHasKey('import_to_media', $fileInput['inputSchema']['properties']);
+        self::assertFalse($fileInput['inputSchema']['additionalProperties']);
         self::assertSame(['download_url', 'file_id', 'mime_type', 'file_name'],
             array_keys($fileInput['inputSchema']['properties']['file']['properties']));
         self::assertFalse($fileInput['annotations']['readOnlyHint']);
@@ -519,7 +537,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertSame(30, $updatedSsh['inputSchema']['properties']['timeout_seconds']['maximum']);
     }
 
-    public function test_chatgpt_file_parameter_download_stages_exact_bytes_then_imports_one_native_media(): void
+    public function test_chatgpt_file_input_stages_complete_exact_bytes_without_native_media_effect(): void
     {
         $owner = $this->user('owner');
         $this->pair('alpha');
@@ -528,64 +546,289 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             'download_url' => 'https://files.oaiusercontent.com/private/file_abc?sig=signed%2Fopaque%3D&expires=123',
             'file_id' => 'file_abc', 'file_name' => 'synthetic.png', 'mime_type' => 'image/png',
         ];
-        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', $file, true);
+        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', $file);
         self::assertTrue($result['ok'], json_encode($result, JSON_THROW_ON_ERROR));
-        self::assertSame('imported_media', $result['state']);
-        self::assertSame(501, $result['media_id']);
+        self::assertSame('verified_private_transfer', $result['state']);
+        self::assertSame(str_repeat('a', 64), $result['transfer_id']);
         self::assertSame(strlen($this->chatFilePayload), $result['bytes']);
         self::assertSame(hash('sha256', $this->chatFilePayload), $result['sha256']);
         self::assertSame($this->chatFilePayload, $this->syntheticPrivateLease['payload']);
-        self::assertSame(1, $this->syntheticImportCalls);
+        self::assertSame(0, $this->syntheticImportCalls);
         self::assertSame(['limits', 'begin', 'append', 'append', 'verify'], $this->syntheticTransferActions);
+        self::assertSame([
+            'wp-ai-bridge/private-transfer', 'wp-ai-bridge/bridge-info', 'wp-ai-bridge/site-context',
+        ], array_slice(array_values(array_unique(array_column($this->downstream, 'ability'))), 1, 3));
     }
 
-    public function test_chatgpt_file_parameter_staging_does_not_publish_without_explicit_import(): void
+    public function test_file_input_replay_after_lost_response_cannot_republish_native_media(): void
     {
         $owner = $this->user('owner');
         $this->pair('alpha');
-        $this->chatFilePayload = "safe-private-file\0";
-        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
-            'download_url' => 'https://files.oaiusercontent.com/private/file_123?sig=secret',
-            'file_id' => 'file_123', 'file_name' => 'safe.png',
-        ]);
-        self::assertTrue($result['ok'], json_encode($result, JSON_THROW_ON_ERROR));
-        self::assertSame('verified_private_transfer', $result['state']);
-        self::assertSame($this->chatFilePayload, $this->syntheticPrivateLease['payload']);
-        self::assertSame(0, $this->syntheticImportCalls);
-    }
-
-    public function test_chatgpt_file_parameter_mismatch_fails_closed_without_media_effect(): void
-    {
-        $owner = $this->user('owner');
-        $this->pair('alpha');
-        $this->chatFilePayload = 'digest-test';
-        $this->syntheticWrongDigest = true;
-        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
+        $this->chatFilePayload = 'repeated-opaque-file-content';
+        $file = [
             'download_url' => 'https://files.oaiusercontent.com/private/file_abc?sig=valid',
-            'file_id' => 'file_abc', 'file_name' => 'mismatch.png',
-        ], true);
-        self::assertFalse($result['ok']);
-        self::assertSame('transfer_integrity_unknown', $result['error']['code']);
-        self::assertFalse($result['error']['retry_safe']);
-        self::assertSame(str_repeat('a', 64), $result['error']['transfer_id']);
+            'file_id' => 'file_abc', 'file_name' => 'same.png',
+        ];
+        $fileInput = app(WordpressFileInputMcpToolHandlers::class);
+        $first = $fileInput->receive($owner, 'alpha', $file);
+        self::assertTrue($first['ok']);
         self::assertSame(0, $this->syntheticImportCalls);
-    }
+        $firstId = $first['transfer_id'];
 
-    public function test_chatgpt_file_parameter_native_media_unknown_is_never_resent(): void
-    {
-        $owner = $this->user('owner');
-        $this->pair('alpha');
-        $this->chatFilePayload = 'unknown-native-effect';
+        // Different, explicitly authorized native step; simulate a successful
+        // Bridge commit whose response is lost to the caller.
         $this->syntheticImportUnknown = true;
-        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
-            'download_url' => 'https://files.oaiusercontent.com/private/file_abc?sig=valid',
-            'file_id' => 'file_abc', 'file_name' => 'unknown.png',
-        ], true);
-        self::assertFalse($result['ok']);
-        self::assertSame('media_import', $result['error']['phase']);
-        self::assertFalse($result['error']['retry_safe']);
-        self::assertSame(str_repeat('a', 64), $result['error']['transfer_id']);
+        $unknown = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'wp-ai-bridge/transfer-media-import', [
+            'transfer_id' => $firstId, 'filename' => 'same.png',
+        ]);
+        self::assertFalse($unknown['ok']);
         self::assertSame(1, $this->syntheticImportCalls);
+        $this->syntheticImportUnknown = false;
+        $status = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'wp-ai-bridge/private-transfer', [
+            'action' => 'status', 'transfer_id' => $firstId,
+        ]);
+        self::assertTrue($status['ok']);
+        self::assertSame($firstId, $status['result']['transfer_id']);
+        self::assertSame('committed', $status['result']['state']);
+        $this->pair('beta');
+        $crossTarget = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'beta', 'wp-ai-bridge/transfer-media-import', [
+            'transfer_id' => $firstId, 'filename' => 'same.png',
+        ]);
+        self::assertFalse($crossTarget['ok'], 'A different WordPress OAuth Target must not consume the other Target lease.');
+        self::assertSame(1, $this->syntheticImportCalls);
+        $sameLeaseReplay = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'wp-ai-bridge/transfer-media-import', [
+            'transfer_id' => $firstId, 'filename' => 'same.png',
+        ]);
+        self::assertFalse($sameLeaseReplay['ok'], 'An immutable Bridge claim must block another native effect.');
+        self::assertSame(1, $this->syntheticImportCalls);
+
+        // Simulate a client repeating the entire top-level file-input request.
+        // The only second effect is a new expiring, unpublished private lease.
+        $second = $fileInput->receive($owner, 'alpha', $file);
+        self::assertTrue($second['ok']);
+        self::assertNotSame($firstId, $second['transfer_id']);
+        self::assertSame(2, $this->syntheticBeginCount);
+        self::assertSame(1, $this->syntheticImportCalls);
+
+        // A distinct new, explicit native import remains possible, and the
+        // original immutable Bridge claim is not bypassed by file-input.
+        $separate = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'wp-ai-bridge/transfer-media-import', [
+            'transfer_id' => $second['transfer_id'], 'filename' => 'same.png',
+        ]);
+        self::assertTrue($separate['ok']);
+        self::assertSame('committed', $separate['result']['state']);
+        self::assertSame($second['transfer_id'], $separate['result']['transfer_id']);
+        self::assertSame(2, $this->syntheticImportCalls);
+        $originalStillCommitted = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'wp-ai-bridge/private-transfer', [
+            'action' => 'status', 'transfer_id' => $firstId,
+        ]);
+        self::assertTrue($originalStillCommitted['ok']);
+        self::assertSame('committed', $originalStillCommitted['result']['state']);
+        $originalReplayAfterNew = app(WordpressTargetMcpToolHandlers::class)->execute($owner, 'alpha', 'wp-ai-bridge/transfer-media-import', [
+            'transfer_id' => $firstId, 'filename' => 'same.png',
+        ]);
+        self::assertFalse($originalReplayAfterNew['ok']);
+        self::assertSame(2, $this->syntheticImportCalls);
+    }
+
+    public function test_chatgpt_file_parameter_invalid_begin_receipts_never_report_success(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'begin-receipt-check';
+        $file = ['download_url' => 'https://files.oaiusercontent.com/private/file?sig=x', 'file_id' => 'file'];
+        $handler = app(WordpressFileInputMcpToolHandlers::class);
+        foreach ([
+            ['purpose' => 'text'], ['total_bytes' => 987], ['sha256' => str_repeat('0', 64)],
+            ['state' => 'committed'], ['received_bytes' => 1], ['action' => 'verify'],
+        ] as $fault) {
+            $this->syntheticBeginOverrides = $fault;
+            $result = $handler->receive($owner, 'alpha', $file);
+            self::assertFalse($result['ok'], json_encode($fault, JSON_THROW_ON_ERROR));
+            self::assertSame('transfer_receipt_unknown', $result['error']['code']);
+            self::assertFalse($result['error']['retry_safe']);
+            self::assertSame($this->syntheticPrivateLease['id'], $result['error']['transfer_id']);
+            self::assertSame(0, $this->syntheticImportCalls);
+        }
+        $this->syntheticBeginOverrides = [];
+    }
+
+    public function test_chatgpt_file_parameter_malformed_begin_lease_id_is_nonretryable(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'admission-with-malformed-lease-id';
+        $this->syntheticBeginOverrides = ['transfer_id' => 'bad-lease-id'];
+        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
+            'download_url' => 'https://files.oaiusercontent.com/private/x?sig=y', 'file_id' => 'file_id',
+        ]);
+        self::assertFalse($result['ok']);
+        self::assertSame('transfer_receipt_unknown', $result['error']['code']);
+        self::assertArrayNotHasKey('transfer_id', $result['error']);
+        self::assertFalse($result['error']['retry_safe']);
+        self::assertSame(1, $this->syntheticBeginCount);
+        self::assertSame(['limits', 'begin'], $this->syntheticTransferActions);
+        self::assertSame(0, $this->syntheticImportCalls);
+    }
+
+    public function test_chatgpt_file_parameter_invalid_verify_receipts_never_report_success(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'verify-receipt-check';
+        $file = ['download_url' => 'https://files.oaiusercontent.com/private/file?sig=x', 'file_id' => 'file'];
+        $handler = app(WordpressFileInputMcpToolHandlers::class);
+        foreach ([
+            ['transfer_id' => str_repeat('f', 64)], ['purpose' => 'text'],
+            ['total_bytes' => 99], ['received_bytes' => 99], ['sha256' => str_repeat('0', 64)],
+            ['state' => 'committed'], ['complete' => false], ['action' => 'status'],
+        ] as $fault) {
+            $this->syntheticVerifyOverrides = $fault;
+            $result = $handler->receive($owner, 'alpha', $file);
+            self::assertFalse($result['ok'], json_encode($fault, JSON_THROW_ON_ERROR));
+            self::assertSame('transfer_integrity_unknown', $result['error']['code']);
+            self::assertFalse($result['error']['retry_safe']);
+            self::assertSame($this->syntheticPrivateLease['id'], $result['error']['transfer_id']);
+            self::assertSame(0, $this->syntheticImportCalls);
+        }
+        $this->syntheticVerifyOverrides = [];
+    }
+
+    public function test_chatgpt_file_parameter_builder_write_disabled_denies_before_http_download(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'never-download-private';
+        $this->syntheticBuilderWriteEnabled = false;
+        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
+            'download_url' => 'https://files.oaiusercontent.com/private/file_abc?sig=valid', 'file_id' => 'file_abc',
+        ]);
+        self::assertSame('media_permission_denied', $result['error']['code']);
+        self::assertSame(['limits'], $this->syntheticTransferActions);
+        self::assertSame(0, $this->syntheticBeginCount);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
+    }
+
+    public function test_chatgpt_file_parameter_upload_capability_denied_before_http_download(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'never-download-private';
+        $this->syntheticUploadFilesAllowed = false;
+        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
+            'download_url' => 'https://files.oaiusercontent.com/private/file_abc?sig=valid', 'file_id' => 'file_abc',
+        ]);
+        self::assertSame('media_permission_denied', $result['error']['code']);
+        self::assertSame(['limits'], $this->syntheticTransferActions);
+        self::assertSame(0, $this->syntheticBeginCount);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
+    }
+
+    public function test_chatgpt_file_parameter_gateway_destructive_permission_denied_before_http_download(): void
+    {
+        $owner = $this->user('administrator');
+        $target = $this->pair('alpha');
+        DB::table('user_target_access')->insert([
+            'user_id' => $owner->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        $this->chatFilePayload = 'never-download-private';
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $owner->getKey(), 'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::WordpressAbilitiesExecuteDestructive->value,
+        ]);
+        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
+            'download_url' => 'https://files.oaiusercontent.com/private/file_abc?sig=valid', 'file_id' => 'file_abc',
+        ]);
+        self::assertFalse($result['ok']);
+        self::assertSame('limits', $result['error']['phase']);
+        self::assertSame(0, $this->syntheticBeginCount);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
+    }
+
+    public function test_chatgpt_file_parameter_gateway_readonly_permission_denied_before_http_download(): void
+    {
+        $owner = $this->user('administrator');
+        $target = $this->pair('alpha');
+        DB::table('user_target_access')->insert([
+            'user_id' => $owner->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        $this->chatFilePayload = 'never-download-private';
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $owner->getKey(), 'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::WordpressAbilitiesExecuteReadonly->value,
+        ]);
+        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
+            'download_url' => 'https://files.oaiusercontent.com/private/file_abc?sig=valid', 'file_id' => 'file_abc',
+        ]);
+        self::assertFalse($result['ok']);
+        self::assertSame('media_group_preflight', $result['error']['phase']);
+        self::assertSame(0, $this->syntheticBeginCount);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
+    }
+
+    public function test_chatgpt_file_parameter_paused_or_revoked_target_does_not_download(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->pair('alpha');
+        $this->chatFilePayload = 'should-stay-private';
+        $file = ['download_url' => 'https://files.oaiusercontent.com/private/opaque?sig=x', 'file_id' => 'opaque'];
+        $handler = app(WordpressFileInputMcpToolHandlers::class);
+        $target->forceFill(['operations_paused' => true])->save();
+        $paused = $handler->receive($owner, 'alpha', $file);
+        self::assertFalse($paused['ok']);
+        self::assertSame('limits', $paused['error']['phase']);
+        $target->forceFill(['operations_paused' => false])->save();
+        $owner->forceFill(['access_enabled' => false])->save();
+        $revoked = $handler->receive($owner, 'alpha', $file);
+        self::assertFalse($revoked['ok']);
+        self::assertSame('limits', $revoked['error']['phase']);
+        self::assertSame(0, $this->syntheticBeginCount);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
+    }
+
+    public function test_mcp_tool_schema_rejects_removed_inline_native_import_switch(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'must-not-publish';
+        $host = parse_url((string) config('oauth.resource'), PHP_URL_HOST);
+        self::assertIsString($host);
+        $request = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], [
+            'HTTP_HOST' => $host,
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+            'HTTP_MCP_PROTOCOL_VERSION' => '2026-07-28',
+            'HTTP_MCP_METHOD' => 'tools/call',
+            'HTTP_MCP_NAME' => 'wordpress-file-input',
+        ], json_encode([
+            'jsonrpc' => '2.0', 'id' => 45, 'method' => 'tools/call',
+            'params' => [
+                'name' => 'wordpress-file-input',
+                'arguments' => [
+                    'target_id' => 'alpha',
+                    'file' => [
+                        'download_url' => 'https://files.oaiusercontent.com/private/file?sig=x',
+                        'file_id' => 'file',
+                    ],
+                    'import_to_media' => true,
+                ],
+                '_meta' => [
+                    'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                    'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                    'io.modelcontextprotocol/clientInfo' => ['name' => 'extra-field-rejected', 'version' => '1.0'],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR));
+        $request->attributes->set('oauth_user', $owner);
+        $response = app(GatewayMcpEndpoint::class)->handle($request);
+        self::assertSame(400, $response->getStatusCode(), 'Unexpected extra import field must be rejected by the actual MCP tool schema.');
+        ob_start();
+        $response->sendContent();
+        $result = json_decode((string) ob_get_clean(), true, 32, JSON_THROW_ON_ERROR);
+        self::assertTrue(($result['result']['isError'] ?? false) === true || isset($result['error']), json_encode($result, JSON_THROW_ON_ERROR));
+        self::assertSame(0, $this->syntheticBeginCount);
+        self::assertSame(0, $this->syntheticImportCalls);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
     }
 
     public function test_chatgpt_file_parameter_invalid_inputs_and_wrong_target_do_not_fetch_file(): void
@@ -597,14 +840,14 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             'download_url' => 'https://files.oaiusercontent.com/private/file_abc?sig=valid',
             'file_id' => 'file_abc', 'file_name' => 'safe.png',
         ];
-        $missing = $handler->receive($owner, 'unknown', $file, true);
+        $missing = $handler->receive($owner, 'unknown', $file);
         self::assertFalse($missing['ok']);
         self::assertSame('limits', $missing['error']['phase']);
         $invalid = $handler->receive($owner, 'unknown', [
             ...$file, 'download_url' => 'https://evil.example.test/internal',
-        ], true);
+        ]);
         self::assertSame('invalid_file_input', $invalid['error']['code']);
-        $unsafe = $handler->receive($owner, 'unknown', [...$file, 'file_name' => '../evil.png'], true);
+        $unsafe = $handler->receive($owner, 'unknown', [...$file, 'file_name' => '../evil.png']);
         self::assertSame('invalid_filename', $unsafe['error']['code']);
         Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
         self::assertSame(0, $this->syntheticImportCalls);
@@ -618,7 +861,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
             'download_url' => 'https://files.oaiusercontent.com/private/huge?sig=short-lived',
             'file_id' => 'file_huge', 'file_name' => 'oversized.pdf',
-        ], true);
+        ]);
         self::assertFalse($result['ok']);
         self::assertSame('response_too_large', $result['error']['code']);
         self::assertSame(['limits'], $this->syntheticTransferActions);
@@ -701,7 +944,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
     /** @param array<string, mixed> $parameters
      * @return array<string, mixed>
      */
-    private function syntheticTransfer(array $parameters): array
+    private function syntheticTransfer(array $parameters, string $origin): array
     {
         $action = (string) ($parameters['action'] ?? '');
         $this->syntheticTransferActions[] = $action;
@@ -709,35 +952,65 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             case 'limits':
                 return ['max_chunk_bytes' => 49152];
             case 'begin':
+                $this->syntheticBeginCount++;
+                $id = $this->syntheticBeginCount === 1
+                    ? str_repeat('a', 64)
+                    : hash('sha256', 'synthetic-private-lease-'.$this->syntheticBeginCount);
                 $this->syntheticPrivateLease = [
-                    'id' => str_repeat('a', 64), 'payload' => '', 'total' => $parameters['total_bytes'],
-                    'sha256' => $parameters['sha256'],
+                    'id' => $id, 'payload' => '', 'total' => $parameters['total_bytes'],
+                    'sha256' => $parameters['sha256'], 'source_host' => $origin,
                 ];
+                $this->syntheticLeases[$id] = $this->syntheticPrivateLease;
 
-                return ['transfer_id' => $this->syntheticPrivateLease['id'], 'max_chunk_bytes' => 49152];
+                return array_replace([
+                    'action' => 'begin', 'transfer_id' => $id,
+                    'purpose' => 'media', 'state' => 'open',
+                    'received_bytes' => 0, 'total_bytes' => $parameters['total_bytes'],
+                    'sha256' => $parameters['sha256'], 'max_chunk_bytes' => 49152,
+                ], $this->syntheticBeginOverrides);
             case 'append':
-                if ($parameters['offset'] !== strlen($this->syntheticPrivateLease['payload'])) {
-                    throw new \RuntimeException('Test fake rejected changed offset.');
+                if ($parameters['transfer_id'] !== $this->syntheticPrivateLease['id']
+                    || $parameters['offset'] !== strlen($this->syntheticPrivateLease['payload'])) {
+                    throw new \RuntimeException('Test fake rejected changed transfer/offset.');
                 }
                 $chunk = base64_decode($parameters['content_base64'], true);
                 if (! is_string($chunk)) {
                     throw new \RuntimeException('Invalid fixture chunk encoding.');
                 }
                 $this->syntheticPrivateLease['payload'] .= $chunk;
+                $this->syntheticLeases[$this->syntheticPrivateLease['id']] = $this->syntheticPrivateLease;
 
-                return ['received_bytes' => strlen($this->syntheticPrivateLease['payload'])];
-            case 'verify':
-                $data = [
-                    'transfer_id' => $this->syntheticPrivateLease['id'],
-                    'state' => 'verified',
-                    'sha256' => hash('sha256', $this->syntheticPrivateLease['payload']),
-                    'total_bytes' => strlen($this->syntheticPrivateLease['payload']),
+                return [
+                    'action' => 'append', 'transfer_id' => $this->syntheticPrivateLease['id'],
+                    'purpose' => 'media', 'state' => 'open',
+                    'received_bytes' => strlen($this->syntheticPrivateLease['payload']),
+                    'total_bytes' => $this->syntheticPrivateLease['total'],
+                    'sha256' => $this->syntheticPrivateLease['sha256'],
                 ];
-                if ($this->syntheticWrongDigest) {
-                    $data['sha256'] = str_repeat('0', 64);
+            case 'verify':
+                if ($parameters['transfer_id'] !== $this->syntheticPrivateLease['id']) {
+                    throw new \RuntimeException('Verification of wrong synthetic lease.');
                 }
 
-                return $data;
+                return array_replace([
+                    'action' => 'verify', 'transfer_id' => $this->syntheticPrivateLease['id'],
+                    'purpose' => 'media', 'state' => 'verified', 'complete' => true,
+                    'received_bytes' => strlen($this->syntheticPrivateLease['payload']),
+                    'total_bytes' => $this->syntheticPrivateLease['total'],
+                    'sha256' => hash('sha256', $this->syntheticPrivateLease['payload']),
+                ], $this->syntheticVerifyOverrides);
+            case 'status':
+                $id = $parameters['transfer_id'] ?? null;
+                $committed = is_string($id) ? ($this->syntheticCommittedLeases[$id] ?? null) : null;
+                if (is_array($committed) && $committed['source_host'] === $origin) {
+                    return [
+                        'action' => 'status', 'transfer_id' => $id,
+                        'purpose' => 'media', 'state' => 'committed',
+                        'total_bytes' => $committed['total'],
+                        'sha256' => $committed['sha256'],
+                    ];
+                }
+                throw new \RuntimeException('Cannot inspect unknown synthetic lease.');
             default:
                 throw new \RuntimeException('Unexpected synthetic operation.');
         }
@@ -751,7 +1024,8 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
 
         if ($host === 'files.oaiusercontent.com' && $this->chatFilePayload !== null) {
             return Http::response($this->chatFilePayload, 200, ['Content-Type' => 'application/octet-stream']);
-        }        if ($path === '/.well-known/oauth-protected-resource') {
+        }
+        if ($path === '/.well-known/oauth-protected-resource') {
             return Http::response([
                 'resource' => $base.'/wp-json/wp-ai-bridge/v1/mcp',
                 'authorization_servers' => [$base],
@@ -817,7 +1091,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
                     }
                     $wanted = (string) ($payload['params']['arguments']['parameters']['name'] ?? 'demo/read');
                     $isDestructive = in_array($wanted, ['demo/destroy', 'wp-ai-bridge/private-transfer'], true);
-                    $isReadonly = $wanted === 'demo/read';
+                    $isReadonly = in_array($wanted, ['demo/read', 'wp-ai-bridge/bridge-info', 'wp-ai-bridge/site-context'], true);
 
                     $data = ['items' => [[
                         'name' => $wanted,
@@ -825,20 +1099,36 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
                         'bridge_delegation' => 'ability_specific',
                         'annotations' => ['readonly' => $isReadonly, 'destructive' => $isDestructive],
                     ]]];
+                } elseif ($this->chatFilePayload !== null && $ability === 'wp-ai-bridge/bridge-info') {
+                    $data = ['access_groups' => ['site_read' => true, 'builder_write' => $this->syntheticBuilderWriteEnabled]];
+                } elseif ($this->chatFilePayload !== null && $ability === 'wp-ai-bridge/site-context') {
+                    $data = ['current_user' => ['id' => 7, 'capabilities' => ['upload_files' => $this->syntheticUploadFilesAllowed]]];
                 } elseif ($this->chatFilePayload !== null && $ability === 'wp-ai-bridge/private-transfer') {
                     $parameters = $payload['params']['arguments']['parameters'] ?? [];
-                    $data = $this->syntheticTransfer($parameters);
+                    $data = $this->syntheticTransfer($parameters, $host);
                 } elseif ($this->chatFilePayload !== null && $ability === 'wp-ai-bridge/transfer-media-import') {
+                    $parameters = $payload['params']['arguments']['parameters'] ?? [];
+                    $transferId = $parameters['transfer_id'] ?? null;
+                    $lease = is_string($transferId) ? ($this->syntheticLeases[$transferId] ?? null) : null;
+                    if (! is_array($lease) || $lease['source_host'] !== $host
+                        || isset($this->syntheticCommittedLeases[$transferId])) {
+                        return Http::response(['jsonrpc' => '2.0', 'id' => $payload['id'] ?? 2,
+                            'result' => ['isError' => true, 'content' => [['type' => 'text', 'text' => 'immutable native claim fence']]]], 200);
+                    }
+                    // Model an irreversible WordPress Media commit with a stable
+                    // per-transfer native fence, even if its response is lost.
                     $this->syntheticImportCalls++;
+                    $this->syntheticCommittedLeases[$transferId] = $lease;
                     if ($this->syntheticImportUnknown) {
                         return Http::response(['jsonrpc' => '2.0', 'id' => $payload['id'] ?? 2,
                             'result' => ['isError' => true, 'content' => [['type' => 'text', 'text' => 'unknown native result']]]], 200);
                     }
                     $data = [
-                        'transfer_id' => $this->syntheticPrivateLease['id'], 'state' => 'consumed',
-                        'media_id' => 501, 'filename' => (string) ($payload['params']['arguments']['parameters']['filename'] ?? ''),
-                        'bytes' => strlen($this->syntheticPrivateLease['payload']),
-                        'sha256' => hash('sha256', $this->syntheticPrivateLease['payload']),
+                        'transfer_id' => $transferId, 'state' => 'committed',
+                        'media_id' => 500 + $this->syntheticImportCalls,
+                        'filename' => (string) ($parameters['filename'] ?? ''),
+                        'bytes' => strlen($lease['payload']),
+                        'sha256' => hash('sha256', $lease['payload']),
                     ];
                 } else {
                     $data = ['host' => $host, 'ability' => $ability];

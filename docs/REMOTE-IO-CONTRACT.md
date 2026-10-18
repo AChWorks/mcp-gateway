@@ -84,14 +84,39 @@ ChatGPT file** with a finite download response/body budget. This is a
 transfer, or Gateway-wide maximum. It computes exact source SHA-256, uses the
 existing authenticated `wp-ai-bridge/private-transfer` **media** purpose
 `limits→begin→append→verify` and returns an exact bound receipt. It never
-installs, executes or unpacks an uploaded package. `import_to_media=false`
-(default) only reserves a private staged object; the separate explicit
-`import_to_media=true` option invokes the existing WordPress-controlled
-`transfer-media-import` once, preserving native filename/MIME/permission
-policy and checking its media ID, bytes and digest. Malformed/unknown effects
-retain a private lease ID where known and `retry_safe=false`; do not repeat a
-maybe-committed import or discard an immutable provider claim. Normal lease
-expiry/cancel and one-way unknown-state reconciliation belong to Bridge.
+installs, executes or unpacks an uploaded package. **Native publication is
+intentionally IMPOSSIBLE from this top-level tool**. After a successful exact
+verified `transfer_id` result, the caller may explicitly invoke the existing
+Gateway `wordpress-ability-execute` with `ability=wp-ai-bridge/transfer-media-import`
+and `input={"transfer_id":"<the_exact_id>","filename":"example.png"}`.
+That independent WordPress-controlled operation rechecks native Builder Write,
+`upload_files`, MIME/filename and its immutable per-lease one-way claim. If an
+import response is lost, retain/reconcile the original ID and inspect the
+WordPress Media destination; **never create a new transfer to replay a possibly
+committed Media import**. A repeated `wordpress-file-input` may create a new
+**unpublished, expiring lease only**; it can never create a native Media item.
+Malformed/unknown private transfer stages retain an existing lease ID where
+known and `retry_safe=false`. Normal lease expiry/cancel and unknown-state
+reconciliation belong to Bridge.
+
+The pre-download access gate first executes the real destructive-class
+`private-transfer(action=limits)` under current Gateway Target and permission
+policy. That limits check alone is not Media authority: Gateway also reads the
+same OAuth Target's `bridge-info.access_groups.builder_write === true` and
+`site-context(section=current_user).current_user.capabilities.upload_files === true`
+for an authenticated nonzero WordPress user ID. Both are existing
+**non-effectful, readonly Bridge Abilities**. This requires effective Gateway
+readonly access and Bridge Site Read; if either read surface is disabled,
+file-input **fails closed**, even if standalone Builder Write is enabled.
+Actual `private-transfer(action=begin,purpose=media)` independently rechecks
+Builder Write/upload_files to prevent time-of-check drift. No dummy lease,
+WordPress post/Media item or privileged probe is created before the download.
+
+All begin, append and verify receipts are checked for **the same opaque transfer
+ID and Media purpose**, correct stage, byte length, SHA-256 and exact progress;
+`verified` must also assert full completeness. A structurally inconsistent
+provider receipt produces a non-retryable **unknown** outcome, never false
+successful Media publication or implicit native-effect retry.
 
 This adapter does **not** implement reverse native ChatGPT attachment creation,
 WordPress WXR import, large-file streaming, direct SSH file transport, an

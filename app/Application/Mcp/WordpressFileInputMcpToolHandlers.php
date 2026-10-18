@@ -8,16 +8,16 @@ use App\Models\User;
 use Throwable;
 
 /**
- * An optional ChatGPT file-parameter adapter, not a generic URL importer.
+ * Stage a host-provided file under the existing authorized WordPress lease.
  *
- * The existing WordPress authenticated Ability dispatcher owns every user,
- * Target, operation-class and provider permission check. Its private transfer
- * receipts own immutable byte identity, reservations and no-replay claims.
- * Downloaded data are never executed or sent to a destination chosen by URL.
+ * This entrypoint deliberately CANNOT publish Media. Retrying this tool after
+ * losing its response may allocate another expiring private lease, but cannot
+ * create a second WordPress native effect. Publication is a separate explicit
+ * provider operation using the stable, originally returned transfer_id.
  */
 final readonly class WordpressFileInputMcpToolHandlers
 {
-    // Bounded synchronous host-file fallback, NOT a WordPress/Bridge file-size ceiling.
+    // Synchronous ChatGPT ingress adapter budget, not a Bridge file size limit.
     public const MAX_INLINE_FILE_BYTES = 262144;
 
     private const HOST = 'files.oaiusercontent.com';
@@ -31,18 +31,19 @@ final readonly class WordpressFileInputMcpToolHandlers
      * @param  array<string, mixed>  $file  Host-supplied file parameter.
      * @return array<string, mixed>
      */
-    public function receive(User $user, string $target_id, array $file, bool $import_to_media = false): array
+    public function receive(User $user, string $target_id, array $file): array
     {
         if (! self::validFile($file)) {
             return self::failed('invalid_file_input', 'A supported ChatGPT file parameter is required.');
         }
         $filename = $file['file_name'] ?? null;
-        if ($import_to_media && (! is_string($filename) || ! self::validFilename($filename))) {
-            return self::failed('invalid_filename', 'A single valid file name is required for Media import.');
+        if ($filename !== null && (! is_string($filename) || ! self::validFilename($filename))) {
+            return self::failed('invalid_filename', 'The supplied Media filename is not valid.');
         }
 
-        // Do not fetch even a trusted ChatGPT file until the exact Gateway
-        // WordPress Target and its current Ability execution grant pass.
+        // The dynamic WordPress private-transfer tool is destructive-class.
+        // Its limits probe checks the exact Gateway Target/execution grant,
+        // but does NOT prove purpose-specific WordPress permissions.
         $limits = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', ['action' => 'limits']);
         if (($limits['ok'] ?? false) !== true || ! is_array($limits['result'] ?? null)) {
             return self::downstream('limits', $limits, null);
@@ -52,6 +53,32 @@ final readonly class WordpressFileInputMcpToolHandlers
             return self::failed('provider_contract_unavailable', 'The WordPress private transfer size contract is unavailable.');
         }
 
+        // Bridge's actual begin(media) guard is Builder Write + upload_files.
+        // Inspect BOTH authoritative non-effectful provider projections before
+        // even fetching a signed private file. These are individually
+        // authenticated, current-user/Target-scoped and readonly-class. If Site
+        // Read or the readonly Gateway grant is unavailable, fail closed.
+        $groups = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/bridge-info', []);
+        if (($groups['ok'] ?? false) !== true || ! is_array($groups['result'] ?? null)) {
+            return self::downstream('media_group_preflight', $groups, null);
+        }
+        if (($groups['result']['access_groups']['builder_write'] ?? null) !== true) {
+            return self::failed('media_permission_denied', 'Builder Write is not enabled for the selected WordPress Target.');
+        }
+        $principal = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/site-context', [
+            'section' => 'current_user',
+        ]);
+        if (($principal['ok'] ?? false) !== true || ! is_array($principal['result'] ?? null)) {
+            return self::downstream('media_principal_preflight', $principal, null);
+        }
+        if (! is_int($principal['result']['current_user']['id'] ?? null)
+            || $principal['result']['current_user']['id'] < 1
+            || ($principal['result']['current_user']['capabilities']['upload_files'] ?? null) !== true) {
+            return self::failed('media_permission_denied', 'The authenticated WordPress principal cannot upload Media.');
+        }
+
+        // Permission changes between these probes and admission still fail
+        // closed at Bridge's purpose-authorized begin/append/verify stages.
         try {
             $response = $this->http->getChatgptFile($file['download_url'], self::MAX_INLINE_FILE_BYTES);
         } catch (OutboundRequestException $exception) {
@@ -67,9 +94,6 @@ final readonly class WordpressFileInputMcpToolHandlers
         if ($bytes > self::MAX_INLINE_FILE_BYTES) {
             return self::failed('file_too_large', 'The file exceeds this synchronous ChatGPT file-parameter adapter.');
         }
-        if ($import_to_media && $bytes === 0) {
-            return self::failed('empty_media', 'WordPress Media Library cannot import an empty file.');
-        }
         $sha256 = hash('sha256', $response->body);
         $begin = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
             'action' => 'begin', 'purpose' => 'media', 'total_bytes' => $bytes, 'sha256' => $sha256,
@@ -80,14 +104,23 @@ final readonly class WordpressFileInputMcpToolHandlers
         $receipt = $begin['result'];
         $transferId = $receipt['transfer_id'] ?? null;
         if (! is_string($transferId) || preg_match('/^[0-9a-f]{64}$/D', $transferId) !== 1) {
-            // A successful remote begin with an invalid receipt is uncertain.
-            // Do not repeat it or pretend it did not reserve server bytes.
+            // An allocation may have succeeded even if the receipt is broken.
+            // Never repeat an uncertain provider admission automatically.
             return self::failed('transfer_receipt_unknown', 'A private transfer may exist; do not retry automatically.');
         }
-        $chunk = min($budget, (int) ($receipt['max_chunk_bytes'] ?? $budget), 49152);
-        if ($chunk < 1) {
-            return self::failed('provider_contract_unavailable', 'Provider chunk budget is invalid.', $transferId);
+        if (($receipt['action'] ?? null) !== 'begin'
+            || ($receipt['purpose'] ?? null) !== 'media'
+            || ($receipt['state'] ?? null) !== 'open'
+            || ($receipt['total_bytes'] ?? null) !== $bytes
+            || ($receipt['received_bytes'] ?? null) !== 0
+            || ($receipt['sha256'] ?? null) !== $sha256) {
+            return self::failed('transfer_receipt_unknown', 'The allocated private transfer identity did not match.', $transferId);
         }
+        $providerChunk = $receipt['max_chunk_bytes'] ?? null;
+        if (! is_int($providerChunk) || $providerChunk < 1) {
+            return self::failed('provider_contract_unavailable', 'The provider chunk budget is invalid.', $transferId);
+        }
+        $chunk = min($budget, $providerChunk, 49152);
         for ($offset = 0; $offset < $bytes; $offset += $chunk) {
             $part = substr($response->body, $offset, $chunk);
             $append = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
@@ -98,8 +131,15 @@ final readonly class WordpressFileInputMcpToolHandlers
                 return self::downstream('append', $append, $transferId);
             }
             $observed = $append['result'] ?? null;
-            if (! is_array($observed) || ($observed['received_bytes'] ?? null) !== ($offset + strlen($part))) {
-                return self::failed('transfer_progress_unknown', 'The transfer progress acknowledgment did not match.', $transferId);
+            if (! is_array($observed)
+                || ($observed['action'] ?? null) !== 'append'
+                || ($observed['transfer_id'] ?? null) !== $transferId
+                || ($observed['purpose'] ?? null) !== 'media'
+                || ($observed['state'] ?? null) !== 'open'
+                || ($observed['total_bytes'] ?? null) !== $bytes
+                || ($observed['sha256'] ?? null) !== $sha256
+                || ($observed['received_bytes'] ?? null) !== ($offset + strlen($part))) {
+                return self::failed('transfer_progress_unknown', 'The transfer progress receipt did not match.', $transferId);
             }
         }
         $verify = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
@@ -109,37 +149,22 @@ final readonly class WordpressFileInputMcpToolHandlers
             return self::downstream('verify', $verify, $transferId);
         }
         $verified = $verify['result'] ?? null;
-        if (! is_array($verified) || ($verified['sha256'] ?? null) !== $sha256
-            || ($verified['total_bytes'] ?? null) !== $bytes || ($verified['state'] ?? null) !== 'verified') {
-            return self::failed('transfer_integrity_unknown', 'The WordPress transfer integrity result did not match.', $transferId);
-        }
-
-        if (! $import_to_media) {
-            return [
-                'ok' => true, 'state' => 'verified_private_transfer', 'target_id' => $target_id,
-                'transfer_id' => $transferId, 'bytes' => $bytes, 'sha256' => $sha256,
-                'next_step' => 'Explicitly use wp-ai-bridge/transfer-media-import with this transfer_id and an authorized filename, or cancel this lease.',
-            ];
-        }
-
-        // An immutable native one-way claim fences the publish effect.
-        // Never retry this call after an error or lost outcome.
-        $import = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/transfer-media-import', [
-            'transfer_id' => $transferId, 'filename' => $filename,
-        ]);
-        if (($import['ok'] ?? false) !== true) {
-            return self::downstream('media_import', $import, $transferId);
-        }
-        $destination = $import['result'] ?? null;
-        if (! is_array($destination) || ! is_int($destination['media_id'] ?? null)
-            || ($destination['sha256'] ?? null) !== $sha256 || ($destination['bytes'] ?? null) !== $bytes) {
-            return self::failed('media_import_outcome_unknown', 'WordPress may have created a Media item; reconcile its receipt before any retry.', $transferId);
+        if (! is_array($verified)
+            || ($verified['action'] ?? null) !== 'verify'
+            || ($verified['transfer_id'] ?? null) !== $transferId
+            || ($verified['purpose'] ?? null) !== 'media'
+            || ($verified['state'] ?? null) !== 'verified'
+            || ($verified['complete'] ?? null) !== true
+            || ($verified['received_bytes'] ?? null) !== $bytes
+            || ($verified['total_bytes'] ?? null) !== $bytes
+            || ($verified['sha256'] ?? null) !== $sha256) {
+            return self::failed('transfer_integrity_unknown', 'The WordPress transfer integrity receipt did not match.', $transferId);
         }
 
         return [
-            'ok' => true, 'state' => 'imported_media', 'target_id' => $target_id,
-            'transfer_id' => $transferId, 'media_id' => $destination['media_id'],
-            'bytes' => $bytes, 'sha256' => $sha256,
+            'ok' => true, 'state' => 'verified_private_transfer', 'target_id' => $target_id,
+            'transfer_id' => $transferId, 'bytes' => $bytes, 'sha256' => $sha256,
+            'next_step' => 'Only after this receipt is received: explicitly call wp-ai-bridge/transfer-media-import with the same transfer_id and an authorized filename. Never retry an uncertain native import with a new transfer.',
         ];
     }
 
@@ -182,8 +207,7 @@ final readonly class WordpressFileInputMcpToolHandlers
     private static function failed(string $code, string $message, ?string $transferId = null): array
     {
         return ['ok' => false, 'error' => [
-            'code' => $code, 'message' => $message,
-            'retry_safe' => false,
+            'code' => $code, 'message' => $message, 'retry_safe' => false,
             ...($transferId !== null ? ['transfer_id' => $transferId] : []),
         ]];
     }
@@ -198,8 +222,7 @@ final readonly class WordpressFileInputMcpToolHandlers
         return ['ok' => false, 'error' => [
             'code' => is_array($error) && is_string($error['code'] ?? null) ? $error['code'] : 'downstream_unavailable',
             'message' => 'The WordPress transfer stage did not complete successfully.',
-            'phase' => $phase,
-            'retry_safe' => false,
+            'phase' => $phase, 'retry_safe' => false,
             ...(is_array($error) && isset($error['diagnostic_reference']) ? ['diagnostic_reference' => $error['diagnostic_reference']] : []),
             ...($transferId !== null ? ['transfer_id' => $transferId] : []),
         ]];

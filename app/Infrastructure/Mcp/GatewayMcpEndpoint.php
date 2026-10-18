@@ -181,11 +181,11 @@ final readonly class GatewayMcpEndpoint
                 ],
             )
             ->addTool(
-                handler: fn (string $target_id, array $file, bool $import_to_media = false): array => $this->wordpressFiles->receive(
-                    $this->user($request), $target_id, $file, $import_to_media,
+                handler: fn (string $target_id, array $file): array => $this->wordpressFiles->receive(
+                    $this->user($request), $target_id, $file,
                 ),
                 name: 'wordpress-file-input',
-                description: 'Receive a genuine ChatGPT file parameter into an authorized WordPress private Media transfer. Optionally consume as a native Media Library item only with import_to_media=true. No arbitrary URL fetch, no automatic retry, no package execution. Limited to 256 KiB by this synchronous client adapter, not by Bridge; larger files require a supported separate transport.',
+                description: 'ONLY stage and hash-verify a host-provided ChatGPT file into an authorized WordPress private Media transfer. This tool cannot publish native Media: separately invoke wordpress-ability-execute with wp-ai-bridge/transfer-media-import and the returned stable transfer_id after explicit authorization. Repeating this file-input can never create a second Media item. Builder Write/upload_files are checked before signed-file download. Maximum 256 KiB in this synchronous adapter, not a Bridge-wide size limit. No arbitrary URLs or executable packages.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -202,7 +202,6 @@ final readonly class GatewayMcpEndpoint
                             'required' => ['download_url', 'file_id'],
                             'additionalProperties' => false,
                         ],
-                        'import_to_media' => ['type' => 'boolean', 'default' => false],
                     ],
                     'required' => ['target_id', 'file'],
                     'additionalProperties' => false,
