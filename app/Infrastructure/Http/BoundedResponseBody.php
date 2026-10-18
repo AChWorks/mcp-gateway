@@ -19,7 +19,7 @@ final class BoundedResponseBody
 
     private ?int $observedBytes = null;
 
-    public function __construct(private readonly int $maxBytes)
+    public function __construct(private readonly int $maxBytes, bool $spillEarly = false)
     {
         if ($this->maxBytes < 1) {
             throw new RuntimeException('Response body limit must be positive.');
@@ -27,7 +27,9 @@ final class BoundedResponseBody
 
         $this->registerFilter();
 
-        $stream = fopen('php://temp', 'w+');
+        // Large private file responses spill after 64 KiB; ordinary HTTP responses
+        // retain their original memory/disk behavior and body budget.
+        $stream = fopen($spillEarly ? 'php://temp/maxmemory:65536' : 'php://temp', 'w+b');
         if ($stream === false) {
             throw new RuntimeException('Unable to create bounded response stream.');
         }

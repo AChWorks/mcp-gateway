@@ -33,6 +33,22 @@ final class SafeHttpClient
     }
 
     /**
+     * Stream one allowlisted host file into the caller-owned, bounded private spool.
+     * Unlike the normal JSON response path, the body is never materialized as a string.
+     * The caller must close its spool, validate the status, byte count and SHA-256.
+     *
+     * @param  resource  $sink
+     */
+    public function streamChatgptFile(string $url, int $maxBytes, mixed $sink, int $timeoutSeconds): SafeHttpResponse
+    {
+        if (! is_resource($sink) || $maxBytes < 1 || $timeoutSeconds < 1) {
+            throw new OutboundRequestException('file_staging_unavailable', 'Private file staging is unavailable.');
+        }
+
+        return $this->send('GET', $url, [], [], 'none', $maxBytes, null, true, $sink, $timeoutSeconds);
+    }
+
+    /**
      * @param  array<string, scalar|null>  $form
      * @param  array<string, string>  $headers
      */
@@ -61,11 +77,11 @@ final class SafeHttpClient
      * @param  array<string, mixed>  $payload
      * @param  'none'|'form'|'json'  $format
      */
-    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null): SafeHttpResponse
     {
         $network = $this->settings->httpTimeoutsSeconds();
         $connectTimeout = $network['connect'];
-        $requestTimeout = $network['request'];
+        $requestTimeout = $fileTimeoutSeconds ?? $network['request'];
         $startedNs = hrtime(true);
         if ($requestTimeout > intdiv(PHP_INT_MAX - $startedNs, 1_000_000_000)) {
             throw new OutboundRequestException('runtime', 'Outbound request timeout configuration is invalid.', [], true);
@@ -87,8 +103,12 @@ final class SafeHttpClient
             throw new OutboundRequestException('network_failure', 'Outbound request deadline expired before dispatch.', ['failure_stage' => 'deadline_before_dispatch'], true);
         }
         $requestedBytes = $responseLimitBytes ?? $this->settings->responseLimitBytes(false);
-        $maxBytes = min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $requestedBytes));
-        $responseBody = new BoundedResponseBody($maxBytes);
+        // The 8 MiB bound still applies to all ordinary in-memory responses.
+        // A file sink has a separate finite caller-authorized whole-file budget.
+        $maxBytes = $fileSink === null
+            ? min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $requestedBytes))
+            : max(1, $requestedBytes);
+        $responseBody = new BoundedResponseBody($maxBytes, $fileSink !== null);
 
         try {
             $curlOptions = [];
@@ -106,6 +126,8 @@ final class SafeHttpClient
             $request = Http::withOptions([
                 'allow_redirects' => false,
                 'verify' => true,
+                // Never transparently decompress an opaque signed-file byte stream.
+                ...($fileSink === null ? [] : ['decode_content' => false]),
                 'proxy' => '',
                 'progress' => [$responseBody, 'progress'],
                 'sink' => $responseBody->stream(),
@@ -119,7 +141,7 @@ final class SafeHttpClient
                 ->connectTimeout(min($connectTimeout, $remainingSeconds))
                 ->timeout($remainingSeconds)
                 ->accept($chatgptFile ? '*/*' : 'application/json')
-                ->withHeaders($headers);
+                ->withHeaders($chatgptFile ? ['Accept-Encoding' => 'identity', ...$headers] : $headers);
 
             $httpStarted = $timing?->stamp() ?? 0;
             $timing?->outboundCall();
@@ -186,6 +208,28 @@ final class SafeHttpClient
             $stream = $responseBody->stream();
             if (! rewind($stream)) {
                 throw new OutboundRequestException('network_failure', 'Remote response body could not be read.', ['failure_stage' => 'response_body']);
+            }
+
+            if (is_resource($fileSink)) {
+                if ($status !== 200) {
+                    throw new OutboundRequestException('file_download_unavailable', 'The signed private file was not available.');
+                }
+                $encoding = strtolower($psrResponse->getHeaderLine('Content-Encoding'));
+                if ($encoding !== '' && $encoding !== 'identity') {
+                    throw new OutboundRequestException('unsupported_content_encoding', 'Compressed private file responses are unsupported.');
+                }
+                $copied = stream_copy_to_stream($stream, $fileSink);
+                if ($copied === false) {
+                    throw new OutboundRequestException('file_staging_unavailable', 'Private file staging could not be completed.');
+                }
+                if ($lengthHeader !== '' && (! ctype_digit($lengthHeader) || (int) $lengthHeader !== $copied)) {
+                    throw new OutboundRequestException('file_download_incomplete', 'Private file length did not match the response.');
+                }
+                if ($copied > $maxBytes) {
+                    throw $this->oversize($maxBytes, 'collected_body', $copied);
+                }
+
+                return new SafeHttpResponse($status, $psrResponse->getHeaders(), '');
             }
 
             $body = stream_get_contents($stream);

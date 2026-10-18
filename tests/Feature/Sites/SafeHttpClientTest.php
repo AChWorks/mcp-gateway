@@ -46,6 +46,88 @@ final class SafeHttpClientTest extends TestCase
             && $request->hasHeader('Accept', '*/*'));
     }
 
+    public function test_chatgpt_streamed_file_uses_separate_bounded_disk_backed_budget(): void
+    {
+        // Deliberately larger than the shared 8-MiB in-memory response ceiling.
+        $content = str_repeat("streamed\0binary\xff", 630000);
+        $url = 'https://files.oaiusercontent.com/private/large?signature=opaque';
+        Http::fake(fn (Request $request) => Http::response($content, 200, [
+            'Content-Length' => (string) strlen($content),
+        ]));
+        $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+        self::assertIsResource($sink);
+        try {
+            $result = app(SafeHttpClient::class)->streamChatgptFile($url, strlen($content), $sink, 30);
+            self::assertSame(200, $result->status);
+            self::assertSame('', $result->body, 'The streamed path must not materialize the entire file in a JSON response.');
+            self::assertSame(strlen($content), ftell($sink));
+            self::assertSame(0, fseek($sink, 0));
+            $digest = hash_init('sha256');
+            self::assertGreaterThan(0, hash_update_stream($digest, $sink));
+            self::assertSame(hash('sha256', $content), hash_final($digest));
+            Http::assertSent(fn (Request $request) => $request->url() === $url
+                && $request->hasHeader('Accept-Encoding', 'identity'));
+        } finally {
+            fclose($sink);
+        }
+    }
+
+    public function test_chatgpt_streamed_file_rejects_short_body_and_encoded_payload(): void
+    {
+        $url = 'https://files.oaiusercontent.com/private/test?sig=x';
+        $client = app(SafeHttpClient::class);
+        foreach ([
+            ['abc', ['Content-Length' => '5'], 'file_download_incomplete'],
+            ['abc', ['Content-Encoding' => 'gzip'], 'unsupported_content_encoding'],
+            ['not-found', [], 'file_download_unavailable', 404],
+        ] as $case) {
+            [$body, $headers, $expected] = $case;
+            $status = $case[3] ?? 200;
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(fn (Request $request) => Http::response($body, $status, $headers));
+            $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+            self::assertIsResource($sink);
+            try {
+                $client->streamChatgptFile($url, 1024, $sink, 5);
+                self::fail('The incomplete, encoded or unavailable file was accepted.');
+            } catch (OutboundRequestException $exception) {
+                self::assertSame($expected, $exception->reason);
+            } finally {
+                fclose($sink);
+            }
+        }
+    }
+
+    public function test_chatgpt_streamed_file_refuses_oversize_and_untrusted_origin(): void
+    {
+        $client = app(SafeHttpClient::class);
+        Http::fake(fn (Request $request) => Http::response(str_repeat('z', 1025), 200));
+        $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+        self::assertIsResource($sink);
+        try {
+            $client->streamChatgptFile('https://files.oaiusercontent.com/private/large?sig=x', 1024, $sink, 5);
+            self::fail('An oversized file was accepted.');
+        } catch (OutboundRequestException $exception) {
+            self::assertSame('response_too_large', $exception->reason);
+        } finally {
+            fclose($sink);
+        }
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => Http::response('should never fetch'));
+        $sink = fopen('php://temp/maxmemory:65536', 'w+b');
+        self::assertIsResource($sink);
+        try {
+            $client->streamChatgptFile('https://evil.example.test/payload?sig=x', 1024, $sink, 5);
+            self::fail('An untrusted file URL was accepted.');
+        } catch (\Throwable) {
+            Http::assertNothingSent();
+        } finally {
+            fclose($sink);
+        }
+    }
+
     public function test_chatgpt_signed_file_url_rejects_untrusted_hosts_before_http_dispatch(): void
     {
         Http::fake(fn (Request $request) => Http::response('should-not-arrive'));
