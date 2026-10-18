@@ -883,6 +883,31 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertSame(0, $this->syntheticImportCalls);
     }
 
+    public function test_wordpress_capacity_reservation_is_released_after_provider_verify_failure(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        config()->set('bridge.file_input.capacity.wordpress_max_active', 1);
+        $this->chatFilePayload = 'exact-binary-receipt';
+        $file = [
+            'download_url' => 'https://files.oaiusercontent.com/private/source?sig=opaque',
+            'file_id' => 'file_verify',
+        ];
+
+        $this->syntheticVerifyOverrides = ['complete' => false];
+        $failure = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', $file);
+        self::assertFalse($failure['ok']);
+        self::assertSame('transfer_integrity_unknown', $failure['error']['code']);
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+
+        $this->syntheticVerifyOverrides = [];
+        $success = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', $file);
+        self::assertTrue($success['ok'], json_encode($success));
+        self::assertSame(hash('sha256', $this->chatFilePayload), $success['sha256']);
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+        self::assertSame(0, $this->syntheticImportCalls);
+    }
+
     public function test_target_file_input_denies_ssh_mode_and_untrusted_destination_without_fetch(): void
     {
         $owner = $this->user('owner');

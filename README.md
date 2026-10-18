@@ -13,7 +13,10 @@ and reverse output attachment handling still require separate acceptance. The
 FileParams Tool appears only for the authenticated ChatGPT OAuth profile with
 an eligible connected, unpaused and authorized WordPress or SSH Target, after
 the client refreshes its tool catalogue. It is not advertised to unrelated
-OAuth clients; downstream provider permissions still fail closed. Consult
+OAuth clients; downstream provider permissions still fail closed. Every signed-file transfer also
+requires a globally bounded, database-serialized temporary-spool reservation
+(`CHATGPT_FILE_*` settings and the v2.3.5 capacity-admission migration); SSH
+counts both local spools. No signed URL is fetched on capacity denial. Consult
 [the technical contract](docs/REMOTE-IO-CONTRACT.md#chatgpt-file-parameter-ingress-to-a-selected-target-gateway-source-candidate)
 for exact modes and limits.
 

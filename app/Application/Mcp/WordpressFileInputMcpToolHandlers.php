@@ -79,8 +79,13 @@ final readonly class WordpressFileInputMcpToolHandlers
         $budget = $this->settings->chatgptWordpressFileLimits();
         $deadline = hrtime(true) + $budget['max_seconds'] * 1_000_000_000;
         try {
-            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds']);
+            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds'], 'wordpress');
         } catch (OutboundRequestException $exception) {
+            if (in_array($exception->reason, ['file_capacity_exceeded', 'file_capacity_unavailable'], true)) {
+                return self::failed($exception->reason,
+                    'No signed file was retrieved because temporary transfer capacity is unavailable.');
+            }
+
             return self::failed($exception->reason, 'The private ChatGPT file could not be retrieved safely.');
         } catch (Throwable) {
             return self::failed('file_download_unavailable', 'The private ChatGPT file could not be retrieved safely.');
@@ -91,7 +96,11 @@ final readonly class WordpressFileInputMcpToolHandlers
             return $this->stage($user, $target_id, $stream, $download['bytes'],
                 $download['sha256'], $deadline);
         } finally {
-            fclose($stream);
+            try {
+                fclose($stream);
+            } finally {
+                $download['capacity_lease']->release();
+            }
         }
     }
 

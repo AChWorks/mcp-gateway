@@ -3,6 +3,7 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Mcp\ChatGptFileToolAvailability;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Mcp\TargetFileInputMcpToolHandlers;
@@ -157,6 +158,65 @@ final class SshFileMcpTest extends TestCase
         $revoked = $handler->receive($owner, $target->target_id, $file, 'ssh_sftp_upload', $destination);
         self::assertSame('target_not_found', $revoked['error']['code']);
         Http::assertNothingSent();
+    }
+
+    public function test_chatgpt_selected_ssh_target_must_be_connected_and_have_verified_local_credentials_before_signed_get(): void
+    {
+        config()->set('ssh.file_transfer.enabled', true);
+        Http::preventStrayRequests();
+        Http::fake(static fn (Request $request) => Http::response('not-expected', 200));
+        $owner = $this->user('owner');
+        $ready = $this->target();
+        $ready->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $handler = app(TargetFileInputMcpToolHandlers::class);
+
+        $file = [
+            'download_url' => 'https://files.oaiusercontent.com/private/signed?sig=secret',
+            'file_id' => 'file_unauthorized_unavailable_target',
+        ];
+        $destination = ['path' => '/srv/selected/never.bin', 'private_staging_dir' => '/srv/selected/.private'];
+
+        // Another eligible Target may keep the global FileParams Tool visible.
+        self::assertTrue(app(ChatGptFileToolAvailability::class)
+            ->modes($owner, 'chatgpt')['ssh']);
+
+        $register = static fn (string $id): Target => app(SshTargetRegistration::class)->register(
+            $id, 'Unavailable SSH', '127.0.0.1', 22, 'deploy',
+            'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat("\x33", 32)),
+            'password', 'fixture-only-password', null,
+        );
+
+        $disconnected = $register('ssh-file-disconnected');
+        $result = $handler->receive($owner, $disconnected->target_id, $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('target_not_connected', $result['error']['code']);
+        self::assertFalse($result['error']['possible_remote_effect'] ?? false);
+
+        $disconnected->forceFill(['connection_state' => TargetConnectionState::ReconnectRequired])->save();
+        $reconnect = $handler->receive($owner, $disconnected->target_id, $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('target_not_connected', $reconnect['error']['code']);
+
+        $noConfig = $register('ssh-file-noconfig');
+        $noConfig->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $noConfig->sshConfig()->delete();
+        $configFailure = $handler->receive($owner, $noConfig->target_id, $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('target_not_connected', $configFailure['error']['code']);
+
+        $noCredentials = $register('ssh-file-nocreds');
+        $noCredentials->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $noCredentials->credentials()->delete();
+        $credentialFailure = $handler->receive($owner, $noCredentials->target_id, $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('target_not_connected', $credentialFailure['error']['code']);
+
+        $invalidCredentials = $register('ssh-file-badcreds');
+        $invalidCredentials->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('target_credentials')->where('target_record_id', $invalidCredentials->getKey())
+            ->update(['encrypted_payload' => 'invalid-ciphertext']);
+        $invalid = $handler->receive($owner, $invalidCredentials->target_id, $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('target_not_connected', $invalid['error']['code']);
+
+        Http::assertNothingSent();
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+        self::assertSame(0, DB::table('activity_events')->where('operation', 'mcp-file-upload')->count());
     }
 
     public function test_native_sftp_status_keeps_original_error_fields_only_in_redacted_diagnostics(): void

@@ -13,7 +13,10 @@ use Throwable;
  */
 final readonly class ChatGptFileIngress
 {
-    public function __construct(private SafeHttpClient $http) {}
+    public function __construct(
+        private SafeHttpClient $http,
+        private ChatGptFileCapacity $capacity,
+    ) {}
 
     /** @param array<string,mixed> $file */
     public static function validFile(array $file): bool
@@ -43,20 +46,24 @@ final readonly class ChatGptFileIngress
 
     /**
      * @param  array<string,mixed>  $file
-     * @return array{stream:resource,bytes:int,sha256:string}
+     * @return array{stream:resource,bytes:int,sha256:string,capacity_lease:ChatGptFileCapacityLease}
      *
      * @throws OutboundRequestException
      */
-    public function download(array $file, int $maxBytes, int $timeoutSeconds): array
+    public function download(array $file, int $maxBytes, int $timeoutSeconds, string $mode): array
     {
         if (! self::validFile($file) || $maxBytes < 1 || $timeoutSeconds < 1) {
             throw new OutboundRequestException('invalid_file_input', 'A supported ChatGPT file input is required.');
         }
-        $stream = fopen('php://temp/maxmemory:65536', 'w+b');
-        if ($stream === false) {
-            throw new OutboundRequestException('file_staging_unavailable', 'Private file staging is unavailable.');
-        }
+        // One admission spans *both* signed download and the subsequent
+        // Target operation. A rejected lease must never fetch the signed URL.
+        $lease = $this->capacity->reserve($mode, $maxBytes, $timeoutSeconds);
+        $stream = null;
         try {
+            $stream = fopen('php://temp/maxmemory:65536', 'w+b');
+            if ($stream === false) {
+                throw new OutboundRequestException('file_staging_unavailable', 'Private file staging is unavailable.');
+            }
             $this->http->streamChatgptFile($file['download_url'], $maxBytes, $stream, $timeoutSeconds);
             $stat = fstat($stream);
             if (! is_array($stat) || $stat['size'] < 0
@@ -68,9 +75,16 @@ final readonly class ChatGptFileIngress
                 throw new OutboundRequestException('file_staging_unavailable', 'The private file could not be verified.');
             }
 
-            return ['stream' => $stream, 'bytes' => $stat['size'], 'sha256' => hash_final($digest)];
+            return [
+                'stream' => $stream, 'bytes' => $stat['size'],
+                'sha256' => hash_final($digest), 'capacity_lease' => $lease,
+            ];
         } catch (Throwable $exception) {
-            fclose($stream);
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+            $lease->release();
+
             throw $exception;
         }
     }

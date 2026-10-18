@@ -120,7 +120,14 @@ The caller explicitly selects `target_id` and exactly one mode:
 - **`ssh_sftp_upload`**: only when the installed SSH whole-file
   feature is enabled, the current selected Target is `ssh_direct`, and
   the principal has the exact `ssh.file.write` grant and no Target Pause.
-  Before downloading, the current Target/grant is checked. The caller
+  Before downloading, the exact selected Target must still be Connected
+  and unpaused, with registered SSH configuration, a current
+  `ssh_auth` credential and a locally decryptable, endpoint-bound secret
+  available. This check makes NO remote SSH connection or signed-file GET.
+  A different eligible Target never substitutes for a disconnected,
+  reconnect-required, misconfigured or credentialless selected Target.
+  After download, the same readiness/grant check and the effect-time
+  SFTP authorization apply independently. The caller
   supplies a specific absolute destination `path` and an already existing
   private, same-filesystem 0700 `private_staging_dir`. Optional
   `overwrite=true` is explicit last-writer-wins; optional paired
@@ -142,9 +149,44 @@ provider may impose a stricter quota or expiry. The separate SSH mode reuses
 the existing Owner Admin-configurable `ssh_transfer_max_kib` and
 `ssh_transfer_max_seconds`, with source maximum 64 MiB and 40 seconds.
 SSH's overall file-input deadline covers signed download and SFTP write,
-not two independent full time budgets. Host PHP/FPM workers, temporary disk,
-proxy and transport limits may be stricter; no setting reserves full maximum
-memory or promises durable resume. WP budget is currently a private
+not two independent full time budgets. **Every signed file download
+must first acquire a short-lived, database-serialized global temporary-storage
+and concurrent-transfer reservation.** The shared defaults are four concurrent
+admissions, at most two WordPress and two SSH, with 128 MiB of aggregate
+worst-case reserved local spool space. `CHATGPT_FILE_MAX_ACTIVE`,
+`CHATGPT_FILE_WP_MAX_ACTIVE` and `CHATGPT_FILE_SSH_MAX_ACTIVE` are
+private operator-configured integers clamped to 1–16. Shared
+`CHATGPT_FILE_MAX_RESERVED_BYTES` is clamped to 1–512 MiB.
+For WordPress, reserve the entire per-file byte maximum for one local
+`php://temp` stream; SSH reserves **twice** its per-file byte maximum
+because its verified SFTP upload uses a second local spool. Reservations
+are pessimistic, independent of untrusted Content-Length, and count ALL
+in-flight WordPress/SSH FileParams requests across PHP workers and
+Gateway nodes sharing the authoritative MariaDB/MySQL database.
+
+The new `chatgpt_file_admission_guard` singleton and
+`chatgpt_file_admission_leases` table are created by the **v2.3.5 migration**.
+An atomic row lock serializes checking the configured global active count,
+per-mode count and aggregate reserved bytes before admitting a new lease.
+A refused/oversubscribed, missing-migration or unavailable-DB request
+**does not fetch** the signed URL; errors are bounded and reveal no URL.
+The reservation spans the signed-file download AND Target operation, is
+released in `finally` after spools close, and has an automatic PHP teardown
+fallback. If a process dies or the DB is unavailable during release,
+expired non-content leases are pruned on the next successful admission after
+the per-mode deadline plus a 30-second reconciliation grace. Lease records
+contain only random IDs, mode, byte quota and expiry—not file IDs, URLs,
+pathnames, Target, user, payload or credentials. This is an **admission
+ledger**, not a new file store or background daemon. The Gateway nodes must
+use the same database and synchronized clocks. Changing quotas while
+transfers are active does not retrospectively cancel them; new
+admissions enforce current limits.
+
+Host PHP/FPM workers, temporary disk, proxy and transport limits may be
+stricter; accounting reserves an upper bound **among Gateway FileParams
+requests**, but cannot preempt arbitrary host processes consuming the
+temporary filesystem. No setting reserves full maximum memory or
+promises durable resume. WP budget is currently a private
 environment knob, not a new Admin setting; existing SSH budget controls
 remain unchanged. Neither maximum is a Gateway-wide universal file limit.
 

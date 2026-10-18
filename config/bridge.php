@@ -46,6 +46,14 @@ return [
     'file_input' => [
         'max_bytes' => (int) env('CHATGPT_WP_FILE_MAX_BYTES', 8388608),
         'max_seconds' => (int) env('CHATGPT_WP_FILE_MAX_SECONDS', 120),
+        // Shared, DB-serialized admission: local spool(s) are reserved
+        // before any signed ChatGPT URL is fetched.
+        'capacity' => [
+            'max_active' => (int) env('CHATGPT_FILE_MAX_ACTIVE', 4),
+            'max_reserved_bytes' => (int) env('CHATGPT_FILE_MAX_RESERVED_BYTES', 134217728),
+            'wordpress_max_active' => (int) env('CHATGPT_FILE_WP_MAX_ACTIVE', 2),
+            'ssh_max_active' => (int) env('CHATGPT_FILE_SSH_MAX_ACTIVE', 2),
+        ],
     ],
     'health' => [
         'stale_after_hours' => 24,

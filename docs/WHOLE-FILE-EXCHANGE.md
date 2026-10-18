@@ -9,7 +9,16 @@ HTTP to the sidecar. Only the selected `ssh_direct` Target, permitted
 `ssh.file.write`, enabled SSH whole-file mode, explicit absolute destination
 and private 0700 staging directory make it eligible. It reuses the existing
 per-mode Owner limits and source/destination SHA-256 verification; a registered
-ChatGPT connection still has to prove real file-parameter injection.
+ChatGPT connection still has to prove real file-parameter injection. The selected
+SSH Target must also remain Connected with locally valid SSH configuration
+and decryptable, endpoint-bound credentials **before** any signed file GET.
+Every inbound FileParams request pre-reserves a bounded active slot and
+pessimistic local temporary spool bytes in the shared v2.3.5 DB admission
+ledger, before fetching its signed source. WordPress reserves 1x and SSH
+reserves 2x its per-mode object maximum (source plus private verification
+spool). A capacity reject performs neither signed GET nor SFTP side effect;
+short-lived admission reservations release on closure/failure or expire
+after process death.
 
 ## New installations versus existing private environments
 

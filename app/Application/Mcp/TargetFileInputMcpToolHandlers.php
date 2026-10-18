@@ -5,7 +5,6 @@ namespace App\Application\Mcp;
 use App\Application\Files\ChatGptFileIngress;
 use App\Application\Files\SshWholeFileTransfer;
 use App\Application\Targets\SshTargetConnectionException;
-use App\Domain\Access\GatewayPermission;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Models\User;
 use Throwable;
@@ -47,7 +46,7 @@ final readonly class TargetFileInputMcpToolHandlers
         // Target/grant/Pause must be checked BEFORE retrieving the bearer-like
         // signed file URL. The SFTP upload itself rechecks the live gate.
         try {
-            $this->ssh->target($user, $target_id, GatewayPermission::SshFileWrite);
+            $this->ssh->readyForChatgptFile($user, $target_id);
         } catch (SshTargetConnectionException $exception) {
             return self::failure($exception->reason);
         } catch (Throwable) {
@@ -57,7 +56,7 @@ final readonly class TargetFileInputMcpToolHandlers
         $budget = $this->ssh->limits();
         $deadline = hrtime(true) + $budget['max_seconds'] * 1_000_000_000;
         try {
-            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds']);
+            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds'], 'ssh');
         } catch (OutboundRequestException $exception) {
             return self::failure($exception->reason);
         } catch (Throwable) {
@@ -71,7 +70,13 @@ final readonly class TargetFileInputMcpToolHandlers
             }
             // Refresh authorization against the current DB revision after the
             // possibly long download; never trust a cached Target snapshot.
-            $target = $this->ssh->target($user, $target_id, GatewayPermission::SshFileWrite);
+            try {
+                $target = $this->ssh->readyForChatgptFile($user, $target_id);
+            } catch (SshTargetConnectionException $exception) {
+                // No remote SFTP dispatch has occurred after the download;
+                // a changed Target is a definite pre-effect denial.
+                return self::failure($exception->reason);
+            }
             $result = $this->ssh->upload($user, $target, $ssh_destination['path'], $stream, [
                 'size' => $download['bytes'],
                 'sha256' => $download['sha256'],
@@ -99,7 +104,11 @@ final readonly class TargetFileInputMcpToolHandlers
         } catch (Throwable) {
             return self::failure('file_unavailable', true);
         } finally {
-            fclose($stream);
+            try {
+                fclose($stream);
+            } finally {
+                $download['capacity_lease']->release();
+            }
         }
     }
 
