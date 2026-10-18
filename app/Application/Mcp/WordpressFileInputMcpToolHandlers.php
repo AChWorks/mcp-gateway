@@ -2,8 +2,9 @@
 
 namespace App\Application\Mcp;
 
+use App\Application\Files\ChatGptFileIngress;
+use App\Application\Operations\OperationalSettings;
 use App\Infrastructure\Http\OutboundRequestException;
-use App\Infrastructure\Http\SafeHttpClient;
 use App\Models\User;
 use Throwable;
 
@@ -17,14 +18,10 @@ use Throwable;
  */
 final readonly class WordpressFileInputMcpToolHandlers
 {
-    // Synchronous ChatGPT ingress adapter budget, not a Bridge file size limit.
-    public const MAX_INLINE_FILE_BYTES = 262144;
-
-    private const HOST = 'files.oaiusercontent.com';
-
     public function __construct(
         private WordpressTargetMcpToolHandlers $wordpress,
-        private SafeHttpClient $http,
+        private ChatGptFileIngress $ingress,
+        private OperationalSettings $settings,
     ) {}
 
     /**
@@ -77,24 +74,37 @@ final readonly class WordpressFileInputMcpToolHandlers
             return self::failed('media_permission_denied', 'The authenticated WordPress principal cannot upload Media.');
         }
 
-        // Permission changes between these probes and admission still fail
-        // closed at Bridge's purpose-authorized begin/append/verify stages.
+        // The owner-configurable WordPress mode budget is separate from the
+        // SSH whole-file profile and the shared 8-MiB JSON response ceiling.
+        $budget = $this->settings->chatgptWordpressFileLimits();
+        $deadline = hrtime(true) + $budget['max_seconds'] * 1_000_000_000;
         try {
-            $response = $this->http->getChatgptFile($file['download_url'], self::MAX_INLINE_FILE_BYTES);
+            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds']);
         } catch (OutboundRequestException $exception) {
             return self::failed($exception->reason, 'The private ChatGPT file could not be retrieved safely.');
         } catch (Throwable) {
             return self::failed('file_download_unavailable', 'The private ChatGPT file could not be retrieved safely.');
         }
-        if ($response->status !== 200) {
-            return self::failed('file_download_unavailable', 'The private ChatGPT file was not available for download.');
-        }
 
-        $bytes = strlen($response->body);
-        if ($bytes > self::MAX_INLINE_FILE_BYTES) {
-            return self::failed('file_too_large', 'The file exceeds this synchronous ChatGPT file-parameter adapter.');
+        $stream = $download['stream'];
+        try {
+            return $this->stage($user, $target_id, $stream, $download['bytes'],
+                $download['sha256'], $deadline);
+        } finally {
+            fclose($stream);
         }
-        $sha256 = hash('sha256', $response->body);
+    }
+
+    /**
+     * @param  resource  $stream
+     * @return array<string,mixed>
+     */
+    private function stage(User $user, string $target_id, mixed $stream, int $bytes,
+        string $sha256, int $deadline): array
+    {
+        if (hrtime(true) >= $deadline) {
+            return self::failed('file_transfer_timed_out', 'The file-input transfer exceeded its deadline.');
+        }
         $begin = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
             'action' => 'begin', 'purpose' => 'media', 'total_bytes' => $bytes, 'sha256' => $sha256,
         ]);
@@ -120,9 +130,15 @@ final readonly class WordpressFileInputMcpToolHandlers
         if (! is_int($providerChunk) || $providerChunk < 1) {
             return self::failed('provider_contract_unavailable', 'The provider chunk budget is invalid.', $transferId);
         }
-        $chunk = min($budget, $providerChunk, 49152);
-        for ($offset = 0; $offset < $bytes; $offset += $chunk) {
-            $part = substr($response->body, $offset, $chunk);
+        $chunk = min($providerChunk, 49152);
+        for ($offset = 0; $offset < $bytes;) {
+            if (hrtime(true) >= $deadline) {
+                return self::failed('file_transfer_timed_out', 'The file-input transfer exceeded its deadline.', $transferId);
+            }
+            $part = fread($stream, min($chunk, $bytes - $offset));
+            if (! is_string($part) || $part === '') {
+                return self::failed('file_staging_unavailable', 'The private staged file changed.', $transferId);
+            }
             $append = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
                 'action' => 'append', 'transfer_id' => $transferId, 'offset' => $offset,
                 'content_base64' => base64_encode($part),
@@ -141,12 +157,19 @@ final readonly class WordpressFileInputMcpToolHandlers
                 || ($observed['received_bytes'] ?? null) !== ($offset + strlen($part))) {
                 return self::failed('transfer_progress_unknown', 'The transfer progress receipt did not match.', $transferId);
             }
+            $offset += strlen($part);
+        }
+        if (hrtime(true) >= $deadline) {
+            return self::failed('file_transfer_timed_out', 'The file-input transfer exceeded its deadline.', $transferId);
         }
         $verify = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
             'action' => 'verify', 'transfer_id' => $transferId,
         ]);
         if (($verify['ok'] ?? false) !== true) {
             return self::downstream('verify', $verify, $transferId);
+        }
+        if (hrtime(true) >= $deadline) {
+            return self::failed('file_transfer_timed_out', 'The file-input transfer exceeded its deadline.', $transferId);
         }
         $verified = $verify['result'] ?? null;
         if (! is_array($verified)
@@ -171,27 +194,7 @@ final readonly class WordpressFileInputMcpToolHandlers
     /** @param array<string,mixed> $file */
     public static function validFile(array $file): bool
     {
-        $id = $file['file_id'] ?? null;
-        $url = $file['download_url'] ?? null;
-        if (! is_string($id) || strlen($id) < 1 || strlen($id) > 255
-            || ! is_string($url) || strlen($url) < 1 || strlen($url) > 8192
-            || ! is_string(parse_url($url, PHP_URL_SCHEME))
-            || strtolower((string) parse_url($url, PHP_URL_SCHEME)) !== 'https'
-            || strtolower((string) parse_url($url, PHP_URL_HOST)) !== self::HOST
-            || parse_url($url, PHP_URL_USER) !== null
-            || parse_url($url, PHP_URL_PASS) !== null
-            || parse_url($url, PHP_URL_PORT) !== null
-            || ! is_string(parse_url($url, PHP_URL_PATH))
-            || parse_url($url, PHP_URL_PATH) === '') {
-            return false;
-        }
-        foreach (['mime_type', 'file_name'] as $optional) {
-            if (isset($file[$optional]) && (! is_string($file[$optional]) || strlen($file[$optional]) > 255)) {
-                return false;
-            }
-        }
-
-        return true;
+        return ChatGptFileIngress::validFile($file);
     }
 
     public static function validFilename(string $filename): bool

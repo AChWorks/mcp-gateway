@@ -2,6 +2,15 @@
 
 This is the technical wire contract for an **optional**, authenticated, complete-file client↔SSH Target HTTPS mode. Enabled behavior requires the real installed code, exact client/Target permissions, effective feature flag and a supported receiving client. Successful independently controlled client bytes do **not** establish native AI host/model file attachment ingestion.
 
+The optional `target-file-input` MCP Tool is a **separate client-specific
+signed-file ingress adapter** that can use the same authorized SSH SFTP
+whole-file engine. Its top-level FileParams object is **not** raw binary
+HTTP to the sidecar. Only the selected `ssh_direct` Target, permitted
+`ssh.file.write`, enabled SSH whole-file mode, explicit absolute destination
+and private 0700 staging directory make it eligible. It reuses the existing
+per-mode Owner limits and source/destination SHA-256 verification; a registered
+ChatGPT connection still has to prove real file-parameter injection.
+
 ## New installations versus existing private environments
 
 The source installer and the canonical new-install template explicitly set

@@ -58,75 +58,96 @@ For downloads, verify actual bytes/digest at the receiving endpoint. Unknown cli
 
 Always distinguish **per-call SFTP Base64 windows** from optional same-origin, OAuth-authenticated **SSH whole-file binary HTTP routes** and from **WordPress-native Bridge Abilities**. They share identity, limit, integrity and Activity semantics where actually equivalent, **not necessarily a transport implementation or fixed payload ceiling**. Whole-file SSH HTTP remains flag/permission/host dependent. There is currently no proven native ChatGPT chat-file ingress and model-consumable return merely because an independent binary client passed.
 
-### ChatGPT file-parameter ingress to WordPress (Gateway source candidate)
+### ChatGPT file-parameter ingress to a selected Target (Gateway source candidate)
 
-The optional **`wordpress-file-input`** MCP tool advertises the host's top-level
-`_meta["openai/fileParams"]=["file"]` extension. Its `file` value declares
-`download_url`, `file_id` and optional `mime_type`, `file_name` per the OpenAI
-plugin file contract. This metadata is **an input capability hint**, not
-proof that a particular connected ChatGPT host/version actually supplies a
-file argument. Only an actual on-host file upload/test can establish that.
+The **`target-file-input`** MCP tool accepts a top-level `file` parameter
+advertised as `_meta["openai/fileParams"]=["file"]`. The original
+**`wordpress-file-input`** stays as a backwards-compatible WordPress-only
+entrypoint. Both use the same FileParams shape: required `file_id` and
+`download_url`, optional `mime_type` and `file_name`. This is a
+**host-input capability declaration, not proof** that a particular ChatGPT
+connection injects or returns a real attachment. The host and actual connected
+client must be tested separately.
 
-After resolving the exact approved WordPress Target and its existing classified
-Ability permission, Gateway admits an HTTPS download URL **only** for the exact
-`files.oaiusercontent.com` file origin. It validates public A/AAAA results,
-pins the selected IP while enforcing certificate/hostname verification, rejects
-redirects and embedded authentication, and preserves a time-limited opaque
-query signature *without logging it*. The general outbound HTTP URL validator
-remains unchanged; no arbitrary-source URL import or plugin-provided network
-proxy is exposed. The actual host file URL origin is not yet verified on the
-installed ChatGPT plugin route; a different origin **fails closed** rather
-than silently widening outbound access.
+Shared ingress validates the exact signed HTTPS origin
+`files.oaiusercontent.com`, public A/AAAA DNS, pinned peer IP and verified
+TLS hostname/certificate. No redirects, embedded authentication, fragment,
+arbitrary URL origins, decompression or secret-bearing logs are allowed. The
+opaque signed query is forwarded unchanged and never included in a response.
+The existing ordinary 8 MiB JSON HTTP response ceiling is **not increased**:
+file bytes are captured in a separate bounded private spill-to-disk stream
+(64 KiB memory threshold) with an independent whole-object budget, exact
+byte count and SHA-256. Any incomplete, encoded, expired or over-budget
+download fails closed before creating a Target artifact.
 
-The current initial **synchronous** adapter accepts at most **256 KiB per
-ChatGPT file** with a finite download response/body budget. This is a
-**client-adapter profile only**, not a WordPress Media, WordPress private
-transfer, or Gateway-wide maximum. It computes exact source SHA-256, uses the
-existing authenticated `wp-ai-bridge/private-transfer` **media** purpose
-`limits→begin→append→verify` and returns an exact bound receipt. It never
-installs, executes or unpacks an uploaded package. **Native publication is
-intentionally IMPOSSIBLE from this top-level tool**. After a successful exact
-verified `transfer_id` result, the caller may explicitly invoke the existing
-Gateway `wordpress-ability-execute` with `ability=wp-ai-bridge/transfer-media-import`
-and `input={"transfer_id":"<the_exact_id>","filename":"example.png"}`.
-That independent WordPress-controlled operation rechecks native Builder Write,
-`upload_files`, MIME/filename and its immutable per-lease one-way claim. If an
-import response is lost, retain/reconcile the original ID and inspect the
-WordPress Media destination; **never create a new transfer to replay a possibly
-committed Media import**. A repeated `wordpress-file-input` may create a new
-**unpublished, expiring lease only**; it can never create a native Media item.
-Malformed/unknown private transfer stages retain an existing lease ID where
-known and `retry_safe=false`. Normal lease expiry/cancel and unknown-state
-reconciliation belong to Bridge.
+The caller explicitly selects `target_id` and exactly one mode:
 
-The pre-download access gate first executes the real destructive-class
-`private-transfer(action=limits)` under current Gateway Target and permission
-policy. That limits check alone is not Media authority: Gateway also reads the
-same OAuth Target's `bridge-info.access_groups.builder_write === true` and
-`site-context(section=current_user).current_user.capabilities.upload_files === true`
-for an authenticated nonzero WordPress user ID. Both are existing
-**non-effectful, readonly Bridge Abilities**. This requires effective Gateway
-readonly access and Bridge Site Read; if either read surface is disabled,
-file-input **fails closed**, even if standalone Builder Write is enabled.
-Actual `private-transfer(action=begin,purpose=media)` independently rechecks
-Builder Write/upload_files to prevent time-of-check drift. No dummy lease,
-WordPress post/Media item or privileged probe is created before the download.
+- **`wordpress_media_stage`** (or legacy `wordpress-file-input`):
+  admits only the selected authorized WP AI Bridge Target, preflights the
+  exact destructive private-transfer permission and its readonly
+  `bridge-info.access_groups.builder_write` and
+  `site-context.current_user.capabilities.upload_files` projections
+  **before downloading the signed URL**. Both Gateway readonly and
+  Bridge Site Read must also be permitted. Real `begin(media)`,
+  `append` and `verify` re-authorize and require receipts with the same
+  transfer ID, purpose, length, digest, progress and complete state.
+  The result is an **unpublished, expiring private lease only**. A native
+  Media import is impossible through file-input; it requires a separately
+  authorized `wordpress-ability-execute` /
+  `wp-ai-bridge/transfer-media-import` with the originally returned
+  `transfer_id`, subject to the Bridge's immutable one-way import claim.
+  Never replay a possibly committed native import or silently create a new
+  lease to claim its original effect succeeded.
+- **`ssh_sftp_upload`**: only when the installed SSH whole-file
+  feature is enabled, the current selected Target is `ssh_direct`, and
+  the principal has the exact `ssh.file.write` grant and no Target Pause.
+  Before downloading, the current Target/grant is checked. The caller
+  supplies a specific absolute destination `path` and an already existing
+  private, same-filesystem 0700 `private_staging_dir`. Optional
+  `overwrite=true` is explicit last-writer-wins; optional paired
+  `expected_size`/`expected_mtime` are **best-effort only**.
+  After download, the Target/grant is rechecked; the existing SFTP
+  streaming engine authenticates again, stages privately, verifies exact
+  bytes and SHA-256 by remote readback, and publishes atomically. It never
+  runs an SSH shell command, opens a generic file store, or replaces a file
+  in create-only mode. An uncertain post-dispatch write reports
+  `possible_remote_effect` and `retry_safe=false`; inspect the exact
+  destination before retrying manually.
 
-All begin, append and verify receipts are checked for **the same opaque transfer
-ID and Media purpose**, correct stage, byte length, SHA-256 and exact progress;
-`verified` must also assert full completeness. A structurally inconsistent
-provider receipt produces a non-retryable **unknown** outcome, never false
-successful Media publication or implicit native-effect retry.
+**Per-mode, finite budgets:** WordPress signed-file admission defaults to
+8 MiB and 120 seconds, set in the private environment as
+`CHATGPT_WP_FILE_MAX_BYTES` (source maximum 64 MiB) and
+`CHATGPT_WP_FILE_MAX_SECONDS` (source maximum 120 seconds).
+Its deadline covers signed download **and** provider private staging; the
+provider may impose a stricter quota or expiry. The separate SSH mode reuses
+the existing Owner Admin-configurable `ssh_transfer_max_kib` and
+`ssh_transfer_max_seconds`, with source maximum 64 MiB and 40 seconds.
+SSH's overall file-input deadline covers signed download and SFTP write,
+not two independent full time budgets. Host PHP/FPM workers, temporary disk,
+proxy and transport limits may be stricter; no setting reserves full maximum
+memory or promises durable resume. WP budget is currently a private
+environment knob, not a new Admin setting; existing SSH budget controls
+remain unchanged. Neither maximum is a Gateway-wide universal file limit.
 
-This adapter does **not** implement reverse native ChatGPT attachment creation,
-WordPress WXR import, large-file streaming, direct SSH file transport, an
-OAuth identity backend, or production rollout. Existing authorized Bridge
-`file-bytes-read`, Media read and private export windows can return genuine
-complete original bytes to a compatible model/client, while their JSON/Base64
-representation by itself is **not** a user-downloadable ChatGPT attachment.
-Real end-to-end host file input/output acceptance remains required by
-[Gateway #147](https://github.com/AChWorks/mcp-gateway/issues/147) and
-[Bridge #134](https://github.com/AChWorks/wp-ai-bridge/issues/134).
+For both modes, client filename/MIME metadata remains untrusted and is not
+authorization to install, unpack, execute or import packages. A source failure
+before an effectful stage must not create a native artifact. Missing or
+inconsistent post-dispatch receipts are **unknown**, not success or
+automatically retryable. Temporary PHP spools close on every success/failure;
+WordPress lease cleanup/expiry and SSH remote temporary cleanup belong to
+their existing Target providers. Source tests and isolated Gateway-to-Target
+bytes do not prove a live ChatGPT `openai/fileParams` injection.
+
+**Not implemented by this input adapter:** native ChatGPT **output attachment**
+creation, generic WordPress binary whole-file API, multi-GiB/resumable
+transfer, WordPress WXR import, plugin/theme execution, or any production
+rollout. Existing authorized client-compatible Bridge file-byte reads and
+SSH ranged/whole-object downloads have distinct receiving-host support;
+Base64 in MCP JSON is not automatically a user-downloadable file.
+Real host acceptance and the reverse client/model receipt remain tracked by
+[Gateway #147](https://github.com/AChWorks/mcp-gateway/issues/147)
+and [Bridge #134](https://github.com/AChWorks/wp-ai-bridge/issues/134).
+
 ## 5. Safe errors, provenance and outcome certainty
 
 Record the **first evidenced** failing stage across only the parts Gateway can observe:

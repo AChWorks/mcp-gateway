@@ -4,6 +4,7 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
+use App\Application\Mcp\TargetFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
@@ -491,7 +492,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $body = (string) ob_get_clean();
         $document = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
         $names = array_column($document['result']['tools'], 'name');
-        foreach (['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute', 'wordpress-file-input', 'ssh-command-run', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'] as $name) {
+        foreach (['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute', 'wordpress-file-input', 'target-file-input', 'ssh-command-run', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'] as $name) {
             self::assertContains($name, $names);
         }
         foreach (['site-ability-execute', 'agent-run-command'] as $name) {
@@ -506,6 +507,12 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             array_keys($fileInput['inputSchema']['properties']['file']['properties']));
         self::assertFalse($fileInput['annotations']['readOnlyHint']);
         self::assertTrue($fileInput['annotations']['destructiveHint']);
+        $genericFile = collect($document['result']['tools'])->firstWhere('name', 'target-file-input');
+        self::assertSame(['file'], $genericFile['_meta']['openai/fileParams']);
+        self::assertSame($fileInput['inputSchema']['properties']['file'],
+            $genericFile['inputSchema']['properties']['file']);
+        self::assertSame(['wordpress_media_stage', 'ssh_sftp_upload'],
+            $genericFile['inputSchema']['properties']['mode']['enum']);
         $ssh = collect($document['result']['tools'])->firstWhere('name', 'ssh-command-run');
         self::assertSame(8192, $ssh['inputSchema']['properties']['command']['maxLength']);
         self::assertSame(15, $ssh['inputSchema']['properties']['timeout_seconds']['maximum']);
@@ -853,11 +860,63 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertSame(0, $this->syntheticImportCalls);
     }
 
+    public function test_target_file_input_wordpress_accepts_binary_larger_than_old_256_kib_limit(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        config()->set('bridge.file_input.max_bytes', 1048576);
+        $this->chatFilePayload = str_repeat("\x00\xff\xa1", 100000);
+        $result = app(TargetFileInputMcpToolHandlers::class)->receive(
+            $owner, 'alpha', [
+                'download_url' => 'https://files.oaiusercontent.com/private/large?sig=opaque',
+                'file_id' => 'file_binary',
+            ], 'wordpress_media_stage',
+        );
+        self::assertTrue($result['ok'], json_encode($result));
+        self::assertSame(300000, $result['bytes']);
+        self::assertSame(hash('sha256', $this->chatFilePayload), $result['sha256']);
+        self::assertSame($this->chatFilePayload, $this->syntheticPrivateLease['payload']);
+        self::assertSame(0, $this->syntheticImportCalls);
+    }
+
+    public function test_target_file_input_denies_ssh_mode_and_untrusted_destination_without_fetch(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $file = [
+            'download_url' => 'https://files.oaiusercontent.com/private/file?sig=x',
+            'file_id' => 'file_test',
+        ];
+        $handler = app(TargetFileInputMcpToolHandlers::class);
+        config()->set('ssh.file_transfer.enabled', false);
+        $unsupported = $handler->receive($owner, 'alpha', $file, 'ssh_sftp_upload', [
+            'path' => '/home/user/test.bin', 'private_staging_dir' => '/home/user/.private',
+        ]);
+        self::assertSame('unsupported_mode', $unsupported['error']['code']);
+
+        config()->set('ssh.file_transfer.enabled', true);
+        $wrongTarget = $handler->receive($owner, 'alpha', $file, 'ssh_sftp_upload', [
+            'path' => '/home/user/test.bin', 'private_staging_dir' => '/home/user/.private',
+        ]);
+        self::assertSame('target_not_found', $wrongTarget['error']['code']);
+        $missing = $handler->receive($owner, 'alpha', $file, 'ssh_sftp_upload', [
+            'path' => '../unsafe', 'private_staging_dir' => '/home/user/.private',
+        ]);
+        self::assertSame('invalid_destination', $missing['error']['code']);
+        $mixedMode = $handler->receive($owner, 'alpha', $file, 'wordpress_media_stage', [
+            'path' => '/home/user/test.bin', 'private_staging_dir' => '/home/user/.private',
+        ]);
+        self::assertSame('invalid_destination', $mixedMode['error']['code']);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
+        self::assertSame(0, $this->syntheticBeginCount);
+    }
+
     public function test_chatgpt_file_input_oversized_download_does_not_allocate_private_lease(): void
     {
         $owner = $this->user('owner');
         $this->pair('alpha');
-        $this->chatFilePayload = str_repeat('x', WordpressFileInputMcpToolHandlers::MAX_INLINE_FILE_BYTES + 1);
+        config()->set('bridge.file_input.max_bytes', 300000);
+        $this->chatFilePayload = str_repeat('x', 300001);
         $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
             'download_url' => 'https://files.oaiusercontent.com/private/huge?sig=short-lived',
             'file_id' => 'file_huge', 'file_name' => 'oversized.pdf',
@@ -889,6 +948,54 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
                 'name' => 'wordpress-file-input',
                 'arguments' => [
                     'target_id' => 'alpha',
+                    'file' => [
+                        'download_url' => 'https://files.oaiusercontent.com/private/abc?sig=short-lived',
+                        'file_id' => 'file_abc',
+                    ],
+                ],
+                '_meta' => [
+                    'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                    'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                    'io.modelcontextprotocol/clientInfo' => ['name' => 'file-param-test', 'version' => '1.0'],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR));
+        $request->attributes->set('oauth_user', $owner);
+        $response = app(GatewayMcpEndpoint::class)->handle($request);
+        self::assertSame(200, $response->getStatusCode());
+        ob_start();
+        $response->sendContent();
+        $json = json_decode((string) ob_get_clean(), true, 32, JSON_THROW_ON_ERROR);
+        self::assertFalse($json['result']['isError'] ?? false, json_encode($json, JSON_THROW_ON_ERROR));
+        $received = $json['result']['structuredContent'];
+        self::assertTrue($received['ok']);
+        self::assertSame('verified_private_transfer', $received['state']);
+        self::assertSame(hash('sha256', $this->chatFilePayload), $received['sha256']);
+        self::assertSame($this->chatFilePayload, $this->syntheticPrivateLease['payload']);
+        self::assertSame(0, $this->syntheticImportCalls);
+    }
+
+    public function test_target_file_input_executes_through_real_mcp_tool_dispatch(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'small-real-mcp-tool-dispatch';
+        $host = parse_url((string) config('oauth.resource'), PHP_URL_HOST);
+        self::assertIsString($host);
+        $request = \Illuminate\Http\Request::create('/mcp', 'POST', [], [], [], [
+            'HTTP_HOST' => $host,
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+            'HTTP_MCP_PROTOCOL_VERSION' => '2026-07-28',
+            'HTTP_MCP_METHOD' => 'tools/call',
+            'HTTP_MCP_NAME' => 'target-file-input',
+        ], json_encode([
+            'jsonrpc' => '2.0', 'id' => 44, 'method' => 'tools/call',
+            'params' => [
+                'name' => 'target-file-input',
+                'arguments' => [
+                    'target_id' => 'alpha',
+                    'mode' => 'wordpress_media_stage',
                     'file' => [
                         'download_url' => 'https://files.oaiusercontent.com/private/abc?sig=short-lived',
                         'file_id' => 'file_abc',

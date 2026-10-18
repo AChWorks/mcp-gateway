@@ -80,6 +80,16 @@ final class OperationalSettings
         return ['connect' => $connect, 'request' => max($connect, $request)];
     }
 
+    /** Source/.env-owned WordPress file-param budget, separate from SSH. */
+    /** @return array{max_bytes:int,max_seconds:int} */
+    public function chatgptWordpressFileLimits(): array
+    {
+        return [
+            'max_bytes' => min(67108864, max(1, (int) config('bridge.file_input.max_bytes', 8388608))),
+            'max_seconds' => min(120, max(1, (int) config('bridge.file_input.max_seconds', 120))),
+        ];
+    }
+
     /** @return array{max_bytes:int,max_seconds:int} */
     public function sshTransferLimits(): array
     {

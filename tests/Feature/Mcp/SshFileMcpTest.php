@@ -5,6 +5,7 @@ namespace Tests\Feature\Mcp;
 use App\Application\Access\UserAccessManager;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
+use App\Application\Mcp\TargetFileInputMcpToolHandlers;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
@@ -16,7 +17,9 @@ use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
 use App\Support\OperationDiagnostics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use phpseclib4\Exception\FileSystemException;
 use RuntimeException;
@@ -123,6 +126,37 @@ final class SshFileMcpTest extends TestCase
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('target_not_found', $exception->reason);
         }
+    }
+
+    public function test_chatgpt_ssh_file_input_denies_ungranted_paused_and_revoked_targets_before_signed_download(): void
+    {
+        config()->set('ssh.file_transfer.enabled', true);
+        Http::preventStrayRequests();
+        Http::fake(static fn (Request $request) => Http::response('must-not-fetch', 200));
+        $owner = $this->user('owner');
+        $operator = $this->user('operator');
+        $target = $this->target();
+        $handler = app(TargetFileInputMcpToolHandlers::class);
+        $file = [
+            'download_url' => 'https://files.oaiusercontent.com/private/secret?sig=opaque',
+            'file_id' => 'file_secret',
+        ];
+        $destination = [
+            'path' => '/home/deploy/test.bin',
+            'private_staging_dir' => '/home/deploy/.private',
+        ];
+
+        $forbidden = $handler->receive($operator, $target->target_id, $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('target_not_found', $forbidden['error']['code']);
+        $target->forceFill(['operations_paused' => true])->save();
+        $paused = $handler->receive($owner, $target->target_id, $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('target_paused', $paused['error']['code']);
+        $target->forceFill(['operations_paused' => false])->save();
+
+        $owner->forceFill(['access_enabled' => false])->save();
+        $revoked = $handler->receive($owner, $target->target_id, $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('target_not_found', $revoked['error']['code']);
+        Http::assertNothingSent();
     }
 
     public function test_native_sftp_status_keeps_original_error_fields_only_in_redacted_diagnostics(): void

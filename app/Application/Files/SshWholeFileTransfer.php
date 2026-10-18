@@ -62,12 +62,12 @@ final readonly class SshWholeFileTransfer
      * @param  array<string,mixed>  $metadata
      * @return array<string,mixed>
      */
-    public function upload(User $user, Target $target, string $path, mixed $input, array $metadata): array
+    public function upload(User $user, Target $target, string $path, mixed $input, array $metadata, ?int $overallDeadlineNs = null): array
     {
         $this->validatePath($path);
         $this->validatePath($metadata['private_staging_dir']);
         $budget = $this->limits();
-        $deadline = hrtime(true) + $budget['max_seconds'] * 1_000_000_000;
+        $deadline = min(hrtime(true) + $budget['max_seconds'] * 1_000_000_000, $overallDeadlineNs ?? PHP_INT_MAX);
 
         $stream = VerifiedTransferSpool::capture(
             $input, $metadata['size'], $metadata['sha256'], $budget['max_bytes'], $deadline,
