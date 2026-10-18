@@ -4,12 +4,12 @@ MCP Gateway is a self-hosted PHP application that connects an authenticated MCP 
 
 **Official downloads and latest published version:** [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases). The current release supports WordPress via WP AI Bridge, Direct SSH (commands, SFTP and retained Jobs), Target Groups, scoped OAuth/client permissions, browser file selection, per-Target Pause/Resume, optional AI guidance and permissioned Admin/AI error diagnostics. **Install or update only from official published Release ZIPs**; merged source commits and GitHub Actions candidates are not installed or published automatically.
 
-The source candidate for [Gateway #147](https://github.com/AChWorks/mcp-gateway/issues/147)
-also defines a bounded ChatGPT FileParams ingress tool for selected authorized
-WordPress private staging or SSH SFTP upload. This is **not** evidence that any
-released/installed Gateway or currently connected ChatGPT plugin exposes the
-candidate; host file injection and reverse native attachments still require
-real acceptance after publication. Consult
+Version 2.3.5 source adds an optional, bounded ChatGPT FileParams ingress Tool
+for selected authorized WordPress private staging or SSH SFTP upload
+([Gateway #147](https://github.com/AChWorks/mcp-gateway/issues/147)). Its presence
+in source is **not** evidence an operator has installed that release or that a
+connected ChatGPT plugin injects real files correctly. Native host file input
+and reverse output attachment handling still require separate acceptance. Consult
 [the technical contract](docs/REMOTE-IO-CONTRACT.md#chatgpt-file-parameter-ingress-to-a-selected-target-gateway-source-candidate)
 for exact modes and limits.
 
