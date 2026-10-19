@@ -367,6 +367,91 @@ final readonly class SshJobCoordinator
         return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first());
     }
 
+    /**
+     * Database-only retained Job discovery. A cursor is authenticated to the
+     * full caller/Target/filter scope and cannot be reused by another client.
+     * Uncertain Jobs remain discoverable past their nominal expiration until
+     * the existing operator reconciliation contract permits their retirement.
+     *
+     * @return array<string,mixed>
+     */
+    public function list(
+        User $user, string $targetId, string $clientHash,
+        ?string $status = null, ?string $cursor = null, int $limit = 20,
+    ): array {
+        $target = $this->authorized($user, $targetId, false);
+        if (strlen($clientHash) !== 64 || ! ctype_xdigit($clientHash)) {
+            throw new SshTargetConnectionException('target_not_found');
+        }
+        $statuses = [
+            'preparing', 'launch_unknown', 'running', 'cancel_requested',
+            'completed', 'failed', 'canceled', 'unsupported', 'retired',
+        ];
+        if ($limit < 1 || $limit > 50 || ($status !== null && ! in_array($status, $statuses, true))) {
+            throw new SshTargetConnectionException('invalid_input');
+        }
+
+        $binding = $this->binding($target);
+        $after = null;
+        if ($cursor !== null) {
+            if (preg_match('/^([0-9A-HJKMNP-TV-Z]{26})\\.([a-f0-9]{64})$/D', $cursor, $match) !== 1
+                || ! hash_equals($this->listCursorSignature(
+                    $user, $target, $clientHash, $binding, $status, $match[1],
+                ), $match[2])) {
+                throw new SshTargetConnectionException('invalid_input');
+            }
+            $after = $match[1];
+        }
+
+        $rows = DB::table('ssh_command_jobs')
+            ->select(['id', 'status', 'created_at', 'updated_at', 'expires_at',
+                'runtime_seconds', 'exit_code', 'terminal_reason'])
+            ->where('user_id', $user->getKey())
+            ->where('target_record_id', $target->getKey())
+            ->where('client_identity_hash', $clientHash)
+            ->where('target_binding_hash', $binding)
+            ->where(static function ($query): void {
+                $query->whereNotIn('status', ['completed', 'failed', 'canceled', 'unsupported', 'retired'])
+                    ->orWhere('expires_at', '>', now());
+            })
+            ->when($status !== null, static fn ($query) => $query->where('status', $status))
+            ->when($after !== null, static fn ($query) => $query->where('id', '<', $after))
+            ->orderByDesc('id')
+            ->limit($limit + 1)->get();
+
+        $hasMore = $rows->count() > $limit;
+        $items = $rows->take($limit)->map(static fn (object $row): array => [
+            'job_id' => $row->id,
+            'status' => $row->status,
+            'created_at' => $row->created_at,
+            'updated_at' => $row->updated_at,
+            'expires_at' => $row->expires_at,
+            'max_runtime_seconds' => $row->runtime_seconds,
+            'exit_code' => $row->exit_code,
+            'terminal_reason' => $row->terminal_reason,
+            'complete' => in_array($row->status, ['completed', 'failed', 'canceled'], true),
+            'retry_safe' => false,
+        ])->values()->all();
+        $last = $hasMore ? end($items)['job_id'] : null;
+
+        return [
+            'jobs' => $items,
+            'next_cursor' => $last === null ? null : $last.'.'.$this->listCursorSignature(
+                $user, $target, $clientHash, $binding, $status, $last,
+            ),
+            'has_more' => $hasMore,
+        ];
+    }
+
+    private function listCursorSignature(
+        User $user, Target $target, string $clientHash, string $binding, ?string $status, string $id,
+    ): string {
+        return hash_hmac('sha256', implode("\0", [
+            (string) $user->getKey(), (string) $target->getKey(), $clientHash, $binding,
+            $status ?? '', $id,
+        ]), (string) config('app.key'));
+    }
+
     /** @return array<string,mixed> */
     public function output(
         User $user, string $targetId, string $clientHash, string $jobId,
