@@ -33,6 +33,8 @@ The official installation ZIP includes PHP dependencies: **Git and Composer are 
 5. Sign in at **`/admin/login`**, then check **`/up`** and the Admin dashboard.
 6. Configure **one cron job every minute** to execute Laravel `schedule:run` using the site's PHP 8.4 CLI **as the site worker, not root**. Confirm that the cron log shows it actually runs.
 
+**No control panel?** A regular Linux VPS works too: install Nginx, PHP-FPM 8.4, MariaDB and HTTPS, then use the same ZIP/web installer. Follow the [step-by-step panel-free Linux installation guide](docs/DEPLOYMENT.md#panel-free-linux-vps-nginx-php-fpm-and-mariadb), including Nginx rules for the standalone installer, temporary updater and OAuth endpoints.
+
 The web installer is for **first installation only**; use the [update instructions](#update-an-existing-installation) for existing deployments. aaPanel/OpenLiteSpeed and CLI/source installation details, cron examples and recovery procedures are in [Deployment](docs/DEPLOYMENT.md).
 
 ## Connect WordPress
