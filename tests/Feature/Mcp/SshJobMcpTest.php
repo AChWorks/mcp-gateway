@@ -739,6 +739,15 @@ final class SshJobMcpTest extends TestCase
         // This fixture's SSH egress is deterministically denied, so there
         // are no remote side effects or assumed client-host capabilities.
         $target = $this->target();
+        // The registered policy contract requires a non-empty approved list;
+        // a denied test destination must raise a typed denial, not return [].
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                throw new SshTargetConnectionException('egress_denied');
+            }
+        });
         $call = function (string $name, array $arguments) use ($headers, $owner): array {
             $wire = json_encode([
                 'jsonrpc' => '2.0', 'id' => 8, 'method' => 'tools/call',
