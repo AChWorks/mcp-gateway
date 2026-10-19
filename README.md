@@ -56,8 +56,9 @@ A Gateway “Connected” status is not a guarantee that a remotely revoked or e
 4. Use `ssh-file-list` to inspect directories, `ssh-file-read` for bounded byte ranges, and `ssh-file-write` to create or conditionally overwrite a bounded file. Repeated writes do **not** append chunks.
 5. For larger, complete binary files, use the separately authorized **SSH whole-file browser upload/download or HTTPS exchange** when enabled. The Admin Target page offers a local file picker and download action; uploads require an explicit remote destination and pre-existing private `0700` staging directory. Verify received size and SHA-256.
 6. For scripts that outlive a synchronous command, use `ssh-job-start` with your own UUID `request_id`, then `ssh-job-status` and bounded `ssh-job-output`; cancel a specific Job with `ssh-job-cancel` only when appropriate.
+7. In a later chat, use **ssh-jobs-list** for the same authorized Gateway user, OAuth client/profile and Target to find retained Job IDs; then deliberately call **ssh-job-status** on the chosen ID. Job listing never connects to the server or retries an old command.
 
-**SSH transfer setting:** fresh-install templates enable `SSH_FILE_TRANSFER_ENABLED=true`; an existing installation retains its private `.env` and an **absent key means OFF**. Enable whole-file mode on an existing installation only after checking hosting limits and Target permissions. The Admin **Operational Settings** page provides bounded command and Job controls; the remote account's actual OS privileges still apply. Detached Jobs require a compatible `systemd-run` environment, and an uncertain Job start must **not** be repeated with a new request UUID.
+**SSH transfer setting:** fresh-install templates enable `SSH_FILE_TRANSFER_ENABLED=true`; an existing installation retains its private `.env` and an **absent key means OFF**. Enable whole-file mode on an existing installation only after checking hosting limits and Target permissions. The Admin **Operational Settings** page provides bounded command and Job controls (including independent configurable SSH byte windows up to **512 KiB** and a selectable synchronous command timeout up to **360 seconds**, not guaranteed by every host/client); the remote account's actual OS privileges still apply. Detached Jobs require a compatible `systemd-run` environment, and an uncertain Job start must **not** be repeated with a new request UUID.
 
 See [Direct SSH and Jobs](docs/DIRECT-SSH-CONNECTOR.md) and [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) for prerequisites, limits, integrity checks and recovery.
 
@@ -73,7 +74,7 @@ Manage client profiles and grants under **Admin → AI clients** (`/admin/oauth-
 
 ## MCP tools at a glance
 
-The normal Gateway tool set is **14 tools** (subject to authenticated client, user and Target grants):
+The normal Gateway tool set is **15 tools** (subject to authenticated client, user and Target grants):
 
 | Tools | Use |
 | --- | --- |
@@ -82,6 +83,7 @@ The normal Gateway tool set is **14 tools** (subject to authenticated client, us
 | `ssh-command-run` | Execute a bounded, non-interactive command as the authorized remote SSH account. |
 | `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | Inspect SFTP paths, read bounded ranges, or create/conditionally overwrite bounded files. |
 | `ssh-job-start`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Start, reconcile, inspect and cancel retained SSH Jobs without blindly replaying them. |
+| `ssh-jobs-list` | List only retained Jobs for the currently authorized user, OAuth client/profile and selected Target; no remote execution. |
 | `operation-diagnostics-read` | Look up permitted, credential-redacted failure evidence by `diagnostic_reference` or Target. |
 
 WordPress plugin Abilities are discovered dynamically; a newly available Ability does **not** require a new Gateway MCP tool for its name.
