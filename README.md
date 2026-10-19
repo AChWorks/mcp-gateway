@@ -1,197 +1,125 @@
 # MCP Gateway
 
-MCP Gateway is a self-hosted PHP application that connects an authenticated MCP client to the specific servers and WordPress sites you authorize. Add each connection as a **Target**, control who can use it, and manage access from one web Admin panel.
+**MCP Gateway** is a self-hosted application that connects MCP clients (including ChatGPT) to **WordPress sites** and **SSH servers** you explicitly authorize. Each connection is a *Target*. The web Admin panel controls Targets, users, client authorizations, permissions and activity in one place.
 
-**Official downloads and latest published version:** [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases). The current release supports WordPress via WP AI Bridge, Direct SSH (commands, SFTP and retained Jobs), Target Groups, scoped OAuth/client permissions, browser file selection, per-Target Pause/Resume, optional AI guidance and permissioned Admin/AI error diagnostics. **Install or update only from official published Release ZIPs**; merged source commits and GitHub Actions candidates are not installed or published automatically.
+Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run authorized SSH commands, inspect or transfer files with SFTP, and manage longer-running SSH Jobs. The Gateway does not grant more access than the configured WordPress user or remote SSH account already has.
 
-Version 2.3.5 source adds an optional, bounded ChatGPT FileParams ingress Tool
-for selected authorized WordPress private staging or SSH SFTP upload
-([Gateway #147](https://github.com/AChWorks/mcp-gateway/issues/147)). Its presence
-in source is **not** evidence an operator has installed that release or that a
-connected ChatGPT plugin injects real files correctly. Native host file input
-and reverse output attachment handling still require separate acceptance. The
-FileParams Tool appears only for the authenticated ChatGPT OAuth profile with
-an eligible connected, unpaused and authorized WordPress or SSH Target, after
-the client refreshes its tool catalogue. It is not advertised to unrelated
-OAuth clients; downstream provider permissions still fail closed. Every signed-file transfer also
-requires a globally bounded, database-serialized temporary-spool reservation
-(`CHATGPT_FILE_*` settings and the v2.3.5 capacity-admission migration); SSH
-counts both local spools. No signed URL is fetched on capacity denial. Consult
-[the technical contract](docs/REMOTE-IO-CONTRACT.md#chatgpt-file-parameter-ingress-to-a-selected-target-gateway-source-candidate)
-for exact modes and limits.
+**Get started:** [Latest official Release](https://github.com/AChWorks/mcp-gateway/releases) · [Install](#install) · [Connect WordPress](#connect-wordpress) · [Connect SSH](#connect-direct-ssh) · [Connect ChatGPT](#connect-chatgpt-or-another-mcp-client)
 
-## What you can do
+## How it works
 
-- Register WordPress and SSH Targets with optional per-Target AI guidance, review connection status, and let the Owner **Pause/Resume Gateway operations per Target** without disconnecting or deleting access. An already-running remote SSH Job is not stopped by Pause.
-- Discover and run WordPress Abilities through the existing WordPress principal and its WP AI Bridge permissions.
-- Run authorized non-interactive SSH commands and bounded SFTP operations against verified SSH hosts. In v2.3.0, the Owner can adjust the bounded synchronous command limits and use lightweight retained systemd SSH Jobs on supported hosts.
-- In v2.3.0, an authorized user can select a real local file in the Target Admin page and upload/download verified binary bytes when the optional SSH transfer mode is explicitly enabled by the operator.
-- Assign users, Target Groups and permission scopes; review Activity, credential-redacted error diagnostics and AI client authorizations.
-- Install or update from the named GitHub Release ZIPs without requiring Git or Composer on the host.
+1. Install the Gateway on your own HTTPS domain.
+2. Add a **WordPress** or **Direct SSH** Target in the Admin panel.
+3. Authorize the Target and grant specific Gateway users or Target Groups access.
+4. Connect your MCP client using Gateway OAuth, then choose a Target and use its permitted tools.
 
-**Limits to know:** SSH runs with the privileges of its configured remote OS account; Gateway permissions do not turn root into a sandbox. v2.3.0 defaulted SSH whole-file HTTP transfer to OFF; **v2.3.1 new installations** explicitly enable SSH-only whole-file transfer (`SSH_FILE_TRANSFER_ENABLED=true`), while existing private environments retain their original value (absent-key OFF). This is not proof of ChatGPT-native attachment support. AI guidance is advisory, not enforced approval. Other AI clients need a compatible, configured client profile; support for every MCP extension is not implied.
-
-**Configuration lookup:** [`.env.example`](.env.example) exposes supported everyday
-Gateway settings with commented context-sensitive examples. The
-[configuration reference](docs/CONFIGURATION.md) covers all active and
-commented supported first-party keys, units, dependencies and safe change procedures.
-Do not replace an existing operator's private `.env` with the new template;
-the installer writes HTTPS-only session-cookie security values and a normal
-upgrade preserves site-specific settings.
+Targets can be **paused** without deleting their configuration or disconnecting WordPress. Pausing stops new Gateway operations for that Target; it does **not** stop a remote SSH Job already running. An MCP client's OAuth approval and a user's Target permissions are separate requirements. Optional per-Target AI guidance provides context to an AI client; it does not override permissions or approve operations.
 
 ## Requirements
 
-MCP Gateway is intended for a conventional Linux PHP host such as aaPanel/OpenLiteSpeed or ordinary shared hosting.
+- Linux web hosting with **PHP 8.4.1 or newer** and the `curl`, `mbstring`, `openssl`, `pdo_mysql` and `sodium` extensions; cURL must support `CURLOPT_RESOLVE`.
+- **MariaDB** (10.11 recommended) or **MySQL**, with a dedicated database and user.
+- A stable **HTTPS** domain and a web server that can serve the application's `public/` directory.
+- A compatible **WP AI Bridge** installation for WordPress Targets, or an accessible SSH host and authorized credentials for Direct SSH Targets.
 
-Required runtime:
+The official installation ZIP includes PHP dependencies: **Git and Composer are not needed on the hosting server**. Normal operation needs no Docker, Redis, Node.js, queue worker or separate MCP daemon.
 
-- PHP `>= 8.4.1`;
-- PHP extensions: `curl`, `mbstring`, `openssl`, `pdo_mysql`, and `sodium`;
-- cURL with `CURLOPT_RESOLVE` support;
-- MariaDB 10.11 (recommended/primary) or MySQL;
-- HTTPS on a stable domain or subdomain;
-- a web server/hosting panel that can point the domain document root to the package `public/` directory.
+## Install
 
-Composer 2 and Git are **not required on the target host** when using the recommended deployment ZIP. They are only required for the advanced source/CLI installation path.
+1. Download **`mcp-gateway-vX.Y.Z.zip`** and its matching `.sha256` from a published [GitHub Release](https://github.com/AChWorks/mcp-gateway/releases). Verify the checksum. Do **not** use GitHub's generic “Source code (zip)” archive.
+2. Prepare a **new, empty** MariaDB/MySQL database. Extract the ZIP into a private application directory and point the site's document root to **`<app-root>/public`**, never the application root.
+3. Make `storage/` and `bootstrap/cache/` writable by the PHP site worker. Enable HTTPS and working URL rewrites; do not give the whole application `777` permissions.
+4. Open **`https://gateway.example.com/install`** and complete the web installer with the site URL, database connection and first Admin user.
+5. Sign in at **`/admin/login`**, then check **`/up`** and the Admin dashboard.
+6. Configure **one cron job every minute** to execute Laravel `schedule:run` using the site's PHP 8.4 CLI **as the site worker, not root**. Confirm that the cron log shows it actually runs.
 
-Normal operation does **not** require Redis, Docker, Node.js, a queue worker, a message broker, or a separate MCP daemon.
-
-## Install (recommended: web installer)
-
-1. Create an HTTPS domain or subdomain and a **dedicated empty** MariaDB/MySQL database and user.
-2. Download `mcp-gateway-vX.Y.Z.zip` (replace `X.Y.Z` with the version of your chosen published [GitHub Release](https://github.com/AChWorks/mcp-gateway/releases)). Use the **deployment ZIP**, not GitHub's generic source archive, and verify its matching `.sha256`.
-3. Extract it into a private application directory. Point the domain's **document root to its `public/` subdirectory**, for example `/www/wwwroot/mcp-gateway/public`. Never expose the application root.
-4. Make `storage/` and `bootstrap/cache/` writable by the PHP worker. Enable HTTPS before entering credentials; do not use `chmod -R 777`.
-5. Open `https://gateway.example.com/install`, supply the canonical URL, database settings and first administrator, then choose **Install MCP Gateway**.
-6. After success, sign in at `/admin/login`. Do not remove the private installed marker to rerun installation.
-
-A working aaPanel/OpenLiteSpeed setup needs PHP 8.4, rewrites/.htaccess and the correct `public/` running directory. Shared hosting must allow a separate private application root and `public/` web root. For Git + Composer + Artisan installations and hosting-specific procedures, use [Deployment](docs/DEPLOYMENT.md).
-
-## Verify the installation
-
-Open `/up` and `/admin/login` on your HTTPS domain. The following public discovery routes should be reachable:
-
-```bash
-curl --fail https://gateway.example.com/.well-known/oauth-protected-resource/mcp
-curl --fail https://gateway.example.com/.well-known/oauth-authorization-server
-curl --fail https://gateway.example.com/oauth/client.json
-curl --fail https://gateway.example.com/oauth/jwks.json
-```
-
-For CLI-managed installs, run `php artisan gateway:check` as the application account. Configure **one host Cron task every minute** to invoke Laravel `schedule:run` with the PHP 8.4 CLI **as the site worker** (never root Artisan); this maintains idle WordPress credentials and Activity retention. Verify that the aaPanel task log shows a real dispatch, not only `schedule:list`. See [Deployment](docs/DEPLOYMENT.md#activity-retention-scheduling) for examples. Keep credentials and tokens out of screenshots and logs.
+The web installer is for **first installation only**; use the [update instructions](#update-an-existing-installation) for existing deployments. aaPanel/OpenLiteSpeed and CLI/source installation details, cron examples and recovery procedures are in [Deployment](docs/DEPLOYMENT.md).
 
 ## Connect WordPress
 
-1. Install a compatible **WP AI Bridge** on WordPress and configure its access permissions.
-2. In Gateway, open **Connection** (`/admin/connection`) and copy its exact `/oauth/client.json` metadata URL. In WordPress, open **WP AI Bridge → OAuth Clients** and approve this **client metadata URL** (not its JWKS or callback URL).
-3. In Gateway, choose **Targets → Add Target → WordPress (WP AI Bridge)**. Enter a unique `target_id` (lowercase letters, digits and hyphens, maximum 64), display name and canonical HTTPS WordPress URL. Verify and add it.
-4. On Target details, choose **Authorize WordPress** and complete OAuth consent for the intended WordPress user. Confirm **Connected**, then assign permitted Gateway users or groups.
-5. Use the `wordpress-abilities-read` tool to inspect live Ability names/schemas before calling `wordpress-ability-execute`. New WordPress Abilities do not require adding individual Gateway tool names.
+1. Install and configure **WP AI Bridge** on WordPress, including the intended WordPress user's permissions.
+2. In Gateway, open **Admin → Connection** (`/admin/connection`) and copy the Gateway's **`/oauth/client.json` metadata URL**.
+3. In WordPress, open **WP AI Bridge → OAuth Clients** and approve that exact *client metadata URL* (not the JWKS URL).
+4. In Gateway, open **Targets → Add Target → WordPress (WP AI Bridge)**. Enter a unique `target_id` (lowercase letters, digits and hyphens; maximum 64 characters), display name and the WordPress site's canonical HTTPS URL.
+5. Verify the Target, select **Authorize WordPress**, complete consent using the intended WordPress account, and assign appropriate Gateway users or Target Groups.
+6. In your MCP client, call `wordpress-abilities-read` to discover permitted Ability names and schemas, then `wordpress-ability-execute` for the selected Target.
 
-A successful WordPress metadata check does **not** prove that an outstanding credential revocation finished. If Disconnect, refresh or consent is uncertain, follow the [Target recovery guide](docs/TARGET-TRANSITION-RUNBOOK.md); do not erase a pending revocation or repeatedly rotate credentials.
+A Gateway “Connected” status is not a guarantee that a remotely revoked or expired WordPress credential still works. For uncertain refresh, disconnect or consent, follow the [Target recovery guide](docs/TARGET-DISCONNECT-RECOVERY.md) rather than deleting credential state or repeatedly reconnecting.
 
 ## Connect Direct SSH
 
-1. Select **Targets → Add Target → Direct SSH**, enter a unique `target_id`, the SSH host, port and remote account, and choose supported password or private-key authentication.
-2. Verify and trust the server's **SSH host-key fingerprint** using an independent trusted source before connecting; investigate unexpected key changes rather than bypassing host-key verification.
-3. Assign the specific users and SSH permissions they need. Test with a read-only command or SFTP `stat` before allowing mutations.
+1. Open **Targets → Add Target → Direct SSH**. Enter a unique `target_id`, SSH host, port and remote account, then configure the supported password or private-key authentication.
+2. **Independently verify the server's SSH host-key fingerprint** before trusting it; never bypass an unexpected host-key change.
+3. Grant only the needed user/Target permissions. Start with `ssh-file-stat` or a harmless read-only `ssh-command-run` call.
+4. Use `ssh-file-list` to inspect directories, `ssh-file-read` for bounded byte ranges, and `ssh-file-write` to create or conditionally overwrite a bounded file. Repeated writes do **not** append chunks.
+5. For larger, complete binary files, use the separately authorized **SSH whole-file browser upload/download or HTTPS exchange** when enabled. The Admin Target page offers a local file picker and download action; uploads require an explicit remote destination and pre-existing private `0700` staging directory. Verify received size and SHA-256.
+6. For scripts that outlive a synchronous command, use `ssh-job-start` with your own UUID `request_id`, then `ssh-job-status` and bounded `ssh-job-output`; cancel a specific Job with `ssh-job-cancel` only when appropriate.
 
-SSH command execution is non-interactive and is constrained by Gateway access checks **and** the remote account's real OS privileges. SFTP is bounded; large binary file exchange requires the separately supported and explicitly enabled transfer path. In v2.3.0, the Owner can open **Admin → Operational Settings** to adjust the maximum command timeout (15–30 seconds; default ceiling 15) and command length (8–64 KiB; default 8 KiB), effective for new commands without restarting PHP. A longer-lived Job is not a longer synchronous HTTP request. The same Owner screen provides separate **Detached SSH Jobs** limits: concurrently admitted Jobs per user (default 2, adjustable 1–1024), maximum duration per Job (default 300 seconds, adjustable up to seven days), result retention (default 24 hours), and safe crash/reconciliation grace periods. There is no cumulative historical Job-count ceiling. Expiration of admission never reruns a script or proves a remote process stopped.
+**SSH transfer setting:** fresh-install templates enable `SSH_FILE_TRANSFER_ENABLED=true`; an existing installation retains its private `.env` and an **absent key means OFF**. Enable whole-file mode on an existing installation only after checking hosting limits and Target permissions. The Admin **Operational Settings** page provides bounded command and Job controls; the remote account's actual OS privileges still apply. Detached Jobs require a compatible `systemd-run` environment, and an uncertain Job start must **not** be repeated with a new request UUID.
 
-For actual file selection in v2.3.0, visit **Targets → [Direct SSH Target] → SSH file upload and download**, choose a file, enter its absolute remote destination and an already provisioned private `0700` staging directory, and submit. For a download, enter the remote absolute path and save the returned attachment; verify the supplied SHA-256 and byte length. On existing Gateway installations, the operator can enable `SSH_FILE_TRANSFER_ENABLED=true` in the private `.env` after verifying PHP/proxy upload size, temporary storage and timeouts. v2.3.1 uses an ON default only for fresh installs, with an explicit `false` opt-out; existing upgrades preserve the private setting. A ChatGPT chat attachment is **not automatically available** to these forms or MCP tools. See [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md).
+See [Direct SSH and Jobs](docs/DIRECT-SSH-CONNECTOR.md) and [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) for prerequisites, limits, integrity checks and recovery.
 
-For retained Jobs, use `ssh-job-start` with a caller-generated UUID `request_id` and a script within the current authenticated Tool budget (default 16 KiB; Owner-adjustable up to 64 KiB on installations with the script-budget migration). Save its returned `job_id`; poll `ssh-job-status`, read bounded stdout/stderr ranges with `ssh-job-output`, and use `ssh-job-cancel` only when appropriate. A remote host must support `systemd-run` with a persistent user manager (`linger` configured by its administrator), or a system manager for a deliberately configured root SSH account. Unsupported hosts fail closed. Reuse the same request UUID on an uncertain start; **never blindly send a different start request**. The command privileges remain those of the registered remote OS account. See [Direct SSH operator details](docs/DIRECT-SSH-CONNECTOR.md).
+## Connect ChatGPT or another MCP client
 
-The SSH Job script-input budget is independent of synchronous commands and 16 KiB per-call SFTP read/write/output windows. A per-call atomic SFTP write cannot be appended into a whole-file upload; separately authorized large files use optional HTTPS binary exchange, not automatic ChatGPT attachment handoff.
+1. From **Admin → Connection**, copy the Gateway MCP endpoint, normally **`https://gateway.example.com/mcp`**.
+2. Register it as a compatible MCP connection in your client and complete **Gateway OAuth** sign-in and consent with an authorized Gateway user/client profile.
+3. Use `targets-list` and `target-context` to select an authorized `target_id`, then call the WordPress or SSH tools available to that user and client.
 
-## Connect ChatGPT
+Manage client profiles and grants under **Admin → AI clients** (`/admin/oauth-clients`). After an upgrade, refresh/reconnect the MCP connection if your client still displays an outdated Tool catalog.
 
-1. Open Gateway **Connection** (`/admin/connection`) and copy the canonical MCP URL, usually `https://gateway.example.com/mcp`.
-2. In ChatGPT, configure the supported custom MCP App/client profile with that URL and complete Gateway OAuth sign-in and consent for an authorized Gateway user.
-3. Start with `targets-list`, select the exact `target_id` and inspect `target-context`. Only then call the authorized WordPress or SSH tools.
+**ChatGPT attachments:** native ChatGPT FileParams handoff is **paused and OFF by default**. The optional `target-file-input` and `wordpress-file-input` tools are not advertised while `CHATGPT_FILEPARAMS_ENABLED` is absent or `false`; a reliable host-provided file handoff has not been demonstrated for the current integration. Do not enable it just to retry attachments or weaken source-URL security. **This does not disable** ordinary SFTP, supported SSH browser/HTTPS binary transfer, or WordPress's native file-transfer Abilities. A file attached to a ChatGPT conversation is **not automatically available** to these tools.
 
-Use **AI clients** (`/admin/oauth-clients`) to manage application profiles and granted authorizations. Client approval is not the same as Target access. If an older ChatGPT conversation still exposes obsolete `sites-list` tools after an upgrade, refresh/reconnect the App and start a new conversation; do not weaken OAuth or add insecure aliases.
+## MCP tools at a glance
 
-**ChatGPT attachment FileParams is currently paused (default OFF).** The optional
-`target-file-input` and `wordpress-file-input` tools are not advertised to
-ChatGPT unless `CHATGPT_FILEPARAMS_ENABLED=true` is deliberately approved and
-configured. The ChatGPT file-to-MCP handoff and authenticated download origin
-were not reliably verifiable in the current connected client; some attempts
-were blocked before reaching Gateway. This is **not a confirmed universal
-OpenAI defect**. Do not keep retrying file attachments or open the URL
-allowlist. Gateway's normal SSH file tools, existing browser upload/download
-and OAuth-authenticated binary HTTP exchange remain available when authorized.
-See [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) and
-[tracked evidence](https://github.com/AChWorks/mcp-gateway/issues/147).
+The normal Gateway tool set is **14 tools** (subject to authenticated client, user and Target grants):
 
-## Available MCP tools
-
-The **MCP catalog (14 core tools since v2.3.2)** includes a read-only diagnostics lookup alongside WordPress and Direct SSH operations. Available operations remain constrained by the authenticated client, Gateway user and effective Target permissions. SSH Jobs and diagnostic lookups are available only when their supporting release and database migrations are installed.
-
-| Tool | Purpose |
+| Tools | Use |
 | --- | --- |
-| `targets-list` | List authorized Targets without credentials. |
-| `target-context` | Read non-secret context for one explicitly authorized `target_id`. |
-| `operation-diagnostics-read` | Read selectively credential-redacted errors using a `diagnostic_reference` UUID, or bounded recent failures for one authorized `target_id`; requires current `activity.view` and applicable actor/client/Target scope. |
-| `wordpress-abilities-read` | Inspect WordPress Ability metadata on one authorized WordPress Target. |
-| `wordpress-ability-execute` | Execute a schema-valid Ability for an explicitly authorized WordPress Target, subject to effect-class and downstream permissions. |
-| `ssh-command-run` | Run a bounded non-interactive command on an explicitly authorized, host-key-verified Direct SSH Target, within its OS privileges and Gateway permission policy. |
-| `ssh-file-stat` | Inspect metadata for one authorized SSH Target SFTP path. |
-| `ssh-file-list` | List a bounded directory on an authorized SSH Target using SFTP. |
-| `ssh-file-read` | Read a bounded byte range from an authorized SSH Target SFTP file. |
-| `ssh-file-write` | Create or conditionally overwrite a bounded SSH Target SFTP file, subject to explicit write authorization. |
-| `ssh-job-start` | start a bounded persistent systemd SSH script with idempotent UUID request identity. |
-| `ssh-job-status` | reconcile the exact retained Job state and real exit reason/code, when known. |
-| `ssh-job-output` | read Base64 stdout/stderr windows without rerunning the remote script. |
-| `ssh-job-cancel` | request a verified, best-effort stop of the exact Job. |
+| `targets-list`, `target-context` | Find permitted Targets and inspect non-secret Target context. |
+| `wordpress-abilities-read`, `wordpress-ability-execute` | Discover and invoke WordPress Abilities on a selected WordPress Target. |
+| `ssh-command-run` | Execute a bounded, non-interactive command as the authorized remote SSH account. |
+| `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | Inspect SFTP paths, read bounded ranges, or create/conditionally overwrite bounded files. |
+| `ssh-job-start`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Start, reconcile, inspect and cancel retained SSH Jobs without blindly replaying them. |
+| `operation-diagnostics-read` | Look up permitted, credential-redacted failure evidence by `diagnostic_reference` or Target. |
 
-New WordPress plugin Abilities are discovered through the existing WordPress tools; the Gateway does not need a separate public tool per Ability. All operations are restricted by the authenticated user, client, Target and downstream WordPress/SSH permissions.
+WordPress plugin Abilities are discovered dynamically; a newly available Ability does **not** require a new Gateway MCP tool for its name.
 
-## Administration
+## Administration and safety
 
-| Path | Page |
-| --- | --- |
-| `/admin` | Dashboard |
-| `/admin/targets` | Target registry and WordPress connection management |
-| `/admin/target-groups` | Target Group assignments |
-| `/admin/users` | Gateway users and access |
-| `/admin/oauth-clients` | AI client profiles, grants and password-confirmed revocation |
-| `/admin/activity` | Bounded Activity and authorized diagnostic-reference lookup |
-| `/admin/connection` | MCP and OAuth connection metadata |
+From the Admin dashboard (`/admin`) you can manage **Targets**, **Target Groups**, **Users**, **AI clients**, **Operational Settings**, **Activity** and **Connection**. Only grant permissions appropriate to the actual WordPress user or SSH account; Gateway permissions do not turn root SSH into a sandbox.
 
-## Update safely
+When a tool fails, use its `diagnostic_reference` with **Admin → Activity** (`/admin/activity`) or `operation-diagnostics-read`. Diagnostics preserve the *observed* error and its stage with sensitive values removed; if a downstream system omitted the original cause, Gateway cannot reconstruct it. Never blindly retry a mutation with an unknown result.
 
-**For an existing deployment-ZIP installation**, use **`mcp-gateway-update-vX.Y.Z.zip`** from your chosen published [GitHub Release](https://github.com/AChWorks/mcp-gateway/releases) (`X.Y.Z` is its exact version), never its fresh-install ZIP, an older release's update ZIP or the generic GitHub source archive.
+Keep `.env`, application encryption and OAuth signing keys, database backups, credentials, tokens and private `storage/` outside the web root and out of public issue reports.
 
-1. Confirm the installed version and review the [release notes](RELEASE_NOTES.md). Take and **test-restore a consistent database backup**; also preserve `.env`, `APP_KEY`, both OAuth/signing key pairs, current code and private state. An updater code snapshot is **not** a database backup.
-2. Upload and extract the named update ZIP into the **existing application root** (where `artisan`, `.env`, `public/` and `storage/` reside). This stages a temporary `update/` and `public/update/`; it does not immediately replace the app.
-3. Open `https://gateway.example.com/update/`, sign in as an existing administrator, verify the source/target versions and package checks, and select **Update MCP Gateway**. Keep the browser open through completion.
-4. Verify the newly installed version, `/up`, Admin login, OAuth discovery, WordPress/SSH Targets and client authorizations. A successful update removes the temporary updater entry.
+## Update an existing installation
 
-**Do not blindly retry failed updates.** If a migration may have started, code-only rollback is not a database rollback. Keep backup, private recovery state and logs, then follow the [deployment/recovery procedures](docs/DEPLOYMENT.md) before any further action. The private Owner-local recovery CLI is not an unauthenticated web recovery endpoint.
+1. Read the selected [Release notes](RELEASE_NOTES.md), preserve the existing `.env`, `APP_KEY`, OAuth/Bridge signing keys, application code and private `storage/`, and take a **consistent database backup whose restore can be verified**.
+2. Download the matching **`mcp-gateway-update-vX.Y.Z.zip`** and its `.sha256` from the published Release; **do not** use the fresh-install ZIP or GitHub's generic source archive.
+3. Extract the update ZIP into the **existing application root** (alongside `artisan`, `.env`, `public/` and `storage/`). Open **`https://gateway.example.com/update/`**, sign in as an existing administrator and follow the version/checksum/preflight checks.
+4. Complete the browser updater **once**, then verify the installed version, `/up`, Admin sign-in, OAuth connection and authorized WordPress/SSH Targets. Successful cleanup removes the temporary updater endpoint.
 
-**Compatibility:** v1 Site-era → v2 Target-era upgrades are breaking and require the [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md). The v2.0.3 → v2.1.2 path added four database migrations; v2.2.0 added guarded WordPress disconnect-recovery migration handling. v2.2.1 does not introduce another migration on top of v2.2.0. The v2.3.0 release adds five migrations: SSH command operational-limit columns, a durable SSH Job journal, configurable Job lifecycle/resource budgets and operator attestation, immutable per-Job admission timing snapshots, and a default-enabled Target Pause/Resume flag; back up and test restoration of the database before any eventual upgrade. The Job journal migration refuses unsafe rollback while any Job record remains. v2.3.1 adds two non-destructive Target-era migrations for the SSH Job script-input setting and optional AI guidance; a rollback must not silently discard operator-written notes. v2.3.2 adds nullable `activity_events.diagnostic_context` for selectively redacted observed error details; reverting this migration drops retained diagnostic evidence, so a code rollback is not a safe database rollback. Historical prerelease installs or skipped versions require exact-release compatibility verification. Source/Composer-managed installations must use the [CLI deployment procedure](docs/DEPLOYMENT.md), not the browser ZIP updater.
+Source commits and GitHub Releases do **not** update an installed Gateway automatically.
+
+If an update stops during migration or recovery, **do not blindly retry** or treat a code-only backup as a database restore. Use the [Deployment and recovery guide](docs/DEPLOYMENT.md). Older v1 Site-era upgrades require the separate [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md); source/Composer installations use their own CLI procedure.
 
 ## Troubleshooting
 
-- **Cannot install:** check PHP/extensions, TLS, correct `public/` web root, writable runtime paths and an empty dedicated database. Never relax private file permissions globally.
-- **WordPress `invalid_client`:** verify that WordPress approved Gateway's exact client metadata URL, then check the real Target status and pending OAuth operation before reconnecting. Do not regenerate Gateway keys to fix this error.
-- **AI client disconnected:** verify Gateway health and OAuth discovery first; inspect and reconnect the correct client authorization when appropriate, without resetting healthy WordPress credentials.
-- **Operation failure:** use the returned `diagnostic_reference` in authorized Admin Activity or the read-only `operation-diagnostics-read` MCP tool to inspect the original *observed* code, message and stage after selective credential redaction. A provider cause already hidden upstream remains unknown; do not blindly retry a potentially executed mutation.
-- **Updater stalled/failed:** preserve backup and recovery evidence. Do not assume Laravel CLI readiness proves actual HTTP availability or that migrations can be reversed.
+- **Installer or HTTP error:** confirm PHP/extensions, HTTPS, URL rewrites, the `public/` web root, database access and writable runtime directories.
+- **WordPress `invalid_client`:** verify the exact Gateway client metadata URL is approved in WP AI Bridge and inspect the Target's real consent/recovery status. Do not regenerate signing keys as a shortcut.
+- **MCP tools missing:** verify OAuth client/user/Target grants, whether a Target is paused, and whether the client needs a Tool catalog refresh.
+- **SSH command or file failure:** check the approved host-key fingerprint, remote OS account permissions, SFTP path and separately enabled whole-file transfer mode.
+- **Unclear failure or interrupted update:** use authorized diagnostic evidence or [recovery instructions](docs/DEPLOYMENT.md); never repeat an operation that may already have changed a remote system.
 
-Use [Deployment](docs/DEPLOYMENT.md) and [Configuration](docs/CONFIGURATION.md) for detailed diagnostics, session lifetime (default `SESSION_LIFETIME=120` minutes of inactivity, `SESSION_EXPIRE_ON_CLOSE=false`), PHP-worker permissions and safe recovery. Do not publish passwords, tokens, `.env` or private keys in issue reports.
+## Further guides
 
-## Documentation
-
-- [Releases](https://github.com/AChWorks/mcp-gateway/releases) and [release notes](RELEASE_NOTES.md) — shipped versions and compatibility.
-- [Deployment, upgrade and recovery](docs/DEPLOYMENT.md) — detailed host setup, backups and troubleshooting.
-- [Configuration](docs/CONFIGURATION.md) — settings, timeouts and safe live changes.
-- [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md) — breaking v1→v2 upgrades and recovery boundaries.
-- [Whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) — optional SSH binary transfer requirements and limits.
-- [Direct SSH connector and Jobs](docs/DIRECT-SSH-CONNECTOR.md) — SSH Job prerequisites, bounded results and safe recovery.
-- [Development](docs/DEVELOPMENT.md) — contributor setup and validation.
+- [Official Releases](https://github.com/AChWorks/mcp-gateway/releases) and [Release notes](RELEASE_NOTES.md) — versions and compatibility.
+- [Deployment and recovery](docs/DEPLOYMENT.md) — hosting, cron, updates and backup procedures.
+- [Configuration](docs/CONFIGURATION.md) and [`.env.example`](.env.example) — supported settings and safe changes.
+- [Whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) and [Direct SSH](docs/DIRECT-SSH-CONNECTOR.md) — detailed remote file/Job operation.
+- [Target connection recovery](docs/TARGET-DISCONNECT-RECOVERY.md) — safe WordPress OAuth recovery.
+- [Development](docs/DEVELOPMENT.md) — source/CLI installation and contributor tests.
 
 ## License
 
-MCP Gateway is available under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE).
