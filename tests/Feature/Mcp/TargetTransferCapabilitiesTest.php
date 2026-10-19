@@ -29,6 +29,7 @@ final class TargetTransferCapabilitiesTest extends TestCase
         self::assertSame(['mcp_range_read', 'mcp_single_window_write'],
             array_column($disabled['native_interfaces'], 'kind'));
         self::assertSame(16384, $disabled['native_interfaces'][0]['max_raw_bytes_per_call']);
+        self::assertSame(16384, $disabled['native_interfaces'][1]['max_raw_bytes_per_call']);
         self::assertNull($disabled['native_interfaces'][0]['object_size_limit']);
         self::assertFalse($disabled['model_file_consumption_verified']);
 
@@ -49,6 +50,46 @@ final class TargetTransferCapabilitiesTest extends TestCase
         self::assertFalse($mode['model_attachment_handoff_verified']);
         self::assertArrayNotHasKey('url', $mode['endpoints']['upload']);
         self::assertStringNotContainsString('password', json_encode($mode, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_ssh_native_capability_discovery_uses_exact_current_read_and_write_windows(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target('dynamic-ssh', 'ssh_direct');
+        // Independent limits must not be conflated. This is a persisted
+        // Owner state fixture, not a change to production settings.
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_file_read_window_kib' => 64,
+            'ssh_file_write_window_kib' => 512,
+        ]);
+
+        $catalog = app(TargetMcpToolHandlers::class)
+            ->targetContext($owner, $target->target_id)['target']['file_transfer'];
+        $native = array_column($catalog['native_interfaces'], null, 'kind');
+        self::assertSame(65536, $native['mcp_range_read']['max_raw_bytes_per_call']);
+        self::assertSame(524288, $native['mcp_single_window_write']['max_raw_bytes_per_call']);
+        self::assertSame('size_mtime_best_effort', $native['mcp_range_read']['snapshot']);
+        self::assertTrue($native['mcp_single_window_write']['atomic_complete_file_per_call']);
+        self::assertSame([], $catalog['whole_file_modes'], 'Native SSH windows are not whole-file HTTP.');
+
+        // Target-scoped denial remains authoritative even when the
+        // persisted Owner window would otherwise allow 512 KiB writes.
+        $operator = $this->user('operator');
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        DB::table('user_permission_denials')->where('user_id', $operator->getKey())
+            ->whereIn('permission', [
+                GatewayPermission::SshFileRead->value, GatewayPermission::SshFileWrite->value,
+            ])->delete();
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::SshFileWrite->value,
+        ]);
+        $limited = app(TargetMcpToolHandlers::class)
+            ->targetContext($operator, $target->target_id)['target']['file_transfer'];
+        self::assertSame(['mcp_range_read'], array_column($limited['native_interfaces'], 'kind'));
+        self::assertSame(65536, $limited['native_interfaces'][0]['max_raw_bytes_per_call']);
     }
 
     public function test_permissions_filter_direction_and_hide_unauthorized_targets(): void

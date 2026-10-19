@@ -135,7 +135,11 @@ attachments.
 
 Even with the binary mode disabled, `native_interfaces` documents
 the already operational Owner-configured **per-call** SSH read and atomic
-single-window write controls (each defaults to 16 KiB; up to 512 KiB). Read windows can address a larger file with
+single-window write controls (each defaults to 16 KiB; up to 512 KiB).
+The `max_raw_bytes_per_call` of each advertised native interface is its **current
+effective Owner-configured window**, independently for read and write; it is
+not a fixed 16 KiB value or a promise of a particular Client's wire budget.
+Read windows can address a larger file with
 size/mtime *best-effort* consistency; repeated write calls are **not**
 an append/resumable whole-file API. An authorized WordPress Target
 instead advertises its existing dynamically discovered native Ability
