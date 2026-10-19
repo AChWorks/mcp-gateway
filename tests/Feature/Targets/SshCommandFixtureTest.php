@@ -124,6 +124,30 @@ final class SshCommandFixtureTest extends TestCase
         self::assertNull($result['result']['exit_code']);
     }
 
+    public function test_continuous_stream_obeys_wall_clock_deadline_and_does_not_retry(): void
+    {
+        $target = $this->target('password');
+        $started = hrtime(true);
+        // Unlike a quiet 'sleep', this command continuously supplies ready
+        // packets. Vendor socket-read time alone must NOT extend the budget.
+        // The finite remote cap prevents a broken implementation from hanging
+        // the isolated fixture indefinitely.
+        $result = app(SshCommandMcpToolHandlers::class)->run(
+            $this->owner(), $target->target_id,
+            "timeout 5 sh -c 'while :; do printf tick; sleep 0.03; done'; exit 7", 1,
+        );
+        $elapsedSeconds = (hrtime(true) - $started) / 1_000_000_000;
+
+        self::assertFalse($result['ok'], json_encode($result));
+        self::assertSame('outcome_unknown', $result['error']['code']);
+        self::assertSame('outcome_unknown', $result['result']['status']);
+        self::assertFalse($result['result']['complete']);
+        self::assertNull($result['result']['exit_code']);
+        self::assertGreaterThan(0, $result['result']['stdout_total_bytes']);
+        self::assertLessThan(4.5, $elapsedSeconds, 'Continuous output must not restart the actual deadline.');
+        self::assertSame(1, DB::table('activity_events')->where('operation', 'ssh-command-run')->count());
+    }
+
     public function test_disposable_real_ssh_command_runs_longer_than_previous_30_second_ceiling(): void
     {
         $target = $this->target('password');

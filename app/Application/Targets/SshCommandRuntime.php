@@ -141,24 +141,35 @@ final readonly class SshCommandRuntime
 
         $unknown = false;
         $exit = null;
+        $deadline = new SshCommandExecutionDeadline($timeoutSeconds);
         $ssh->disableQuietMode();
-        $ssh->setTimeout($timeoutSeconds);
+        $ssh->setTimeout($deadline->remainingSocketSeconds());
         try {
-            $ssh->exec($command, static function (string $chunk) use ($ssh, $collector): bool {
+            $ssh->exec($command, static function (string $chunk) use ($ssh, $collector, $deadline): bool {
+                // A busy stream can spend almost no time blocked in socket
+                // reads. Check elapsed monotonic time for EVERY delivered
+                // packet, independently of phpseclib's curTimeout counter.
+                $deadline->remainingSocketSeconds();
                 $collector->observe($ssh, $chunk);
 
-                // Do not close the channel just because capture ceilings
-                // were reached. Keep draining until actual end/exit proof.
+                // Clamp the next socket wait too: after a burst of packets,
+                // phpseclib must not get a fresh full-length blocking wait.
+                // Throwing on expiry unwinds exec directly. Returning true
+                // instead would enter close_channel's separate drain loop.
+                $ssh->setTimeout($deadline->remainingSocketSeconds());
+
+                // Preserve genuine exit evidence for finite output. Reaching
+                // a capture limit does not authorize closing this channel.
                 return false;
             });
-            $unknown = $ssh->isTimeout();
+            $unknown = $deadline->expired() || $ssh->isTimeout();
             $exit = $unknown ? null : $ssh->getExitStatus();
             if ($exit === null) {
                 $unknown = true;
             }
         } catch (Throwable) {
-            // After exec() is attempted, dispatch may have succeeded even if
-            // the channel, network or local consumer subsequently failed.
+            // Once exec() was attempted, the remote command may already be
+            // running. Never fabricate exit evidence or silently replay it.
             $unknown = true;
         }
 
