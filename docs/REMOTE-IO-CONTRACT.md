@@ -21,7 +21,7 @@ Do not conflate the following budgets or substitute one single “maximum messag
 | Ordinary MCP/JSON input | authenticated request bytes, schema/decoded arguments | finite pre-dispatch validation; JSON expansion and overhead accounted for |
 | Outbound provider response | **decoded** HTTP response bytes and optionally encoded/wire bytes | enforce actual delivered content, preserve complete or explicit oversize outcome |
 | MCP result representation | structured content plus text/Base64 **wire framing** bytes | measure duplication/serialization; downstream advertised payload is not the client-host limit |
-| Range or stream buffer | bytes per read/write or transport frame | small reusable bounded blocks; 16 KiB SFTP inline window is **not** 16 KiB max whole-file |
+| Range or stream buffer | bytes per read/write or transport frame | small reusable bounded blocks; Owner-adjustable 16–512 KiB SFTP inline window is **not** a whole-file maximum; internal verified streaming blocks stay small |
 | Complete transfer | total bytes, verified source/destination/temporary storage | a separate finite whole-object budget, available only for a supported direction/mode |
 | Host resources | PHP worker RAM/CPU, disk/inodes, outbound connections | admit against actual quotas; large ceiling does not preallocate large buffer |
 | Concurrency | active per-principal/Target/workflow jobs/connections | separate from accumulated Job history and operation lifetime |

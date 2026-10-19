@@ -7,6 +7,7 @@ use App\Application\Mcp\ChatGptFileToolAvailability;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Mcp\TargetFileInputMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
@@ -410,6 +411,44 @@ final class SshFileMcpTest extends TestCase
         self::assertFalse($unknown['retry_safe']);
         self::assertTrue($unknown['effect_unconfirmed']);
         self::assertStringNotContainsString('FIXTURE_UNKNOWN_SECRET', json_encode($unknown));
+    }
+
+    public function test_owner_configured_exact_512_kib_inline_sftp_windows_enforce_decoded_bytes(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_file_read_window_kib' => 512,
+            'ssh_file_write_window_kib' => 512,
+            'ssh_file_list_name_kib' => 512,
+        ]);
+        $this->app->forgetInstance(OperationalSettings::class);
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                throw new RuntimeException('No network permitted in payload boundary test.');
+            }
+        });
+        $tools = app(SshFileMcpToolHandlers::class);
+        self::assertSame('egress_denied',
+            $tools->read($owner, $target->target_id, '/tmp/fixture', 0, 524288)['error']['code']);
+        self::assertSame('invalid_input',
+            $tools->read($owner, $target->target_id, '/tmp/fixture', 0, 524289)['error']['code']);
+
+        $encoded = base64_encode(str_repeat("\xff", 524288));
+        self::assertSame(699052, strlen($encoded));
+        self::assertSame('egress_denied',
+            $tools->write($owner, $target->target_id, '/tmp/fixture', $encoded)['error']['code']);
+        self::assertSame('invalid_input',
+            $tools->write($owner, $target->target_id, '/tmp/fixture', base64_encode(str_repeat('x', 524289)))['error']['code']);
+        self::assertSame('invalid_input',
+            $tools->write($owner, $target->target_id, '/tmp/fixture', $encoded.'==')['error']['code']);
+
+        // Internal stream buffers and aggregate SSH whole-file size retain
+        // their independent budgets despite the enlarged inline window.
+        self::assertSame(8388608, app(OperationalSettings::class)->sshTransferLimits()['max_bytes']);
     }
 
     private function target(): Target

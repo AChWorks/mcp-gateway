@@ -149,6 +149,56 @@ final class SshCommandMcpTest extends TestCase
         }
     }
 
+    public function test_exact_512_kib_command_and_360_second_boundary_apply_before_transport(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_command_timeout_seconds' => 360, 'ssh_command_max_kib' => 512,
+        ]);
+        $this->app->forgetInstance(OperationalSettings::class);
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                throw new RuntimeException('Isolated deny-only synthetic policy.');
+            }
+        });
+        $handler = app(SshCommandMcpToolHandlers::class);
+        foreach ([str_repeat('x', 524288), str_repeat('é', 262144)] as $accepted) {
+            self::assertSame('egress_denied', $handler->run($owner, $target->target_id, $accepted, 360)['error']['code']);
+        }
+        foreach ([[str_repeat('x', 524289), 360], [str_repeat('é', 262145), 360], ['echo x', 361]] as [$command, $seconds]) {
+            $result = $handler->run($owner, $target->target_id, $command, $seconds);
+            self::assertSame('invalid_input', $result['error']['code']);
+            self::assertSame(['max_command_bytes' => 524288, 'max_timeout_seconds' => 360],
+                $result['error']['effective_limits']);
+        }
+        self::assertSame(0, DB::table('activity_events')->where('operation', 'ssh-command-run')
+            ->where('outcome', 'unknown')->count());
+    }
+
+    public function test_php_worker_deadline_rejects_long_command_before_remote_dispatch(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('operational_settings')->where('id', 1)->update(['ssh_command_timeout_seconds' => 360]);
+        $this->app->forgetInstance(OperationalSettings::class);
+        $old = (string) ini_get('max_execution_time');
+        try {
+            ini_set('max_execution_time', '30');
+            $result = app(SshCommandMcpToolHandlers::class)->run($owner, $target->target_id, 'echo bounded', 35);
+            self::assertSame('timeout_unsupported', $result['error']['code']);
+            $activity = DB::table('activity_events')->where('operation', 'ssh-command-run')->latest('created_at')->first();
+            self::assertSame('timeout_unsupported', $activity->error_code);
+            self::assertSame('failure', $activity->outcome);
+        } finally {
+            ini_set('max_execution_time', $old);
+        }
+    }
+
     private function target(): Target
     {
         return app(SshTargetRegistration::class)->register(

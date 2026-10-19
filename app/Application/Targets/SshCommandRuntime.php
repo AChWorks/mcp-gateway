@@ -16,16 +16,11 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
 use App\Models\User;
 use phpseclib4\Net\SSH2;
-use RuntimeException;
 use Throwable;
 
 /** One non-interactive exec on a pinned, Target-bound SSH session, never retried. */
 final readonly class SshCommandRuntime
 {
-    private const STDOUT_LIMIT = 16384;
-
-    private const STDERR_LIMIT = 8192;
-
     public function __construct(
         private SshTargetVault $vault,
         private SshVerifiedTransport $transport,
@@ -48,6 +43,15 @@ final readonly class SshCommandRuntime
             || str_contains($command, "\0") || $timeoutSeconds < 1
             || $timeoutSeconds > $limits['max_seconds']) {
             throw new SshTargetConnectionException('invalid_input');
+        }
+
+        // A finite FPM/LSAPI worker that cannot reach the selected timeout
+        // must fail before attempting a possibly effectful remote command.
+        // An unlimited CLI/worker (0) is allowed; proxy/client hop limits
+        // still require separately measured operator qualification.
+        $workerSeconds = (int) ini_get('max_execution_time');
+        if ($workerSeconds > 0 && $workerSeconds < $timeoutSeconds + 15) {
+            throw new SshTargetConnectionException('timeout_unsupported');
         }
 
         return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding): array {
@@ -115,7 +119,7 @@ final readonly class SshCommandRuntime
                     return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started);
                 },
             );
-        });
+        }, $timeoutSeconds);
     }
 
     /** @return array<string,mixed> */
@@ -123,55 +127,44 @@ final readonly class SshCommandRuntime
         SSH2 $ssh, string $command, int $timeoutSeconds,
         string $peerIp, SshTargetConfig $config, float $started,
     ): array {
-        $stdout = '';
-        $stderr = '';
-        $stderrObserved = 0;
-        $outputExceeded = false;
-        $unknown = false;
+        // The collector must be ready BEFORE we send any remote command.
+        // It clears phpseclib's cumulative private stderr log per packet;
+        // otherwise verbose stderr would grow without bound *inside* SSH2.
+        try {
+            $limits = $this->settings->sshCommandOutputLimits();
+            $collector = new SshCommandOutputCollector(
+                $ssh, $limits['stdout_bytes'], $limits['stderr_bytes'],
+            );
+        } catch (Throwable) {
+            throw new SshTargetConnectionException('ssh_output_collector_unavailable');
+        }
 
-        // phpseclib delivers stdout and stderr chunks to the callback when
-        // quiet mode is off. Only stderr increments its internal stderr log.
-        // Exit as soon as either byte budget is exceeded; never buffer floods.
+        $unknown = false;
+        $exit = null;
         $ssh->disableQuietMode();
         $ssh->setTimeout($timeoutSeconds);
         try {
-            $ssh->exec($command, static function (string $chunk) use (
-                $ssh, &$stdout, &$stderr, &$stderrObserved, &$outputExceeded,
-            ): bool {
-                $seen = strlen($ssh->getStdError());
-                $isStderr = $seen > $stderrObserved;
-                $stderrObserved = $seen;
-                $limit = $isStderr ? self::STDERR_LIMIT : self::STDOUT_LIMIT;
-                $current = $isStderr ? strlen($stderr) : strlen($stdout);
-                if ($current + strlen($chunk) > $limit) {
-                    $remaining = max(0, $limit - $current);
-                    if ($isStderr) {
-                        $stderr .= substr($chunk, 0, $remaining);
-                    } else {
-                        $stdout .= substr($chunk, 0, $remaining);
-                    }
-                    $outputExceeded = true;
-                    // Closing an active channel cannot prove the remote command
-                    // stopped. Never call it completed and never re-execute.
-                    throw new RuntimeException('ssh_output_budget_reached');
-                }
-                if ($isStderr) {
-                    $stderr .= $chunk;
-                } else {
-                    $stdout .= $chunk;
-                }
+            $ssh->exec($command, static function (string $chunk) use ($ssh, $collector): bool {
+                $collector->observe($ssh, $chunk);
 
+                // Do not close the channel just because capture ceilings
+                // were reached. Keep draining until actual end/exit proof.
                 return false;
             });
             $unknown = $ssh->isTimeout();
+            $exit = $unknown ? null : $ssh->getExitStatus();
+            if ($exit === null) {
+                $unknown = true;
+            }
         } catch (Throwable) {
             // After exec() is attempted, dispatch may have succeeded even if
             // the channel, network or local consumer subsequently failed.
             $unknown = true;
         }
 
-        $stdoutEncoded = $this->encoded($stdout);
-        $stderrEncoded = $this->encoded($stderr);
+        $capture = $collector->result();
+        $stdoutEncoded = $this->encoded($capture['stdout']);
+        $stderrEncoded = $this->encoded($capture['stderr']);
         $status = $unknown ? 'outcome_unknown' : 'completed';
 
         return [
@@ -182,13 +175,17 @@ final readonly class SshCommandRuntime
             'port' => $config->port,
             'stdout' => $stdoutEncoded['data'],
             'stdout_encoding' => $stdoutEncoded['encoding'],
-            'stdout_bytes' => strlen($stdout),
+            'stdout_bytes' => $capture['stdout_bytes'],
+            'stdout_total_bytes' => $capture['stdout_total_bytes'],
+            'stdout_truncated' => $capture['stdout_truncated'],
             'stderr' => $stderrEncoded['data'],
             'stderr_encoding' => $stderrEncoded['encoding'],
-            'stderr_bytes' => strlen($stderr),
-            'exit_code' => $unknown ? null : $ssh->getExitStatus(),
+            'stderr_bytes' => $capture['stderr_bytes'],
+            'stderr_total_bytes' => $capture['stderr_total_bytes'],
+            'stderr_truncated' => $capture['stderr_truncated'],
+            'exit_code' => $unknown ? null : $exit,
             'complete' => ! $unknown,
-            'truncated' => $outputExceeded,
+            'truncated' => $capture['stdout_truncated'] || $capture['stderr_truncated'],
             'continuation_available' => false,
             'duration_ms' => (int) round((microtime(true) - $started) * 1000),
         ];

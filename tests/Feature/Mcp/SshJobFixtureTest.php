@@ -163,15 +163,16 @@ SH;
         $tools = app(SshJobMcpToolHandlers::class);
         $requestId = (string) Str::uuid();
         // Exercise the actual verified streaming publish, not just a larger
-        // input schema. Last executable lines occur AFTER byte 16384, so
+        // input schema. The exact 512 KiB last executable lines are AFTER byte 16384, so
         // truncation/partial upload cannot accidentally pass this test.
         DB::table('operational_settings')->where('id', 1)->update([
-            'ssh_job_max_script_kib' => 32,
+            'ssh_job_max_script_kib' => 512,
         ]);
-        $script = str_repeat('# streamed-fixture-padding-'.str_repeat('x', 48).chr(10), 300)
-            .'sleep 19; printf "%020000d" 7; printf "err-job" >&2; exit 7';
-        self::assertGreaterThan(16384, strlen($script));
-        self::assertLessThanOrEqual(32768, strlen($script));
+        $tail = 'sleep 19; printf "%020000d" 7; printf "err-job" >&2; exit 7';
+        $header = 'set -eu'.chr(10);
+        $script = $header.'# '.str_repeat('x', 524288 - strlen($header) - 3 - strlen($tail))
+            .chr(10).$tail;
+        self::assertSame(524288, strlen($script));
         $start = $tools->start($owner, $target->target_id, $client, $requestId, $script, 60);
         self::assertTrue($start['ok'], json_encode($start));
         self::assertSame('running', $start['result']['status']);

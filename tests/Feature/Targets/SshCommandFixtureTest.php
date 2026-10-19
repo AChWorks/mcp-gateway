@@ -65,18 +65,20 @@ final class SshCommandFixtureTest extends TestCase
         self::assertSame(0, $result['result']['exit_code']);
     }
 
-    public function test_output_flood_aborts_bounded_capture_with_unknown_outcome_and_no_continuation(): void
+    public function test_output_flood_drains_safely_and_retains_proven_remote_exit(): void
     {
         $target = $this->target('password');
         $result = app(SshCommandMcpToolHandlers::class)->run($this->owner(), $target->target_id,
             "head -c 32768 /dev/zero | tr '\\000' x");
-        self::assertFalse($result['ok']);
-        self::assertSame('outcome_unknown', $result['error']['code']);
-        self::assertSame('outcome_unknown', $result['result']['status']);
+        self::assertTrue($result['ok'], json_encode($result));
+        self::assertSame('completed', $result['result']['status']);
         self::assertSame(16384, $result['result']['stdout_bytes']);
+        self::assertSame(32768, $result['result']['stdout_total_bytes']);
+        self::assertTrue($result['result']['stdout_truncated']);
+        self::assertFalse($result['result']['stderr_truncated']);
         self::assertTrue($result['result']['truncated']);
-        self::assertFalse($result['result']['complete']);
-        self::assertNull($result['result']['exit_code']);
+        self::assertTrue($result['result']['complete']);
+        self::assertSame(0, $result['result']['exit_code']);
         self::assertFalse($result['result']['continuation_available']);
     }
 
@@ -85,10 +87,31 @@ final class SshCommandFixtureTest extends TestCase
         $target = $this->target('password');
         $result = app(SshCommandMcpToolHandlers::class)->run($this->owner(), $target->target_id,
             "head -c 16384 /dev/zero | tr '\\000' e >&2");
-        self::assertFalse($result['ok']);
-        self::assertSame('outcome_unknown', $result['error']['code']);
+        self::assertTrue($result['ok'], json_encode($result));
         self::assertSame(8192, $result['result']['stderr_bytes']);
+        self::assertSame(16384, $result['result']['stderr_total_bytes']);
+        self::assertTrue($result['result']['stderr_truncated']);
+        self::assertFalse($result['result']['stdout_truncated']);
         self::assertTrue($result['result']['truncated']);
+        self::assertSame(0, $result['result']['exit_code']);
+    }
+
+    public function test_multi_megabyte_outputs_are_drained_without_stderr_heap_growth(): void
+    {
+        $target = $this->target('password');
+        $result = app(SshCommandMcpToolHandlers::class)->run($this->owner(), $target->target_id,
+            "head -c 2097152 /dev/zero | tr '\\000' s; head -c 2097152 /dev/zero | tr '\\000' e >&2; exit 7");
+        self::assertTrue($result['ok'], json_encode($result));
+        $data = $result['result'];
+        self::assertSame('completed', $data['status']);
+        self::assertSame(7, $data['exit_code']);
+        self::assertSame(2097152, $data['stdout_total_bytes']);
+        self::assertSame(2097152, $data['stderr_total_bytes']);
+        self::assertSame(16384, $data['stdout_bytes']);
+        self::assertSame(8192, $data['stderr_bytes']);
+        self::assertTrue($data['stdout_truncated']);
+        self::assertTrue($data['stderr_truncated']);
+        self::assertLessThan(128 * 1024 * 1024, memory_get_peak_usage(true));
     }
 
     public function test_timeout_is_unknown_and_command_is_not_retried(): void
@@ -99,6 +122,43 @@ final class SshCommandFixtureTest extends TestCase
         self::assertSame('outcome_unknown', $result['error']['code']);
         self::assertFalse($result['result']['complete']);
         self::assertNull($result['result']['exit_code']);
+    }
+
+    public function test_disposable_real_ssh_command_runs_longer_than_previous_30_second_ceiling(): void
+    {
+        $target = $this->target('password');
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_command_timeout_seconds' => 45,
+        ]);
+        $result = app(SshCommandMcpToolHandlers::class)->run(
+            $this->owner(), $target->target_id, 'sleep 35; printf "after35"; exit 7', 45,
+        );
+        self::assertTrue($result['ok'], json_encode($result));
+        self::assertSame('completed', $result['result']['status']);
+        self::assertSame('after35', $result['result']['stdout']);
+        self::assertSame(7, $result['result']['exit_code']);
+        self::assertTrue($result['result']['complete']);
+    }
+
+    public function test_opt_in_disposable_extended_timeout_acceptance_over_90_or_near_360_seconds(): void
+    {
+        $seconds = (int) getenv('SSH_COMMAND_EXTENDED_FIXTURE_SECONDS');
+        if (! in_array($seconds, [95, 350], true)) {
+            $this->markTestSkipped('Set SSH_COMMAND_EXTENDED_FIXTURE_SECONDS=95 or 350 on disposable OpenSSH fixture.');
+        }
+
+        $target = $this->target('password');
+        $selectedTimeout = $seconds === 350 ? 360 : 120;
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_command_timeout_seconds' => $selectedTimeout,
+        ]);
+        $result = app(SshCommandMcpToolHandlers::class)->run(
+            $this->owner(), $target->target_id, 'sleep '.$seconds.'; printf "long-ok"', $selectedTimeout,
+        );
+        self::assertTrue($result['ok'], json_encode($result));
+        self::assertSame('completed', $result['result']['status']);
+        self::assertSame('long-ok', $result['result']['stdout']);
+        self::assertSame(0, $result['result']['exit_code']);
     }
 
     private function target(string $method): Target

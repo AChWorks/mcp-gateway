@@ -472,6 +472,33 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
     }
 
+    public function test_exact_512_kib_job_script_is_admitted_and_extra_utf8_byte_rejected_before_journal(): void
+    {
+        $user = $this->user('owner');
+        $target = $this->target();
+        $client = hash('sha256', 'job-script-512k');
+        DB::table('operational_settings')->where('id', 1)->update(['ssh_job_max_script_kib' => 512]);
+        $jobs = app(SshJobMcpToolHandlers::class);
+        $prefix = 'echo approved'.chr(10);
+        $script = $prefix.str_repeat('#', 524288 - strlen($prefix));
+        self::assertSame(524288, strlen($script));
+        $sameId = (string) Str::uuid();
+        $started = $jobs->start($user, $target->target_id, $client, $sameId, $script, 30);
+        self::assertSame('job_unsupported', $started['error']['code']);
+        self::assertSame('unsupported', $started['result']['status']);
+        self::assertSame(1, DB::table('ssh_command_jobs')->count());
+        self::assertSame($started['result']['job_id'],
+            $jobs->start($user, $target->target_id, $client, $sameId, $script, 30)['result']['job_id']);
+
+        foreach ([$script.'x', str_repeat('é', 262145)] as $over) {
+            $result = $jobs->start(
+                $user, $target->target_id, $client, (string) Str::uuid(), $over, 30,
+            );
+            self::assertSame('invalid_input', $result['error']['code']);
+        }
+        self::assertSame(1, DB::table('ssh_command_jobs')->count());
+    }
+
     public function test_expired_unknown_job_stays_recoverable_and_does_not_get_replayed_or_pruned(): void
     {
         $owner = $this->user('owner');
@@ -588,7 +615,11 @@ final class SshJobMcpTest extends TestCase
         // New MCP requests publish the current Owner-configured maximum,
         // never a hardcoded 300s schema that contradicts real runtime.
         DB::table('operational_settings')->where('id', 1)
-            ->update(['ssh_job_max_runtime_seconds' => 7200, 'ssh_job_max_script_kib' => 64]);
+            ->update(['ssh_job_max_runtime_seconds' => 7200, 'ssh_job_max_script_kib' => 512,
+                'ssh_job_output_window_kib' => 512, 'ssh_file_read_window_kib' => 512,
+                'ssh_file_write_window_kib' => 512, 'ssh_file_list_name_kib' => 512,
+                'ssh_command_stdout_kib' => 512, 'ssh_command_stderr_kib' => 512,
+                'ssh_command_timeout_seconds' => 360, 'ssh_command_max_kib' => 512]);
         // The test directly invokes the endpoint twice in one Laravel
         // container; in real HTTP handling scoped settings reset per request.
         $this->app->forgetInstance(OperationalSettings::class);
@@ -605,7 +636,12 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(200, $updated->getStatusCode());
         $changed = collect($updatedData['result']['tools'])->keyBy('name');
         self::assertSame(7200, $changed['ssh-job-start']['inputSchema']['properties']['max_runtime_seconds']['maximum']);
-        self::assertSame(65536, $changed['ssh-job-start']['inputSchema']['properties']['script']['maxLength']);
+        self::assertSame(524288, $changed['ssh-job-start']['inputSchema']['properties']['script']['maxLength']);
+        self::assertSame(360, $changed['ssh-command-run']['inputSchema']['properties']['timeout_seconds']['maximum']);
+        self::assertSame(524288, $changed['ssh-command-run']['inputSchema']['properties']['command']['maxLength']);
+        self::assertSame(524288, $changed['ssh-job-output']['inputSchema']['properties']['length']['maximum']);
+        self::assertSame(524288, $changed['ssh-file-read']['inputSchema']['properties']['length']['maximum']);
+        self::assertSame(699052, $changed['ssh-file-write']['inputSchema']['properties']['content_base64']['maxLength']);
     }
 
     private function user(string $role): User

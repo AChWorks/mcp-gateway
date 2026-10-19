@@ -29,8 +29,8 @@ final class OperationalSettings
         'ssh_transfer_max_seconds' => ['minimum' => 5, 'maximum' => 40],
         // Sync SSH commands remain bounded by PHP/proxy/transport limits.
         // Larger or slower scripts use the retained Direct SSH Job path.
-        'ssh_command_timeout_seconds' => ['minimum' => 15, 'maximum' => 30],
-        'ssh_command_max_kib' => ['minimum' => 8, 'maximum' => 64],
+        'ssh_command_timeout_seconds' => ['minimum' => 15, 'maximum' => 360],
+        'ssh_command_max_kib' => ['minimum' => 8, 'maximum' => 512],
         // Detached jobs have independent, Owner-adjustable resource budgets.
         // The service retains uncertain identities even after admission ends.
         'ssh_job_max_active_per_user' => ['minimum' => 1, 'maximum' => 1024],
@@ -38,7 +38,15 @@ final class OperationalSettings
         'ssh_job_retention_hours' => ['minimum' => 1, 'maximum' => 8760],
         'ssh_job_preparing_grace_seconds' => ['minimum' => 30, 'maximum' => 600],
         'ssh_job_reconcile_grace_seconds' => ['minimum' => 60, 'maximum' => 3600],
-        'ssh_job_max_script_kib' => ['minimum' => 16, 'maximum' => 64],
+        'ssh_job_max_script_kib' => ['minimum' => 16, 'maximum' => 512],
+        // Add new controls *after* existing ones: legacy saved browser tabs
+        // submit prefix allowlists, retaining every absent newer setting.
+        'ssh_command_stdout_kib' => ['minimum' => 16, 'maximum' => 512],
+        'ssh_command_stderr_kib' => ['minimum' => 8, 'maximum' => 512],
+        'ssh_job_output_window_kib' => ['minimum' => 16, 'maximum' => 512],
+        'ssh_file_read_window_kib' => ['minimum' => 16, 'maximum' => 512],
+        'ssh_file_write_window_kib' => ['minimum' => 16, 'maximum' => 512],
+        'ssh_file_list_name_kib' => ['minimum' => 16, 'maximum' => 512],
     ];
 
     /** @var array<string, int>|null */
@@ -115,6 +123,34 @@ final class OperationalSettings
         ];
     }
 
+    /** @return array{stdout_bytes:int,stderr_bytes:int} */
+    public function sshCommandOutputLimits(): array
+    {
+        $overrides = $this->overrides();
+
+        return [
+            'stdout_bytes' => ($overrides['ssh_command_stdout_kib'] ?? 16) * 1024,
+            'stderr_bytes' => ($overrides['ssh_command_stderr_kib'] ?? 8) * 1024,
+        ];
+    }
+
+    public function sshJobOutputWindowBytes(): int
+    {
+        return ($this->overrides()['ssh_job_output_window_kib'] ?? 16) * 1024;
+    }
+
+    /** @return array{read_bytes:int,write_bytes:int,list_name_bytes:int} */
+    public function sshFileLimits(): array
+    {
+        $overrides = $this->overrides();
+
+        return [
+            'read_bytes' => ($overrides['ssh_file_read_window_kib'] ?? 16) * 1024,
+            'write_bytes' => ($overrides['ssh_file_write_window_kib'] ?? 16) * 1024,
+            'list_name_bytes' => ($overrides['ssh_file_list_name_kib'] ?? 16) * 1024,
+        ];
+    }
+
     /** @return array{max_active_per_user:int,max_runtime_seconds:int,retention_hours:int,preparing_grace_seconds:int,reconcile_grace_seconds:int,max_script_bytes:int} */
     public function sshJobLimits(): array
     {
@@ -160,7 +196,8 @@ final class OperationalSettings
         if ($keys !== $all && $keys !== array_slice($all, 0, 4)
             && $keys !== array_slice($all, 0, 6)
             && $keys !== array_slice($all, 0, 8)
-            && $keys !== array_slice($all, 0, -1)) {
+            && $keys !== array_slice($all, 0, 13)
+            && $keys !== array_slice($all, 0, 14)) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);
@@ -224,7 +261,9 @@ final class OperationalSettings
                 || ! property_exists($record, 'ssh_command_max_kib')
                 || ! property_exists($record, 'ssh_job_max_active_per_user')
                 || ! property_exists($record, 'ssh_job_reconcile_grace_seconds')
-                || ! property_exists($record, 'ssh_job_max_script_kib')) {
+                || ! property_exists($record, 'ssh_job_max_script_kib')
+                || ! property_exists($record, 'ssh_command_stdout_kib')
+                || ! property_exists($record, 'ssh_file_list_name_kib')) {
                 throw new RuntimeException('Network settings migration is missing.');
             }
             $old = $this->combineOverrides($record);
@@ -252,6 +291,12 @@ final class OperationalSettings
                 'ssh_job_preparing_grace_seconds' => $next['ssh_job_preparing_grace_seconds'] ?? null,
                 'ssh_job_reconcile_grace_seconds' => $next['ssh_job_reconcile_grace_seconds'] ?? null,
                 'ssh_job_max_script_kib' => $next['ssh_job_max_script_kib'] ?? null,
+                'ssh_command_stdout_kib' => $next['ssh_command_stdout_kib'] ?? null,
+                'ssh_command_stderr_kib' => $next['ssh_command_stderr_kib'] ?? null,
+                'ssh_job_output_window_kib' => $next['ssh_job_output_window_kib'] ?? null,
+                'ssh_file_read_window_kib' => $next['ssh_file_read_window_kib'] ?? null,
+                'ssh_file_write_window_kib' => $next['ssh_file_write_window_kib'] ?? null,
+                'ssh_file_list_name_kib' => $next['ssh_file_list_name_kib'] ?? null,
                 'version' => $revision,
                 'changed_by' => $actor->getKey(),
                 'updated_at' => $now,
@@ -315,7 +360,10 @@ final class OperationalSettings
             'ssh_command_timeout_seconds', 'ssh_command_max_kib',
             'ssh_job_max_active_per_user', 'ssh_job_max_runtime_seconds',
             'ssh_job_retention_hours', 'ssh_job_preparing_grace_seconds',
-            'ssh_job_reconcile_grace_seconds', 'ssh_job_max_script_kib'] as $key) {
+            'ssh_job_reconcile_grace_seconds', 'ssh_job_max_script_kib',
+            'ssh_command_stdout_kib', 'ssh_command_stderr_kib',
+            'ssh_job_output_window_kib', 'ssh_file_read_window_kib',
+            'ssh_file_write_window_kib', 'ssh_file_list_name_kib'] as $key) {
             $value = $record->{$key} ?? null;
             if ($value === null) {
                 continue;

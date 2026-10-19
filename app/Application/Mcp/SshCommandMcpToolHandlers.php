@@ -101,7 +101,7 @@ final readonly class SshCommandMcpToolHandlers
         string $operation, ?Target $target, string $code, array $limits = [], array $observed = [],
     ): array {
         $reference = CorrelationId::current();
-        $admission = in_array($code, ['rate_limited', 'connection_busy', 'admission_unavailable'], true);
+        $admission = in_array($code, ['rate_limited', 'connection_busy', 'admission_unavailable', 'timeout_unsupported', 'ssh_output_collector_unavailable'], true);
         $this->activity->record($reference, $operation, 'failure', $target, $code, [
             ...($admission ? [
                 'failure_origin' => 'gateway_admission',

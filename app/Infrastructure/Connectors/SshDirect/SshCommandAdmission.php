@@ -11,14 +11,18 @@ use Throwable;
 /** Separate command admission budget; login verification's limited rate is not a command quota. */
 final class SshCommandAdmission
 {
-    public function run(string $targetRecordId, Closure $operation): mixed
+    public function run(string $targetRecordId, Closure $operation, int $execTimeoutSeconds = 30): mixed
     {
         $base = 'ssh-command:'.hash('sha256', $targetRecordId);
         try {
-            // The lease exceeds the maximum connect, authentication and exec budget.
-            // Includes bounded connect/host-key/auth time plus the Owner's
-            // max 30-second exec and cleanup margin; never an unbounded lock.
-            $lock = Cache::lock($base.':lease', 90);
+            // Lease spans bounded transport setup, the *admitted actual*
+            // selected exec deadline, and cleanup margin. A fixed 90-second
+            // lease would permit overlapping effectful calls after 90s.
+            // Preserve the current lease for the default <=30-second path.
+            if ($execTimeoutSeconds < 1 || $execTimeoutSeconds > 360) {
+                throw new SshTargetConnectionException('invalid_input');
+            }
+            $lock = Cache::lock($base.':lease', $execTimeoutSeconds <= 30 ? 90 : $execTimeoutSeconds + 90);
             if (! $lock->get()) {
                 throw new SshTargetConnectionException('connection_busy');
             }

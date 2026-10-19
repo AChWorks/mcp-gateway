@@ -297,12 +297,23 @@ Unsupported framework scaffold entries (e.g. AWS/SQS/Beanstalkd/DynamoDB/Postmar
 
 For values managed in **Owner → Operational settings** use the existing audited
 database-backed Owner control, **not** an invented `.env` key. In particular,
-`ssh_job_max_script_kib` defaults to **16 KiB** and may be set to **16–64 KiB**
-only after its additive `2026_10_16_010000_add_ssh_job_script_input_limit.php`
-migration is applied on the installed host. It is separate from
-`SSH_FILE_TRANSFER_MAX_BYTES`, synchronous command input, 16 KiB per-call SFTP
-read/write and Job output windows. New settings do not retroactively change
-the identity or authorization of retained Jobs.
+`ssh_job_max_script_kib` defaults to **16 KiB** and may be set to **16–512 KiB** after the existing script-budget migration and `2026_10_19_010000_expand_ssh_resource_limits.php` have been safely applied. Other distinct Owner-operational controls:
+
+| Setting | Default | Owner range | Meaning |
+| --- | ---: | ---: | --- |
+| `ssh_command_timeout_seconds` | 15 s | 15–360 s | Selected synchronous SSH exec timeout; actual supported host/HTTP/MCP path must be qualified |
+| `ssh_command_max_kib` | 8 KiB | 8–512 KiB | Raw UTF-8 command input bytes |
+| `ssh_command_stdout_kib` | 16 KiB | 16–512 KiB | Captured command stdout before discarding further output |
+| `ssh_command_stderr_kib` | 8 KiB | 8–512 KiB | Captured command stderr before discarding further output |
+| `ssh_job_max_script_kib` | 16 KiB | 16–512 KiB | Entire staged Job script bytes; internal verified SFTP chunks stay bounded |
+| `ssh_job_output_window_kib` | 16 KiB | 16–512 KiB | Per-call Job spool read; 1 MiB retained stream quota unchanged |
+| `ssh_file_read_window_kib` | 16 KiB | 16–512 KiB | Per-call ordinary SFTP read |
+| `ssh_file_write_window_kib` | 16 KiB | 16–512 KiB | Per-call ordinary SFTP decoded write (Base64 expands over the wire) |
+| `ssh_file_list_name_kib` | 16 KiB | 16–512 KiB | Aggregate listing entry names, with the original count limit |
+
+All newly added controls are nullable typed columns and keep old effective defaults. The wider columns accept values that were not representable by prior `unsignedTinyInteger` schema. A rollback that would truncate or discard Owner settings **fails closed**; reset non-legacy settings and lower incompatible values through the authorized Admin first. Old open Admin forms retain absent newer fields, with optimistic revision checks.
+
+These values do not replace `SSH_FILE_TRANSFER_MAX_BYTES`, internal stream/chunk budgets, server HTTP body ceilings, PHP worker execution time, reverse-proxy/CDN or MCP client deadlines. A selected 360-second SSH deadline is **not** proof that every deployed hop supports it. Never increase WordPress/OAuth deadlines to compensate; validate the installed chain or use retained Jobs. New settings do not retroactively change identities, permissions, or retained Jobs.
 
 ## Operational cautions
 

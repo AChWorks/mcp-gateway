@@ -45,6 +45,8 @@ final readonly class GatewayMcpEndpoint
     {
         $commandLimits = $this->settings->sshCommandLimits();
         $jobLimits = $this->settings->sshJobLimits();
+        $fileLimits = $this->settings->sshFileLimits();
+        $jobOutputWindow = $this->settings->sshJobOutputWindowBytes();
         $authenticatedProfile = $request->attributes->get('oauth_client_profile_key');
         $fileModes = $this->fileAvailability->modes($this->user($request),
             is_string($authenticatedProfile) ? $authenticatedProfile : null);
@@ -325,7 +327,7 @@ final readonly class GatewayMcpEndpoint
                     $job_id, $stream, $offset, $length,
                 ),
                 name: 'ssh-job-output',
-                description: 'Read up to 16 KiB of retained Job stdout/stderr per call as base64; use offset for more. Output unavailable is not EOF. On connection_busy, retry reads sequentially.',
+                description: 'Read Owner-configured bounded windows of retained Job stdout/stderr per call as base64; use offset for more. Output unavailable is not EOF. On connection_busy, retry reads sequentially.',
                 annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -334,7 +336,7 @@ final readonly class GatewayMcpEndpoint
                         'job_id' => ['type' => 'string', 'minLength' => 26, 'maxLength' => 26],
                         'stream' => ['type' => 'string', 'enum' => ['stdout', 'stderr'], 'default' => 'stdout'],
                         'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 1048576, 'default' => 0],
-                        'length' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 16384, 'default' => 16384],
+                        'length' => ['type' => 'integer', 'minimum' => 1, 'maximum' => $jobOutputWindow, 'default' => min(16384, $jobOutputWindow)],
                     ],
                     'required' => ['target_id', 'job_id'],
                     'additionalProperties' => false,
@@ -400,7 +402,7 @@ final readonly class GatewayMcpEndpoint
                     $this->user($request), $target_id, $path, $offset, $length, $expected_size, $expected_mtime,
                 ),
                 name: 'ssh-file-read',
-                description: 'Read up to 16 KiB per call of an absolute SFTP file as base64; offset allows larger reads over multiple calls. Size+mtime checks are best-effort.',
+                description: 'Read a bounded Owner-configured SFTP file window as base64; offset allows larger reads over multiple calls. Size+mtime checks are best-effort.',
                 annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -408,7 +410,7 @@ final readonly class GatewayMcpEndpoint
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                         'path' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024],
                         'offset' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 1099511627776, 'default' => 0],
-                        'length' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 16384, 'default' => 16384],
+                        'length' => ['type' => 'integer', 'minimum' => 1, 'maximum' => $fileLimits['read_bytes'], 'default' => min(16384, $fileLimits['read_bytes'])],
                         'expected_size' => ['type' => 'integer', 'minimum' => 0],
                         'expected_mtime' => ['type' => 'integer', 'minimum' => 0],
                     ],
@@ -425,14 +427,14 @@ final readonly class GatewayMcpEndpoint
                     $expected_size, $expected_mtime,
                 ),
                 name: 'ssh-file-write',
-                description: 'Create or atomically replace one SFTP file (max 16 KiB decoded bytes per call); NOT an append/chunk upload. overwrite=true replaces, size+mtime checks are not CAS. On outcome_unknown, inspect before retrying. Whole-file transfer uses a separate HTTPS endpoint.',
+                description: 'Create or atomically replace one SFTP file (Owner-configured decoded-byte window); NOT an append/chunk upload. overwrite=true replaces, size+mtime checks are not CAS. On outcome_unknown, inspect before retrying. Whole-file transfer uses a separate HTTPS endpoint.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
                     'properties' => [
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                         'path' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024],
-                        'content_base64' => ['type' => 'string', 'maxLength' => 21848],
+                        'content_base64' => ['type' => 'string', 'maxLength' => 4 * intdiv($fileLimits['write_bytes'] + 2, 3)],
                         'overwrite' => ['type' => 'boolean', 'default' => false],
                         'expected_size' => ['type' => 'integer', 'minimum' => 0],
                         'expected_mtime' => ['type' => 'integer', 'minimum' => 0],
