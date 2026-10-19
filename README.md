@@ -112,9 +112,21 @@ The SSH Job script-input budget is independent of synchronous commands and 16 Ki
 
 Use **AI clients** (`/admin/oauth-clients`) to manage application profiles and granted authorizations. Client approval is not the same as Target access. If an older ChatGPT conversation still exposes obsolete `sites-list` tools after an upgrade, refresh/reconnect the App and start a new conversation; do not weaken OAuth or add insecure aliases.
 
+**ChatGPT attachment FileParams is currently paused (default OFF).** The optional
+`target-file-input` and `wordpress-file-input` tools are not advertised to
+ChatGPT unless `CHATGPT_FILEPARAMS_ENABLED=true` is deliberately approved and
+configured. The ChatGPT file-to-MCP handoff and authenticated download origin
+were not reliably verifiable in the current connected client; some attempts
+were blocked before reaching Gateway. This is **not a confirmed universal
+OpenAI defect**. Do not keep retrying file attachments or open the URL
+allowlist. Gateway's normal SSH file tools, existing browser upload/download
+and OAuth-authenticated binary HTTP exchange remain available when authorized.
+See [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) and
+[tracked evidence](https://github.com/AChWorks/mcp-gateway/issues/147).
+
 ## Available MCP tools
 
-The **MCP catalog (14 tools since v2.3.2)** includes a read-only diagnostics lookup alongside WordPress and Direct SSH operations. Available operations remain constrained by the authenticated client, Gateway user and effective Target permissions. SSH Jobs and diagnostic lookups are available only when their supporting release and database migrations are installed.
+The **MCP catalog (14 core tools since v2.3.2)** includes a read-only diagnostics lookup alongside WordPress and Direct SSH operations. Available operations remain constrained by the authenticated client, Gateway user and effective Target permissions. SSH Jobs and diagnostic lookups are available only when their supporting release and database migrations are installed.
 
 | Tool | Purpose |
 | --- | --- |

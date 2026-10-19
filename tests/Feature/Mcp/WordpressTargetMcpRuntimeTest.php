@@ -3,6 +3,7 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Mcp\ChatGptFileToolAvailability;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\TargetFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressFileInputMcpToolHandlers;
@@ -455,6 +456,12 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
     {
         $owner = $this->user('owner');
         $this->pair('alpha');
+        // A connected authorized WordPress Target must not expose the two
+        // parked host-specific tools until an explicit opt-in is configured.
+        self::assertSame(['wordpress' => false, 'ssh' => false],
+            app(ChatGptFileToolAvailability::class)->modes($owner, 'chatgpt'));
+        config()->set('bridge.file_input.enabled', true);
+        self::assertTrue(app(ChatGptFileToolAvailability::class)->modes($owner, 'chatgpt')['wordpress']);
         $host = parse_url((string) config('oauth.resource'), PHP_URL_HOST);
         self::assertIsString($host);
         $endpoint = app(GatewayMcpEndpoint::class);
@@ -798,6 +805,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
 
     public function test_mcp_tool_schema_rejects_removed_inline_native_import_switch(): void
     {
+        config()->set('bridge.file_input.enabled', true);
         $owner = $this->user('owner');
         $this->pair('alpha');
         $this->chatFilePayload = 'must-not-publish';
@@ -961,6 +969,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
 
     public function test_chatgpt_file_input_executes_through_real_mcp_tool_dispatch(): void
     {
+        config()->set('bridge.file_input.enabled', true);
         $owner = $this->user('owner');
         $this->pair('alpha');
         $this->chatFilePayload = 'small-real-mcp-tool-dispatch';
@@ -1009,6 +1018,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
 
     public function test_target_file_input_executes_through_real_mcp_tool_dispatch(): void
     {
+        config()->set('bridge.file_input.enabled', true);
         $owner = $this->user('owner');
         $this->pair('alpha');
         $this->chatFilePayload = 'small-real-mcp-tool-dispatch';

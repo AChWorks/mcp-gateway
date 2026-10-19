@@ -23,7 +23,9 @@ final readonly class ChatGptFileToolAvailability
     public function modes(User $user, ?string $oauthProfile): array
     {
         $result = ['wordpress' => false, 'ssh' => false];
-        if ($oauthProfile !== 'chatgpt') {
+        // Host-specific FileParams is parked: do not even query eligible
+        // Targets or register executable tools while the feature is off.
+        if (config('bridge.file_input.enabled', false) !== true || $oauthProfile !== 'chatgpt') {
             return $result;
         }
 

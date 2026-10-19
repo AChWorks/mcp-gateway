@@ -41,9 +41,13 @@ return [
         'enabled' => filter_var(env('BRIDGE_TIMING_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
         'minimum_ms' => (int) env('BRIDGE_TIMING_MINIMUM_MS', 1500),
     ],
-    // Per-WordPress-Target ChatGPT signed-file staging mode, independent
-    // of SSH whole-file limits and the bounded JSON response path.
+    // Optional host-specific FileParams discovery plus per-WordPress signed-file
+    // staging limits, separate from existing SSH whole-file and JSON paths.
     'file_input' => [
+        // Park native ChatGPT FileParams until real host-provided ingress is verified.
+        // Default OFF only hides these client-specific MCP tools; the existing
+        // SSH browser, binary HTTP sidecar and bounded SFTP tools are unaffected.
+        'enabled' => filter_var(env('CHATGPT_FILEPARAMS_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
         'max_bytes' => (int) env('CHATGPT_WP_FILE_MAX_BYTES', 8388608),
         'max_seconds' => (int) env('CHATGPT_WP_FILE_MAX_SECONDS', 120),
         // Shared, DB-serialized admission: local spool(s) are reserved

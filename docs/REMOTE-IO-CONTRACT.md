@@ -60,6 +60,22 @@ Always distinguish **per-call SFTP Base64 windows** from optional same-origin, O
 
 ### ChatGPT file-parameter ingress to a selected Target (Gateway source candidate)
 
+**Operational status: PARKED (default OFF)** as of 2026-10-19. Set
+`CHATGPT_FILEPARAMS_ENABLED=false` (or omit it) to prevent advertising or
+calling the two native FileParams MCP tools. The code, migration, admission
+ledger and strict URL validation remain in place for possible future
+reactivation. This switch is **independent** of SSH SFTP window tools, browser
+upload/download, WordPress Abilities and the OAuth binary sidecar. Historical
+live probes reached Gateway once with `download_url_origin_denied` but did not
+identify a trustworthy source hostname; later fresh harmless-file calls were
+blocked by ChatGPT safety checks before reaching Gateway. This supports a
+host/client integration limitation, **not a proven blanket OpenAI failure**.
+Do not broaden the download allowlist, log signed URLs or construct a new
+upload route to compensate. Only reopen after a real, repeatable host-supplied
+file object and authenticated trusted origin are independently verified;
+record the actual byte/hash and Target receipt before considering support
+proven. [Decision and evidence](https://github.com/AChWorks/mcp-gateway/issues/147).
+
 The **`target-file-input`** MCP tool accepts a top-level `file` parameter
 advertised as `_meta["openai/fileParams"]=["file"]`. The original
 **`wordpress-file-input`** stays as a backwards-compatible WordPress-only

@@ -138,6 +138,45 @@ final class ClientProfileIsolationTest extends TestCase
         DB::table('user_target_access')->insert([
             'user_id' => $user->getKey(), 'target_record_id' => $ssh->getKey(), 'allowed' => true,
         ]);
+
+        // FileParams is parked by default even for an eligible ChatGPT
+        // principal and an otherwise connected authorized SSH Target.
+        self::assertFalse(config('bridge.file_input.enabled'));
+        $parkedCatalog = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
+        $parkedNames = array_column((array) $parkedCatalog->json('result.tools'), 'name');
+        self::assertNotContains('target-file-input', $parkedNames);
+        self::assertNotContains('wordpress-file-input', $parkedNames);
+        foreach (['targets-list', 'target-context', 'wordpress-ability-execute',
+            'ssh-file-read', 'ssh-file-write'] as $retained) {
+            self::assertContains($retained, $parkedNames);
+        }
+
+        // Tool discovery is also execution registration: old clients cannot
+        // force a hidden file-input tool by calling its stale name directly.
+        $hiddenCall = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token'],
+            'Mcp-Method' => 'tools/call', 'Mcp-Name' => 'target-file-input'])
+            ->postJson('/mcp', [
+                'jsonrpc' => '2.0', 'id' => 91, 'method' => 'tools/call',
+                'params' => [
+                    'name' => 'target-file-input',
+                    'arguments' => [
+                        'target_id' => $ssh->target_id,
+                        'mode' => 'ssh_sftp_upload',
+                        'file' => ['file_id' => 'synthetic-only',
+                            'download_url' => 'https://files.oaiusercontent.com/private/example'],
+                    ],
+                    '_meta' => $mcp['params']['_meta'],
+                ],
+            ]);
+        self::assertTrue($hiddenCall->json('result.isError') === true
+            || is_array($hiddenCall->json('error')),
+            'Disabled file-input must not be callable by a cached old tool catalog.');
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+
+        // Optional host-specific code stays intact and can be deliberately
+        // re-enabled after the separately authorized real-client gate.
+        config()->set('bridge.file_input.enabled', true);
         $available = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
             ->postJson('/mcp', $mcp)->assertOk();
         $availableTools = collect((array) $available->json('result.tools'));
