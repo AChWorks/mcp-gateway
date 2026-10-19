@@ -30,8 +30,9 @@ final readonly class WordpressFileInputMcpToolHandlers
      */
     public function receive(User $user, string $target_id, array $file): array
     {
-        if (! self::validFile($file)) {
-            return self::failed('invalid_file_input', 'A supported ChatGPT file parameter is required.');
+        if (($validationClass = ChatGptFileIngress::inputValidationClass($file)) !== null) {
+            return self::failed('invalid_file_input',
+                'A supported ChatGPT file parameter is required.', null, $validationClass);
         }
         $filename = $file['file_name'] ?? null;
         if ($filename !== null && (! is_string($filename) || ! self::validFilename($filename))) {
@@ -216,11 +217,16 @@ final readonly class WordpressFileInputMcpToolHandlers
     }
 
     /** @return array<string,mixed> */
-    private static function failed(string $code, string $message, ?string $transferId = null): array
-    {
+    private static function failed(
+        string $code,
+        string $message,
+        ?string $transferId = null,
+        ?string $inputValidationClass = null,
+    ): array {
         return ['ok' => false, 'error' => [
             'code' => $code, 'message' => $message, 'retry_safe' => false,
             ...($transferId !== null ? ['transfer_id' => $transferId] : []),
+            ...($inputValidationClass !== null ? ['input_validation_class' => $inputValidationClass] : []),
         ]];
     }
 

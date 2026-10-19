@@ -30,6 +30,35 @@ final class SshFileMcpTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_invalid_chatgpt_file_has_bounded_class_and_never_reaches_target_or_network(): void
+    {
+        Http::preventStrayRequests();
+        $owner = $this->user('owner');
+        $candidate = [
+            'file_id' => 'secret-file-id',
+            'download_url' => 'https://untrusted.example.test/private/file?token=secret-signature',
+        ];
+
+        $response = app(TargetFileInputMcpToolHandlers::class)->receive(
+            $owner,
+            'not-a-target',
+            $candidate,
+            'ssh_sftp_upload',
+            ['path' => '/private/example.txt', 'private_staging_dir' => '/private/stage'],
+        );
+
+        self::assertFalse($response['ok']);
+        self::assertSame('invalid_file_input', $response['error']['code']);
+        self::assertSame('download_url_origin_denied', $response['error']['input_validation_class']);
+        self::assertFalse($response['error']['retry_safe']);
+        self::assertFalse($response['error']['possible_remote_effect'] ?? false);
+        $public = json_encode($response, JSON_THROW_ON_ERROR);
+        foreach (['secret-file-id', 'secret-signature', 'untrusted.example.test'] as $secret) {
+            self::assertStringNotContainsString($secret, $public);
+        }
+        Http::assertNothingSent();
+    }
+
     public function test_nonowners_stay_default_denied_and_unauthorized_targets_are_not_enumerable(): void
     {
         $operator = $this->user('operator');

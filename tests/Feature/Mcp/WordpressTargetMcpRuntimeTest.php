@@ -858,6 +858,8 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
             ...$file, 'download_url' => 'https://evil.example.test/internal',
         ]);
         self::assertSame('invalid_file_input', $invalid['error']['code']);
+        self::assertSame('download_url_origin_denied', $invalid['error']['input_validation_class']);
+        self::assertStringNotContainsString('evil.example.test', json_encode($invalid, JSON_THROW_ON_ERROR));
         $unsafe = $handler->receive($owner, 'unknown', [...$file, 'file_name' => '../evil.png']);
         self::assertSame('invalid_filename', $unsafe['error']['code']);
         Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
