@@ -128,13 +128,12 @@ final class SshCommandFixtureTest extends TestCase
     {
         $target = $this->target('password');
         $started = hrtime(true);
-        // Unlike a quiet 'sleep', this command continuously supplies ready
-        // packets. Vendor socket-read time alone must NOT extend the budget.
-        // The finite remote cap prevents a broken implementation from hanging
-        // the isolated fixture indefinitely.
+        // A saturated output stream supplies already-ready packets, unlike
+        // a paced loop whose socket blocking would consume vendor timeout.
+        // Cap the remote generator at 5 seconds so the old buggy behavior
+        // fails decisively rather than hanging the disposable fixture.
         $result = app(SshCommandMcpToolHandlers::class)->run(
-            $this->owner(), $target->target_id,
-            "timeout 5 sh -c 'while :; do printf tick; sleep 0.03; done'; exit 7", 1,
+            $this->owner(), $target->target_id, 'timeout 5 yes tick; exit 7', 1,
         );
         $elapsedSeconds = (hrtime(true) - $started) / 1_000_000_000;
 
@@ -143,7 +142,8 @@ final class SshCommandFixtureTest extends TestCase
         self::assertSame('outcome_unknown', $result['result']['status']);
         self::assertFalse($result['result']['complete']);
         self::assertNull($result['result']['exit_code']);
-        self::assertGreaterThan(0, $result['result']['stdout_total_bytes']);
+        self::assertGreaterThan(16384, $result['result']['stdout_total_bytes']);
+        self::assertTrue($result['result']['stdout_truncated']);
         self::assertLessThan(4.5, $elapsedSeconds, 'Continuous output must not restart the actual deadline.');
         self::assertSame(1, DB::table('activity_events')->where('operation', 'ssh-command-run')->count());
     }
