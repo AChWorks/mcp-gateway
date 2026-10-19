@@ -111,7 +111,7 @@
         <ul>
             <li>{{ __('WordPress responses count the decoded JSON-RPC envelope, including metadata. Confirmed read-only calls can use their separate higher limit; the independent 8 MiB hard response guard remains in force.') }}</li>
             <li>{{ __('The overall WordPress timeout must be at least the connection timeout. The existing OAuth refresh/recovery window cannot be extended by these settings.') }}</li>
-            <li>{{ __('SSH whole-file limits do not change its 16 KiB inline reads, 64 KiB temporary buffer, or WordPress transfer limits. The binary sidecar must be independently enabled and authorized.') }}</li>
+            <li>{{ __('SSH whole-file limits are independent of Owner-selected inline SFTP read/write windows, 64 KiB temporary streaming blocks, and WordPress transfer limits. The binary sidecar must be independently enabled and authorized.') }}</li>
             <li>{{ __('SSH Job concurrency counts only live admission leases, not retained historical records. Remote systemd runtime and metadata retention are independent. A stale or ambiguous Job is never automatically replayed; remote uncertainty remains visible after its admission lease ends.') }}</li>
             <li>{{ __('Unverifiable orphaned Job spools require deliberate operator reconciliation after independently verified cleanup on the original SSH host, never a newly rebound Target.') }}</li>
             <li>{{ __('Selecting up to 360 seconds for a synchronous SSH command requires the hosting PHP worker, HTTP proxy and MCP client to support that duration. An unsupported hop can terminate the HTTP request even when the remote effect is uncertain. Use detached SSH Jobs for longer or uncertain work.') }}</li>

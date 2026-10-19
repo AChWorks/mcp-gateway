@@ -642,6 +642,57 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(524288, $changed['ssh-job-output']['inputSchema']['properties']['length']['maximum']);
         self::assertSame(524288, $changed['ssh-file-read']['inputSchema']['properties']['length']['maximum']);
         self::assertSame(699052, $changed['ssh-file-write']['inputSchema']['properties']['content_base64']['maxLength']);
+
+        // Exercise the actual MCP tools/call transport envelope, not just
+        // in-process handlers/schema. 512 KiB plain UTF-8 and canonical
+        // Base64 must fit the Gateway's default 1 MiB inbound body budget.
+        // This fixture's SSH egress is deterministically denied, so there
+        // are no remote side effects or assumed client-host capabilities.
+        $target = $this->target();
+        $call = function (string $name, array $arguments) use ($headers, $owner): array {
+            $wire = json_encode([
+                'jsonrpc' => '2.0', 'id' => 8, 'method' => 'tools/call',
+                'params' => ['name' => $name, 'arguments' => $arguments],
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+            self::assertLessThanOrEqual((int) config('oauth.mcp.max_body_bytes'), strlen($wire));
+            $req = Request::create('/mcp', 'POST', [], [], [], [
+                ...$headers, 'HTTP_MCP_METHOD' => 'tools/call',
+                'HTTP_MCP_NAME' => $name,
+            ], $wire);
+            $req->attributes->set('oauth_user', $owner);
+            $req->attributes->set('oauth_client_id', 'client-test');
+            $req->attributes->set('oauth_client_profile_key', 'chatgpt');
+            $reply = app(GatewayMcpEndpoint::class)->handle($req);
+            self::assertSame(200, $reply->getStatusCode());
+            ob_start();
+            $reply->sendContent();
+
+            return json_decode((string) ob_get_clean(), true, 32, JSON_THROW_ON_ERROR);
+        };
+        $command = $call('ssh-command-run', [
+            'target_id' => $target->target_id, 'command' => str_repeat('x', 524288),
+        ]);
+        self::assertArrayHasKey('result', $command, json_encode($command, JSON_THROW_ON_ERROR));
+        self::assertSame('egress_denied', $command['result']['structuredContent']['error']['code']);
+        $encoded = base64_encode(str_repeat("\xff", 524288));
+        // PHP's default JSON encoder escapes "/" in Base64 and can double
+        // the whole request; that is correctly beyond the 1 MiB transport
+        // budget. Callers must not confuse decoded bytes with wire bytes.
+        self::assertGreaterThan((int) config('oauth.mcp.max_body_bytes'), strlen(json_encode([
+            'method' => 'tools/call', 'params' => [
+                'name' => 'ssh-file-write', 'arguments' => ['content_base64' => $encoded],
+            ],
+        ], JSON_THROW_ON_ERROR)));
+        $write = $call('ssh-file-write', [
+            'target_id' => $target->target_id, 'path' => '/tmp/mcp-boundary',
+            'content_base64' => $encoded,
+        ]);
+        self::assertSame('egress_denied', $write['result']['structuredContent']['error']['code']);
+        $job = $call('ssh-job-start', [
+            'target_id' => $target->target_id, 'request_id' => (string) Str::uuid(),
+            'script' => 'echo pass'.chr(10).str_repeat('#', 524288 - strlen('echo pass'.chr(10))),
+        ]);
+        self::assertSame('job_unsupported', $job['result']['structuredContent']['error']['code']);
     }
 
     private function user(string $role): User

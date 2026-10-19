@@ -106,10 +106,11 @@ final readonly class SshVerifiedTransport
 
         $this->assertDeadline($deadlineNs);
 
-        // One approved connection attempt. In particular, never retry a key
-        // mismatch against a different DNS answer or silently rebind a Target.
-        $ip = $approved[0];
-        if (@inet_pton($ip) === false) {
+        // One approved connection attempt. An empty policy result is a denial,
+        // never an undefined-array error or authorization to pick a new peer.
+        // In particular, never retry a key mismatch against another DNS answer.
+        $ip = $approved[0] ?? null;
+        if (! is_string($ip) || @inet_pton($ip) === false) {
             throw new SshTargetConnectionException('egress_denied');
         }
         $address = 'tcp://'.(str_contains($ip, ':') ? '['.$ip.']' : $ip).':'.$endpoint->port;
