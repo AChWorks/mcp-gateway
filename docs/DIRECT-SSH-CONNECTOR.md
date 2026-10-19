@@ -48,14 +48,17 @@ The internal `SshFileRuntime` stream methods can exchange bytes with **already a
 
 ## 4. Detached SSH Jobs
 
-The authenticated MCP Job family has four separate methods:
+The authenticated MCP Job family has five separate methods:
 
 | Tool | Meaning |
 | --- | --- |
 | `ssh-job-start` | Submit a finite UTF-8 script with a client-generated UUID `request_id` and selected runtime; receive a durable `job_id` and state |
+| `ssh-jobs-list` | Discover retained Jobs for this exact user, OAuth client/profile, and authorized Target; optionally filter by status and paginate with a scoped signed cursor; **database-only**, with no remote execution or per-Job polling |
 | `ssh-job-status` | Inspect the same Job under its original authenticated user/client/Target binding and reconcile supported remote terminal evidence |
 | `ssh-job-output` | Read bounded `stdout` or `stderr` Base64 windows by offset without starting the command again |
 | `ssh-job-cancel` | Request stop of the exact remote unit; confirm **canceled** only after independently verifying no live process, otherwise report **cancel_requested** |
+
+A new conversation can use `ssh-jobs-list` with the same authorized Gateway user, OAuth client/profile and `target_id` to recover a retained `job_id` without rerunning anything. Listings include only bounded status, timestamps, expiration and stored terminal metadata (no scripts or output). They exclude expired terminal records; uncertain nonterminal records remain discoverable until reconciled. Client changes, revoked rights, Target rotation/deletion and revoked binding never authorize discovery. A paused Target rejects listing without enumerating Jobs; read-only discovery does not use SSH.
 
 Job admission requires all three Gateway SSH capabilities: command + SFTP read + SFTP write, an authenticated original Target binding and verified remote SSH identity. Subsequent status, output and cancellation requests recheck original principal/client/Target binding and their applicable current rights. Job script/output are kept in a restrictive **remote** private location, not in the Gateway Activity or database. Gateway retains non-secret durable ID/digest/original-host snapshots needed to distinguish requests and support recovery.
 
