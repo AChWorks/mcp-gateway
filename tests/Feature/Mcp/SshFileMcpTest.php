@@ -59,6 +59,46 @@ final class SshFileMcpTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_owner_only_missing_destination_probe_does_not_expose_secrets_or_effects(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(static fn () => Http::response('unexpected', 200));
+        $owner = $this->user('owner');
+        $operator = $this->user('operator');
+        $file = [
+            'file_id' => 'sensitive-file-id',
+            'download_url' => 'https://FILES.CHATGPT.COM/private/secret?sig=signed-secret',
+        ];
+        $handler = app(TargetFileInputMcpToolHandlers::class);
+        $probe = $handler->receive($owner, 'tr01-test', $file, 'ssh_sftp_upload');
+
+        self::assertSame('invalid_file_input', $probe['error']['code']);
+        self::assertSame('download_url_origin_denied', $probe['error']['input_validation_class']);
+        self::assertSame('files.chatgpt.com', $probe['error']['download_url_host']);
+        self::assertFalse($probe['error']['retry_safe']);
+        self::assertFalse($probe['error']['possible_remote_effect'] ?? false);
+        $payload = json_encode($probe, JSON_THROW_ON_ERROR);
+        foreach (['sensitive-file-id', 'signed-secret', '/private/secret'] as $private) {
+            self::assertStringNotContainsString($private, $payload);
+        }
+
+        $destination = ['path' => '/private/test', 'private_staging_dir' => '/private/stage'];
+        $ordinary = $handler->receive($owner, 'tr01-test', $file, 'ssh_sftp_upload', $destination);
+        self::assertSame('invalid_file_input', $ordinary['error']['code']);
+        self::assertArrayNotHasKey('download_url_host', $ordinary['error']);
+
+        $operatorResult = $handler->receive($operator, 'tr01-test', $file, 'ssh_sftp_upload');
+        self::assertArrayNotHasKey('download_url_host', $operatorResult['error']);
+
+        $owner->forceFill(['access_enabled' => false])->save();
+        $revoked = $handler->receive($owner, 'tr01-test', $file, 'ssh_sftp_upload');
+        self::assertArrayNotHasKey('download_url_host', $revoked['error']);
+
+        $wordpress = $handler->receive($operator, 'tr01-test', $file, 'wordpress_media_stage');
+        self::assertArrayNotHasKey('download_url_host', $wordpress['error']);
+        Http::assertNothingSent();
+    }
+
     public function test_nonowners_stay_default_denied_and_unauthorized_targets_are_not_enumerable(): void
     {
         $operator = $this->user('operator');

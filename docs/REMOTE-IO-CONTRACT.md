@@ -93,6 +93,24 @@ Shared ingress validates the exact signed HTTPS origin
 TLS hostname/certificate. No redirects, embedded authentication, fragment,
 arbitrary URL origins, decompression or secret-bearing logs are allowed. The
 opaque signed query is forwarded unchanged and never included in a response.
+
+**Owner-only origin diagnostic (Issue #147):** For a rejected ChatGPT FileParams
+URL, an enabled Gateway Owner can call `target-file-input` with
+`mode=ssh_sftp_upload` and intentionally omit `ssh_destination`. When the
+fixed rejection class is `download_url_origin_denied` and the URL has a
+strictly valid ASCII DNS hostname, the response adds only
+`error.download_url_host`. This diagnostic returns no source path/query,
+signed token, file ID or filename and introduces no logging of them; **SDK
+DEBUG raw-argument logging must remain disabled** because it could expose
+signed URLs. IP literals, malformed origins,
+destination-bearing SSH calls, WordPress mode and non-Owner callers do not
+receive this additional field. Because no destination is present and input
+validation rejects the file first, this probe performs no DNS lookup, HTTP
+download, SSH connection or remote write. An observed hostname alone is
+**not** authorization to expand the trusted outbound allowlist: independently
+verify its provider provenance and pinned TLS/DNS/public-IP behavior, obtain
+an independent review, and separately authorize any security-policy change.
+
 The existing ordinary 8 MiB JSON HTTP response ceiling is **not increased**:
 file bytes are captured in a separate bounded private spill-to-disk stream
 (64 KiB memory threshold) with an independent whole-object budget, exact

@@ -66,6 +66,52 @@ final readonly class ChatGptFileIngress
     }
 
     /**
+     * Diagnostic-only sanitized hostname of an origin-denied HTTPS URL.
+     * Only a separately Owner-authorized caller may expose the result.
+     * No file IDs, URL paths/queries, tokens, or outbound requests.
+     *
+     * @param  array<string,mixed>  $file
+     */
+    public static function rejectedDownloadHostname(array $file): ?string
+    {
+        if (self::inputValidationClass($file) !== 'download_url_origin_denied') {
+            return null;
+        }
+
+        $url = $file['download_url'] ?? null;
+        if (! is_string($url) || $url === '' || strlen($url) > 8192
+            || preg_match('/[\x00-\x20\x7f]/', $url) === 1) {
+            return null;
+        }
+
+        $parts = parse_url($url);
+        if (! is_array($parts) || strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
+            || ! is_string($parts['path'] ?? null) || $parts['path'] === ''
+            || isset($parts['user']) || isset($parts['pass'])
+            || isset($parts['port']) || isset($parts['fragment'])) {
+            return null;
+        }
+
+        $host = $parts['host'] ?? null;
+        if (! is_string($host) || strlen($host) < 4 || strlen($host) > 253) {
+            return null;
+        }
+
+        $host = strtolower($host);
+        if (! str_contains($host, '.') || filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return null;
+        }
+        foreach (explode('.', $host) as $label) {
+            if ($label === '' || strlen($label) > 63
+                || preg_match('/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/D', $label) !== 1) {
+                return null;
+            }
+        }
+
+        return $host;
+    }
+
+    /**
      * @param  array<string,mixed>  $file
      * @return array{stream:resource,bytes:int,sha256:string,capacity_lease:ChatGptFileCapacityLease}
      *

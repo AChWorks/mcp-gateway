@@ -46,6 +46,35 @@ final class ChatGptFileIngressInputValidationTest extends TestCase
         }
     }
 
+    public function test_rejected_origin_host_hint_is_strict_and_never_returns_signed_parts(): void
+    {
+        $file = [
+            'file_id' => 'private-file-id',
+            'download_url' => 'https://FILES.CHATGPT.COM/private/secret?sig=never-expose',
+        ];
+        self::assertSame('download_url_origin_denied', ChatGptFileIngress::inputValidationClass($file));
+        self::assertSame('files.chatgpt.com', ChatGptFileIngress::rejectedDownloadHostname($file));
+
+        foreach ([
+            'http://files.chatgpt.com/private/file',
+            'https://files.oaiusercontent.com/private/file',
+            'https://127.0.0.1/private/file',
+            'https://[::1]/private/file',
+            'https://localhost/private/file',
+            'https://user:pass@files.chatgpt.com/private/file',
+            'https://files.chatgpt.com:443/private/file',
+            'https://files.chatgpt.com/private/file#fragment',
+            'https://files.chatgpt.com',
+            'https://invalid_host.example.test/private/file',
+            'https://-invalid.example.test/private/file',
+            "https://files.chatgpt.com/private/file\nembedded",
+        ] as $url) {
+            self::assertNull(ChatGptFileIngress::rejectedDownloadHostname([
+                'file_id' => 'private-file-id', 'download_url' => $url,
+            ]), $url);
+        }
+    }
+
     public function test_actual_mcp_sdk_rejects_bare_file_strings_before_tool_handler(): void
     {
         $fileSchema = [

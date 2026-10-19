@@ -2,6 +2,7 @@
 
 namespace App\Application\Mcp;
 
+use App\Application\Access\AccessControl;
 use App\Application\Files\ChatGptFileIngress;
 use App\Application\Files\SshWholeFileTransfer;
 use App\Application\Targets\SshTargetConnectionException;
@@ -20,6 +21,7 @@ final readonly class TargetFileInputMcpToolHandlers
         private WordpressFileInputMcpToolHandlers $wordpress,
         private SshWholeFileTransfer $ssh,
         private ChatGptFileIngress $ingress,
+        private AccessControl $access,
     ) {}
 
     /**
@@ -31,7 +33,20 @@ final readonly class TargetFileInputMcpToolHandlers
         ?array $ssh_destination = null): array
     {
         if (($validationClass = ChatGptFileIngress::inputValidationClass($file)) !== null) {
-            return self::failure('invalid_file_input', false, $validationClass);
+            $rejection = self::failure('invalid_file_input', false, $validationClass);
+            // With no SSH destination no transfer can occur. Only an enabled
+            // Owner may see the sanitized host on this opt-in failed probe.
+            // All normal, non-Owner and WordPress calls retain fixed errors.
+            if ($validationClass === 'download_url_origin_denied'
+                && $mode === 'ssh_sftp_upload' && $ssh_destination === null
+                && $this->access->hasUnrestrictedTargetScope($user)) {
+                $host = ChatGptFileIngress::rejectedDownloadHostname($file);
+                if ($host !== null) {
+                    $rejection['error']['download_url_host'] = $host;
+                }
+            }
+
+            return $rejection;
         }
         if ($mode === 'wordpress_media_stage' && $ssh_destination === null) {
             return $this->wordpress->receive($user, $target_id, $file);
