@@ -100,7 +100,9 @@ URL, an enabled Gateway Owner can call `target-file-input` with
 fixed rejection class is `download_url_origin_denied` and the URL has a
 strictly valid ASCII DNS hostname, the response adds only
 `error.download_url_host`. This diagnostic returns no source path/query,
-signed token, file ID or filename and introduces no logging of them; **SDK
+file ID or filename, and introduces no logging of them. Treat the returned
+hostname itself as potentially sensitive (for example, if it contains an
+opaque provider-generated label); **SDK
 DEBUG raw-argument logging must remain disabled** because it could expose
 signed URLs. IP literals, malformed origins,
 destination-bearing SSH calls, WordPress mode and non-Owner callers do not

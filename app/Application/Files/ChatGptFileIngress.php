@@ -68,7 +68,8 @@ final readonly class ChatGptFileIngress
     /**
      * Diagnostic-only sanitized hostname of an origin-denied HTTPS URL.
      * Only a separately Owner-authorized caller may expose the result.
-     * No file IDs, URL paths/queries, tokens, or outbound requests.
+     * Only the DNS hostname is extracted; URL paths/queries, caller file IDs
+     * and outbound requests are excluded. Hostnames can themselves be private.
      *
      * @param  array<string,mixed>  $file
      */
