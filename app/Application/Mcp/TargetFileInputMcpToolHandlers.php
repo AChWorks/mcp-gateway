@@ -30,8 +30,8 @@ final readonly class TargetFileInputMcpToolHandlers
     public function receive(User $user, string $target_id, array $file, string $mode,
         ?array $ssh_destination = null): array
     {
-        if (! ChatGptFileIngress::validFile($file)) {
-            return self::failure('invalid_file_input');
+        if (($validationClass = ChatGptFileIngress::inputValidationClass($file)) !== null) {
+            return self::failure('invalid_file_input', false, $validationClass);
         }
         if ($mode === 'wordpress_media_stage' && $ssh_destination === null) {
             return $this->wordpress->receive($user, $target_id, $file);
@@ -144,8 +144,11 @@ final readonly class TargetFileInputMcpToolHandlers
     }
 
     /** @return array<string,mixed> */
-    private static function failure(string $code, bool $possibleRemoteEffect = false): array
-    {
+    private static function failure(
+        string $code,
+        bool $possibleRemoteEffect = false,
+        ?string $inputValidationClass = null,
+    ): array {
         return ['ok' => false, 'error' => [
             'code' => $code,
             'message' => $possibleRemoteEffect
@@ -153,6 +156,7 @@ final readonly class TargetFileInputMcpToolHandlers
                 : 'The selected Target could not accept the private file safely.',
             'retry_safe' => false,
             ...($possibleRemoteEffect ? ['possible_remote_effect' => true] : []),
+            ...($inputValidationClass !== null ? ['input_validation_class' => $inputValidationClass] : []),
         ]];
     }
 }

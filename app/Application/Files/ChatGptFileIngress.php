@@ -21,27 +21,48 @@ final readonly class ChatGptFileIngress
     /** @param array<string,mixed> $file */
     public static function validFile(array $file): bool
     {
+        return self::inputValidationClass($file) === null;
+    }
+
+    /**
+     * Bounded diagnostic classification, without echoing source IDs, URLs,
+     * signed queries, file contents or filenames. No outbound side effects.
+     *
+     * @param  array<string,mixed>  $file
+     */
+    public static function inputValidationClass(array $file): ?string
+    {
         $id = $file['file_id'] ?? null;
+        if (! is_string($id) || strlen($id) < 1 || strlen($id) > 255) {
+            return 'file_id_invalid';
+        }
+
         $url = $file['download_url'] ?? null;
-        if (! is_string($id) || strlen($id) < 1 || strlen($id) > 255
-            || ! is_string($url) || strlen($url) < 1 || strlen($url) > 8192
-            || strtolower((string) parse_url($url, PHP_URL_SCHEME)) !== 'https'
-            || strtolower((string) parse_url($url, PHP_URL_HOST)) !== 'files.oaiusercontent.com'
-            || parse_url($url, PHP_URL_USER) !== null
+        if (! is_string($url) || strlen($url) < 1 || strlen($url) > 8192) {
+            return 'download_url_invalid';
+        }
+        if (strtolower((string) parse_url($url, PHP_URL_SCHEME)) !== 'https') {
+            return 'download_url_scheme_invalid';
+        }
+        if (strtolower((string) parse_url($url, PHP_URL_HOST)) !== 'files.oaiusercontent.com') {
+            return 'download_url_origin_denied';
+        }
+        if (parse_url($url, PHP_URL_USER) !== null
             || parse_url($url, PHP_URL_PASS) !== null
             || parse_url($url, PHP_URL_PORT) !== null
-            || parse_url($url, PHP_URL_FRAGMENT) !== null
-            || ! is_string(parse_url($url, PHP_URL_PATH))
-            || parse_url($url, PHP_URL_PATH) === '') {
-            return false;
+            || parse_url($url, PHP_URL_FRAGMENT) !== null) {
+            return 'download_url_components_invalid';
+        }
+        if (! is_string(parse_url($url, PHP_URL_PATH)) || parse_url($url, PHP_URL_PATH) === '') {
+            return 'download_url_path_invalid';
         }
         foreach (['mime_type', 'file_name'] as $optional) {
             if (isset($file[$optional]) && (! is_string($file[$optional]) || strlen($file[$optional]) > 255)) {
-                return false;
+                return 'file_metadata_invalid';
             }
         }
 
-        return true;
+        return null;
     }
 
     /**
