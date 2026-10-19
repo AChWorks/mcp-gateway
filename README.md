@@ -51,7 +51,7 @@ A Gateway “Connected” status is not a guarantee that a remotely revoked or e
 1. Open **Targets → Add Target → Direct SSH**. Enter a unique `target_id`, SSH host, port and remote account, then configure the supported password or private-key authentication.
 2. **Independently verify the server's SSH host-key fingerprint** before trusting it; never bypass an unexpected host-key change.
 3. Grant only the needed user/Target permissions. Start with `ssh-file-stat` or a harmless read-only `ssh-command-run` call.
-4. Use `ssh-file-list`, `ssh-file-read` and `ssh-file-write` for authorized **bounded SFTP directory and byte-range operations**. These are not arbitrary-size file uploads.
+4. Use `ssh-file-list` to inspect directories, `ssh-file-read` for bounded byte ranges, and `ssh-file-write` to create or conditionally overwrite a bounded file. Repeated writes do **not** append chunks.
 5. For larger, complete binary files, use the separately authorized **SSH whole-file browser upload/download or HTTPS exchange** when enabled. The Admin Target page offers a local file picker and download action; uploads require an explicit remote destination and pre-existing private `0700` staging directory. Verify received size and SHA-256.
 6. For scripts that outlive a synchronous command, use `ssh-job-start` with your own UUID `request_id`, then `ssh-job-status` and bounded `ssh-job-output`; cancel a specific Job with `ssh-job-cancel` only when appropriate.
 
@@ -78,7 +78,7 @@ The normal Gateway tool set is **14 tools** (subject to authenticated client, us
 | `targets-list`, `target-context` | Find permitted Targets and inspect non-secret Target context. |
 | `wordpress-abilities-read`, `wordpress-ability-execute` | Discover and invoke WordPress Abilities on a selected WordPress Target. |
 | `ssh-command-run` | Execute a bounded, non-interactive command as the authorized remote SSH account. |
-| `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | Inspect SFTP paths and read/write authorized bounded ranges. |
+| `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | Inspect SFTP paths, read bounded ranges, or create/conditionally overwrite bounded files. |
 | `ssh-job-start`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Start, reconcile, inspect and cancel retained SSH Jobs without blindly replaying them. |
 | `operation-diagnostics-read` | Look up permitted, credential-redacted failure evidence by `diagnostic_reference` or Target. |
 
