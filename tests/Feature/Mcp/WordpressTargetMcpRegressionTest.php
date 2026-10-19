@@ -5,6 +5,7 @@ namespace Tests\Feature\Mcp;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
+use App\Application\Targets\WordpressTargetOperations;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
@@ -122,6 +123,83 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         self::assertSame(['alpha.example.test', 'beta.example.test'], array_column($this->toolCalls, 'host'));
         self::assertSame(['wp-ai-bridge/abilities-read', 'wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'));
         self::assertSame(['Bearer alpha-access', 'Bearer beta-access'], array_column($this->toolCalls, 'authorization'));
+    }
+
+    public function test_admin_and_mcp_share_readonly_bridge_execution(): void
+    {
+        $site = $this->createSite('alpha');
+        $this->pair($site);
+
+        $this->actingAs($this->principal)->get(route('admin.targets.show', ['target' => 'alpha']))
+            ->assertOk()->assertSee('Inspect Bridge information (read-only)');
+
+        $this->post(route('admin.targets.wordpress.bridge-info', ['target' => 'alpha']))
+            ->assertOk()->assertSee('Read-only Bridge information received.')
+            ->assertSee('&quot;target&quot;: &quot;alpha&quot;', false);
+
+        $mcp = app(WordpressTargetMcpToolHandlers::class)->execute(
+            $this->principal, 'alpha', 'wp-ai-bridge/bridge-info', [],
+        );
+        self::assertTrue($mcp['ok']);
+        self::assertSame(['target' => 'alpha', 'kind' => 'read'], $mcp['result']);
+        self::assertSame(2, DB::table('activity_events')
+            ->where('operation', 'wordpress-ability-execute')->where('outcome', 'success')->count());
+        self::assertSame([
+            'wp-ai-bridge/abilities-read', 'wp-ai-bridge/bridge-info',
+            'wp-ai-bridge/abilities-read', 'wp-ai-bridge/bridge-info',
+        ], array_column($this->toolCalls, 'ability'));
+    }
+
+    public function test_admin_readonly_operation_denies_mutation_and_rechecks_scope_and_pause(): void
+    {
+        $site = $this->createSite('alpha');
+        $this->pair($site);
+        $operations = app(WordpressTargetOperations::class);
+
+        $result = $operations->execute(
+            $this->principal, 'alpha', 'demo/write', ['value' => 'must-not-apply'], readonlyOnly: true,
+        );
+        self::assertFalse($result['ok']);
+        self::assertSame('forbidden', $result['error']['code']);
+        self::assertSame(['wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'));
+
+        $operator = User::query()->create([
+            'name' => 'Scoped readonly operator',
+            'email' => 'read-only-operator@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+            'access_enabled' => true,
+        ]);
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->id, 'target_record_id' => $site->id,
+            'allowed' => true, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->actingAs($operator)->get(route('admin.targets.show', ['target' => 'alpha']))
+            ->assertOk()->assertSee('Inspect Bridge information (read-only)');
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->id, 'target_record_id' => $site->id,
+            'permission' => GatewayPermission::WordpressAbilitiesExecuteReadonly->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->get(route('admin.targets.show', ['target' => 'alpha']))
+            ->assertOk()->assertDontSee('Inspect Bridge information (read-only)');
+        $this->post(route('admin.targets.wordpress.bridge-info', ['target' => 'alpha']))
+            ->assertNotFound();
+
+        $this->post(route('admin.targets.wordpress.bridge-info', ['target' => 'unknown-target']))
+            ->assertNotFound();
+        $this->post(route('admin.targets.wordpress.bridge-info', ['target' => 'invalid_!!']))
+            ->assertNotFound();
+
+        $this->actingAs($this->principal);
+        $site->forceFill(['operations_paused' => true])->save();
+        $this->get(route('admin.targets.show', ['target' => 'alpha']))
+            ->assertOk()->assertDontSee('Inspect Bridge information (read-only)');
+        $this->post(route('admin.targets.wordpress.bridge-info', ['target' => 'alpha']))
+            ->assertStatus(409)->assertSee('target_paused');
+        self::assertSame(['wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'),
+            'Denied and paused Admin actions must not reach the remote execution stage.');
     }
 
     public function test_execution_routes_read_write_and_downstream_denial_without_bypass(): void
@@ -1064,7 +1142,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
                 'description' => 'Site-specific current ability contract.',
                 'mcp_type' => 'tool',
                 'annotations' => [
-                    'readonly' => $itemName === 'demo/read',
+                    'readonly' => in_array($itemName, ['demo/read', 'wp-ai-bridge/bridge-info'], true),
                     'destructive' => $itemName === 'demo/delete',
                     'idempotent' => true,
                 ],

@@ -766,6 +766,20 @@ td input[type="checkbox"] {
     font-size: 0.82rem;
 }
 
+/* Shared bounded display for human/AI operation results in Admin. */
+.operation-result-preview {
+    min-width: 0;
+    max-width: 100%;
+    padding: 0.85rem;
+    border: 1px solid var(--ui-border);
+    border-radius: 0.55rem;
+    background: var(--ui-surface-subtle);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    overflow-x: auto;
+}
+
 .empty-state {
     margin: 1rem 0 0;
     padding: 1.5rem;
