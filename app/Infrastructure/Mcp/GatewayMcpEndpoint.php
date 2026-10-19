@@ -300,6 +300,31 @@ final readonly class GatewayMcpEndpoint
                 ],
             )
             ->addTool(
+                handler: fn (
+                    string $target_id, ?string $status = null, ?string $cursor = null, int $limit = 20,
+                ): array => $this->sshJobs->list(
+                    $this->user($request), $target_id, $this->clientHash($request),
+                    $status, $cursor, $limit,
+                ),
+                name: 'ssh-jobs-list',
+                description: 'Discover retained SSH Jobs for this exact authenticated user, OAuth client/profile and authorized Target, including uncertain Jobs. Database-only: no SSH connection, polling or relaunch. Use ssh-job-status for a selected job_id.',
+                annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: false),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'status' => ['type' => 'string', 'enum' => [
+                            'preparing', 'launch_unknown', 'running', 'cancel_requested',
+                            'completed', 'failed', 'canceled', 'unsupported', 'retired',
+                        ]],
+                        'cursor' => ['type' => 'string', 'minLength' => 91, 'maxLength' => 91],
+                        'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 50, 'default' => 20],
+                    ],
+                    'required' => ['target_id'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
                 handler: fn (string $target_id, string $job_id): array => $this->sshJobs->status(
                     $this->user($request), $target_id, $this->clientHash($request), $job_id,
                 ),

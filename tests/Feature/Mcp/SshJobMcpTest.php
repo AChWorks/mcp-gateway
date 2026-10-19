@@ -84,6 +84,83 @@ final class SshJobMcpTest extends TestCase
         self::assertFalse($status['result']['retry_safe']);
     }
 
+    public function test_scoped_read_only_job_listing_filters_paginates_and_rejects_tampered_cursors(): void
+    {
+        $owner = $this->user('owner');
+        $other = $this->user('owner');
+        $target = $this->target();
+        $client = hash('sha256', 'client-list');
+        $otherClient = hash('sha256', 'client-list-other');
+        $tool = app(SshJobMcpToolHandlers::class);
+        $ids = [];
+        for ($i = 0; $i < 5; $i++) {
+            $ids[] = $tool->start(
+                $owner, $target->target_id, $client, (string) Str::uuid(), 'echo safe-'.$i,
+            )['result']['job_id'];
+        }
+        $foreign = $tool->start(
+            $other, $target->target_id, $client, (string) Str::uuid(), 'echo private',
+        )['result']['job_id'];
+        $foreignClient = $tool->start(
+            $owner, $target->target_id, $otherClient, (string) Str::uuid(), 'echo private-client',
+        )['result']['job_id'];
+
+        // Nonterminal uncertain Jobs survive nominal expiration; expired
+        // terminal evidence is excluded even before operator-side pruning.
+        DB::table('ssh_command_jobs')->where('id', $ids[1])
+            ->update(['status' => 'launch_unknown', 'expires_at' => now()->subHour()]);
+        DB::table('ssh_command_jobs')->where('id', $ids[0])
+            ->update(['status' => 'completed', 'exit_code' => 0,
+                'terminal_reason' => 'script_exit', 'expires_at' => now()->subHour()]);
+
+        $page1 = $tool->list($owner, $target->target_id, $client, limit: 2);
+        self::assertTrue($page1['ok']);
+        self::assertCount(2, $page1['result']['jobs']);
+        self::assertTrue($page1['result']['has_more']);
+        $cursor = $page1['result']['next_cursor'];
+        self::assertSame(91, strlen($cursor));
+        $page2 = $tool->list($owner, $target->target_id, $client, cursor: $cursor, limit: 2);
+        self::assertTrue($page2['ok']);
+        self::assertFalse($page2['result']['has_more']);
+        $all = array_merge($page1['result']['jobs'], $page2['result']['jobs']);
+        self::assertSame(array_reverse(array_slice($ids, 1)), array_column($all, 'job_id'));
+        self::assertSame('launch_unknown', end($all)['status']);
+        self::assertSame(0, DB::table('activity_events')->where('operation', 'ssh-jobs-list')->count());
+        self::assertArrayNotHasKey('script_digest', $all[0]);
+        self::assertArrayNotHasKey('client_identity_hash', $all[0]);
+        self::assertArrayNotHasKey('original_host', $all[0]);
+        self::assertSame([], $tool->list($other, $target->target_id, $otherClient)['result']['jobs']);
+        self::assertSame([], $tool->list($owner, $target->target_id, hash('sha256', 'new-chat-client'))['result']['jobs']);
+        self::assertSame('invalid_input', $tool->list(
+            $owner, $target->target_id, $client, cursor: substr($cursor, 0, -1).(str_ends_with($cursor, 'a') ? 'b' : 'a'),
+        )['error']['code']);
+        self::assertSame('invalid_input', $tool->list(
+            $owner, $target->target_id, $client, status: 'running', cursor: $cursor,
+        )['error']['code']);
+        self::assertSame('invalid_input', $tool->list(
+            $owner, $target->target_id, $client, status: 'whatever',
+        )['error']['code']);
+        self::assertSame('invalid_input', $tool->list(
+            $owner, $target->target_id, $client, limit: 51,
+        )['error']['code']);
+        self::assertSame([], $tool->list($owner, $target->target_id, $client, status: 'running')['result']['jobs']);
+
+        // Both foreign records remain in DB, but no tool result exposes them.
+        self::assertSame(7, DB::table('ssh_command_jobs')->count());
+        self::assertNotContains($foreign, array_column($all, 'job_id'));
+        self::assertNotContains($foreignClient, array_column($all, 'job_id'));
+
+        $target->forceFill(['operations_paused' => true])->save();
+        self::assertSame('target_paused', $tool->list($owner, $target->target_id, $client)['error']['code']);
+        $owner->forceFill(['access_enabled' => false])->save();
+        self::assertSame('target_not_found', $tool->list($owner, $target->target_id, $client)['error']['code']);
+        $owner->forceFill(['access_enabled' => true])->save();
+        $target->forceFill(['operations_paused' => false])->save();
+        DB::table('ssh_direct_target_configs')->where('target_record_id', $target->getKey())
+            ->update(['username' => 'rotated-list-account']);
+        self::assertSame([], $tool->list($owner, $target->target_id, $client)['result']['jobs']);
+    }
+
     public function test_job_authorization_remains_bound_to_user_client_target_and_config(): void
     {
         $user = $this->user('owner');
@@ -573,12 +650,15 @@ final class SshJobMcpTest extends TestCase
         $body = (string) ob_get_clean();
         $data = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
         $byName = collect($data['result']['tools'])->keyBy('name');
-        foreach (['ssh-job-start', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel'] as $name) {
+        foreach (['ssh-job-start', 'ssh-jobs-list', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel'] as $name) {
             self::assertTrue($byName->has($name));
         }
         self::assertSame(16384, $byName['ssh-job-start']['inputSchema']['properties']['script']['maxLength']);
         self::assertSame(300, $byName['ssh-job-start']['inputSchema']['properties']['max_runtime_seconds']['maximum']);
         self::assertFalse($byName['ssh-job-start']['annotations']['readOnlyHint']);
+        self::assertTrue($byName['ssh-jobs-list']['annotations']['readOnlyHint']);
+        self::assertFalse($byName['ssh-jobs-list']['annotations']['openWorldHint']);
+        self::assertSame(50, $byName['ssh-jobs-list']['inputSchema']['properties']['limit']['maximum']);
         self::assertTrue($byName['ssh-job-status']['annotations']['readOnlyHint']);
         self::assertTrue($byName['ssh-job-cancel']['annotations']['destructiveHint']);
         self::assertStringContainsString('per call', $byName['ssh-job-output']['description']);

@@ -35,6 +35,16 @@ final readonly class SshJobMcpToolHandlers
     }
 
     /** @return array<string,mixed> */
+    public function list(
+        User $user, string $targetId, string $clientHash,
+        ?string $status = null, ?string $cursor = null, int $limit = 20,
+    ): array {
+        return $this->dispatch($user, $targetId, 'ssh-jobs-list', fn () => $this->jobs->list(
+            $user, $targetId, $clientHash, $status, $cursor, $limit,
+        ));
+    }
+
+    /** @return array<string,mixed> */
     public function status(User $user, string $targetId, string $clientHash, string $jobId): array
     {
         return $this->dispatch($user, $targetId, 'ssh-job-status', fn () => $this->jobs->status(
