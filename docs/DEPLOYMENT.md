@@ -1,6 +1,6 @@
 # MCP Gateway Deployment Baseline
 
-This document defines the supported **current deployment and validation baseline** for MCP Gateway on PHP 8.4 + MariaDB 10.11 (primary) or MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory.
+This document defines the supported **current deployment and validation baseline** for MCP Gateway on PHP 8.4 + MariaDB 10.11 (primary) or MySQL, with aaPanel/OpenLiteSpeed as the primary validated host shape and compatible shared PHP hosting supported when it can expose only the application `public/` directory. The panel-free Nginx/PHP-FPM procedure below is an operator example whose exact distro, TLS and runtime configuration must still be validated on the chosen server.
 
 GitHub releases own public release identity. Production deployment remains an operator-controlled action: publishing a release does not authorize or perform deployment to any server. `README.md` remains the user-facing installation and usage guide. The [operator configuration reference](CONFIGURATION.md) inventories `.env.example` and explains login-session, OAuth/MCP timing and safe live configuration reloads.
 
@@ -43,7 +43,7 @@ The supported Job journal enforces immutable original user/client/Target/host bi
 
 Before placing application code on the server, prepare:
 
-1. An aaPanel/shared-hosting site for the intended Gateway hostname or subdomain.
+1. An aaPanel/shared-hosting site **or** a self-managed Nginx/PHP-FPM host for the intended Gateway hostname or subdomain.
 2. PHP 8.4 for the website. The runtime must provide `curl`, `mbstring`, `openssl`, `pdo_mysql`, and `sodium`, and cURL must expose `CURLOPT_RESOLVE`.
 3. A dedicated **empty** MariaDB (recommended) or MySQL database and user scoped to the Gateway database. The account must be able to create/alter/drop application tables and indexes as well as perform normal application reads/writes. Do not use a global database administrator account for normal application runtime.
 4. DNS resolving the Gateway hostname to the intended server before final HTTPS/OAuth verification.
@@ -82,6 +82,170 @@ The repository owns `public/.htaccess`. It preserves the `Authorization` header,
 
 Do not copy nginx configuration into OpenLiteSpeed. LSAPI/SSE buffering and long-response behavior are not prescribed unless a future release produces evidence that a custom adjustment is needed.
 
+## Panel-free Linux VPS (Nginx, PHP-FPM and MariaDB)
+
+**A hosting control panel is not required.** On a Linux VPS, install the web server, PHP-FPM, database and HTTPS certificate yourself; then use the **same official release ZIP and browser installer** as a panel-managed site. No Git, Composer, Docker or separate MCP service is necessary for the packaged installation.
+
+The example below is for a **fresh, single-application Debian/Ubuntu-style server** with `sudo` access. It is an operator configuration template, not a claim that every distribution or reverse proxy was field-tested. Substitute the real hostname, paths, PHP-FPM socket and service user. **Do not copy it over an existing Nginx site, PHP-FPM pool, database or firewall configuration without reconciling their current owners.** For a multi-site host, use a dedicated PHP-FPM pool/account rather than letting unrelated applications share the `www-data` runtime identity.
+
+### 1. Prepare packages, DNS and a database
+
+Point the Gateway hostname's DNS A/AAAA records to the server, ensure incoming TCP **80 and 443** can reach it, and use an operating-system repository that genuinely supplies **PHP >= 8.4.1**. Before installing, check package availability:
+
+```bash
+sudo apt-get update
+apt-cache policy php8.4-fpm php8.4-cli
+```
+
+If there is no usable PHP 8.4 candidate (for example, an older distribution's default packages provide PHP 8.3), provision a supported PHP 8.4 repository for **that exact distribution** using its maintained vendor instructions; **do not silently install an older PHP or add an unreviewed PPA**. With those packages available:
+
+```bash
+sudo apt-get install -y nginx mariadb-server cron unzip curl ca-certificates \
+  php8.4-fpm php8.4-cli php8.4-curl php8.4-mbstring php8.4-mysql \
+  php8.4-xml php8.4-zip certbot python3-certbot-nginx
+sudo systemctl enable --now nginx php8.4-fpm mariadb cron
+php8.4 -r 'foreach (["curl","mbstring","openssl","pdo_mysql","sodium"] as $e) { if (!extension_loaded($e)) { fwrite(STDERR, "$e missing\n"); exit(1); } } if (!defined("CURLOPT_RESOLVE")) { exit(1); } echo "PHP requirements OK\n";'
+ls -l /run/php/php8.4-fpm.sock
+```
+
+PHP's `sodium` and `openssl` extensions may be supplied by the distribution's PHP common packages rather than separate module packages; the check above must succeed. Verify PHP-FPM uses the expected PHP 8.4 configuration, not only the CLI.
+
+Create a **new empty** database and a database-scoped user, for example with `sudo mariadb` and the following interactive SQL (substitute a unique, strong password and do not publish it):
+
+```sql
+CREATE DATABASE mcp_gateway CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'mcp_gateway'@'127.0.0.1' IDENTIFIED BY 'REPLACE_WITH_STRONG_PRIVATE_PASSWORD';
+GRANT ALL PRIVILEGES ON mcp_gateway.* TO 'mcp_gateway'@'127.0.0.1';
+```
+
+For the web installer, use database host `127.0.0.1`, port `3306`, name `mcp_gateway` and the new database account. The database grant is limited to this application database but includes DDL needed by the installer and future migrations. Do not use MariaDB's global root account for the app.
+
+### 2. Download and verify the official ZIP
+
+Choose a **published stable tag** from [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases); the tag below is an **example**, not a permanently pinned latest version.
+
+```bash
+RELEASE_TAG=v2.3.6    # Replace with the chosen published release tag.
+cd "$(mktemp -d)"
+curl --fail --location --output "mcp-gateway-$RELEASE_TAG.zip" \
+  "https://github.com/AChWorks/mcp-gateway/releases/download/$RELEASE_TAG/mcp-gateway-$RELEASE_TAG.zip"
+curl --fail --location --output "mcp-gateway-$RELEASE_TAG.zip.sha256" \
+  "https://github.com/AChWorks/mcp-gateway/releases/download/$RELEASE_TAG/mcp-gateway-$RELEASE_TAG.zip.sha256"
+sha256sum --check --strict "mcp-gateway-$RELEASE_TAG.zip.sha256"
+sudo install -d -o www-data -g www-data -m 0750 /srv/mcp-gateway
+sudo unzip -q "mcp-gateway-$RELEASE_TAG.zip" -d /srv/mcp-gateway
+sudo chown -R www-data:www-data /srv/mcp-gateway
+sudo -u www-data test -w /srv/mcp-gateway
+sudo -u www-data test -w /srv/mcp-gateway/storage
+sudo -u www-data test -w /srv/mcp-gateway/bootstrap/cache
+```
+
+This ownership example is **only for a new, dedicated installation root** where the default PHP-FPM pool runs as `www-data`. Match the actual PHP-FPM pool's user if different. Do not run a recursive ownership reset on an existing populated Gateway during an upgrade. The PHP worker must be able to create `.env`, private signing keys and updater-managed application files; keep the final private keys mode `0600` and never make the app tree world-writable. Only `/srv/mcp-gateway/public` may be exposed as the site's document root; private source and storage remain outside it.
+
+### 3. Configure Nginx and PHP-FPM
+
+Create `/etc/nginx/sites-available/mcp-gateway` with the following **example** server block. Replace the hostname, app root and `fastcgi_pass` socket path if your distribution differs. The exact PHP script allowlist matters: this Gateway uses **`public/install.php` before Laravel is installed**, the regular **`public/index.php`** front controller, and the temporary **`public/update/index.php`** browser updater.
+
+```nginx
+server {
+    listen 80;
+    server_name gateway.example.com;
+    root /srv/mcp-gateway/public;
+    index index.php;
+    client_max_body_size 10m;  # Example: 8 MiB file plus form overhead.
+
+    # Preserve the standalone first-install entry, outside Laravel.
+    location = /install  { rewrite ^ /install.php last; }
+    location = /install/ { rewrite ^ /install.php last; }
+
+    # The update package temporarily stages public/update/index.php.
+    location = /update  { return 301 /update/; }
+    location = /update/ { rewrite ^ /update/index.php last; }
+
+    location = /index.php {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $realpath_root/index.php;
+        fastcgi_param HTTPS $https if_not_empty;
+        fastcgi_param HTTP_AUTHORIZATION $http_authorization;
+        fastcgi_param HTTP_X_XSRF_TOKEN $http_x_xsrf_token;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+
+    location = /install.php {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $realpath_root/install.php;
+        fastcgi_param HTTPS $https if_not_empty;
+        fastcgi_param HTTP_AUTHORIZATION $http_authorization;
+        fastcgi_param HTTP_X_XSRF_TOKEN $http_x_xsrf_token;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+
+    location = /update/index.php {
+        try_files $uri =410;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $realpath_root/update/index.php;
+        fastcgi_param HTTPS $https if_not_empty;
+        fastcgi_param HTTP_AUTHORIZATION $http_authorization;
+        fastcgi_param HTTP_X_XSRF_TOKEN $http_x_xsrf_token;
+        fastcgi_read_timeout 300s;  # Bounded example; verify upgrade budgets.
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+
+    # Never execute arbitrary PHP or expose hidden files. OAuth discovery
+    # under /.well-known/ must still reach Laravel; Certbot also uses it.
+    location ~ \.php(?:/|$) { return 404; }
+    location ~ /\.(?!well-known/) { return 404; }
+
+    # Route OAuth/MCP/Admin URLs through Laravel; serve existing assets.
+    location / { try_files $uri /index.php?$query_string; }
+}
+```
+
+**Important:** Nginx does **not** read the packaged `public/.htaccess`. A generic Laravel `try_files` rule without the specific `/install` and `/update/` handlers can break the standalone installer and updater. The update endpoint resolves to its staged PHP file during an approved update; without the file, the exact handler returns **410** for `/update/` (and `/update` redirects once to that status), not an infinite redirect or Laravel 404. These locations pass HTTPS and the OAuth Authorization header to PHP-FPM. Do not open up a generic executable `location ~ \.php` handler.
+
+Enable the site and validate Nginx **before** modifying a live Nginx host:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/mcp-gateway /etc/nginx/sites-enabled/mcp-gateway
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Set up a publicly trusted HTTPS certificate and redirect HTTP to HTTPS. With DNS and port 80 ready, a common Certbot/Nginx path is:
+
+```bash
+sudo certbot --nginx -d gateway.example.com
+sudo nginx -t
+sudo certbot renew --dry-run
+```
+
+Select the HTTPS redirect when offered, and verify the installed vhost really terminates TLS on port **443**. Do not enter passwords in the installer until HTTPS works; do not rely on arbitrary forwarded-proto headers. Confirm `php8.4-fpm`, Nginx and MariaDB services are running. If SSH/browser whole-file transfer is enabled, reconcile `client_max_body_size`, PHP-FPM `upload_max_filesize`/`post_max_size`, disk space, worker/request timeouts and the configured Gateway transfer limits; the values above are **examples, not proof of end-to-end capacity**.
+
+### 4. Finish installation, schedule maintenance and verify
+
+1. Open `https://gateway.example.com/install`; the **standalone web installer** creates the private production `.env`, keys, schema, admin account and installed marker. Enter the database values above. Do **not** run `php artisan key:generate` or `migrate:fresh` as an extra step after completing the web installer.
+2. Log in at `https://gateway.example.com/admin/login`.
+3. From the application root, verify the **actual site worker** can run the built-in environment and scheduler checks:
+
+   ```bash
+   sudo -u www-data sh -c 'cd /srv/mcp-gateway && /usr/bin/php8.4 artisan gateway:check'
+   sudo -u www-data sh -c 'cd /srv/mcp-gateway && /usr/bin/php8.4 artisan schedule:list'
+   ```
+
+4. Add **one** system cron entry with `sudo crontab -u www-data -e` (for the same PHP-FPM account):
+
+   ```cron
+   * * * * * cd /srv/mcp-gateway && /usr/bin/php8.4 artisan schedule:run --no-ansi >> /dev/null 2>&1
+   ```
+
+   Check the cron service and a **real dispatch**, not only `schedule:list`. It maintains idle WordPress OAuth credentials, Activity retention and applicable SSH Job cleanup. Do not run the application's scheduler as root.
+
+5. Verify `https://gateway.example.com/up` and `/admin/login` return healthy responses, HTTP redirects to HTTPS, and OAuth discovery at `https://gateway.example.com/.well-known/oauth-protected-resource/mcp` reaches Laravel. Review redacted Nginx/PHP-FPM/Laravel error logs if a route fails, and keep credentials out of logs.
+
+**No-panel updates:** Download the *matching* official `mcp-gateway-update-vX.Y.Z.zip` and checksum over SSH/SFTP, verify SHA-256, and **extract the update ZIP into the existing application root**. This stages temporary `update/` and `public/update/` files without replacing the running application's managed code yet. Ensure both staged paths are accessible to the site PHP worker; do not make them world-writable. Keep a separately tested database backup and private `.env`/keys/`storage/`; then use the authenticated **`https://gateway.example.com/update/`** browser flow. Do **not** unzip the *fresh-install* ZIP over a running installation, call migrations manually as a substitute, or blindly retry an uncertain browser update. The detailed updater/recovery contract below is the same with or without a hosting panel.
+
+For Apache-based panel-free hosts, the supplied `public/.htaccess` covers the application's rewrite contract when `mod_rewrite` and the required per-directory override policy are correctly enabled; the same private app-root, PHP 8.4, TLS, DB, worker ownership, installer and cron requirements still apply.
+
 ## 3. Deployment user and filesystem ownership
 
 The PHP process must be able to read the application and write only the runtime paths that need it.
@@ -104,7 +268,7 @@ For advanced Composer/Artisan deployment, run Composer and Artisan as the applic
 
 ### Recommended: deployment ZIP + web installer
 
-For normal aaPanel/shared-hosting installs, download the named deployment package attached to the GitHub Release:
+For normal ZIP-based installs, with or without a hosting panel, download the named deployment package attached to the GitHub Release:
 
 ```text
 mcp-gateway-vX.Y.Z.zip
