@@ -92,6 +92,7 @@ final class SshJobMcpTest extends TestCase
         $client = hash('sha256', 'client-list');
         $otherClient = hash('sha256', 'client-list-other');
         $tool = app(SshJobMcpToolHandlers::class);
+        self::assertSame([], $tool->list($owner, $target->target_id, $client)['result']['jobs']);
         $ids = [];
         for ($i = 0; $i < 5; $i++) {
             $ids[] = $tool->start(
@@ -119,6 +120,14 @@ final class SshJobMcpTest extends TestCase
         self::assertTrue($page1['result']['has_more']);
         $cursor = $page1['result']['next_cursor'];
         self::assertSame(91, strlen($cursor));
+        // A concurrent insert after the first page must not be duplicated or
+        // unexpectedly move onto an earlier keyset page.
+        $newId = $tool->start(
+            $owner, $target->target_id, $client, (string) Str::uuid(), 'echo inserted-later',
+        )['result']['job_id'];
+        self::assertSame($newId, $tool->list(
+            $owner, $target->target_id, $client, limit: 1,
+        )['result']['jobs'][0]['job_id']);
         $page2 = $tool->list($owner, $target->target_id, $client, cursor: $cursor, limit: 2);
         self::assertTrue($page2['ok']);
         self::assertFalse($page2['result']['has_more']);
@@ -146,7 +155,8 @@ final class SshJobMcpTest extends TestCase
         self::assertSame([], $tool->list($owner, $target->target_id, $client, status: 'running')['result']['jobs']);
 
         // Both foreign records remain in DB, but no tool result exposes them.
-        self::assertSame(7, DB::table('ssh_command_jobs')->count());
+        self::assertSame(8, DB::table('ssh_command_jobs')->count());
+        self::assertNotContains($newId, array_column($all, 'job_id'));
         self::assertNotContains($foreign, array_column($all, 'job_id'));
         self::assertNotContains($foreignClient, array_column($all, 'job_id'));
 
