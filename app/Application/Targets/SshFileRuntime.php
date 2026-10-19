@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\Concerns\StreamsSshFiles;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -33,19 +34,14 @@ final readonly class SshFileRuntime
 
     private const MAX_PATH_BYTES = 1024;
 
-    private const MAX_RANGE_BYTES = 16384;
-
-    private const MAX_WRITE_BYTES = 16384;
-
     private const MAX_LIST_ITEMS = 100;
-
-    private const MAX_LIST_NAME_BYTES = 16384;
 
     public function __construct(
         private SshTargetVault $vault,
         private SshVerifiedTransport $transport,
         private SshFileAdmission $admission,
         private AccessControl $access,
+        private OperationalSettings $settings,
     ) {}
 
     /** @return array<string,mixed> */
@@ -84,19 +80,21 @@ final readonly class SshFileRuntime
             throw new SshTargetConnectionException('invalid_input');
         }
 
+        $nameLimit = $this->settings->sshFileLimits()['list_name_bytes'];
+
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config) use ($path, $limit): array {
+            function (SFTP $sftp, string $ip, SshTargetConfig $config) use ($path, $limit, $nameLimit): array {
                 $sftp->disableStatCache();
                 $entries = [];
                 $nameBytes = 0;
                 $onFile = function (string $dir, string $name, array $attributes) use (
-                    &$entries, &$nameBytes, $limit,
+                    &$entries, &$nameBytes, $limit, $nameLimit,
                 ): void {
                     if ($name === '.' || $name === '..') {
                         return;
                     }
                     $nameBytes += strlen($name);
-                    if (count($entries) >= $limit || $nameBytes > self::MAX_LIST_NAME_BYTES
+                    if (count($entries) >= $limit || $nameBytes > $nameLimit
                         || ! mb_check_encoding($name, 'UTF-8')) {
                         // rawlist's onFile fires per entry, before adding another
                         // network batch. Fail as oversize; never fake pagination.
@@ -139,7 +137,14 @@ final readonly class SshFileRuntime
         ?string $expectedTargetBinding = null,
     ): array {
         $this->validatePath($path);
-        if ($offset < 0 || $offset > 1099511627776 || $length < 1 || $length > self::MAX_RANGE_BYTES) {
+        $maxReadBytes = $this->settings->sshFileLimits()['read_bytes'];
+        if ($expectedTargetBinding !== null) {
+            // Internal, original-Target-bound SSH Job output reads use their
+            // separately configured per-call window without widening the
+            // public ssh-file-read Tool's ceiling.
+            $maxReadBytes = max($maxReadBytes, $this->settings->sshJobOutputWindowBytes());
+        }
+        if ($offset < 0 || $offset > 1099511627776 || $length < 1 || $length > $maxReadBytes) {
             throw new SshTargetConnectionException('invalid_input');
         }
         $this->validatePrecondition($expectedSize, $expectedMtime);
@@ -190,12 +195,14 @@ final readonly class SshFileRuntime
         ?string $expectedTargetBinding = null,
     ): array {
         $this->validatePath($path);
-        if ($path === '/' || str_ends_with($path, '/') || strlen($contentBase64) > 21848
-            || ! preg_match('/^(?:[A-Za-z0-9+\/]{4})*(?:[A-Za-z0-9+\/]{2}==|[A-Za-z0-9+\/]{3}=)?$/D', $contentBase64)) {
+        if ($path === '/' || str_ends_with($path, '/')
+            || strlen($contentBase64) > 4 * intdiv($this->settings->sshFileLimits()['write_bytes'] + 2, 3)) {
             throw new SshTargetConnectionException('invalid_input');
         }
+        // Strict decode + canonical re-encoding below is linear and avoids
+        // PCRE backtracking-limit failures on valid 512 KiB Base64 inputs.
         $data = base64_decode($contentBase64, true);
-        if (! is_string($data) || strlen($data) > self::MAX_WRITE_BYTES
+        if (! is_string($data) || strlen($data) > $this->settings->sshFileLimits()['write_bytes']
             || base64_encode($data) !== $contentBase64) {
             throw new SshTargetConnectionException('invalid_input');
         }

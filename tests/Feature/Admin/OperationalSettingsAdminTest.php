@@ -70,7 +70,7 @@ final class OperationalSettingsAdminTest extends TestCase
         libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($dom);
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@class,"operations-form")])'));
-        self::assertSame(5, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
+        self::assertSame(6, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
@@ -563,14 +563,12 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(['max_bytes' => 65536, 'max_seconds' => 30],
             (new OperationalSettings)->sshCommandLimits());
 
+        $invalid = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
+        $invalid['ssh_command_timeout_seconds'] = '361';
+        $invalid['ssh_command_max_kib'] = '513';
         $this->put('/admin/operations', [
             'version' => '1',
-            'values' => [
-                'wp_response_kib' => '',
-                'wp_readonly_response_kib' => '',
-                'ssh_command_timeout_seconds' => '31',
-                'ssh_command_max_kib' => '65',
-            ],
+            'values' => $invalid,
             'current_password' => 'CorrectHorse!234',
         ])->assertSessionHasErrors(['values.ssh_command_timeout_seconds', 'values.ssh_command_max_kib']);
 
@@ -633,8 +631,7 @@ final class OperationalSettingsAdminTest extends TestCase
 
         // A browser tab opened before the new script-size control was added
         // must retain the new override instead of resetting it silently.
-        $preScriptForm = $blank;
-        unset($preScriptForm['ssh_job_max_script_kib']);
+        $preScriptForm = array_intersect_key($blank, array_flip(array_slice(array_keys(OperationalSettings::allowed()), 0, 13)));
         $this->put('/admin/operations', [
             'version' => '1', 'values' => $preScriptForm,
             'current_password' => 'CorrectHorse!234',
@@ -646,7 +643,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $wrong['ssh_job_max_active_per_user'] = '1025';
         $wrong['ssh_job_max_runtime_seconds'] = '604801';
         $wrong['ssh_job_preparing_grace_seconds'] = '29';
-        $wrong['ssh_job_max_script_kib'] = '65';
+        $wrong['ssh_job_max_script_kib'] = '513';
         $this->put('/admin/operations', [
             'version' => '1', 'values' => $wrong,
             'current_password' => 'CorrectHorse!234',
@@ -664,6 +661,91 @@ final class OperationalSettingsAdminTest extends TestCase
             'current_password' => 'CorrectHorse!234',
         ])->assertRedirect();
         self::assertSame($defaults, (new OperationalSettings)->sshJobLimits());
+    }
+
+    public function test_owner_accepts_independent_exact_512_kib_limits_and_preserves_old_forms(): void
+    {
+        $this->actingAs($this->account('owner'));
+        $defaults = new OperationalSettings;
+        self::assertSame(['stdout_bytes' => 16384, 'stderr_bytes' => 8192],
+            $defaults->sshCommandOutputLimits());
+        self::assertSame(16384, $defaults->sshJobOutputWindowBytes());
+        self::assertSame(['read_bytes' => 16384, 'write_bytes' => 16384, 'list_name_bytes' => 16384],
+            $defaults->sshFileLimits());
+
+        $values = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
+        foreach ([
+            'ssh_command_timeout_seconds' => '360',
+            'ssh_command_max_kib' => '512',
+            'ssh_job_max_script_kib' => '512',
+            'ssh_command_stdout_kib' => '512',
+            'ssh_command_stderr_kib' => '512',
+            'ssh_job_output_window_kib' => '512',
+            'ssh_file_read_window_kib' => '512',
+            'ssh_file_write_window_kib' => '512',
+            'ssh_file_list_name_kib' => '512',
+        ] as $key => $value) {
+            $values[$key] = $value;
+        }
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $values,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+
+        $limits = new OperationalSettings;
+        self::assertSame(['max_bytes' => 524288, 'max_seconds' => 360], $limits->sshCommandLimits());
+        self::assertSame(['stdout_bytes' => 524288, 'stderr_bytes' => 524288],
+            $limits->sshCommandOutputLimits());
+        self::assertSame(524288, $limits->sshJobLimits()['max_script_bytes']);
+        self::assertSame(524288, $limits->sshJobOutputWindowBytes());
+        self::assertSame(['read_bytes' => 524288, 'write_bytes' => 524288, 'list_name_bytes' => 524288],
+            $limits->sshFileLimits());
+        self::assertSame(9, DB::table('operational_setting_changes')->count());
+
+        // Previously opened 14-key tabs must not erase the six new controls.
+        $legacy = array_intersect_key($values, array_flip(
+            array_slice(array_keys(OperationalSettings::allowed()), 0, 14),
+        ));
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => $legacy,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(524288, (new OperationalSettings)->sshFileLimits()['read_bytes']);
+        self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
+
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => array_fill_keys(array_keys(OperationalSettings::allowed()), ''),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('version');
+        self::assertSame(524288, (new OperationalSettings)->sshCommandOutputLimits()['stderr_bytes']);
+
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => array_fill_keys(array_keys(OperationalSettings::allowed()), ''),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(['max_bytes' => 8192, 'max_seconds' => 15],
+            (new OperationalSettings)->sshCommandLimits());
+        self::assertSame(['stdout_bytes' => 16384, 'stderr_bytes' => 8192],
+            (new OperationalSettings)->sshCommandOutputLimits());
+        self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
+    }
+
+    public function test_expanded_setting_migration_refuses_lossy_rollback(): void
+    {
+        $migration = require base_path('database/migrations/2026_10_19_010000_expand_ssh_resource_limits.php');
+        DB::table('operational_settings')->where('id', 1)->update(['ssh_command_timeout_seconds' => 360]);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Refusing lossy rollback');
+        $migration->down();
+    }
+
+    public function test_expanded_setting_migration_refuses_dropping_a_configured_new_field(): void
+    {
+        $migration = require base_path('database/migrations/2026_10_19_010000_expand_ssh_resource_limits.php');
+        DB::table('operational_settings')->where('id', 1)->update(['ssh_command_stdout_kib' => 512]);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Reset newly configured SSH budgets');
+        $migration->down();
     }
 
     private function account(string $role): User

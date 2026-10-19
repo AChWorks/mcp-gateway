@@ -50,7 +50,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate(
             'count(//fieldset[legend[normalize-space(.)="Detached SSH Jobs"]]'
             .'//input[@id="setting_ssh_job_max_script_kib"]'
-            .'[@name="values[ssh_job_max_script_kib]"][@min="16"][@max="64"]'
+            .'[@name="values[ssh_job_max_script_kib]"][@min="16"][@max="512"]'
             .'[@aria-describedby="setting_ssh_job_max_script_kib_info"])',
         ));
         self::assertSame(1, (int) $xpath->evaluate(

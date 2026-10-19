@@ -134,8 +134,8 @@ client/proxy/Target limits or promise that a chat host can ingest
 attachments.
 
 Even with the binary mode disabled, `native_interfaces` documents
-the already operational 16 KiB **per-call** SSH read window and atomic
-single-window write. Read windows can address a larger file with
+the already operational Owner-configured **per-call** SSH read and atomic
+single-window write controls (each defaults to 16 KiB; up to 512 KiB). Read windows can address a larger file with
 size/mtime *best-effort* consistency; repeated write calls are **not**
 an append/resumable whole-file API. An authorized WordPress Target
 instead advertises its existing dynamically discovered native Ability
@@ -239,7 +239,7 @@ confirmed `OperationalSettings` service, not a duplicate config/ACL system:
 | SFTP+PHP synchronous operation | `SSH_FILE_TRANSFER_MAX_SECONDS=30` | `ssh_transfer_max_seconds` (5–40 seconds) | 40 seconds in existing SFTP stream primitive |
 | Transient in-memory spool | <=64 KiB before disk spill, 64 KiB SFTP write block | No new independent setting | Private `php://temp`, unlinked on close |
 | Per-Target SFTP admission | 30 file operations / 60 sec | Existing enforced policy | Serialized per-Target lease (90 sec); no bypass |
-| OAuth/MCP framing | Existing separately validated limits | Separate WP settings | No increase in 16 KiB MCP inline SFTP window or WP decoded HTTP guard |
+| OAuth/MCP framing | Existing separately validated limits | Separate WP settings | Separately Owner-configured 16–512 KiB MCP inline SFTP windows; unchanged WP decoded HTTP guard |
 
 The configured maximum is **not** allocated on ordinary requests. One
 upload/download operation stages at most one configured object in the Gateway

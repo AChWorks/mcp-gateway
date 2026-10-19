@@ -42,6 +42,12 @@ final class OperationalSettingsController extends Controller
                 'ssh_job_preparing_grace_seconds' => 120,
                 'ssh_job_reconcile_grace_seconds' => 600,
                 'ssh_job_max_script_kib' => 16,
+                'ssh_command_stdout_kib' => 16,
+                'ssh_command_stderr_kib' => 8,
+                'ssh_job_output_window_kib' => 16,
+                'ssh_file_read_window_kib' => 16,
+                'ssh_file_write_window_kib' => 16,
+                'ssh_file_list_name_kib' => 16,
             ],
         ]);
     }
@@ -73,7 +79,8 @@ final class OperationalSettingsController extends Controller
         $preSsh = array_slice($all, 0, 4);
         $preSshCommand = array_slice($all, 0, 6);
         $preSshJobs = array_slice($all, 0, 8);
-        $preScriptBudget = array_slice($all, 0, -1);
+        $preScriptBudget = array_slice($all, 0, 13);
+        $prePayloadBudgets = array_slice($all, 0, 14);
         sort($names);
         sort($all);
         sort($legacy);
@@ -81,7 +88,8 @@ final class OperationalSettingsController extends Controller
         sort($preSshCommand);
         sort($preSshJobs);
         sort($preScriptBudget);
-        if ($names !== $all && $names !== $legacy && $names !== $preSsh && $names !== $preSshCommand && $names !== $preSshJobs && $names !== $preScriptBudget) {
+        sort($prePayloadBudgets);
+        if ($names !== $all && $names !== $legacy && $names !== $preSsh && $names !== $preSshCommand && $names !== $preSshJobs && $names !== $preScriptBudget && $names !== $prePayloadBudgets) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);

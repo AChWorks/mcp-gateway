@@ -25,16 +25,21 @@
         [
             'title' => __('SSH commands'),
             'description' => __('Bound each synchronous SSH command separately from whole-file transfer. Use retained SSH Jobs for longer operations. Timeout includes the remote exec phase, not setup; transport, PHP and proxy limits may be lower.'),
-            'keys' => ['ssh_command_timeout_seconds', 'ssh_command_max_kib'],
+            'keys' => ['ssh_command_timeout_seconds', 'ssh_command_max_kib', 'ssh_command_stdout_kib', 'ssh_command_stderr_kib'],
         ],
         [
             'title' => __('Detached SSH Jobs'),
-            'description' => __('Owner-configurable script input (16-64 KiB), concurrent admission, runtime, result retention and recovery windows. Historical Jobs have no count quota; admission expiry never proves a remote process stopped.'),
+            'description' => __('Owner-configurable script input (16-512 KiB), bounded output-read windows, concurrent admission, runtime, retention and recovery. Existing retained stdout/stderr spools stay at 1 MiB per stream.'),
             'keys' => [
                 'ssh_job_max_active_per_user', 'ssh_job_max_runtime_seconds',
                 'ssh_job_retention_hours', 'ssh_job_preparing_grace_seconds',
-                'ssh_job_reconcile_grace_seconds', 'ssh_job_max_script_kib',
+                'ssh_job_reconcile_grace_seconds', 'ssh_job_max_script_kib', 'ssh_job_output_window_kib',
             ],
+        ],
+        [
+            'title' => __('SSH SFTP inline windows'),
+            'description' => __('Per-call file read/write decoded-byte limits and directory-name aggregate. These do not change SSH whole-file transfer budgets or internal streaming block sizes.'),
+            'keys' => ['ssh_file_read_window_kib', 'ssh_file_write_window_kib', 'ssh_file_list_name_kib'],
         ],
     ];
     $descriptions = [
@@ -46,12 +51,18 @@
         'ssh_transfer_max_seconds' => __('Maximum synchronous transfer time'),
         'ssh_command_timeout_seconds' => __('Maximum SSH command execution time'),
         'ssh_command_max_kib' => __('Maximum SSH command input size'),
+        'ssh_command_stdout_kib' => __('Maximum captured SSH command stdout (KiB)'),
+        'ssh_command_stderr_kib' => __('Maximum captured SSH command stderr (KiB)'),
         'ssh_job_max_active_per_user' => __('Concurrent SSH Jobs admitted per user'),
         'ssh_job_max_runtime_seconds' => __('Maximum remote Job runtime'),
         'ssh_job_retention_hours' => __('Retain terminal Job results'),
         'ssh_job_preparing_grace_seconds' => __('Pre-dispatch crash recovery window'),
         'ssh_job_reconcile_grace_seconds' => __('Post-runtime uncertain admission grace'),
         'ssh_job_max_script_kib' => __('Maximum SSH Job script input (KiB)'),
+        'ssh_job_output_window_kib' => __('Maximum SSH Job output read per call (KiB)'),
+        'ssh_file_read_window_kib' => __('Maximum inline SFTP read per call (KiB)'),
+        'ssh_file_write_window_kib' => __('Maximum inline SFTP write per call (KiB)'),
+        'ssh_file_list_name_kib' => __('Maximum directory listing aggregate names (KiB)'),
     ];
 @endphp
 <div class="page-heading">
@@ -100,9 +111,10 @@
         <ul>
             <li>{{ __('WordPress responses count the decoded JSON-RPC envelope, including metadata. Confirmed read-only calls can use their separate higher limit; the independent 8 MiB hard response guard remains in force.') }}</li>
             <li>{{ __('The overall WordPress timeout must be at least the connection timeout. The existing OAuth refresh/recovery window cannot be extended by these settings.') }}</li>
-            <li>{{ __('SSH whole-file limits do not change its 16 KiB inline reads, 64 KiB temporary buffer, or WordPress transfer limits. The binary sidecar must be independently enabled and authorized.') }}</li>
+            <li>{{ __('SSH whole-file limits are independent of Owner-selected inline SFTP read/write windows, 64 KiB temporary streaming blocks, and WordPress transfer limits. The binary sidecar must be independently enabled and authorized.') }}</li>
             <li>{{ __('SSH Job concurrency counts only live admission leases, not retained historical records. Remote systemd runtime and metadata retention are independent. A stale or ambiguous Job is never automatically replayed; remote uncertainty remains visible after its admission lease ends.') }}</li>
             <li>{{ __('Unverifiable orphaned Job spools require deliberate operator reconciliation after independently verified cleanup on the original SSH host, never a newly rebound Target.') }}</li>
+            <li>{{ __('Selecting up to 360 seconds for a synchronous SSH command requires the hosting PHP worker, HTTP proxy and MCP client to support that duration. An unsupported hop can terminate the HTTP request even when the remote effect is uncertain. Use detached SSH Jobs for longer or uncertain work.') }}</li>
             <li>{{ __('Values cannot override PHP worker, proxy/CDN, filesystem or actual client limits. These bounded ranges remain provisional pending operational measurements.') }}</li>
         </ul>
     </details>

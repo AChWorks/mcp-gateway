@@ -26,7 +26,7 @@ use Throwable;
  */
 final readonly class SshJobCoordinator
 {
-    private const MAX_SCRIPT_BYTES = 65536;
+    private const MAX_SCRIPT_BYTES = 524288;
 
     private const MAX_OUTPUT_BYTES = 1048576;
 
@@ -464,7 +464,8 @@ final readonly class SshJobCoordinator
             throw new SshTargetConnectionException('job_unavailable');
         }
         if (! in_array($stream, ['stdout', 'stderr'], true)
-            || $offset < 0 || $offset > self::MAX_OUTPUT_BYTES || $length < 1 || $length > 16384) {
+            || $offset < 0 || $offset > self::MAX_OUTPUT_BYTES || $length < 1
+            || $length > $this->settings->sshJobOutputWindowBytes()) {
             throw new SshTargetConnectionException('invalid_input');
         }
         try {
