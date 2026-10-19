@@ -2,6 +2,19 @@
 
 This is the technical wire contract for an **optional**, authenticated, complete-file client↔SSH Target HTTPS mode. Enabled behavior requires the real installed code, exact client/Target permissions, effective feature flag and a supported receiving client. Successful independently controlled client bytes do **not** establish native AI host/model file attachment ingestion.
 
+**Current support decision (Gateway #147):** Native ChatGPT `openai/fileParams`
+ingress is **parked and OFF by default** (`CHATGPT_FILEPARAMS_ENABLED=false`).
+The feature's safe source code, tests and resource-admission infrastructure
+are preserved, but neither native chat attachment handoff nor a verified
+host-issued download URL was proven with the current ChatGPT client. Some
+calls were rejected before reaching Gateway. No speculative origin-allowlist
+change is justified. This limitation is separate from the already usable
+Gateway Admin browser upload/download, OAuth-authenticated raw-binary SSH
+sidecar and bounded MCP SFTP windows; do **not** disable SSH whole-file
+transfer to park FileParams. Re-enable only after real, independently reviewed
+platform ingress and origin evidence. See
+[Issue #147](https://github.com/AChWorks/mcp-gateway/issues/147).
+
 The optional `target-file-input` MCP Tool is a **separate client-specific
 signed-file ingress adapter** that can use the same authorized SSH SFTP
 whole-file engine. Its top-level FileParams object is **not** raw binary

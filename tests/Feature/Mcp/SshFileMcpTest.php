@@ -231,6 +231,9 @@ final class SshFileMcpTest extends TestCase
 
     public function test_chatgpt_selected_ssh_target_must_be_connected_and_have_verified_local_credentials_before_signed_get(): void
     {
+        // This legacy FileParams implementation regression intentionally
+        // exercises the preserved opt-in path; production defaults to OFF.
+        config()->set('bridge.file_input.enabled', true);
         config()->set('ssh.file_transfer.enabled', true);
         Http::preventStrayRequests();
         Http::fake(static fn (Request $request) => Http::response('not-expected', 200));
