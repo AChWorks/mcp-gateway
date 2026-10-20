@@ -15,6 +15,7 @@ use App\Http\Controllers\Admin\TargetGroupUserController;
 use App\Http\Controllers\Admin\TargetOperationsController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\UserTargetAccessController;
+use App\Http\Controllers\Admin\WordpressBridgeInfoController;
 use App\Http\Middleware\EnsureLocalUserAccessEnabled;
 use Illuminate\Support\Facades\Route;
 
@@ -33,6 +34,8 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::post('/targets', [TargetController::class, 'store'])->name('targets.store');
     Route::get('/targets/{target:target_id}', [TargetController::class, 'show'])->name('targets.show');
     Route::get('/targets/{target:target_id}/edit', [TargetController::class, 'edit'])->name('targets.edit');
+    Route::post('/targets/{target}/wordpress/bridge-info', WordpressBridgeInfoController::class)
+        ->middleware('throttle:20,1')->name('targets.wordpress.bridge-info');
     Route::post('/targets/{target:target_id}/operations', [TargetOperationsController::class, 'update'])->name('targets.operations.update');
     Route::put('/targets/{target:target_id}', [TargetController::class, 'update'])->name('targets.update');
     Route::put('/targets/{target:target_id}/configuration', [TargetConfigurationController::class, 'update'])->name('targets.configuration.update');

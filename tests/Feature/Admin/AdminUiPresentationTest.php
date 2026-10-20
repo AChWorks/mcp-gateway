@@ -17,6 +17,25 @@ final class AdminUiPresentationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_target_wordpress_operation_uses_shared_admin_markup(): void
+    {
+        $source = file_get_contents(resource_path('views/admin/targets/show.blade.php'));
+        $result = file_get_contents(resource_path('views/admin/targets/wordpress-bridge-info.blade.php'));
+        self::assertIsString($source);
+        self::assertIsString($result);
+        self::assertStringContainsString('@can(\'wordpress.abilities.execute.readonly\', $target)', $source);
+        self::assertStringContainsString('@csrf', $source);
+        self::assertStringContainsString('class="panel panel-wide"', $source);
+        self::assertStringContainsString('class="page-heading"', $result);
+        self::assertStringContainsString('role="alert"', $result);
+        self::assertStringContainsString('{{ $response }}', $result);
+        self::assertStringContainsString('operation-result-preview', $result);
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertStringContainsString('.operation-result-preview {', $css);
+        self::assertStringContainsString('overflow-wrap: anywhere;', $css);
+    }
+
     public function test_admin_stylesheet_is_versioned_from_release_identity(): void
     {
         $this->actingAs($this->owner())
