@@ -123,7 +123,7 @@ final class ClientProfileIsolationTest extends TestCase
                 $isWordPress = str_starts_with($tool['name'], 'wordpress-');
                 self::assertSame(! $isExecute, $tool['annotations']['readOnlyHint'] ?? null);
                 self::assertSame($isExecute && ! $boundedCreate, $tool['annotations']['destructiveHint'] ?? null);
-                self::assertSame(($isWordPress || str_starts_with($tool['name'], 'ssh-')) && $tool['name'] !== 'ssh-jobs-list' && ! $boundedCreate, $tool['annotations']['openWorldHint'] ?? null);
+                self::assertSame(($isWordPress || str_starts_with($tool['name'], 'ssh-')) && $tool['name'] !== 'ssh-jobs-list', $tool['annotations']['openWorldHint'] ?? null);
             }
         }
         // The profile must be the authenticated OAuth registration, never an

@@ -183,7 +183,7 @@ final readonly class GatewayMcpEndpoint
                 ),
                 name: 'wordpress-content-publish-create',
                 description: 'Create exactly one published WordPress post on an authorized Target. Requires an Owner-managed semantic User + Target Group grant for ordinary accounts, plus independently enabled AI access and OAuth client authorization and an 8-128 character stable operation_id. Never grants generic Ability execution, editing, deletion, plugin or site management. Do not issue a new operation_id merely to retry an uncertain result.',
-                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: false, openWorldHint: false),
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
                     'properties' => [

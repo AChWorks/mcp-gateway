@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
+use App\Application\Mcp\McpDispatchAdmission;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\Concerns\StreamsSshFiles;
 use App\Domain\Access\GatewayPermission;
@@ -42,6 +43,7 @@ final readonly class SshFileRuntime
         private SshFileAdmission $admission,
         private AccessControl $access,
         private OperationalSettings $settings,
+        private McpDispatchAdmission $dispatchAdmission,
     ) {}
 
     /** @return array<string,mixed> */
@@ -214,7 +216,7 @@ final readonly class SshFileRuntime
 
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
-                $path, $data, $overwrite, $expectedSize, $expectedMtime,
+                $user, $path, $data, $overwrite, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
                 $existingMode = null;
@@ -256,6 +258,9 @@ final readonly class SshFileRuntime
                 // verified-private directory + same-owner 0600 inode checks pass.
                 // Same-filesystem sibling staging preserves exclusive hardlink.
                 try {
+                    if (! $this->dispatchAdmission->allows($user)) {
+                        throw new SshTargetConnectionException('forbidden');
+                    }
                     $sftp->mkdir($stagingDir, 0700);
                     $sftp->clearStatCache();
                     $directory = $sftp->lstat($stagingDir);
@@ -289,6 +294,9 @@ final readonly class SshFileRuntime
 
                     // The first nonempty payload byte occurs ONLY after the
                     // preceding verified-private directory/inode checks.
+                    if (! $this->dispatchAdmission->allows($user)) {
+                        throw new SshTargetConnectionException('forbidden');
+                    }
                     $sftp->put($temporary, $data, SFTP::SOURCE_STRING);
                     $sftp->clearStatCache();
                     $attributes = $sftp->lstat($temporary);
@@ -324,6 +332,9 @@ final readonly class SshFileRuntime
                         throw new SshTargetConnectionException('staging_not_private');
                     }
 
+                    if (! $this->dispatchAdmission->allows($user)) {
+                        throw new SshTargetConnectionException('forbidden');
+                    }
                     if (! $overwrite) {
                         // Atomic exclusive link; no check-then-rename fallback.
                         $sftp->hardlink($temporary, $path);
@@ -496,7 +507,8 @@ final readonly class SshFileRuntime
                         || ! hash_equals((string) $config->auth_method, (string) $currentConfig->auth_method)
                         || ($expectedTargetBinding !== null
                             && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($currentTarget, $currentConfig)))
-                        || ! $this->access->allows($currentUser, $permission, $currentTarget)) {
+                        || ! $this->access->allows($currentUser, $permission, $currentTarget)
+                        || ! $this->dispatchAdmission->allows($currentUser)) {
                         throw new SshTargetConnectionException('target_changed');
                     }
 

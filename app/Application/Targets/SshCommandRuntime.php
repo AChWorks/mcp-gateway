@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
+use App\Application\Mcp\McpDispatchAdmission;
 use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -27,6 +28,7 @@ final readonly class SshCommandRuntime
         private SshCommandAdmission $admission,
         private AccessControl $access,
         private OperationalSettings $settings,
+        private McpDispatchAdmission $dispatchAdmission,
     ) {}
 
     /** @return array<string,mixed> */
@@ -112,7 +114,8 @@ final readonly class SshCommandRuntime
                         || ! hash_equals((string) $config->auth_method, (string) $currentConfig->auth_method)
                         || ($expectedTargetBinding !== null
                             && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($currentTarget, $currentConfig)))
-                        || ! $this->access->allows($currentUser, GatewayPermission::SshCommandRun, $currentTarget)) {
+                        || ! $this->access->allows($currentUser, GatewayPermission::SshCommandRun, $currentTarget)
+                        || ! $this->dispatchAdmission->allows($currentUser)) {
                         throw new SshTargetConnectionException('target_changed');
                     }
 

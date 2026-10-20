@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
+use App\Application\Mcp\McpDispatchAdmission;
 use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -23,6 +24,7 @@ final readonly class WordpressTargetOperations
         private ActivityRecorder $activity,
         private WpAiBridgeMcpClient $bridge,
         private ClientProfileRegistry $profiles,
+        private McpDispatchAdmission $dispatchAdmission,
     ) {}
 
     /** @return array<string, mixed> */
@@ -147,7 +149,8 @@ final readonly class WordpressTargetOperations
                     // User role/enabled state or stale group membership.
                     $currentUser = User::query()->find($user->getKey());
 
-                    if (! $currentUser instanceof User || ($requiresAiAccess && ! $currentUser->ai_access_enabled)) {
+                    if (! $currentUser instanceof User || ($requiresAiAccess && ! $currentUser->ai_access_enabled)
+                        || ! $this->dispatchAdmission->allows($currentUser)) {
                         return false;
                     }
 
@@ -214,7 +217,8 @@ final readonly class WordpressTargetOperations
         // catalog classification is independently rechecked at dispatch.
         $admitted = $this->access->allowsWordpressPublish($user, $target)
             && (! $throughAi || ($user->ai_access_enabled
-                && $this->profiles->authorizes((string) $clientId, $profileKey, $profileGeneration)));
+                && $this->profiles->authorizes((string) $clientId, $profileKey, $profileGeneration)))
+            && $this->dispatchAdmission->allows($user);
         if (! $admitted) {
             return $this->failed($operation, $target, 'forbidden', 'WordPress publication is not authorized.');
         }
@@ -228,10 +232,12 @@ final readonly class WordpressTargetOperations
             'status' => 'publish',
             'title' => $title,
             'content' => $content,
-            // Bridge's own claim identity knows the WordPress principal and
-            // OAuth client, but not the initiating Gateway User. Namespace
-            // the caller's stable key so 100+ scoped users cannot collide.
-            'operation_id' => 'gw-'.hash('sha256', "wp-post-create\0".$user->getKey()."\0".$operationId),
+            // Bridge sees only Gateway's downstream client. Bind its claim
+            // to the original Gateway user, Target and authenticated upstream
+            // AI client (or a separate human channel). Authorized retries
+            // reuse the exact same deterministic identity.
+            'operation_id' => 'gw-'.hash('sha256', "wp-post-create\0".$user->getKey()."\0"
+                .$target->getKey()."\0".($throughAi ? 'ai:'.$clientId : 'human')."\0".$operationId),
         ];
         $timing = OperationTiming::forWordpress();
         try {
@@ -250,7 +256,8 @@ final readonly class WordpressTargetOperations
                     return $current instanceof User
                         && $this->access->allowsWordpressPublish($current, $target)
                         && (! $throughAi || ($current->ai_access_enabled
-                            && $this->profiles->authorizes((string) $clientId, $profileKey, $profileGeneration)));
+                            && $this->profiles->authorizes((string) $clientId, $profileKey, $profileGeneration)))
+                        && $this->dispatchAdmission->allows($current);
                 },
                 $timing,
                 fn (?array $contract, AbilityExecutionClass $class): bool => $this->supportsPublishCreate($contract, $class),

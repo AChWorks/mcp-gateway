@@ -3,6 +3,7 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetRegistration;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
@@ -53,6 +54,8 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
     private const CLIENT_ID = 'https://acceptance.example.test/client';
 
     private string $privateToken = '';
+
+    private string $lastIssuedAccessTokenId = '';
 
     private int $outboundWpCalls = 0;
 
@@ -251,6 +254,108 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
         self::assertSame(401, $blocked['http_status']);
     }
 
+    public function test_mid_ssh_handshake_ai_or_oauth_revocation_stops_each_effectful_family(): void
+    {
+        $owner = $this->user('owner');
+        $ssh = $this->registerAndVerifySsh();
+        $cases = [
+            ['ssh-command-run', 'ai_disabled'],
+            ['ssh-command-run', 'access_token'],
+            ['ssh-file-write', 'ai_disabled'],
+            ['ssh-file-write', 'consent'],
+            ['ssh-job-start', 'ai_disabled'],
+            ['ssh-job-start', 'access_token'],
+        ];
+        foreach ($cases as [$tool, $revocation]) {
+            $owner->forceFill(['ai_access_enabled' => true])->save();
+            $bearer = $this->issueAccessToken($owner);
+            $tokenId = $this->lastIssuedAccessTokenId;
+            $consentId = (string) DB::table('oauth_access_tokens')
+                ->where('id', $tokenId)->value('authorization_id');
+            $path = '/home/'.$this->sshUser.'/mcp-revoked-'.bin2hex(random_bytes(9));
+            $mutated = false;
+
+            // This policy is test-only and is reached AFTER MCP bearer
+            // admission, during an actual pinned SSH connection setup. The
+            // final post-login effect fence must see the revoked database
+            // state even though the human role/Target permission is unchanged.
+            $revoke = static function () use ($owner, $revocation, $tokenId, $consentId, &$mutated): void {
+                $mutated = true;
+                if ($revocation === 'ai_disabled') {
+                    $owner->forceFill(['ai_access_enabled' => false])->save();
+                } elseif ($revocation === 'consent') {
+                    DB::table('oauth_authorizations')->where('id', $consentId)
+                        ->update(['revoked_at' => now()]);
+                } else {
+                    DB::table('oauth_access_tokens')->where('id', $tokenId)
+                        ->update(['revoked_at' => now()]);
+                }
+            };
+            $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class($revoke) implements SshDialAddressPolicy
+            {
+                private bool $called = false;
+
+                public function __construct(private readonly \Closure $revoke) {}
+
+                public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+                {
+                    if (! $this->called) {
+                        $this->called = true;
+                        ($this->revoke)();
+                    }
+
+                    return ['127.0.0.1'];
+                }
+            });
+
+            $arguments = match ($tool) {
+                'ssh-command-run' => ['target_id' => $ssh->target_id,
+                    'command' => 'printf should-never-run > '.escapeshellarg($path)],
+                'ssh-file-write' => ['target_id' => $ssh->target_id,
+                    'path' => $path, 'content_base64' => base64_encode('should-never-write')],
+                default => ['target_id' => $ssh->target_id, 'request_id' => (string) Str::uuid(),
+                    'script' => 'printf should-never-launch > '.escapeshellarg($path)],
+            };
+            $denied = $this->tool($bearer, $tool, $arguments);
+            self::assertTrue($mutated, $tool.' / '.$revocation);
+            self::assertFalse($denied['ok'] ?? true, $tool.' / '.$revocation.' '.json_encode($denied));
+
+            // The dial policy must not revoke the independent verification
+            // connection. Restore it before the next authenticated request.
+            $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+            {
+                public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+                {
+                    return ['127.0.0.1'];
+                }
+            });
+
+            if ($tool === 'ssh-command-run' && $revocation === 'ai_disabled') {
+                // The account still retains the SAME authorized human/OS
+                // command capability. Only its AI admission was disabled.
+                $this->app->instance('request', \Illuminate\Http\Request::create('/admin/targets', 'POST'));
+                $human = app(SshCommandRuntime::class)->run(
+                    $owner, $ssh, 'test ! -e -- '.escapeshellarg($path),
+                );
+                self::assertSame('completed', $human['status']);
+                self::assertSame(0, $human['exit_code']);
+            }
+
+            // A new, authorized HTTP request checks the actual remote host.
+            // This is stronger than asserting the handler merely returned an
+            // error: the revoked request created no command, file or Job effect.
+            $owner->forceFill(['ai_access_enabled' => true])->save();
+            $verificationBearer = $this->issueAccessToken($owner);
+            $checked = $this->tool($verificationBearer, 'ssh-command-run', [
+                'target_id' => $ssh->target_id,
+                'command' => 'test ! -e -- '.escapeshellarg($path),
+            ]);
+            self::assertTrue($checked['ok'] ?? false, json_encode($checked));
+            self::assertSame(0, $checked['result']['exit_code'] ?? null);
+
+        }
+    }
+
     public function test_official_mcp_sdk_client_calls_both_families_over_authenticated_http_transport(): void
     {
         $owner = $this->user('owner');
@@ -415,6 +520,8 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
             'role' => $role,
             'target_scope_mode' => $role === 'owner' ? 'all' : 'selected',
             'access_enabled' => true,
+            // This actor deliberately exercises OAuth + MCP; human-only users remain default-denied.
+            'ai_access_enabled' => true,
         ], []);
     }
 
@@ -432,7 +539,8 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
             [new ScopeEntity('mcp')],
             (string) $user->getKey(),
         );
-        $token->setIdentifier(bin2hex(random_bytes(20)));
+        $this->lastIssuedAccessTokenId = bin2hex(random_bytes(20));
+        $token->setIdentifier($this->lastIssuedAccessTokenId);
         $token->setExpiryDateTime((new DateTimeImmutable)->modify('+15 minutes'));
         $token->setPrivateKey(new CryptKey((string) config('oauth.keys.private')));
         app(AccessTokenRepository::class)->persistNewAccessToken($token);

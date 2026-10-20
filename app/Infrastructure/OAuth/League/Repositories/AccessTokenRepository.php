@@ -84,37 +84,81 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
 
     public function isAccessTokenRevoked(string $tokenId): bool
     {
-        $row = DB::table('oauth_access_tokens as tokens')
+        return ! $this->tokenUsable($this->findToken($tokenId));
+    }
+
+    /**
+     * Revalidate the exact bearer AND its parent consent at the final MCP
+     * effect boundary. Identity is supplied only by the verified HTTP
+     * middleware, never by MCP Tool arguments or caller-controlled metadata.
+     */
+    public function authorizesDispatch(
+        string $tokenId, int $userId, string $clientId, string $profileKey, int $profileGeneration,
+    ): bool {
+        $row = $this->findToken($tokenId);
+        if ($row === null || ! $this->tokenUsable($row)
+            || (int) $row->user_id !== $userId
+            || (int) $row->authorization_user_id !== $userId
+            || ! hash_equals((string) $row->client_id, $clientId)
+            || ! hash_equals((string) $row->client_profile_key, $profileKey)
+            || (int) $row->client_profile_generation !== $profileGeneration
+            || (string) $row->authorization_resource !== (string) config('oauth.resource')
+            || ! hash_equals((string) $row->authorization_resource_hash,
+                hash('sha256', (string) config('oauth.resource')))) {
+            return false;
+        }
+
+        $scope = (string) config('oauth.scope');
+        $tokenScopes = json_decode((string) $row->scopes, true);
+        $consentScopes = json_decode((string) $row->authorization_scopes, true);
+
+        return is_array($tokenScopes) && in_array($scope, $tokenScopes, true)
+            && is_array($consentScopes) && in_array($scope, $consentScopes, true);
+    }
+
+    private function findToken(string $tokenId): ?object
+    {
+        return DB::table('oauth_access_tokens as tokens')
             ->join('oauth_authorizations as authorizations', 'authorizations.id', '=', 'tokens.authorization_id')
             ->join('users', 'users.id', '=', 'tokens.user_id')
             ->where('tokens.id', $tokenId)
             ->select([
+                'tokens.user_id',
                 'tokens.client_id',
                 'tokens.resource',
+                'tokens.scopes',
                 'tokens.expires_at',
                 'tokens.revoked_at',
+                'authorizations.user_id as authorization_user_id',
                 'authorizations.client_id as authorization_client_id',
                 'authorizations.client_profile_key',
                 'authorizations.client_profile_generation',
+                'authorizations.resource as authorization_resource',
+                'authorizations.resource_hash as authorization_resource_hash',
+                'authorizations.scopes as authorization_scopes',
                 'authorizations.revoked_at as authorization_revoked_at',
                 'users.access_enabled as user_access_enabled',
                 'users.ai_access_enabled as user_ai_access_enabled',
             ])
             ->first();
+    }
 
-        return $row === null
-            || $row->revoked_at !== null
-            || $row->authorization_revoked_at !== null
-            || ! (bool) $row->user_access_enabled
-            || ! (bool) $row->user_ai_access_enabled
-            || ! hash_equals((string) $row->client_id, (string) $row->authorization_client_id)
-            || ! $this->profiles->authorizes(
+    private function tokenUsable(?object $row): bool
+    {
+        return $row !== null
+            && $row->revoked_at === null
+            && $row->authorization_revoked_at === null
+            && (bool) $row->user_access_enabled
+            && (bool) $row->user_ai_access_enabled
+            && (int) $row->user_id === (int) $row->authorization_user_id
+            && hash_equals((string) $row->client_id, (string) $row->authorization_client_id)
+            && $this->profiles->authorizes(
                 (string) $row->client_id,
                 is_string($row->client_profile_key) ? $row->client_profile_key : null,
                 $row->client_profile_generation === null ? null : (int) $row->client_profile_generation,
             )
-            || (string) $row->resource !== (string) config('oauth.resource')
-            || now()->gte($row->expires_at);
+            && (string) $row->resource === (string) config('oauth.resource')
+            && now()->lt($row->expires_at);
     }
 
     /** @param ScopeEntityInterface[] $scopes
