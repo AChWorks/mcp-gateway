@@ -380,7 +380,7 @@ final class SshFileFixtureTest extends TestCase
             }
             $reconfiguration = app(SshTargetReconfiguration::class);
             $reconfigured = $reconfiguration->update($target, [
-                'configuration_revision' => $reconfiguration->revision($target),
+                'configuration_revision' => $reconfiguration->revision($target->fresh()),
                 'ssh_host' => $config->host,
                 'ssh_port' => $change === 'binding'
                     ? (int) $this->env('SSH_FIXTURE_PORT_WATCH_FIRST_WRITE') : $config->port,
