@@ -9,20 +9,32 @@ use App\Application\Mcp\TargetFileInputMcpToolHandlers;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetConnectionService;
+use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Http\DnsResolver;
+use App\Infrastructure\OAuth\League\Entities\ClientEntity;
+use App\Infrastructure\OAuth\League\Entities\ScopeEntity;
+use App\Infrastructure\OAuth\League\Repositories\AccessTokenRepository;
+use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Models\User;
+use DateTimeImmutable;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use League\OAuth2\Server\CryptKey;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
@@ -145,6 +157,7 @@ final class SshFileFixtureTest extends TestCase
         ];
     }
 
+    /** @param 'direct_deny'|'pause'|'global_deny'|'group_removed' $revocation */
     #[DataProvider('lateSftpRevocationCases')]
     public function test_real_sftp_refuses_publication_when_write_rights_change_after_private_staging(
         string $transfer, bool $overwrite, string $revocation,
@@ -271,6 +284,205 @@ final class SshFileFixtureTest extends TestCase
         $human = app(SshCommandRuntime::class)->run($owner, $target, $proof);
         self::assertSame('completed', $human['status'], json_encode($human));
         self::assertSame(0, $human['exit_code'], json_encode($human));
+    }
+
+    /** @return array<string, array{string, bool, string, bool}> */
+    public static function supersededSftpConnectionCases(): array
+    {
+        return [
+            'MCP inline hardlink / endpoint and pin' => ['inline', false, 'binding', true],
+            'human inline rename / credential reseal' => ['inline', true, 'reseal', false],
+            'human stream hardlink / credential replaced' => ['stream', false, 'replace', false],
+            'human stream rename / endpoint and pin' => ['stream', true, 'binding', false],
+        ];
+    }
+
+    #[DataProvider('supersededSftpConnectionCases')]
+    public function test_real_sftp_refuses_superseded_connection_after_staging_and_successful_reverification(
+        string $transfer, bool $overwrite, string $change, bool $mcp,
+    ): void {
+        $owner = $this->owner();
+        if ($mcp) {
+            $owner->forceFill(['ai_access_enabled' => true])->save();
+        }
+        $target = $this->target('password');
+        // Keep independent access to endpoint A after the tested Target moves.
+        $proofTarget = $this->target('private_key');
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->firstOrFail();
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->firstOrFail();
+        $binding = SshTargetBinding::hash($target, $config);
+        $directory = $this->home().'/binding-'.bin2hex(random_bytes(9));
+        $private = $directory.'/stream';
+        $path = $directory.'/destination';
+        $original = 'original-destination-must-survive';
+        $payload = str_repeat('authenticated-session-payload', $transfer === 'stream' ? 1000 : 1);
+        $setup = app(SshCommandRuntime::class)->run(
+            $owner, $proofTarget, 'mkdir -m 700 -- '.escapeshellarg($directory).' '.escapeshellarg($private),
+        );
+        self::assertSame(0, $setup['exit_code'], json_encode($setup));
+        if ($overwrite) {
+            $initial = app(SshFileRuntime::class)->write($owner, $target, $path, base64_encode($original));
+            self::assertSame('completed', $initial['status'], json_encode($initial));
+        }
+        $bearer = $mcp ? $this->fileMcpBearer($owner) : null;
+        $findStage = 'find '.escapeshellarg($directory)
+            ." -type f \\( -name payload -o -name '.gateway-stream-*.tmp' \\)";
+        $configRead = false;
+        $fileChecks = 0;
+        $changed = false;
+        $reconfigured = false;
+        $disconnected = false;
+        $reverified = false;
+        /** @var bool $finished Read by the retained event listener after this operation returns. */
+        $finished = false;
+        $verifiedIp = null;
+        $zeroProof = null;
+        /** @var array<string,mixed>|null $payloadProof Populated by a later query-event callback. */
+        $payloadProof = null;
+
+        DB::listen(function (QueryExecuted $query) use (
+            &$configRead, &$fileChecks, &$changed, &$reconfigured, &$disconnected, &$reverified,
+            &$finished, &$verifiedIp, &$zeroProof, &$payloadProof,
+            $target, $proofTarget, $owner, $config, $credential, $change, $findStage,
+        ): void {
+            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
+            // Match consecutive config+credential identity reads. Command
+            // setup and reverification also read credentials, in a different
+            // order; they must not advance the SFTP-boundary counter.
+            $fileCheck = $configRead && str_contains($sql, 'from target_credentials where target_credentials.id = ?')
+                && (string) ($query->bindings[0] ?? '') === (string) $credential->getKey();
+            $configRead = str_contains($sql, 'from ssh_direct_target_configs where ssh_direct_target_configs.id = ?')
+                && (string) ($query->bindings[0] ?? '') === (string) $config->getKey();
+            if ($finished || ! $fileCheck) {
+                return;
+            }
+            if ($reverified) {
+                // One <64 KiB payload has reached private staging. The next
+                // guard is immediately before hardlink / POSIX rename.
+                $payloadProof = app(SshCommandRuntime::class)->run(
+                    $owner, $proofTarget, $findStage." -printf '%s\\n'",
+                );
+
+                return;
+            }
+            if ($changed || ++$fileChecks !== 3) {
+                return;
+            }
+            // Post-login, pre-stage, pre-payload. QueryExecuted fires after
+            // this guard's original rows were read. Mutate before returning
+            // them, so only the subsequent publication guard sees the change.
+            $changed = true;
+            $zeroProof = app(SshCommandRuntime::class)->run(
+                $owner, $proofTarget, $findStage." -printf '%s %m\\n'",
+            );
+            if ($change === 'replace') {
+                app(SshTargetConnectionService::class)->disconnect($target);
+            }
+            $reconfiguration = app(SshTargetReconfiguration::class);
+            $reconfigured = $reconfiguration->update($target, [
+                'configuration_revision' => $reconfiguration->revision($target),
+                'ssh_host' => $config->host,
+                'ssh_port' => $change === 'binding'
+                    ? (int) $this->env('SSH_FIXTURE_PORT_WATCH_FIRST_WRITE') : $config->port,
+                'ssh_username' => $config->username,
+                'ssh_host_key' => $change === 'binding'
+                    ? trim((string) file_get_contents($this->env('SSH_FIXTURE_RSA_HOST_PUB'))) : $config->pinned_host_key,
+                'ssh_auth_method' => 'password',
+                'ssh_password' => $this->env('SSH_FIXTURE_PASSWORD'),
+                'ssh_trust_confirmed' => 'yes',
+            ]);
+            $disconnected = $target->fresh()->getAttribute('connection_state') === TargetConnectionState::Disconnected;
+            $verifiedIp = app(SshTargetConnectionService::class)->test($target->fresh());
+            $reverified = $target->fresh()->getAttribute('connection_state') === TargetConnectionState::Connected;
+        });
+
+        $write = function (string $destination, bool $replace) use (
+            $owner, $target, $transfer, $private, $payload, $bearer,
+        ): array {
+            if ($bearer !== null) {
+                return $this->fileWriteOverMcp($bearer, $target->target_id, $destination, $payload, $replace);
+            }
+            if ($transfer === 'inline') {
+                $result = app(SshFileRuntime::class)->write(
+                    $owner, $target, $destination, base64_encode($payload), $replace,
+                );
+            } else {
+                $stream = fopen('php://temp', 'w+b');
+                self::assertIsResource($stream);
+                fwrite($stream, $payload);
+                rewind($stream);
+                try {
+                    $result = app(SshFileRuntime::class)->uploadFromStream(
+                        $owner, $target, $destination, $stream, strlen($payload), hash('sha256', $payload),
+                        65536, 30, $private, $replace,
+                    );
+                } finally {
+                    fclose($stream);
+                }
+            }
+
+            return ['ok' => $result['status'] === 'completed', 'result' => $result];
+        };
+        try {
+            $denied = $write($path, $overwrite);
+        } finally {
+            $finished = true;
+        }
+        self::assertTrue($changed, json_encode($denied));
+        self::assertSame(3, $fileChecks);
+        self::assertTrue($reconfigured);
+        self::assertTrue($disconnected);
+        self::assertSame('127.0.0.1', $verifiedIp);
+        self::assertTrue($reverified, 'Rejection must happen after a real successful reconnect.');
+        self::assertIsArray($zeroProof);
+        self::assertSame(0, $zeroProof['exit_code'], json_encode($zeroProof));
+        self::assertSame("0 600\n", $zeroProof['stdout'], 'Private zero-byte staging must precede mutation.');
+        self::assertIsArray($payloadProof);
+        self::assertSame(0, $payloadProof['exit_code'], json_encode($payloadProof));
+        self::assertSame(strlen($payload)."\n", $payloadProof['stdout'],
+            'The final publication guard must run after the entire staged payload.');
+        self::assertFalse($denied['ok']);
+        self::assertSame('outcome_unknown', $denied['result']['status'], json_encode($denied));
+        self::assertFalse($denied['result']['complete']);
+        self::assertTrue($denied['result']['possible_remote_effect']);
+
+        $current = TargetCredential::query()->where('target_record_id', $target->getKey())->firstOrFail();
+        self::assertNotSame($credential->encrypted_payload, $current->encrypted_payload);
+        if ($change === 'replace') {
+            self::assertNull($credential->fresh());
+            self::assertNotSame((string) $credential->getKey(), (string) $current->getKey());
+        }
+        $currentBinding = SshTargetBinding::hash($target->fresh(), $config->fresh());
+        if ($change === 'binding') {
+            self::assertNotSame($binding, $currentBinding);
+        } else {
+            self::assertSame($binding, $currentBinding, 'Credential invalidation is independent of endpoint identity.');
+        }
+
+        // Fresh use of the verified Target must still work, with the same
+        // valid bearer in the MCP case. Do not change that request's context.
+        $fresh = $write($directory.'/fresh', false);
+        self::assertTrue($fresh['ok'], json_encode($fresh));
+        self::assertSame('completed', $fresh['result']['status']);
+
+        // After all MCP requests, independently inspect endpoint A using the
+        // unchanged proof Target and a human request (AI remains off in the
+        // human scenarios). No old destination or staging bytes may escape.
+        $this->app->instance('request', \Illuminate\Http\Request::create('/admin/targets', 'POST'));
+        $destinationProof = $overwrite
+            ? 'test "$(cat '.escapeshellarg($path).')" = '.escapeshellarg($original)
+            : 'test ! -e '.escapeshellarg($path);
+        $proof = app(SshCommandRuntime::class)->run(
+            $owner, $proofTarget, $destinationProof.' && '.$findStage.' -print',
+        );
+        self::assertSame(0, $proof['exit_code'], json_encode($proof));
+        self::assertSame('', $proof['stdout'], 'Old staging must be cleaned without publishing.');
+        $cleanup = app(SshCommandRuntime::class)->run(
+            $owner, $proofTarget,
+            'rm -f -- '.escapeshellarg($directory.'/fresh').' '.escapeshellarg($path)
+                .' && rmdir -- '.escapeshellarg($private).' '.escapeshellarg($directory),
+        );
+        self::assertSame(0, $cleanup['exit_code'], json_encode($cleanup));
     }
 
     public function test_encrypted_private_key_sftp_binary_roundtrip_and_limited_listing(): void
@@ -955,6 +1167,58 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame('file_exists', $again['error']['code']);
         self::assertFalse($again['error']['retry_safe']);
         Http::assertSent(fn (Request $request) => $request->url() === $input['download_url']);
+    }
+
+    private function fileMcpBearer(User $user): string
+    {
+        Artisan::call('gateway:oauth-keygen', ['--force' => true]);
+        $client = (string) config('oauth.client.id');
+        $scope = (string) config('oauth.scope');
+        app(OAuthAuthorizationStore::class)->approve(
+            (int) $user->getKey(), $client, (string) config('oauth.resource'), [$scope],
+        );
+        $token = app(AccessTokenRepository::class)->getNewToken(
+            new ClientEntity($client, 'SFTP binding fixture', []),
+            [new ScopeEntity($scope)], (string) $user->getKey(),
+        );
+        $token->setIdentifier(bin2hex(random_bytes(20)));
+        $token->setExpiryDateTime((new DateTimeImmutable)->modify('+15 minutes'));
+        $token->setPrivateKey(new CryptKey((string) config('oauth.keys.private')));
+        app(AccessTokenRepository::class)->persistNewAccessToken($token);
+
+        return $token->toString();
+    }
+
+    /** @return array<string,mixed> */
+    private function fileWriteOverMcp(string $bearer, string $targetId, string $path, string $bytes, bool $overwrite): array
+    {
+        $response = $this->withHeaders([
+            'Authorization' => 'Bearer '.$bearer,
+            'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+            'Mcp-Name' => 'ssh-file-write',
+        ])->postJson('/mcp', [
+            'jsonrpc' => '2.0', 'id' => 41, 'method' => 'tools/call',
+            'params' => [
+                'name' => 'ssh-file-write',
+                'arguments' => [
+                    'target_id' => $targetId, 'path' => $path,
+                    'content_base64' => base64_encode($bytes), 'overwrite' => $overwrite,
+                ],
+                '_meta' => [
+                    'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                    'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                    'io.modelcontextprotocol/clientInfo' => ['name' => 'sftp-binding-fixture', 'version' => '1.0'],
+                ],
+            ],
+        ]);
+        self::assertSame(200, $response->getStatusCode());
+        $decoded = json_decode($response->streamedContent(), true, flags: JSON_THROW_ON_ERROR);
+        $result = $decoded['result']['structuredContent'] ?? null;
+        self::assertIsArray($result, json_encode($decoded));
+
+        return $result;
     }
 
     private function target(string $method, ?int $port = null): Target

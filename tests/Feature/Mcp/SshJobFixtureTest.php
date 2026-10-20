@@ -4,15 +4,24 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshJobMcpToolHandlers;
+use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshJobCoordinator;
+use App\Application\Targets\SshTargetConnectionService;
+use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\SshTargetRegistration;
+use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Models\User;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /** A disposable real OpenSSH fixture with a linger-enabled systemd user. */
@@ -33,6 +42,156 @@ final class SshJobFixtureTest extends TestCase
                 return ['127.0.0.1'];
             }
         });
+    }
+
+    /** @return array<string, array{bool}> */
+    public static function supersededJobScriptCases(): array
+    {
+        return ['inline script' => [false], 'streamed script' => [true]];
+    }
+
+    #[DataProvider('supersededJobScriptCases')]
+    public function test_job_refuses_script_publication_after_credential_rotation_and_reverification(bool $streamed): void
+    {
+        $owner = User::query()->create([
+            'name' => 'Job binding fixture',
+            'email' => 'job-binding-'.bin2hex(random_bytes(5)).'@example.test',
+            'password' => 'CorrectHorse!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $register = static function (string $id): Target {
+            $target = app(SshTargetRegistration::class)->register(
+                $id, 'Disposable Job binding fixture', 'fixture.example.test',
+                (int) getenv('SSH_JOB_FIXTURE_PORT'), (string) getenv('SSH_JOB_FIXTURE_USER'),
+                trim((string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_HOST_KEY'))),
+                'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+                getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
+            );
+            $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+
+            return $target;
+        };
+        $target = $register('job-binding-fixture');
+        $proofTarget = $register('job-binding-proof');
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->firstOrFail();
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->firstOrFail();
+        $binding = SshTargetBinding::hash($target, $config);
+        $requestId = (string) Str::uuid();
+        $marker = '/home/'.getenv('SSH_JOB_FIXTURE_USER').'/unlaunched-'.bin2hex(random_bytes(9));
+        $script = 'printf should-never-run > '.escapeshellarg($marker)."\n"
+            .($streamed ? '# '.str_repeat('x', 20000)."\n" : '');
+        DB::table('operational_settings')->where('id', 1)->update(['ssh_job_max_script_kib' => 64]);
+
+        $configRead = false;
+        $fileChecks = 0;
+        $changed = false;
+        $disconnected = false;
+        $reverified = false;
+        /** @var bool $finished Read by the retained event listener after this operation returns. */
+        $finished = false;
+        $verifiedIp = null;
+        $zeroProof = null;
+        /** @var array<string,mixed>|null $payloadProof Populated by a later query-event callback. */
+        $payloadProof = null;
+        $directory = '';
+        $findStage = '';
+        DB::listen(function (QueryExecuted $query) use (
+            &$configRead, &$fileChecks, &$changed, &$disconnected, &$reverified, &$finished,
+            &$verifiedIp, &$zeroProof, &$payloadProof, &$directory, &$findStage,
+            $owner, $target, $proofTarget, $config, $credential, $requestId,
+        ): void {
+            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
+            // Only consecutive original config+credential reads belong to
+            // the shared SFTP guard. Job probe/mkdir command queries must
+            // not move this mutation earlier than real script staging.
+            $fileCheck = $configRead && str_contains($sql, 'from target_credentials where target_credentials.id = ?')
+                && (string) ($query->bindings[0] ?? '') === (string) $credential->getKey();
+            $configRead = str_contains($sql, 'from ssh_direct_target_configs where ssh_direct_target_configs.id = ?')
+                && (string) ($query->bindings[0] ?? '') === (string) $config->getKey();
+            if ($finished || ! $fileCheck) {
+                return;
+            }
+            if ($reverified) {
+                $payloadProof = app(SshCommandRuntime::class)->run(
+                    $owner, $proofTarget, $findStage." -printf '%s\\n'",
+                );
+
+                return;
+            }
+            if ($changed || ++$fileChecks !== 3) {
+                return;
+            }
+            $changed = true;
+            $id = DB::table('ssh_command_jobs')->where('request_id', $requestId)->value('id');
+            self::assertIsString($id);
+            $directory = '/var/tmp/.mcp-gateway-job-'.$id;
+            $findStage = 'find '.escapeshellarg($directory)
+                ." -type f \\( -name payload -o -name '.gateway-stream-*.tmp' \\)";
+            $zeroProof = app(SshCommandRuntime::class)->run(
+                $owner, $proofTarget, $findStage." -printf '%s %m\\n'",
+            );
+
+            // Reseal the SAME valid key under the SAME endpoint/config.
+            // expectedTargetBinding alone cannot detect this invalidation.
+            $reconfiguration = app(SshTargetReconfiguration::class);
+            $reconfiguration->update($target, [
+                'configuration_revision' => $reconfiguration->revision($target),
+                'ssh_host' => $config->host, 'ssh_port' => $config->port,
+                'ssh_username' => $config->username, 'ssh_host_key' => $config->pinned_host_key,
+                'ssh_auth_method' => 'private_key', 'ssh_trust_confirmed' => 'yes',
+                'ssh_private_key' => (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+                'ssh_passphrase' => getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
+            ]);
+            $disconnected = $target->fresh()->getAttribute('connection_state') === TargetConnectionState::Disconnected;
+            $verifiedIp = app(SshTargetConnectionService::class)->test($target->fresh());
+            $reverified = $target->fresh()->getAttribute('connection_state') === TargetConnectionState::Connected;
+        });
+
+        try {
+            $denied = app(SshJobMcpToolHandlers::class)->start(
+                $owner, $target->target_id, hash('sha256', 'job-binding-fixture'), $requestId, $script, 60,
+            );
+        } finally {
+            $finished = true;
+        }
+        self::assertTrue($changed, json_encode($denied));
+        self::assertSame(3, $fileChecks);
+        self::assertTrue($disconnected);
+        self::assertSame('127.0.0.1', $verifiedIp);
+        self::assertTrue($reverified);
+        self::assertIsArray($zeroProof);
+        self::assertSame(0, $zeroProof['exit_code'], json_encode($zeroProof));
+        self::assertSame("0 600\n", $zeroProof['stdout']);
+        self::assertIsArray($payloadProof);
+        self::assertSame(0, $payloadProof['exit_code'], json_encode($payloadProof));
+        self::assertSame(strlen($script)."\n", $payloadProof['stdout'],
+            'The complete private script reaches the final publication check.');
+        self::assertSame($binding, SshTargetBinding::hash($target->fresh(), $config->fresh()));
+        self::assertNotSame($credential->encrypted_payload, $credential->fresh()->encrypted_payload);
+        self::assertFalse($denied['ok']);
+        self::assertSame('outcome_unknown', $denied['error']['code']);
+        self::assertSame('launch_unknown', $denied['result']['status']);
+        self::assertFalse($denied['result']['complete']);
+        self::assertFalse($denied['result']['retry_safe']);
+        $id = $denied['result']['job_id'];
+        self::assertSame('/var/tmp/.mcp-gateway-job-'.$id, $directory);
+        self::assertSame('launch_unknown', DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+
+        // Inspect the original endpoint independently: no published script,
+        // wrapper, detached systemd unit or script effect, and no staging
+        // residue. The preparing Job directory itself is an allowed effect.
+        $proof = app(SshCommandRuntime::class)->run(
+            $owner, $proofTarget,
+            'test ! -e '.escapeshellarg($marker)
+                .' && test "$(XDG_RUNTIME_DIR=/run/user/$(id -u)'
+                .' DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus'
+                .' systemctl --user show -p LoadState --value '.escapeshellarg('mgw-'.strtolower($id).'.service')
+                .')" = not-found && find '.escapeshellarg($directory).' -mindepth 1 -print',
+        );
+        self::assertSame(0, $proof['exit_code'], json_encode($proof));
+        self::assertSame('', $proof['stdout'], 'No script, wrapper, or temporary file may remain.');
+        $cleanup = app(SshCommandRuntime::class)->run($owner, $proofTarget, 'rmdir -- '.escapeshellarg($directory));
+        self::assertSame(0, $cleanup['exit_code'], json_encode($cleanup));
     }
 
     public function test_real_host_without_linger_refuses_detached_execution_before_script_staging(): void
