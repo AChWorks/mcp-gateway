@@ -26,10 +26,10 @@ final class OperationalSettings
         'wp_request_timeout_seconds' => ['minimum' => 2, 'maximum' => 30],
         // Distinct aggregate SFTP object and whole-transfer budgets (not MCP frames).
         'ssh_transfer_max_kib' => ['minimum' => 256, 'maximum' => 65536],
-        'ssh_transfer_max_seconds' => ['minimum' => 5, 'maximum' => 40],
+        'ssh_transfer_max_seconds' => ['minimum' => 5, 'maximum' => 3600],
         // Sync SSH commands remain bounded by PHP/proxy/transport limits.
         // Larger or slower scripts use the retained Direct SSH Job path.
-        'ssh_command_timeout_seconds' => ['minimum' => 15, 'maximum' => 360],
+        'ssh_command_timeout_seconds' => ['minimum' => 15, 'maximum' => 600],
         'ssh_command_max_kib' => ['minimum' => 8, 'maximum' => 512],
         // Detached jobs have independent, Owner-adjustable resource budgets.
         // The service retains uncertain identities even after admission ends.
@@ -103,7 +103,7 @@ final class OperationalSettings
     {
         $overrides = $this->overrides();
         $configuredMax = min(67108864, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608)));
-        $configuredSeconds = min(40, max(1, (int) config('ssh.file_transfer.max_seconds', 30)));
+        $configuredSeconds = min(3600, max(1, (int) config('ssh.file_transfer.max_seconds', 30)));
 
         return [
             'max_bytes' => isset($overrides['ssh_transfer_max_kib'])

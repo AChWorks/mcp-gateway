@@ -428,7 +428,7 @@ final readonly class SshFileRuntime
     ): array {
         // This is an end-to-end budget, including admission and credential
         // lookups, not a fresh timeout for each SFTP packet or path operation.
-        // Leave a generous margin before the 90-second Target lease expires.
+        // The admission lease scales with the actual deadline for long streams.
         $deadlineNs ??= hrtime(true) + 55_000_000_000;
         $this->ensureFileDeadline($deadlineNs);
         if ($target->connector_type !== 'ssh_direct') {
@@ -529,7 +529,7 @@ final readonly class SshFileRuntime
                 },
                 $deadlineNs,
             );
-        });
+        }, $deadlineNs);
     }
 
     /**

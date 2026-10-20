@@ -4,6 +4,7 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
 use App\Application\Mcp\TargetMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Models\User;
@@ -45,6 +46,10 @@ final class TargetTransferCapabilitiesTest extends TestCase
         self::assertSame('/mcp/file-transfer/ssh/secure-ssh/download', $mode['endpoints']['download']['path']);
         self::assertSame(5 * 1024 * 1024 + 13, $mode['max_object_bytes']);
         self::assertSame(23, $mode['max_operation_seconds']);
+        DB::table('operational_settings')->where('id', 1)->update(['ssh_transfer_max_seconds' => 3600]);
+        app()->forgetInstance(OperationalSettings::class);
+        $extended = app(TargetMcpToolHandlers::class)->targetContext($owner, $ssh->target_id)['target']['file_transfer']['whole_file_modes'][0];
+        self::assertSame(3600, $extended['max_operation_seconds']);
         self::assertSame('this_synchronous_ssh_mode_only', $mode['bounds_scope']);
         self::assertFalse($mode['resume']);
         self::assertFalse($mode['model_attachment_handoff_verified']);

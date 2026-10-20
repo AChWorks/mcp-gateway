@@ -124,14 +124,16 @@ trait StreamsSshFiles
         User $user, Target $target, string $path, mixed $source, int $expectedBytes,
         string $expectedSha256, int $maxBytes, int $maxSeconds, string $privateStagingDir,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
-        ?string $expectedTargetBinding = null,
+        ?string $expectedTargetBinding = null, ?int $overallDeadlineNs = null,
     ): array {
         $this->validatePath($path);
         $this->validatePath($privateStagingDir);
         $this->validateStream($source);
         $this->validateTransferLimit($maxBytes);
         $this->validateStreamDeadline($maxSeconds);
-        $deadline = hrtime(true) + $maxSeconds * 1_000_000_000;
+        // Whole-file ingress may already have consumed some of its one
+        // operation-wide deadline. Never restart that budget at SFTP setup.
+        $deadline = min(hrtime(true) + $maxSeconds * 1_000_000_000, $overallDeadlineNs ?? PHP_INT_MAX);
         $this->validateSha256($expectedSha256);
         $this->validatePrecondition($expectedSize, $expectedMtime);
         if (! $overwrite && $expectedSize !== null) {
@@ -380,7 +382,7 @@ trait StreamsSshFiles
 
     private function validateStreamDeadline(int $maxSeconds): void
     {
-        if ($maxSeconds < 1 || $maxSeconds > 40) {
+        if ($maxSeconds < 1 || $maxSeconds > 3600) {
             throw new SshTargetConnectionException('invalid_input');
         }
     }

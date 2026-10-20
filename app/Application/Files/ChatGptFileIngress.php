@@ -132,7 +132,10 @@ final readonly class ChatGptFileIngress
             if ($stream === false) {
                 throw new OutboundRequestException('file_staging_unavailable', 'Private file staging is unavailable.');
             }
-            $this->http->streamChatgptFile($file['download_url'], $maxBytes, $stream, $timeoutSeconds);
+            // The signed-source GET keeps its short-lived HTTPS budget even when
+            // the subsequent SSH transfer has a longer Owner-selected deadline.
+            $this->http->streamChatgptFile($file['download_url'], $maxBytes, $stream,
+                $mode === 'ssh' ? min(120, $timeoutSeconds) : $timeoutSeconds);
             $stat = fstat($stream);
             if (! is_array($stat) || $stat['size'] < 0
                 || $stat['size'] > $maxBytes || fseek($stream, 0) !== 0) {

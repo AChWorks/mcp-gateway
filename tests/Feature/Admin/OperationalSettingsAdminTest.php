@@ -514,6 +514,68 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
     }
 
+    public function test_owner_can_select_extended_synchronous_deadlines_without_changing_defaults_or_old_form_semantics(): void
+    {
+        $this->actingAs($this->account('owner'));
+        $settings = new OperationalSettings;
+        self::assertSame(30, $settings->sshTransferLimits()['max_seconds']);
+        self::assertSame(15, $settings->sshCommandLimits()['max_seconds']);
+
+        $values = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
+        $values['ssh_transfer_max_seconds'] = '3600';
+        $values['ssh_command_timeout_seconds'] = '600';
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $values,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(3600, (new OperationalSettings)->sshTransferLimits()['max_seconds']);
+        self::assertSame(600, (new OperationalSettings)->sshCommandLimits()['max_seconds']);
+        self::assertSame(3600, (int) DB::table('operational_settings')->value('ssh_transfer_max_seconds'));
+        self::assertSame(600, (int) DB::table('operational_settings')->value('ssh_command_timeout_seconds'));
+
+        // Stale four-key forms preserve both newer deadline overrides.
+        $this->put('/admin/operations', [
+            'version' => '1',
+            'values' => array_slice($values, 0, 4, true),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertRedirect();
+        self::assertSame(3600, (new OperationalSettings)->sshTransferLimits()['max_seconds']);
+        self::assertSame(600, (new OperationalSettings)->sshCommandLimits()['max_seconds']);
+
+        $values['ssh_transfer_max_seconds'] = '3601';
+        $values['ssh_command_timeout_seconds'] = '601';
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => $values,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors(['values.ssh_transfer_max_seconds', 'values.ssh_command_timeout_seconds']);
+        self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
+    }
+
+    public function test_ssh_transfer_source_fallback_is_capped_independently_from_owner_overrides(): void
+    {
+        config()->set('ssh.file_transfer.max_seconds', 7200);
+        self::assertSame(3600, (new OperationalSettings)->sshTransferLimits()['max_seconds']);
+        $this->actingAs($this->account('owner'))
+            ->get('/admin/operations')->assertOk()
+            ->assertSee('3600');
+    }
+
+    public function test_synchronous_deadline_migration_refuses_downgrades_with_extended_values(): void
+    {
+        $migration = require base_path('database/migrations/2026_10_20_030000_expand_ssh_synchronous_transfer_timeout.php');
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_transfer_max_seconds' => 3600, 'ssh_command_timeout_seconds' => 600,
+        ]);
+        try {
+            $migration->down();
+            self::fail('A rollback must not truncate or invalidate an active Owner deadline.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('Reset extended SSH synchronous deadlines', $exception->getMessage());
+        }
+        self::assertSame(3600, (int) DB::table('operational_settings')->value('ssh_transfer_max_seconds'));
+        self::assertSame(600, (int) DB::table('operational_settings')->value('ssh_command_timeout_seconds'));
+    }
+
     public function test_ssh_command_budgets_preserve_defaults_and_previous_admin_forms(): void
     {
         $owner = $this->account('owner');
@@ -564,7 +626,7 @@ final class OperationalSettingsAdminTest extends TestCase
             (new OperationalSettings)->sshCommandLimits());
 
         $invalid = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
-        $invalid['ssh_command_timeout_seconds'] = '361';
+        $invalid['ssh_command_timeout_seconds'] = '601';
         $invalid['ssh_command_max_kib'] = '513';
         $this->put('/admin/operations', [
             'version' => '1',

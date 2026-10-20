@@ -34,6 +34,21 @@ final class SshCommandExecutionDeadlineTest extends TestCase
         $deadline->remainingSocketSeconds();
     }
 
+    public function test_600_second_command_deadline_is_finite_and_601_is_rejected(): void
+    {
+        $now = 1_000_000_000;
+        $deadline = new SshCommandExecutionDeadline(600, static function () use (&$now): int {
+            return $now;
+        });
+        self::assertSame(600, $deadline->remainingSocketSeconds());
+        $now += 599_100_000_000;
+        self::assertSame(1, $deadline->remainingSocketSeconds());
+        $now += 900_000_000;
+        self::assertTrue($deadline->expired());
+        $this->expectException(\InvalidArgumentException::class);
+        new SshCommandExecutionDeadline(601);
+    }
+
     public function test_socket_wait_is_clamped_to_remaining_elapsed_budget_not_restarted_per_packet(): void
     {
         $nowNs = 50_000_000_000;

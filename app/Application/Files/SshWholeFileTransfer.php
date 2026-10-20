@@ -123,6 +123,7 @@ final readonly class SshWholeFileTransfer
                 $user, $target, $path, $stream, $metadata['size'], $metadata['sha256'],
                 $budget['max_bytes'], $remaining, $metadata['private_staging_dir'],
                 $metadata['overwrite'], $metadata['expected_size'] ?? null, $metadata['expected_mtime'] ?? null,
+                overallDeadlineNs: $deadline,
             );
             $this->record($target, 'mcp-file-upload', ($result['status'] ?? '') === 'outcome_unknown' ? 'unknown' : 'success',
                 ($result['status'] ?? '') === 'outcome_unknown' ? 'outcome_unknown' : null);
@@ -198,7 +199,7 @@ final readonly class SshWholeFileTransfer
             throw new SshTargetConnectionException('transfer_timed_out');
         }
 
-        return min(40, max(1, (int) ceil($remainingNs / 1_000_000_000)));
+        return min(3600, max(1, (int) ceil($remainingNs / 1_000_000_000)));
     }
 
     private function validatePath(string $path): void

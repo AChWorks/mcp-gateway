@@ -19,7 +19,7 @@
         ],
         [
             'title' => __('SSH whole-file transfer'),
-            'description' => __('Limits for the optional authenticated binary transfer plane only. Separate from WordPress responses and small SFTP calls.'),
+            'description' => __('Limits for the optional authenticated binary transfer plane only. An extended timeout requires suitable PHP, proxy and client deadlines; it does not extend the signed-file download deadline.'),
             'keys' => ['ssh_transfer_max_kib', 'ssh_transfer_max_seconds'],
         ],
         [
@@ -114,7 +114,7 @@
             <li>{{ __('SSH whole-file limits are independent of Owner-selected inline SFTP read/write windows, 64 KiB temporary streaming blocks, and WordPress transfer limits. The binary sidecar must be independently enabled and authorized.') }}</li>
             <li>{{ __('SSH Job concurrency counts only live admission leases, not retained historical records. Remote systemd runtime and metadata retention are independent. A stale or ambiguous Job is never automatically replayed; remote uncertainty remains visible after its admission lease ends.') }}</li>
             <li>{{ __('Unverifiable orphaned Job spools require deliberate operator reconciliation after independently verified cleanup on the original SSH host, never a newly rebound Target.') }}</li>
-            <li>{{ __('Selecting up to 360 seconds for a synchronous SSH command requires the hosting PHP worker, HTTP proxy and MCP client to support that duration. An unsupported hop can terminate the HTTP request even when the remote effect is uncertain. Use detached SSH Jobs for longer or uncertain work.') }}</li>
+            <li>{{ __('Selecting up to 600 seconds for a synchronous SSH command requires the hosting PHP worker, HTTP proxy and MCP client to support that duration. An unsupported hop can terminate the HTTP request even when the remote effect is uncertain. Use detached SSH Jobs for longer or uncertain work.') }}</li>
             <li>{{ __('Values cannot override PHP worker, proxy/CDN, filesystem or actual client limits. These bounded ranges remain provisional pending operational measurements.') }}</li>
         </ul>
     </details>

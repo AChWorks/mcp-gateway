@@ -20,7 +20,7 @@ final class SshCommandExecutionDeadline
     /** @param (Closure():int)|null $clock Injected only for deterministic clock tests. */
     public function __construct(int $seconds, ?Closure $clock = null)
     {
-        if ($seconds < 1 || $seconds > 360) {
+        if ($seconds < 1 || $seconds > 600) {
             throw new InvalidArgumentException('Invalid SSH command execution budget.');
         }
 
