@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Application\Access\AccessControl;
 use App\Application\Access\UserAccessManager;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshTargetConnectionService;
@@ -331,14 +332,11 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
             });
 
             if ($tool === 'ssh-command-run' && $revocation === 'ai_disabled') {
-                // The account still retains the SAME authorized human/OS
-                // command capability. Only its AI admission was disabled.
-                $this->app->instance('request', \Illuminate\Http\Request::create('/admin/targets', 'POST'));
-                $human = app(SshCommandRuntime::class)->run(
-                    $owner, $ssh, 'test ! -e '.escapeshellarg($path),
-                );
-                self::assertSame('completed', $human['status']);
-                self::assertSame(0, $human['exit_code']);
+                // AI disable alone cannot change the existing human command
+                // permission. Test the real human SSH operation after the
+                // MCP request loop, without replacing its live HTTP context.
+                self::assertTrue(app(AccessControl::class)
+                    ->allows($owner, GatewayPermission::SshCommandRun, $ssh));
             }
 
             // A new, authorized HTTP request checks the actual remote host.
@@ -352,8 +350,20 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
             ]);
             self::assertTrue($checked['ok'] ?? false, json_encode($checked));
             self::assertSame(0, $checked['result']['exit_code'] ?? null);
-
         }
+
+        // Last, exercise the actual human application runtime with AI off.
+        // This is intentionally outside the MCP request loop: replacing the
+        // current request with a human route in the middle of a StreamableHTTP
+        // exchange would make later HTTP transport test calls ambiguous.
+        $owner->forceFill(['ai_access_enabled' => false])->save();
+        $this->app->instance('request', \Illuminate\Http\Request::create('/admin/targets', 'POST'));
+        $human = app(SshCommandRuntime::class)->run(
+            $owner, $ssh, 'printf human-ssh-still-allowed',
+        );
+        self::assertSame('completed', $human['status']);
+        self::assertSame(0, $human['exit_code']);
+        self::assertSame('human-ssh-still-allowed', $human['stdout']);
     }
 
     public function test_official_mcp_sdk_client_calls_both_families_over_authenticated_http_transport(): void
@@ -582,10 +592,24 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
         }
         $response = $this->withHeaders($headers)->postJson('/mcp', $payload);
 
-        return [
-            'http_status' => $response->getStatusCode(),
-            'payload' => $response->getStatusCode() === 401 ? [] : (array) $response->json(),
-        ];
+        $status = $response->getStatusCode();
+        if ($status === 401) {
+            return ['http_status' => $status, 'payload' => []];
+        }
+
+        // The MCP endpoint is a streamed Symfony response. Decode its
+        // captured bytes explicitly rather than having TestResponse::json()
+        // replace malformed/empty wire data with a misleading dynamic
+        // "StreamedResponse::$exception" property error.
+        $body = $response->baseResponse instanceof StreamedResponse
+            ? $response->streamedContent() : $response->getContent();
+        $payload = json_decode((string) $body, true);
+        self::assertIsArray($payload, sprintf(
+            'Invalid streamed MCP response (HTTP %d, Content-Type %s): %s',
+            $status, (string) $response->headers->get('Content-Type'), substr((string) $body, 0, 500),
+        ));
+
+        return ['http_status' => $status, 'payload' => $payload];
     }
 
     /** @param array<string,mixed> $args @return array<string,mixed> */
