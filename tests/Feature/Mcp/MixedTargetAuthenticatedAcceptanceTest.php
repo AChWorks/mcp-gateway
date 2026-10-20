@@ -337,29 +337,32 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
             }
         });
 
-        // Check the ACTUAL remote filesystem with a new valid bearer, not
-        // merely the denial response. There must be no effect marker.
-        $owner->forceFill(['ai_access_enabled' => true])->save();
-        $verificationBearer = $this->issueAccessToken($owner);
-        $checked = $this->tool($verificationBearer, 'ssh-command-run', [
-            'target_id' => $ssh->target_id,
-            'command' => 'test ! -e '.escapeshellarg($path),
-        ]);
-        self::assertTrue($checked['ok'] ?? false, json_encode($checked));
-        self::assertSame(0, $checked['result']['exit_code'] ?? null);
-
-        if ($tool === 'ssh-command-run' && $revocation === 'ai_disabled') {
-            // The exact same human principal keeps their SSH permission
-            // despite losing AI channel admission. Exercise actual runtime.
-            $owner->forceFill(['ai_access_enabled' => false])->save();
-            self::assertTrue(app(AccessControl::class)
-                ->allows($owner, GatewayPermission::SshCommandRun, $ssh));
-            $this->app->instance('request', \Illuminate\Http\Request::create('/admin/targets', 'POST'));
-            $human = app(SshCommandRuntime::class)->run($owner, $ssh, 'printf human-ssh-still-allowed');
-            self::assertSame('completed', $human['status']);
-            self::assertSame(0, $human['exit_code']);
-            self::assertSame('human-ssh-still-allowed', $human['stdout']);
+        // Confirm the exact requested revocation occurred in persistent
+        // state; don't try to re-authorize an AI client after disable/revoke.
+        if ($revocation === 'ai_disabled') {
+            self::assertFalse($owner->fresh()->ai_access_enabled);
+        } elseif ($revocation === 'consent') {
+            self::assertNotNull(DB::table('oauth_authorizations')
+                ->where('id', $consentId)->value('revoked_at'));
+        } else {
+            self::assertNotNull(DB::table('oauth_access_tokens')
+                ->where('id', $tokenId)->value('revoked_at'));
         }
+
+        // A genuinely independent human/OS-channel SSH command checks the
+        // ACTUAL remote filesystem: the revoked MCP request must not have
+        // created a command, file or Job marker. This also proves disabling
+        // AI alone does not remove existing human SSH/Target permissions.
+        // Deliberately run last, after ALL MCP requests, so the synthetic
+        // human request does not contaminate the streamed HTTP lifecycle.
+        self::assertTrue(app(AccessControl::class)
+            ->allows($owner, GatewayPermission::SshCommandRun, $ssh));
+        $this->app->instance('request', \Illuminate\Http\Request::create('/admin/targets', 'POST'));
+        $human = app(SshCommandRuntime::class)->run(
+            $owner, $ssh, 'test ! -e '.escapeshellarg($path),
+        );
+        self::assertSame('completed', $human['status'], json_encode($human));
+        self::assertSame(0, $human['exit_code'], json_encode($human));
     }
 
     public function test_official_mcp_sdk_client_calls_both_families_over_authenticated_http_transport(): void
