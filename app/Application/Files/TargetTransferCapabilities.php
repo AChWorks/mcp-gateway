@@ -77,11 +77,15 @@ final readonly class TargetTransferCapabilities
         ]);
         $read = $grants[GatewayPermission::SshFileRead->value];
         $write = $grants[GatewayPermission::SshFileWrite->value];
+        // The native MCP file tools enforce these same Owner-tunable
+        // windows. Discovery must not advertise stale fixed 16-KiB limits
+        // when the selected Target can actually read/write larger windows.
+        $fileLimits = $this->settings->sshFileLimits();
         if ($read) {
             $description['native_interfaces'][] = [
                 'kind' => 'mcp_range_read',
                 'tool' => 'ssh-file-read',
-                'max_raw_bytes_per_call' => 16384,
+                'max_raw_bytes_per_call' => $fileLimits['read_bytes'],
                 'object_size_limit' => null,
                 'snapshot' => 'size_mtime_best_effort',
             ];
@@ -90,7 +94,7 @@ final readonly class TargetTransferCapabilities
             $description['native_interfaces'][] = [
                 'kind' => 'mcp_single_window_write',
                 'tool' => 'ssh-file-write',
-                'max_raw_bytes_per_call' => 16384,
+                'max_raw_bytes_per_call' => $fileLimits['write_bytes'],
                 'atomic_complete_file_per_call' => true,
                 'resumable' => false,
             ];
