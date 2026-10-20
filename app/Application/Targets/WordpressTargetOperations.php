@@ -95,8 +95,9 @@ final readonly class WordpressTargetOperations
             return $this->failed($operation, $target, 'invalid_input', 'Ability input must be valid JSON.');
         }
 
-        // A single Target-scoped authorization snapshot bounds DB work and
-        // freezes the decisions for this one logical request (not a cache).
+        // A single Target-scoped request-entry snapshot bounds initial
+        // authority. Its decisions form a ceiling, not a permanent grant:
+        // the classified permission is refreshed immediately before dispatch.
         $authorizedAt = $timing?->stamp() ?? 0;
         try {
             // A human read-only pilot can only narrow the existing MCP
@@ -127,7 +128,35 @@ final readonly class WordpressTargetOperations
                 $ability,
                 $input,
                 CorrelationId::current(),
-                static fn (AbilityExecutionClass $class): bool => $allowed[$class->permission()->value] ?? false,
+                function (AbilityExecutionClass $class) use ($allowed, $user, $target, $readonlyOnly): bool {
+                    $permission = $class->permission();
+                    // The request-entry snapshot is an immutable ceiling:
+                    // later grants cannot elevate a previously denied class.
+                    if (! ($allowed[$permission->value] ?? false)) {
+                        return false;
+                    }
+
+                    // Downstream classification takes network time. Refresh the
+                    // actor and the exact Target-scoped permission immediately
+                    // before the connector dispatches; never trust an in-memory
+                    // User role/enabled state or stale group membership.
+                    $currentUser = User::query()->find($user->getKey());
+
+                    if (! $currentUser instanceof User) {
+                        return false;
+                    }
+
+                    // The Admin pilot also requires Target visibility. Check
+                    // both rights in one fresh evaluation so a revoked view
+                    // grant cannot survive classification and dispatch.
+                    $permissions = $readonlyOnly
+                        ? [$permission, GatewayPermission::TargetsView]
+                        : [$permission];
+                    $current = $this->access->allowsTargetPermissions($currentUser, $target, $permissions);
+
+                    return ($current[$permission->value] ?? false)
+                        && (! $readonlyOnly || ($current[GatewayPermission::TargetsView->value] ?? false));
+                },
                 $timing,
             );
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Application\Access\AccessControl;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
@@ -12,6 +13,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
 use App\Models\User;
@@ -200,6 +202,236 @@ final class WordpressTargetMcpRegressionTest extends TestCase
             ->assertStatus(409)->assertSee('target_paused');
         self::assertSame(['wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'),
             'Denied and paused Admin actions must not reach the remote execution stage.');
+    }
+
+    public function test_revocation_during_downstream_classification_blocks_real_dispatch(): void
+    {
+        // Each case starts with a valid SELECTED-scope group grant, then
+        // changes exactly one source of effective authorization while the
+        // same downstream session is returning trusted Ability metadata.
+        foreach ([
+            'direct_permission',
+            'group_permission',
+            'global_permission',
+            'group_membership',
+            'direct_target',
+            'user_disabled',
+            'role_ceiling',
+            'admin_user_disabled',
+            'admin_view_revoked',
+        ] as $case) {
+            $targetId = 'rev-'.str_replace('_', '-', $case);
+            $site = $this->createSite($targetId);
+            $this->pair($site);
+            $operator = User::query()->create([
+                'name' => 'Revocation fixture '.$case,
+                'email' => $targetId.'@example.test',
+                'password' => 'CorrectHorse!234',
+                'role' => GatewayRole::Operator->value,
+                'target_scope_mode' => TargetScopeMode::Selected->value,
+                'access_enabled' => true,
+            ]);
+            $group = TargetGroup::query()->create(['name' => 'Revocation fixture '.$case]);
+            DB::table('target_group_targets')->insert([
+                'target_group_id' => $group->id,
+                'target_record_id' => $site->id,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+            DB::table('target_group_users')->insert([
+                'target_group_id' => $group->id,
+                'user_id' => $operator->id,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+
+            $ability = $case === 'role_ceiling' ? 'demo/write' : 'demo/read';
+            $permission = $case === 'role_ceiling'
+                ? GatewayPermission::WordpressAbilitiesExecuteMutating
+                : GatewayPermission::WordpressAbilitiesExecuteReadonly;
+            self::assertTrue(app(AccessControl::class)->allows($operator, $permission, $site), $case);
+            $before = count($this->toolCalls);
+            $catalogCalls = 0;
+
+            $this->fakeBridge(function (Request $request) use ($case, $operator, $site, $group, $permission, &$catalogCalls) {
+                $payload = $request->data();
+                if (($payload['method'] ?? null) === 'tools/call'
+                    && ($payload['params']['arguments']['ability_name'] ?? null) === 'wp-ai-bridge/abilities-read'
+                    && ($payload['params']['arguments']['parameters']['action'] ?? null) === 'get') {
+                    $catalogCalls++;
+                    $now = ['created_at' => now(), 'updated_at' => now()];
+                    switch ($case) {
+                        case 'direct_permission':
+                            DB::table('user_target_permission_denials')->insert([
+                                'user_id' => $operator->id, 'target_record_id' => $site->id,
+                                'permission' => $permission->value, ...$now,
+                            ]);
+                            break;
+                        case 'group_permission':
+                            DB::table('target_group_permission_denials')->insert([
+                                'target_group_id' => $group->id,
+                                'permission' => $permission->value, ...$now,
+                            ]);
+                            break;
+                        case 'global_permission':
+                            DB::table('user_permission_denials')->insert([
+                                'user_id' => $operator->id,
+                                'permission' => $permission->value, ...$now,
+                            ]);
+                            break;
+                        case 'group_membership':
+                            DB::table('target_group_users')
+                                ->where('target_group_id', $group->id)
+                                ->where('user_id', $operator->id)->delete();
+                            break;
+                        case 'direct_target':
+                            DB::table('user_target_access')->insert([
+                                'user_id' => $operator->id, 'target_record_id' => $site->id,
+                                'allowed' => false, ...$now,
+                            ]);
+                            break;
+                        case 'user_disabled':
+                        case 'admin_user_disabled':
+                            DB::table('users')->where('id', $operator->id)->update(['access_enabled' => false]);
+                            break;
+                        case 'role_ceiling':
+                            DB::table('users')->where('id', $operator->id)->update(['role' => GatewayRole::Viewer->value]);
+                            break;
+                        case 'admin_view_revoked':
+                            DB::table('target_group_permission_denials')->insert([
+                                'target_group_id' => $group->id,
+                                'permission' => GatewayPermission::TargetsView->value, ...$now,
+                            ]);
+                            break;
+                    }
+                }
+
+                return $this->bridgeResponse($request);
+            });
+
+            if (in_array($case, ['admin_user_disabled', 'admin_view_revoked'], true)) {
+                $this->actingAs($operator)
+                    ->post(route('admin.targets.wordpress.bridge-info', ['target' => $targetId]))
+                    ->assertNotFound()
+                    ->assertSee('forbidden');
+            } else {
+                $result = app(WordpressTargetMcpToolHandlers::class)
+                    ->execute($operator, $targetId, $ability, []);
+                self::assertFalse($result['ok'], $case);
+                self::assertSame('forbidden', $result['error']['code'], $case);
+                self::assertArrayNotHasKey('diagnostic_reference', $result['error'], $case);
+            }
+
+            self::assertSame(1, $catalogCalls, 'Expected one same-session classification: '.$case);
+            self::assertSame(
+                ['wp-ai-bridge/abilities-read'],
+                array_column(array_slice($this->toolCalls, $before), 'ability'),
+                'No WordPress Ability may be dispatched after revocation: '.$case,
+            );
+            $this->assertDatabaseHas('activity_events', [
+                'operation' => 'wordpress-ability-execute',
+                'target_id' => $targetId,
+                'outcome' => 'failure',
+                'error_code' => 'forbidden',
+            ]);
+        }
+    }
+
+    public function test_new_grants_during_classification_never_bypass_request_entry_ceiling(): void
+    {
+        $site = $this->createSite('snapshot-ceiling');
+        $this->pair($site);
+        $operator = User::query()->create([
+            'name' => 'MCP limited operator',
+            'email' => 'snapshot-ceiling@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+        ]);
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->id, 'target_record_id' => $site->id,
+            'allowed' => true, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->id, 'target_record_id' => $site->id,
+            'permission' => GatewayPermission::WordpressAbilitiesExecuteReadonly->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        self::assertTrue(app(AccessControl::class)->allows(
+            $operator, GatewayPermission::WordpressAbilitiesExecuteMutating, $site,
+        ));
+        $catalogCalls = 0;
+        $this->fakeBridge(function (Request $request) use ($operator, $site, &$catalogCalls) {
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'tools/call'
+                && ($payload['params']['arguments']['ability_name'] ?? null) === 'wp-ai-bridge/abilities-read'
+                && ($payload['params']['arguments']['parameters']['action'] ?? null) === 'get') {
+                $catalogCalls++;
+                DB::table('user_target_permission_denials')
+                    ->where('user_id', $operator->id)
+                    ->where('target_record_id', $site->id)->delete();
+            }
+
+            return $this->bridgeResponse($request);
+        });
+        $result = app(WordpressTargetMcpToolHandlers::class)->execute(
+            $operator, $site->target_id, 'demo/read', [],
+        );
+        self::assertFalse($result['ok']);
+        self::assertSame('forbidden', $result['error']['code']);
+        self::assertSame(1, $catalogCalls);
+        self::assertSame(['wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'));
+    }
+
+    public function test_admin_result_is_escaped_bounded_and_diagnostics_do_not_leak_provider_errors(): void
+    {
+        $site = $this->createSite('admin-response');
+        $this->pair($site);
+        $large = '<script>alert("untrusted")</script>'.str_repeat('X', 40000);
+        $executions = 0;
+        $this->fakeBridge(function (Request $request) use ($large, &$executions) {
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'tools/call'
+                && ($payload['params']['arguments']['ability_name'] ?? null) === 'wp-ai-bridge/bridge-info') {
+                $executions++;
+
+                return $this->toolSuccess(['preview' => $large], (int) ($payload['id'] ?? 2));
+            }
+
+            return $this->bridgeResponse($request);
+        });
+        $this->actingAs($this->principal)
+            ->post(route('admin.targets.wordpress.bridge-info', ['target' => $site->target_id]))
+            ->assertOk()
+            ->assertSee('&lt;script&gt;alert(', false)
+            ->assertDontSee('<script>alert("untrusted")</script>', false)
+            ->assertSee('Displayed preview is truncated at 32 KiB');
+        self::assertSame(1, $executions);
+        self::assertSame(['wp-ai-bridge/abilities-read'], array_column($this->toolCalls, 'ability'));
+
+        $this->fakeBridge(function (Request $request) {
+            $payload = $request->data();
+            if (($payload['method'] ?? null) === 'tools/call'
+                && ($payload['params']['arguments']['ability_name'] ?? null) === 'wp-ai-bridge/bridge-info') {
+                return Http::response([
+                    'jsonrpc' => '2.0', 'id' => $payload['id'] ?? null,
+                    'result' => [
+                        'isError' => true,
+                        'content' => [['type' => 'text', 'text' => 'Private provider credential: SENTINEL_SECRET']],
+                    ],
+                ], 200);
+            }
+
+            return $this->bridgeResponse($request);
+        });
+        $html = $this->post(route('admin.targets.wordpress.bridge-info', ['target' => $site->target_id]))
+            ->assertStatus(502)
+            ->assertSee('downstream_rejected')
+            ->assertSee('Diagnostic reference')
+            ->assertDontSee('SENTINEL_SECRET')
+            ->getContent();
+        $event = DB::table('activity_events')->where('operation', 'wordpress-ability-execute')
+            ->where('error_code', 'downstream_rejected')->firstOrFail();
+        self::assertSame('failure', $event->outcome);
+        self::assertStringContainsString((string) $event->correlation_id, $html);
     }
 
     public function test_execution_routes_read_write_and_downstream_denial_without_bypass(): void

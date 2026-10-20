@@ -245,8 +245,11 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $handlers = app(WordpressTargetMcpToolHandlers::class);
         self::assertTrue($handlers->execute($operator, 'alpha', 'demo/read', [])['ok']);
         $membershipQueries = array_filter($queries, static fn (string $sql): bool => str_contains($sql, 'target_group_users'));
-        self::assertLessThanOrEqual(2, count($membershipQueries),
-            'One Ability execution must not repeat group membership SQL per execution permission.');
+        // One membership query for initial Target reachability, one for
+        // request-entry permissions and one fresh check after remote Ability
+        // classification. Each stage batches all permissions in one query.
+        self::assertLessThanOrEqual(3, count($membershipQueries),
+            'Membership lookup must remain bounded across entry and fresh dispatch authorization.');
 
         DB::table('target_group_permission_denials')->insert([
             'target_group_id' => $group->getKey(),
