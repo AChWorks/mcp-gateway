@@ -238,7 +238,7 @@ MCP_BOOTSTRAP_FIXTURE_TOKEN=an-ephemeral-test-token
 
 Do not enable this fixture in production. The integration test starts an isolated local Laravel process, sends an explicit bearer token through the official MCP PHP client, exercises Streamable HTTP, lists the controlled fixture tool, and then shuts the process down.
 
-The production MCP endpoint is implemented by the ChatGPT-facing workstream, not by promoting this fixture.
+The production `/mcp` endpoint is independently implemented by [`GatewayMcpEndpoint`](../app/Infrastructure/Mcp/GatewayMcpEndpoint.php) under [`routes/mcp.php`](../routes/mcp.php); do not promote the test-only bootstrap fixture into the production request path.
 
 The production `/mcp` path is modern-first on MCP `2026-07-28`. Modern requests are stateless, carry request metadata/capabilities in `_meta`, and use the required MCP routing headers (`Mcp-Method` and `Mcp-Name` where applicable); they do not rely on `initialize` or `Mcp-Session-Id`. Integration tests exercise modern `tools/list` and `tools/call` and verify that no session ID is returned.
 

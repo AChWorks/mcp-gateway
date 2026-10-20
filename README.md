@@ -123,6 +123,7 @@ If an update stops during migration or recovery, **do not blindly retry** or tre
 - [Configuration](docs/CONFIGURATION.md) and [`.env.example`](.env.example) — supported settings and safe changes.
 - [Whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) and [Direct SSH](docs/DIRECT-SSH-CONNECTOR.md) — detailed remote file/Job operation.
 - [Target connection recovery](docs/TARGET-DISCONNECT-RECOVERY.md) — safe WordPress OAuth recovery.
+- [Project documentation map](docs/PROJECT-MAP.md) and [Master Specification](docs/MASTER-SPEC.md) — authoritative engineering references and durable product boundaries.
 - [Development](docs/DEVELOPMENT.md) — source/CLI installation and contributor tests.
 
 ## License
