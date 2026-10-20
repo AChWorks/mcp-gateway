@@ -335,7 +335,7 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
                 // command capability. Only its AI admission was disabled.
                 $this->app->instance('request', \Illuminate\Http\Request::create('/admin/targets', 'POST'));
                 $human = app(SshCommandRuntime::class)->run(
-                    $owner, $ssh, 'test ! -e -- '.escapeshellarg($path),
+                    $owner, $ssh, 'test ! -e '.escapeshellarg($path),
                 );
                 self::assertSame('completed', $human['status']);
                 self::assertSame(0, $human['exit_code']);
@@ -348,7 +348,7 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
             $verificationBearer = $this->issueAccessToken($owner);
             $checked = $this->tool($verificationBearer, 'ssh-command-run', [
                 'target_id' => $ssh->target_id,
-                'command' => 'test ! -e -- '.escapeshellarg($path),
+                'command' => 'test ! -e '.escapeshellarg($path),
             ]);
             self::assertTrue($checked['ok'] ?? false, json_encode($checked));
             self::assertSame(0, $checked['result']['exit_code'] ?? null);
