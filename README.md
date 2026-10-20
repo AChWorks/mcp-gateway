@@ -13,7 +13,7 @@ Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run
 3. Authorize the Target and grant specific Gateway users or Target Groups access.
 4. Connect your MCP client using Gateway OAuth, then choose a Target and use its permitted tools.
 
-Targets can be **paused** without deleting their configuration or disconnecting WordPress. Pausing stops new Gateway operations for that Target; it does **not** stop a remote SSH Job already running. An MCP client's OAuth approval and a user's Target permissions are separate requirements. Optional per-Target AI guidance provides context to an AI client; it does not override permissions or approve operations.
+Targets can be **paused** without deleting their configuration or disconnecting WordPress. Pausing stops new Gateway operations for that Target; it does **not** stop a remote SSH Job already running. An MCP client's OAuth approval and a user's Target permissions are separate requirements. The Owner can also enable or disable a user's **AI connection access** independently of their human Admin login and Target operation grants; a disabled user's existing AI consent/tokens cannot be used. Optional per-Target AI guidance provides context to an AI client; it does not override permissions or approve operations.
 
 ## Requirements
 
@@ -44,7 +44,7 @@ The web installer is for **first installation only**; use the [update instructio
 3. In WordPress, open **WP AI Bridge → OAuth Clients** and approve that exact *client metadata URL* (not the JWKS URL).
 4. In Gateway, open **Targets → Add Target → WordPress (WP AI Bridge)**. Enter a unique `target_id` (lowercase letters, digits and hyphens; maximum 64 characters), display name and the WordPress site's canonical HTTPS URL.
 5. Verify the Target, select **Authorize WordPress**, complete consent using the intended WordPress account, and assign appropriate Gateway users or Target Groups.
-6. In your MCP client, call `wordpress-abilities-read` to discover permitted Ability names and schemas, then `wordpress-ability-execute` for the selected Target.
+6. In your MCP client, call `wordpress-abilities-read` to discover permitted Ability names and schemas, then `wordpress-ability-execute` for the selected Target. The distinct `wordpress-content-publish-create` tool creates a **publicly published post** only when the user/Target Group, AI client and WordPress account are independently authorized; use the general Ability path for an approved draft or existing-post operation. Never try a live publication merely to test connectivity.
 
 A Gateway “Connected” status is not a guarantee that a remotely revoked or expired WordPress credential still works. For uncertain refresh, disconnect or consent, follow the [Target recovery guide](docs/TARGET-DISCONNECT-RECOVERY.md) rather than deleting credential state or repeatedly reconnecting.
 
@@ -74,12 +74,13 @@ Manage client profiles and grants under **Admin → AI clients** (`/admin/oauth-
 
 ## MCP tools at a glance
 
-The normal Gateway tool set is **15 tools** (subject to authenticated client, user and Target grants):
+The normal Gateway tool set is **16 tools** (subject to authenticated client, user and Target grants):
 
 | Tools | Use |
 | --- | --- |
 | `targets-list`, `target-context` | Find permitted Targets and inspect non-secret Target context. |
 | `wordpress-abilities-read`, `wordpress-ability-execute` | Discover and invoke WordPress Abilities on a selected WordPress Target. |
+| `wordpress-content-publish-create` | Create **one live published** WordPress `post` with a fixed, bounded Bridge operation and a separate scoped publish grant. This is **not** a draft creator or unrestricted editing tool. |
 | `ssh-command-run` | Execute a bounded, non-interactive command as the authorized remote SSH account. |
 | `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | Inspect SFTP paths, read bounded ranges, or create/conditionally overwrite bounded files. |
 | `ssh-job-start`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Start, reconcile, inspect and cancel retained SSH Jobs without blindly replaying them. |

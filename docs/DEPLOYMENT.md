@@ -125,7 +125,7 @@ For the web installer, use database host `127.0.0.1`, port `3306`, name `mcp_gat
 Choose a **published stable tag** from [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases); the tag below is an **example**, not a permanently pinned latest version.
 
 ```bash
-RELEASE_TAG=v2.3.7    # Example: verify this tag is published before using it.
+RELEASE_TAG=v2.3.8    # Example: verify this tag is published before using it.
 cd "$(mktemp -d)"
 curl --fail --location --output "mcp-gateway-$RELEASE_TAG.zip" \
   "https://github.com/AChWorks/mcp-gateway/releases/download/$RELEASE_TAG/mcp-gateway-$RELEASE_TAG.zip"
