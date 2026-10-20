@@ -14,6 +14,7 @@ use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
@@ -197,6 +198,84 @@ final class SshFileMcpTest extends TestCase
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('target_not_found', $exception->reason);
         }
+    }
+
+    public function test_sftp_effect_boundary_checks_fresh_target_and_user_permissions(): void
+    {
+        $operator = $this->user('operator');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        DB::table('user_permission_denials')->where('user_id', $operator->getKey())
+            ->where('permission', GatewayPermission::SshFileWrite->value)->delete();
+
+        // Deliberately use the ORIGINAL, stale Eloquent instances at every
+        // invocation. The new gate must re-read DB state before SFTP effects,
+        // including for the non-MCP human channel.
+        $guard = new \ReflectionMethod(SshFileRuntime::class, 'assertCurrentFileWriteAuthority');
+        $runtime = app(SshFileRuntime::class);
+        $guard->invoke($runtime, $operator, $target);
+
+        $assertDenied = static function (string $reason) use ($guard, $runtime, $operator, $target): void {
+            try {
+                $guard->invoke($runtime, $operator, $target);
+                self::fail('Stale actor or Target state cannot authorize a new SFTP effect.');
+            } catch (SshTargetConnectionException $exception) {
+                self::assertSame($reason, $exception->reason);
+            }
+        };
+
+        DB::table('targets')->where('id', $target->getKey())->update(['operations_paused' => true]);
+        $assertDenied('target_paused');
+        DB::table('targets')->where('id', $target->getKey())->update(['operations_paused' => false]);
+
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $operator->getKey(), 'permission' => GatewayPermission::SshFileWrite->value,
+        ]);
+        $assertDenied('forbidden');
+        DB::table('user_permission_denials')->where('user_id', $operator->getKey())->delete();
+
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::SshFileWrite->value,
+        ]);
+        $assertDenied('forbidden');
+        DB::table('user_target_permission_denials')->where('user_id', $operator->getKey())->delete();
+
+        $group = TargetGroup::query()->create(['name' => 'SSH group deny fixture']);
+        DB::table('target_group_users')->insert([
+            'target_group_id' => $group->getKey(), 'user_id' => $operator->getKey(),
+        ]);
+        DB::table('target_group_targets')->insert([
+            'target_group_id' => $group->getKey(), 'target_record_id' => $target->getKey(),
+        ]);
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshFileWrite->value,
+        ]);
+        $assertDenied('forbidden');
+        DB::table('target_group_permission_denials')
+            ->where('target_group_id', $group->getKey())->delete();
+
+        DB::table('user_target_access')->where('user_id', $operator->getKey())
+            ->where('target_record_id', $target->getKey())->update(['allowed' => false]);
+        $assertDenied('forbidden');
+        DB::table('user_target_access')->where('user_id', $operator->getKey())
+            ->where('target_record_id', $target->getKey())->update(['allowed' => true]);
+
+        DB::table('users')->where('id', $operator->getKey())->update(['access_enabled' => false]);
+        $assertDenied('forbidden');
+        DB::table('users')->where('id', $operator->getKey())->update(['access_enabled' => true]);
+
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['connection_state' => TargetConnectionState::Disconnected->value]);
+        $assertDenied('forbidden');
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['connection_state' => TargetConnectionState::Connected->value]);
+
+        $guard->invoke($runtime, $operator, $target);
     }
 
     public function test_chatgpt_ssh_file_input_denies_ungranted_paused_and_revoked_targets_before_signed_download(): void

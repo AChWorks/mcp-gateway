@@ -216,7 +216,7 @@ final readonly class SshFileRuntime
 
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
-                $user, $path, $data, $overwrite, $expectedSize, $expectedMtime,
+                $user, $target, $path, $data, $overwrite, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
                 $existingMode = null;
@@ -258,9 +258,7 @@ final readonly class SshFileRuntime
                 // verified-private directory + same-owner 0600 inode checks pass.
                 // Same-filesystem sibling staging preserves exclusive hardlink.
                 try {
-                    if (! $this->dispatchAdmission->allows($user)) {
-                        throw new SshTargetConnectionException('forbidden');
-                    }
+                    $this->assertCurrentFileWriteAuthority($user, $target);
                     $sftp->mkdir($stagingDir, 0700);
                     $sftp->clearStatCache();
                     $directory = $sftp->lstat($stagingDir);
@@ -294,9 +292,7 @@ final readonly class SshFileRuntime
 
                     // The first nonempty payload byte occurs ONLY after the
                     // preceding verified-private directory/inode checks.
-                    if (! $this->dispatchAdmission->allows($user)) {
-                        throw new SshTargetConnectionException('forbidden');
-                    }
+                    $this->assertCurrentFileWriteAuthority($user, $target);
                     $sftp->put($temporary, $data, SFTP::SOURCE_STRING);
                     $sftp->clearStatCache();
                     $attributes = $sftp->lstat($temporary);
@@ -332,11 +328,10 @@ final readonly class SshFileRuntime
                         throw new SshTargetConnectionException('staging_not_private');
                     }
 
-                    if (! $this->dispatchAdmission->allows($user)) {
-                        throw new SshTargetConnectionException('forbidden');
-                    }
                     if (! $overwrite) {
-                        // Atomic exclusive link; no check-then-rename fallback.
+                        // Recheck current Target/user authority immediately
+                        // before this irreversible, exclusive publication.
+                        $this->assertCurrentFileWriteAuthority($user, $target);
                         $sftp->hardlink($temporary, $path);
                     } else {
                         // Explicit atomic replacement. Optional size+mtime
@@ -346,6 +341,7 @@ final readonly class SshFileRuntime
                             throw new SshTargetConnectionException('unsupported_file_type');
                         }
                         $this->requireVersion($latest, $expectedSize, $expectedMtime);
+                        $this->assertCurrentFileWriteAuthority($user, $target);
                         $sftp->posix_rename($temporary, $path);
                     }
 
@@ -526,6 +522,30 @@ final readonly class SshFileRuntime
                 $deadlineNs,
             );
         });
+    }
+
+    /**
+     * Do not treat a still-valid OAuth channel (or human session) as a
+     * continuing Target-scoped write grant. SFTP staging and verification
+     * can outlive an Owner's permission, group, or Pause changes. Re-read
+     * both principals and the Target at every write/publication boundary.
+     */
+    private function assertCurrentFileWriteAuthority(User $user, Target $target): void
+    {
+        $currentTarget = Target::query()->whereKey($target->getKey())->first();
+        if ($currentTarget instanceof Target && $currentTarget->operations_paused) {
+            throw new SshTargetConnectionException('target_paused');
+        }
+
+        $currentUser = User::query()->whereKey($user->getKey())->first();
+        if (! $currentTarget instanceof Target || $currentTarget->connector_type !== 'ssh_direct'
+            || $currentTarget->getAttribute('connection_state') !== TargetConnectionState::Connected
+            || ! hash_equals((string) $target->target_id, (string) $currentTarget->target_id)
+            || ! $currentUser instanceof User
+            || ! $this->access->allows($currentUser, GatewayPermission::SshFileWrite, $currentTarget)
+            || ! $this->dispatchAdmission->allows($currentUser)) {
+            throw new SshTargetConnectionException('forbidden');
+        }
     }
 
     /**

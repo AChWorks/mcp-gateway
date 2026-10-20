@@ -2,22 +2,28 @@
 
 namespace Tests\Feature\Targets;
 
+use App\Application\Access\AccessControl;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Mcp\TargetFileInputMcpToolHandlers;
+use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /** Actual disposable OpenSSH SFTP fixture with an explicit loopback-only policy. */
@@ -126,6 +132,145 @@ final class SshFileFixtureTest extends TestCase
         self::assertStringNotContainsString($path, $activity);
         self::assertStringNotContainsString(base64_encode($bytes), $activity);
         self::assertStringNotContainsString(base64_encode($replacement), $activity);
+    }
+
+    /** @return array<string, array{string, bool, string}> */
+    public static function lateSftpRevocationCases(): array
+    {
+        return [
+            'inline hardlink / direct deny' => ['inline', false, 'direct_deny'],
+            'inline rename / Target Pause' => ['inline', true, 'pause'],
+            'stream hardlink / group membership removed' => ['stream', false, 'group_removed'],
+            'stream rename / global deny' => ['stream', true, 'global_deny'],
+        ];
+    }
+
+    #[DataProvider('lateSftpRevocationCases')]
+    public function test_real_sftp_refuses_publication_when_write_rights_change_after_private_staging(
+        string $transfer, bool $overwrite, string $revocation,
+    ): void {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        $operator = User::query()->create([
+            'name' => 'Revocable SFTP operator',
+            'email' => 'revocable-sftp-'.bin2hex(random_bytes(7)).'@example.test',
+            'password' => 'StrongPassword!234',
+            'role' => 'operator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => true,
+        ]);
+        $groupId = null;
+        if ($revocation === 'group_removed') {
+            $group = TargetGroup::query()->create(['name' => 'Temporary fixture SSH scope']);
+            $groupId = $group->getKey();
+            DB::table('target_group_users')->insert([
+                'target_group_id' => $groupId, 'user_id' => $operator->getKey(),
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+            DB::table('target_group_targets')->insert([
+                'target_group_id' => $groupId, 'target_record_id' => $target->getKey(),
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+        } else {
+            DB::table('user_target_access')->insert([
+                'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(),
+                'allowed' => true,
+            ]);
+        }
+
+        self::assertTrue(app(AccessControl::class)
+            ->allows($operator, GatewayPermission::SshFileWrite, $target));
+        $path = $this->home().'/late-revoke-'.bin2hex(random_bytes(9));
+        $original = 'existing-data-remains-intact';
+        if ($overwrite) {
+            $initial = app(SshFileRuntime::class)->write($owner, $target, $path, base64_encode($original));
+            self::assertSame('completed', $initial['status'], json_encode($initial));
+        }
+
+        // Real SFTP session followed by independent SSH filesystem proof.
+        // Revoke after the fourth Target-permission SELECT: initial admission,
+        // post-login, pre-stage, then pre-payload. The last SELECT has already
+        // allowed the staged write. The later hardlink/rename must observe the
+        // persisted change, regardless of whether that denial short-circuits
+        // before another permission SELECT. No production testing hook.
+        $permissionReads = 0;
+        $postRevokeTargetReads = 0;
+        $revoked = false;
+        DB::listen(static function (QueryExecuted $query) use (
+            &$permissionReads, &$postRevokeTargetReads, &$revoked, $revocation, $target, $operator, $groupId,
+        ): void {
+            if (! str_starts_with(strtolower(ltrim($query->sql)), 'select')) {
+                return;
+            }
+            if ($revoked && str_contains($query->sql, 'from "targets"')) {
+                $postRevokeTargetReads++;
+            }
+            if ($revoked || ! str_contains($query->sql, 'user_target_permission_denials')) {
+                return;
+            }
+            $permissionReads++;
+            if ($permissionReads !== 4) {
+                return;
+            }
+            $revoked = true;
+            match ($revocation) {
+                'pause' => DB::table('targets')->where('id', $target->getKey())
+                    ->update(['operations_paused' => true]),
+                'direct_deny' => DB::table('user_target_permission_denials')->insert([
+                    'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(),
+                    'permission' => GatewayPermission::SshFileWrite->value,
+                ]),
+                'global_deny' => DB::table('user_permission_denials')->insert([
+                    'user_id' => $operator->getKey(),
+                    'permission' => GatewayPermission::SshFileWrite->value,
+                ]),
+                'group_removed' => DB::table('target_group_users')
+                    ->where('target_group_id', $groupId)
+                    ->where('user_id', $operator->getKey())->delete(),
+            };
+        });
+
+        $payload = 'private-stage-does-not-authorize-publication';
+        if ($transfer === 'inline') {
+            $result = app(SshFileRuntime::class)->write(
+                $operator, $target, $path, base64_encode($payload), $overwrite,
+            );
+        } else {
+            $stream = fopen('php://temp', 'w+b');
+            self::assertIsResource($stream);
+            fwrite($stream, $payload);
+            rewind($stream);
+            try {
+                $result = app(SshFileRuntime::class)->uploadFromStream(
+                    $operator, $target, $path, $stream, strlen($payload), hash('sha256', $payload),
+                    4096, 30, $this->env('SSH_FIXTURE_PRIVATE_STAGING'), $overwrite,
+                );
+            } finally {
+                fclose($stream);
+            }
+        }
+
+        self::assertTrue($revoked, 'The fixture must revoke rights in the authenticated SFTP operation.');
+        self::assertSame(4, $permissionReads,
+            'Revocation occurs after the pre-payload check; later denies may short-circuit.');
+        self::assertGreaterThanOrEqual(1, $postRevokeTargetReads,
+            'The fresh Target query must run after revocation, at the final publication boundary.');
+        self::assertSame('outcome_unknown', $result['status'], json_encode($result));
+        self::assertFalse($result['complete']);
+
+        // A paused Target blocks all fresh operations, including readback;
+        // restore only its fixture pause flag before an independent authorized
+        // Owner command proves the absence of remote publication.
+        if ($revocation === 'pause') {
+            DB::table('targets')->where('id', $target->getKey())
+                ->update(['operations_paused' => false]);
+        }
+        $proof = $overwrite
+            ? 'test "$(cat '.escapeshellarg($path).')" = '.escapeshellarg($original)
+            : 'test ! -e '.escapeshellarg($path);
+        $human = app(SshCommandRuntime::class)->run($owner, $target, $proof);
+        self::assertSame('completed', $human['status'], json_encode($human));
+        self::assertSame(0, $human['exit_code'], json_encode($human));
     }
 
     public function test_encrypted_private_key_sftp_binary_roundtrip_and_limited_listing(): void

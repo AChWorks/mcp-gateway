@@ -144,7 +144,7 @@ trait StreamsSshFiles
 
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
-                $user, $path, $source, $expectedBytes, $expectedSha256, $deadline, $privateStagingDir,
+                $user, $target, $path, $source, $expectedBytes, $expectedSha256, $deadline, $privateStagingDir,
                 $overwrite, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
@@ -208,9 +208,7 @@ trait StreamsSshFiles
                     // owner to that of the directory and chmod to 0600
                     // BEFORE the first nonzero payload byte is dispatched.
                     $this->ensureStreamDeadline($deadline);
-                    if (! $this->dispatchAdmission->allows($user)) {
-                        throw new SshTargetConnectionException('forbidden');
-                    }
+                    $this->assertCurrentFileWriteAuthority($user, $target);
                     $sftp->put($temporary, '', SFTP::SOURCE_STRING, 0);
                     $sftp->clearStatCache();
                     $zero = $sftp->lstat($temporary);
@@ -244,9 +242,7 @@ trait StreamsSshFiles
                             throw new SshTargetConnectionException('input_unavailable');
                         }
 
-                        if (! $this->dispatchAdmission->allows($user)) {
-                            throw new SshTargetConnectionException('forbidden');
-                        }
+                        $this->assertCurrentFileWriteAuthority($user, $target);
                         $sftp->put($temporary, $next, SFTP::SOURCE_STRING, $submittedBytes);
                         $submittedBytes += strlen($next);
                         hash_update($submittedDigest, $next);
@@ -313,11 +309,10 @@ trait StreamsSshFiles
                     }
 
                     $this->ensureStreamDeadline($deadline);
-                    if (! $this->dispatchAdmission->allows($user)) {
-                        throw new SshTargetConnectionException('forbidden');
-                    }
                     if (! $overwrite) {
-                        // Exclusive hardlink prevents clobbering an existing file.
+                        // Current permission, Target Pause and channel must
+                        // all remain valid at the actual publication boundary.
+                        $this->assertCurrentFileWriteAuthority($user, $target);
                         $sftp->hardlink($temporary, $path);
                     } else {
                         // Optional version checks are best-effort only. This
@@ -327,6 +322,7 @@ trait StreamsSshFiles
                             throw new SshTargetConnectionException('unsupported_file_type');
                         }
                         $this->requireVersion($latest, $expectedSize, $expectedMtime);
+                        $this->assertCurrentFileWriteAuthority($user, $target);
                         $sftp->posix_rename($temporary, $path);
                     }
 
