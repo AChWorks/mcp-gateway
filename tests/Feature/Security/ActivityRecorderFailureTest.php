@@ -104,6 +104,7 @@ final class ActivityRecorderFailureTest extends TestCase
             'email' => 'activity-test-owner-'.uniqid().'@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
+            'ai_access_enabled' => true,
             'target_scope_mode' => TargetScopeMode::All->value,
         ]);
     }

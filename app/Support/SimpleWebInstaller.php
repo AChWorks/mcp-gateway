@@ -204,6 +204,7 @@ final class SimpleWebInstaller
                     'role' => GatewayRole::Owner->value,
                     'target_scope_mode' => TargetScopeMode::All->value,
                     'access_enabled' => true,
+                    'ai_access_enabled' => true,
                 ]);
 
                 $marker = json_encode([

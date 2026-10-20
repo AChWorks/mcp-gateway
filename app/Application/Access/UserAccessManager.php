@@ -18,7 +18,7 @@ final readonly class UserAccessManager
     public function __construct(private ActivityRecorder $activity) {}
 
     /**
-     * @param  array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool}  $attributes
+     * @param  array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool,ai_access_enabled?:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
     public function create(array $attributes, array $deniedPermissions, bool $allowSshPermissionChanges = false): User
@@ -46,6 +46,7 @@ final readonly class UserAccessManager
                 'role' => $role->value,
                 'target_scope_mode' => $scope->value,
                 'access_enabled' => (bool) $attributes['access_enabled'],
+                'ai_access_enabled' => (bool) ($attributes['ai_access_enabled'] ?? false),
             ]);
 
             $this->replaceGlobalDenials($user, $role, [
@@ -62,7 +63,7 @@ final readonly class UserAccessManager
     }
 
     /**
-     * @param  array{name:string,email:string,password?:string|null,role:string,target_scope_mode:string,access_enabled:bool}  $attributes
+     * @param  array{name:string,email:string,password?:string|null,role:string,target_scope_mode:string,access_enabled:bool,ai_access_enabled?:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
     public function update(User $user, array $attributes, array $deniedPermissions, bool $allowSshPermissionChanges = false): User
@@ -103,7 +104,29 @@ final readonly class UserAccessManager
                 $values['password'] = $attributes['password'];
             }
 
+            // Omitting the optional AI-control field preserves the current
+            // decision; routine programmatic account updates cannot grant it.
+            $priorAiAccess = (bool) $lockedUser->ai_access_enabled;
+            if (array_key_exists('ai_access_enabled', $attributes)) {
+                $values['ai_access_enabled'] = (bool) $attributes['ai_access_enabled'];
+            }
             $lockedUser->fill($values)->save();
+            if ($priorAiAccess && ! (bool) $lockedUser->ai_access_enabled) {
+                // Revoking this channel is independent of Target/role grants.
+                // Retire all prior OAuth consents in the same short locked
+                // transaction, including issued access/refresh/code chains.
+                // Re-enabling requires a fresh client consent rather than
+                // silently resurrecting a dormant bearer token.
+                DB::table('oauth_authorizations')
+                    ->where('user_id', $lockedUser->getKey())
+                    ->whereNull('revoked_at')
+                    ->update(['revoked_at' => now(), 'updated_at' => now()]);
+            }
+            // Never retain a dormant positive publisher grant through a
+            // role downgrade or account disable/re-enable cycle.
+            if (! $role->allows(GatewayPermission::WordpressContentPublishCreate) || $role === GatewayRole::Owner || ! $enabled) {
+                DB::table('wordpress_publish_group_grants')->where('user_id', $lockedUser->getKey())->delete();
+            }
             // Editing ordinary user fields must not erase migration-seeded connector
             // denials merely because the form omitted newly introduced permissions.
             $this->replaceGlobalDenials($lockedUser, $role, [

@@ -113,6 +113,7 @@ final readonly class WpAiBridgeMcpClient
      *
      * @param  array<string,mixed>  $input
      * @param  callable(AbilityExecutionClass):bool  $authorizeClass
+     * @param  (callable(array<mixed,mixed>|null,AbilityExecutionClass):bool)|null  $verifyContract
      */
     public function executeAuthorizedAbility(
         Target $target,
@@ -121,15 +122,22 @@ final readonly class WpAiBridgeMcpClient
         string $correlationId,
         callable $authorizeClass,
         ?OperationTiming $timing = null,
+        ?callable $verifyContract = null,
     ): mixed {
         $routing = $this->routingContext($target, $timing);
 
-        return $this->withLegacySession($routing, $correlationId, function (string $url, array $headers) use ($target, $routing, $ability, $input, $correlationId, $authorizeClass, $timing): mixed {
+        return $this->withLegacySession($routing, $correlationId, function (string $url, array $headers) use ($target, $routing, $ability, $input, $correlationId, $authorizeClass, $verifyContract, $timing): mixed {
             $classifiedAt = $timing?->stamp() ?? 0;
             try {
-                $executionClass = $this->abilityExecutionClass($routing, $ability, $correlationId, $headers, $timing);
+                $contract = null;
+                $executionClass = $this->abilityExecutionClass($routing, $ability, $correlationId, $headers, $timing, $contract);
             } finally {
                 $timing?->finish('mcp_classification_ms', $classifiedAt);
+            }
+            // Only narrowly specified use cases require an exact provider
+            // contract. Broad authorized dynamic execution is unchanged.
+            if ($verifyContract !== null && ! $verifyContract($contract, $executionClass)) {
+                throw new WpAiBridgeMcpException('forbidden', 'The required WordPress provider contract is unavailable.');
             }
             if (! $authorizeClass($executionClass)) {
                 throw new WpAiBridgeMcpException('forbidden', 'The classified WordPress Ability is not authorized.');
@@ -151,6 +159,9 @@ final readonly class WpAiBridgeMcpClient
     /**
      * @param  array{resource_url:string,access_token:string}  $routing
      * @param  array<string,string>|null  $sessionHeaders
+     * @param  array<mixed,mixed>|null  $contract
+     *
+     * @param-out array<mixed,mixed>|null $contract
      */
     private function abilityExecutionClass(
         array $routing,
@@ -158,6 +169,7 @@ final readonly class WpAiBridgeMcpClient
         string $correlationId,
         ?array $sessionHeaders = null,
         ?OperationTiming $timing = null,
+        ?array &$contract = null,
     ): AbilityExecutionClass {
         $catalog = $sessionHeaders === null
             ? $this->callAbilityOnRouting(

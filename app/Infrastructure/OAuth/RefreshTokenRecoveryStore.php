@@ -236,6 +236,7 @@ final readonly class RefreshTokenRecoveryStore
             $enabledUser = DB::table('users')
                 ->where('id', $recovery->user_id)
                 ->where('access_enabled', true)
+                ->where('ai_access_enabled', true)
                 ->lockForUpdate()
                 ->first(['id']);
 

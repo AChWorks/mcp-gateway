@@ -115,14 +115,15 @@ final class ClientProfileIsolationTest extends TestCase
             ->postJson('/mcp', $mcp)->assertOk();
 
         foreach ([$fixtureTools, $chatTools] as $toolResult) {
-            self::assertSame(['targets-list', 'target-context', 'operation-diagnostics-read', 'wordpress-abilities-read', 'wordpress-ability-execute', 'ssh-command-run', 'ssh-job-start', 'ssh-jobs-list', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'],
+            self::assertSame(['targets-list', 'target-context', 'operation-diagnostics-read', 'wordpress-abilities-read', 'wordpress-content-publish-create', 'wordpress-ability-execute', 'ssh-command-run', 'ssh-job-start', 'ssh-jobs-list', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'],
                 array_column((array) $toolResult->json('result.tools'), 'name'));
             foreach ((array) $toolResult->json('result.tools') as $tool) {
-                $isExecute = in_array($tool['name'], ['wordpress-ability-execute', 'ssh-command-run', 'ssh-job-start', 'ssh-job-cancel', 'ssh-file-write'], true);
+                $isExecute = in_array($tool['name'], ['wordpress-content-publish-create', 'wordpress-ability-execute', 'ssh-command-run', 'ssh-job-start', 'ssh-job-cancel', 'ssh-file-write'], true);
+                $boundedCreate = $tool['name'] === 'wordpress-content-publish-create';
                 $isWordPress = str_starts_with($tool['name'], 'wordpress-');
                 self::assertSame(! $isExecute, $tool['annotations']['readOnlyHint'] ?? null);
-                self::assertSame($isExecute, $tool['annotations']['destructiveHint'] ?? null);
-                self::assertSame(($isWordPress || str_starts_with($tool['name'], 'ssh-')) && $tool['name'] !== 'ssh-jobs-list', $tool['annotations']['openWorldHint'] ?? null);
+                self::assertSame($isExecute && ! $boundedCreate, $tool['annotations']['destructiveHint'] ?? null);
+                self::assertSame(($isWordPress || str_starts_with($tool['name'], 'ssh-')) && $tool['name'] !== 'ssh-jobs-list' && ! $boundedCreate, $tool['annotations']['openWorldHint'] ?? null);
             }
         }
         // The profile must be the authenticated OAuth registration, never an
@@ -572,6 +573,7 @@ final class ClientProfileIsolationTest extends TestCase
     private function operator(): User
     {
         return User::query()->create([
+            'ai_access_enabled' => true,
             'name' => 'OAuth operator',
             'email' => 'operator@example.test',
             'password' => 'irrelevant',

@@ -56,6 +56,9 @@ final class UserController extends Controller
         $validated = $this->validated($request);
         $validated['email'] = Str::lower(trim((string) $validated['email']));
         $validated['access_enabled'] = $request->boolean('access_enabled');
+        if ($request->has('ai_access_enabled')) {
+            $validated['ai_access_enabled'] = $request->boolean('ai_access_enabled');
+        }
         $this->guardSshUserChanges($request, $validated);
 
         $user = $access->create(
@@ -96,6 +99,9 @@ final class UserController extends Controller
         $validated = $this->validated($request, $user);
         $validated['email'] = Str::lower(trim((string) $validated['email']));
         $validated['access_enabled'] = $request->boolean('access_enabled');
+        if ($request->has('ai_access_enabled')) {
+            $validated['ai_access_enabled'] = $request->boolean('ai_access_enabled');
+        }
         $this->guardSshUserChanges($request, $validated, $user, $access);
         $revokesSshByScope = $user->getAttribute('target_scope_mode') === TargetScopeMode::Selected
             && $validated['target_scope_mode'] === TargetScopeMode::All->value
@@ -151,6 +157,7 @@ final class UserController extends Controller
             'role' => ['required', Rule::enum(GatewayRole::class)],
             'target_scope_mode' => ['required', Rule::enum(TargetScopeMode::class)],
             'access_enabled' => ['nullable', 'boolean'],
+            'ai_access_enabled' => ['nullable', 'boolean'],
             'denied_permissions' => ['nullable', 'array'],
             'denied_permissions.*' => ['string', Rule::enum(GatewayPermission::class)],
             'confirm_ssh_permission_changes' => ['nullable', 'boolean'],

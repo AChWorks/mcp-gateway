@@ -342,6 +342,7 @@ final class OAuthTokenConcurrencyTest extends TestCase
     private function operator(): User
     {
         return User::query()->create([
+            'ai_access_enabled' => true,
             'name' => 'Gateway Operator',
             'email' => 'operator-concurrency@example.test',
             'password' => Hash::make('test-password-not-used-for-oauth'),

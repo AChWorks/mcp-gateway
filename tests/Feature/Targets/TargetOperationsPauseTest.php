@@ -193,6 +193,7 @@ final class TargetOperationsPauseTest extends TestCase
             'role' => $role,
             'target_scope_mode' => $role === 'owner' ? 'all' : 'selected',
             'access_enabled' => true,
+            'ai_access_enabled' => true,
         ]);
     }
 

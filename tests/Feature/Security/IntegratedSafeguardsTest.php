@@ -102,6 +102,7 @@ final class IntegratedSafeguardsTest extends TestCase
             'email' => 'activity-owner@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
+            'ai_access_enabled' => true,
             'target_scope_mode' => TargetScopeMode::All->value,
         ]);
         $page = app(ActivityFeed::class)->page($user, 1, 50);
@@ -340,6 +341,7 @@ final class IntegratedSafeguardsTest extends TestCase
             'email' => $email,
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
+            'ai_access_enabled' => true,
             'target_scope_mode' => TargetScopeMode::All->value,
         ]);
     }

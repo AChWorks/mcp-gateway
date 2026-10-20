@@ -74,6 +74,7 @@ final class RefreshTokenRepository implements RefreshTokenRepositoryInterface
                 'authorizations.client_profile_generation',
                 'authorizations.revoked_at as authorization_revoked_at',
                 'users.access_enabled as user_access_enabled',
+                'users.ai_access_enabled as user_ai_access_enabled',
             ])
             ->lockForUpdate()
             ->first();
@@ -82,6 +83,7 @@ final class RefreshTokenRepository implements RefreshTokenRepositoryInterface
             || $row->revoked_at !== null
             || $row->authorization_revoked_at !== null
             || ! (bool) $row->user_access_enabled
+            || ! (bool) $row->user_ai_access_enabled
             || ! hash_equals((string) $row->client_id, (string) $row->authorization_client_id)
             || ! $this->profiles->authorizes(
                 (string) $row->client_id,

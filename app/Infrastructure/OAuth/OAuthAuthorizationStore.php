@@ -20,7 +20,9 @@ final class OAuthAuthorizationStore
         $resourceHash = hash('sha256', $resource);
 
         return DB::transaction(function () use ($userId, $clientId, $resource, $resourceHash, $scopes, $profile): string {
-            if (DB::table('users')->where('id', $userId)->lockForUpdate()->first() === null) {
+            if (DB::table('users')->where('id', $userId)
+                ->where('access_enabled', true)->where('ai_access_enabled', true)
+                ->lockForUpdate()->first() === null) {
                 throw new RuntimeException('OAuth operator no longer exists.');
             }
 
@@ -83,6 +85,12 @@ final class OAuthAuthorizationStore
             ?? throw new RuntimeException('OAuth client profile is disabled or unregistered.');
 
         $scopes = $this->normalizeScopes($scopes);
+        // A consent from before channel revocation must never be reusable
+        // for new authorization codes/access tokens while AI is disabled.
+        if (! DB::table('users')->where('id', (int) $userIdentifier)
+            ->where('access_enabled', true)->where('ai_access_enabled', true)->exists()) {
+            throw new RuntimeException('This Gateway account is not authorized to connect AI clients.');
+        }
         $rows = DB::table('oauth_authorizations')
             ->where('client_id', $clientId)
             ->where('client_profile_key', $profile['key'])
