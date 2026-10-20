@@ -58,7 +58,7 @@ For downloads, verify actual bytes/digest at the receiving endpoint. Unknown cli
 
 Always distinguish **per-call SFTP Base64 windows** from optional same-origin, OAuth-authenticated **SSH whole-file binary HTTP routes** and from **WordPress-native Bridge Abilities**. They share identity, limit, integrity and Activity semantics where actually equivalent, **not necessarily a transport implementation or fixed payload ceiling**. Whole-file SSH HTTP remains flag/permission/host dependent. There is currently no proven native ChatGPT chat-file ingress and model-consumable return merely because an independent binary client passed.
 
-### ChatGPT file-parameter ingress to a selected Target (Gateway source candidate)
+### ChatGPT file-parameter ingress to a selected Target (implemented, parked by default)
 
 **Operational status: PARKED (default OFF)** as of 2026-10-19. Set
 `CHATGPT_FILEPARAMS_ENABLED=false` (or omit it) to prevent advertising or
