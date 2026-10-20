@@ -285,11 +285,22 @@ final class ChatGptFileCapacityTest extends TestCase
         }
         self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
 
+        $sourceHttpTimeouts = [];
+        Http::globalMiddleware(static function (callable $handler) use (&$sourceHttpTimeouts): callable {
+            return static function ($request, array $options) use ($handler, &$sourceHttpTimeouts) {
+                $sourceHttpTimeouts[] = $options['timeout'] ?? null;
+
+                return $handler($request, $options);
+            };
+        });
         Http::fake(static fn (Request $request) => Http::response('bounded', 200, ['Content-Length' => '7']));
         $received = app(ChatGptFileIngress::class)->download(self::FILE, 1048576, 3600, 'ssh');
         try {
             self::assertSame(7, $received['bytes']);
             Http::assertSentCount(1);
+            self::assertCount(1, $sourceHttpTimeouts);
+            self::assertGreaterThan(0, $sourceHttpTimeouts[0]);
+            self::assertLessThanOrEqual(120, $sourceHttpTimeouts[0]);
         } finally {
             fclose($received['stream']);
             $received['capacity_lease']->release();
