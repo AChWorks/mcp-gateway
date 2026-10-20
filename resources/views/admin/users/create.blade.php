@@ -69,6 +69,17 @@
         </label>
 
         <fieldset class="permission-fieldset">
+            <legend>{{ __('AI / MCP connection') }}</legend>
+            <input type="hidden" name="ai_access_enabled" value="0">
+            <label class="checkbox-option" for="ai_access_enabled">
+                <input id="ai_access_enabled" type="checkbox" name="ai_access_enabled" value="1" @checked((bool) old('ai_access_enabled', false))>
+                <span>{{ __('Allow this account to authorize and use AI/MCP clients') }}</span>
+            </label>
+            <p class="field-help">{{ __('This Gateway-wide connection gate is independent of the account role and human Admin/Target permissions. It never adds a Target or action permission. Disabling revokes existing AI client consents/tokens; re-enabling requires fresh client authorization. New users start with AI access disabled; existing users retain their prior state after upgrade.') }}</p>
+            @error('ai_access_enabled')<p class="field-error">{{ $message }}</p>@enderror
+        </fieldset>
+
+        <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
             <p class="field-help">{{ __('Checked means DENY. New non-owner users start with all SSH tools blocked. Uncheck an SSH denial only to intentionally authorize that tool on explicitly Selected Targets, with Owner confirmation. This does not add Targets to the account; assign Targets or Target Groups after creation.') }}</p>
             <input type="hidden" name="ssh_permissions_reviewed" value="1">

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\OAuth;
 
+use App\Application\Access\UserAccessManager;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayRole;
@@ -133,6 +134,76 @@ final class ChatGptOAuthFlowTest extends TestCase
             ->assertStatus(400);
     }
 
+    public function test_ai_access_is_separate_from_operator_role_and_existing_bearer_cannot_revive(): void
+    {
+        $user = $this->operator();
+        [$refreshToken, $accessToken] = $this->issueRefreshableToken($user);
+        $headers = [
+            'Authorization' => 'Bearer '.$accessToken,
+            'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/list',
+        ];
+        $modernList = [
+            'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list',
+            'params' => ['_meta' => [
+                'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                'io.modelcontextprotocol/clientInfo' => ['name' => 'disabled-ai-test', 'version' => '1.0'],
+            ]],
+        ];
+        $this->withHeaders($headers)->postJson('/mcp', $modernList)->assertOk();
+
+        $manager = app(UserAccessManager::class);
+        $attributes = [
+            'name' => $user->name, 'email' => $user->email,
+            'role' => GatewayRole::Operator->value, 'target_scope_mode' => 'selected',
+            'access_enabled' => true, 'ai_access_enabled' => false,
+        ];
+        $manager->update($user, $attributes, []);
+        self::assertTrue($user->fresh()->access_enabled);
+        self::assertFalse($user->fresh()->ai_access_enabled);
+        self::assertSame(1, DB::table('oauth_authorizations')
+            ->where('user_id', $user->id)->whereNotNull('revoked_at')->count());
+        $this->actingAs($user)->get(route('admin.dashboard'))->assertOk();
+        $this->get('/oauth/authorize?'.http_build_query($this->authorizationParameters()))
+            ->assertForbidden()->assertSee('AI connection not authorized');
+        $this->post('/oauth/authorize', [
+            ...$this->authorizationParameters(), 'decision' => 'approve',
+        ])->assertForbidden();
+        $this->withHeaders($headers)->postJson('/mcp', $modernList)->assertUnauthorized();
+        $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
+
+        // Re-enabling AI is a new permission to connect, NOT a resurrection
+        // of the prior revoked consent, bearer or refresh token.
+        $manager->update($user->fresh(), [
+            ...$attributes, 'ai_access_enabled' => true,
+        ], []);
+        $this->withHeaders($headers)->postJson('/mcp', $modernList)->assertUnauthorized();
+        $this->recoverOldRefreshToken($refreshToken)->assertStatus(400);
+        self::assertTrue($user->fresh()->ai_access_enabled);
+        $this->actingAs($user->fresh())->get('/oauth/authorize?'.http_build_query($this->authorizationParameters()))
+            ->assertOk();
+    }
+
+    public function test_new_operator_has_no_ai_connection_without_explicit_owner_opt_in(): void
+    {
+        $user = User::query()->create([
+            'name' => 'Human only', 'email' => 'human-only@example.test',
+            'password' => 'CorrectHorse!234', 'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+            'access_enabled' => true,
+        ]);
+        self::assertFalse($user->ai_access_enabled);
+        $this->actingAs($user)->get(route('admin.dashboard'))->assertOk();
+        $this->get('/oauth/authorize?'.http_build_query($this->authorizationParameters()))
+            ->assertForbidden();
+        $this->post('/oauth/authorize', [
+            ...$this->authorizationParameters(), 'decision' => 'approve',
+        ])->assertForbidden();
+        self::assertSame(0, DB::table('oauth_authorizations')->count());
+    }
+
     public function test_full_oauth_refresh_mcp_and_revocation_flow(): void
     {
         $user = $this->operator();
@@ -218,6 +289,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             'target-context',
             'operation-diagnostics-read',
             'wordpress-abilities-read',
+            'wordpress-content-publish-create',
             'wordpress-ability-execute',
             'ssh-command-run',
             'ssh-job-start',
@@ -381,6 +453,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             'target-context',
             'operation-diagnostics-read',
             'wordpress-abilities-read',
+            'wordpress-content-publish-create',
             'wordpress-ability-execute',
             'ssh-command-run',
             'ssh-job-start',
@@ -978,6 +1051,7 @@ final class ChatGptOAuthFlowTest extends TestCase
         $owner = User::query()->create([
             'name' => 'Pause bearer Owner',
             'email' => 'pause-owner@example.test',
+            'ai_access_enabled' => true,
             'password' => Hash::make('test-password-not-used-for-oauth'),
             'role' => GatewayRole::Owner->value,
             'target_scope_mode' => TargetScopeMode::All->value,
@@ -1267,6 +1341,7 @@ final class ChatGptOAuthFlowTest extends TestCase
     private function operator(): User
     {
         return User::query()->create([
+            'ai_access_enabled' => true,
             'name' => 'Gateway Operator',
             'email' => 'operator@example.test',
             'password' => Hash::make('test-password-not-used-for-oauth'),

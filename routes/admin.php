@@ -15,6 +15,7 @@ use App\Http\Controllers\Admin\TargetGroupUserController;
 use App\Http\Controllers\Admin\TargetOperationsController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\UserTargetAccessController;
+use App\Http\Controllers\Admin\UserWordpressPublishGrantController;
 use App\Http\Controllers\Admin\WordpressBridgeInfoController;
 use App\Http\Middleware\EnsureLocalUserAccessEnabled;
 use Illuminate\Support\Facades\Route;
@@ -62,6 +63,9 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class])->prefix('admin'
     Route::post('/users', [UserController::class, 'store'])->name('users.store');
     Route::get('/users/{user}/edit', [UserController::class, 'edit'])->name('users.edit');
     Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
+    Route::get('/users/{user}/publishing', [UserWordpressPublishGrantController::class, 'index'])->name('users.publishing.index');
+    Route::post('/users/{user}/publishing', [UserWordpressPublishGrantController::class, 'store'])->name('users.publishing.store');
+    Route::delete('/users/{user}/publishing/{grant}', [UserWordpressPublishGrantController::class, 'destroy'])->name('users.publishing.destroy');
     Route::get('/users/{user}/targets', [UserTargetAccessController::class, 'index'])->name('users.targets.index');
     Route::get('/users/{user}/targets/{target:target_id}/edit', [UserTargetAccessController::class, 'edit'])
         ->withoutScopedBindings()

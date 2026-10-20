@@ -136,6 +136,36 @@ final readonly class AccessControl
     }
 
     /**
+     * Explicit semantic delegation within the existing role, per-Target and
+     * group deny ceilings. This positive grant is CHANNEL-INDEPENDENT:
+     * AI access and OAuth client consent are separate admission conditions.
+     * Group membership and a matching registered Target are required now;
+     * adding a Target to that group deliberately expands its approved scope.
+     */
+    public function allowsWordpressPublish(User $user, Target $target): bool
+    {
+        $permission = GatewayPermission::WordpressContentPublishCreate;
+        if (! ($this->allowsTargetPermissions($user, $target, [$permission])[$permission->value] ?? false)) {
+            return false;
+        }
+        // The Owner already holds broad downstream authority for recovery;
+        // new positive grants are for ordinary human/AI scoped users only.
+        if ($this->role($user) === GatewayRole::Owner) {
+            return true;
+        }
+
+        return DB::table('wordpress_publish_group_grants as grants')
+            ->join('target_group_users as members', function ($join): void {
+                $join->on('members.target_group_id', '=', 'grants.target_group_id')
+                    ->on('members.user_id', '=', 'grants.user_id');
+            })
+            ->join('target_group_targets as selected', 'selected.target_group_id', '=', 'grants.target_group_id')
+            ->where('grants.user_id', $user->getKey())
+            ->where('selected.target_record_id', $target->getKey())
+            ->exists();
+    }
+
+    /**
      * Applies principal target membership only. Functional permission is deliberately separate so
      * a selected target can be write-only, read-only, or otherwise narrowed by capability.
      *

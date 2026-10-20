@@ -30,6 +30,9 @@ final readonly class AuthorizationController
         if ($request->user() === null) {
             return $this->browserResponse(response()->view('oauth.authentication-required', status: 401));
         }
+        if (! $request->user()->ai_access_enabled) {
+            return $this->browserResponse(response()->view('oauth.ai-access-disabled', status: 403));
+        }
 
         try {
             $parameters = $this->authorizationParameters($request->query());
@@ -64,6 +67,9 @@ final readonly class AuthorizationController
         $user = $request->user();
         if ($user === null) {
             return $this->browserResponse(response()->view('oauth.authentication-required', status: 401));
+        }
+        if (! $request->user()->ai_access_enabled) {
+            return $this->browserResponse(response()->view('oauth.ai-access-disabled', status: 403));
         }
 
         try {

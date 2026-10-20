@@ -62,12 +62,13 @@ final readonly class RequireMcpAccessToken
         }
 
         $user = User::query()->find((int) $userId);
-        if (! $user instanceof User || ! $user->access_enabled) {
+        if (! $user instanceof User || ! $user->access_enabled || ! $user->ai_access_enabled) {
             return $this->challenge(401, 'invalid_token');
         }
 
         $request->attributes->set('oauth_client_id', $clientId);
         $request->attributes->set('oauth_client_profile_key', $profile['key']);
+        $request->attributes->set('oauth_client_profile_generation', $profile['generation']);
         $request->attributes->set('oauth_user_id', (string) $user->getAuthIdentifier());
         $request->attributes->set('oauth_user', $user);
         $request->attributes->set('oauth_access_token_id', $validated->getAttribute('oauth_access_token_id'));

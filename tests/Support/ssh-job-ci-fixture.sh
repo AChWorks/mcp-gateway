@@ -47,6 +47,11 @@ php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
   --filter=test_job_can_write_large_regular_files_while_capturing_bounded_stdout_and_stderr
 
+# Credential rotation must invalidate an already authenticated script SFTP
+# session, including both inline and streamed retained Job publication.
+php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
+  --filter=test_job_refuses_script_publication_after_credential_rotation_and_reverification
+
 sudo loginctl disable-linger "$user"
 # The guard must reject new detached work while the user manager may linger
 # briefly from its last session; don't assume the bus vanishes immediately.

@@ -177,6 +177,29 @@ final readonly class GatewayMcpEndpoint
                 ],
             )
             ->addTool(
+                handler: fn (string $target_id, string $title, string $content, string $operation_id): array => $this->wordpress->publishCreate(
+                    $this->user($request), $target_id, $title, $content, $operation_id,
+                    ...$this->mcpClientIdentity($request),
+                ),
+                name: 'wordpress-content-publish-create',
+                description: 'Create exactly one published WordPress post on an authorized Target. Requires an Owner-managed semantic User + Target Group grant for ordinary accounts, plus independently enabled AI access and OAuth client authorization and an 8-128 character stable operation_id. Never grants generic Ability execution, editing, deletion, plugin or site management. Do not issue a new operation_id merely to retry an uncertain result.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: false, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'title' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 200],
+                        'content' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 65536],
+                        'operation_id' => [
+                            'type' => 'string', 'minLength' => 8, 'maxLength' => 128,
+                            'pattern' => '^[A-Za-z0-9_.:-]{8,128}$',
+                        ],
+                    ],
+                    'required' => ['target_id', 'title', 'content', 'operation_id'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
                 handler: fn (string $target_id, string $ability, array $input = []): array => $this->wordpress->execute($this->user($request), $target_id, $ability, $input),
                 name: 'wordpress-ability-execute',
                 description: 'Execute one explicitly authorized WordPress Ability with runtime safety-class enforcement.',
@@ -487,6 +510,26 @@ final readonly class GatewayMcpEndpoint
         $psrResponse = $server->run($transport);
 
         return (new HttpFoundationFactory)->createResponse($psrResponse, true);
+    }
+
+    /**
+     * MCP identity is server-verified by RequireMcpAccessToken; never accept
+     * a caller-supplied OAuth client or profile in a Tool input field.
+     *
+     * @return array{string,string,int}
+     */
+    private function mcpClientIdentity(Request $request): array
+    {
+        $clientId = $request->attributes->get('oauth_client_id');
+        $profileKey = $request->attributes->get('oauth_client_profile_key');
+        $generation = $request->attributes->get('oauth_client_profile_generation');
+        if (! is_string($clientId) || $clientId === ''
+            || ! is_string($profileKey) || $profileKey === ''
+            || ! is_int($generation) || $generation < 1) {
+            abort(401);
+        }
+
+        return [$clientId, $profileKey, $generation];
     }
 
     private function clientHash(Request $request): string

@@ -27,6 +27,7 @@ final class TargetGroupMcpAuthorizationTest extends TestCase
             'email' => 'grouped-operator@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Operator->value,
+            'ai_access_enabled' => true,
             'target_scope_mode' => TargetScopeMode::Selected->value,
         ]);
         $alpha = $this->site('alpha');

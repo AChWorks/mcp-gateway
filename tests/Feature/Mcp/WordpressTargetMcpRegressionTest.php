@@ -16,7 +16,13 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
+use App\Infrastructure\OAuth\ClientProfileRegistry;
+use App\Infrastructure\OAuth\League\Entities\ClientEntity;
+use App\Infrastructure\OAuth\League\Entities\ScopeEntity;
+use App\Infrastructure\OAuth\League\Repositories\AccessTokenRepository;
+use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Models\User;
+use DateTimeImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
@@ -25,6 +31,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use League\OAuth2\Server\CryptKey;
 use Tests\TestCase;
 
 final class WordpressTargetMcpRegressionTest extends TestCase
@@ -36,6 +43,9 @@ final class WordpressTargetMcpRegressionTest extends TestCase
 
     private User $principal;
 
+    /** @var list<array<string,mixed>> */
+    private array $publishInputs = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -45,6 +55,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
             'email' => 'mcp-owner@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Owner->value,
+            'ai_access_enabled' => true,
             'target_scope_mode' => TargetScopeMode::All->value,
         ]);
 
@@ -170,6 +181,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
             'email' => 'read-only-operator@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Operator->value,
+            'ai_access_enabled' => true,
             'target_scope_mode' => TargetScopeMode::Selected->value,
             'access_enabled' => true,
         ]);
@@ -228,6 +240,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
                 'email' => $targetId.'@example.test',
                 'password' => 'CorrectHorse!234',
                 'role' => GatewayRole::Operator->value,
+                'ai_access_enabled' => true,
                 'target_scope_mode' => TargetScopeMode::Selected->value,
                 'access_enabled' => true,
             ]);
@@ -344,6 +357,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
             'email' => 'snapshot-ceiling@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Operator->value,
+            'ai_access_enabled' => true,
             'target_scope_mode' => TargetScopeMode::Selected->value,
         ]);
         DB::table('user_target_access')->insert([
@@ -494,6 +508,7 @@ final class WordpressTargetMcpRegressionTest extends TestCase
             'email' => 'write-only@example.test',
             'password' => 'CorrectHorse!234',
             'role' => GatewayRole::Operator->value,
+            'ai_access_enabled' => true,
             'target_scope_mode' => TargetScopeMode::Selected->value,
         ]);
 
@@ -1219,6 +1234,547 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         $result = app(WordpressTargetMcpToolHandlers::class)->execute($this->principal, 'alpha', 'demo/read', []);
         self::assertTrue($result['ok']);
         self::assertSame(str_repeat('x', 2048), $result['result']['large_read']);
+    }
+
+    public function test_human_permission_does_not_imply_ai_connection_permission(): void
+    {
+        $site = $this->createSite('human-only');
+        $this->pair($site);
+        $operator = $this->publisher('human-only');
+        $this->assignPublisher($operator, $site);
+        $operator->forceFill(['ai_access_enabled' => false])->save();
+        $this->fakePublishBridge();
+
+        // The same underlying application operation remains usable by a
+        // separately authenticated human path without any AI client identity.
+        $human = app(WordpressTargetOperations::class)->publishCreate(
+            $operator, $site->target_id, 'Human publication', 'Article body', 'human-only-20261020',
+        );
+        self::assertTrue($human['ok']);
+        self::assertSame(987, $human['remote_id']);
+        self::assertCount(1, $this->publishInputs);
+
+        $fromAi = $this->publish($operator, $site->target_id);
+        self::assertSame('forbidden', $fromAi['error']['code']);
+        self::assertCount(1, $this->publishInputs);
+
+        $genericAi = app(WordpressTargetMcpToolHandlers::class)->execute(
+            $operator, $site->target_id, 'demo/read', [],
+        );
+        self::assertSame('forbidden', $genericAi['error']['code']);
+    }
+
+    public function test_publisher_grant_executes_only_the_fixed_semantic_post_create(): void
+    {
+        $alpha = $this->createSite('publish-a');
+        $beta = $this->createSite('publish-b');
+        $this->pair($alpha);
+        $this->pair($beta);
+        $publisher = $this->publisher('scoped-a');
+        $group = $this->assignPublisher($publisher, $alpha);
+        $this->fakePublishBridge();
+
+        $ok = $this->publish($publisher, 'publish-a');
+        self::assertTrue($ok['ok']);
+        self::assertSame('publish-a', $ok['target_id']);
+        self::assertSame(987, $ok['remote_id']);
+        self::assertSame('publish', $ok['status']);
+        self::assertSame([[
+            'action' => 'create', 'post_type' => 'post', 'status' => 'publish',
+            'title' => 'A bounded published post', 'content' => '<p>Safe body</p>',
+            'operation_id' => 'gw-'.hash('sha256', "wp-post-create\0".$publisher->getKey()."\0"
+                .$alpha->getKey()."\0ai:".(string) config('oauth.client.id')."\0test-20261020-0001"),
+        ]], $this->publishInputs);
+        self::assertSame('success', DB::table('activity_events')
+            ->where('operation', 'wordpress-content-publish-create')->latest('created_at')->value('outcome'));
+
+        $generic = app(WordpressTargetMcpToolHandlers::class)->execute($publisher, 'publish-a', 'demo/write', ['action' => 'delete_users']);
+        self::assertSame('forbidden', $generic['error']['code']);
+        self::assertCount(1, $this->publishInputs);
+        $elsewhere = $this->publish($publisher, 'publish-b');
+        self::assertSame('target_not_found', $elsewhere['error']['code']);
+
+        // Existing legitimately authorized broad dynamic execution remains intact.
+        $broad = app(WordpressTargetMcpToolHandlers::class)->execute($this->principal, 'publish-a', 'demo/write', ['field' => 'normal']);
+        self::assertTrue($broad['ok']);
+        self::assertSame('write', $broad['result']['kind']);
+
+        // Group permission denials continue to narrow the special operation.
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $group->id,
+            'permission' => GatewayPermission::WordpressContentPublishCreate->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        self::assertSame('target_not_found', $this->publish($publisher, 'publish-a')['error']['code']);
+        self::assertCount(1, $this->publishInputs);
+    }
+
+    public function test_same_client_operation_id_is_isolated_between_gateway_users(): void
+    {
+        $site = $this->createSite('shared-key-site');
+        $this->pair($site);
+        $first = $this->publisher('key-first');
+        $group = $this->assignPublisher($first, $site);
+        $second = $this->publisher('key-second');
+        DB::table('target_group_users')->insert([
+            'target_group_id' => $group->id, 'user_id' => $second->id,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('wordpress_publish_group_grants')->insert([
+            'target_group_id' => $group->id, 'user_id' => $second->id,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->fakePublishBridge();
+
+        self::assertTrue($this->publish($first, $site->target_id)['ok']);
+        self::assertTrue($this->publish($second, $site->target_id)['ok']);
+        self::assertTrue($this->publish($first, $site->target_id)['ok']);
+        $keys = array_column($this->publishInputs, 'operation_id');
+        self::assertCount(3, $keys);
+        self::assertNotSame($keys[0], $keys[1]);
+        self::assertSame($keys[0], $keys[2]);
+        self::assertMatchesRegularExpression('/^gw-[a-f0-9]{64}$/D', $keys[0]);
+        self::assertMatchesRegularExpression('/^gw-[a-f0-9]{64}$/D', $keys[1]);
+    }
+
+    public function test_authenticated_mcp_bearer_publishes_through_positive_dispatch_fence(): void
+    {
+        $site = $this->createSite('bearer-positive');
+        $this->pair($site);
+        $publisher = $this->publisher('bearer-positive');
+        $this->assignPublisher($publisher, $site);
+        [$bearer] = $this->issueMcpBearer($publisher);
+        $this->fakePublishBridge();
+
+        $result = $this->publishOverAuthenticatedMcp($bearer, $site->target_id);
+        self::assertTrue($result['ok'] ?? false, json_encode($result));
+        self::assertSame(987, $result['remote_id'] ?? null);
+        self::assertCount(1, $this->publishInputs);
+    }
+
+    public function test_live_mcp_dispatch_blocks_exact_token_or_consent_revoked_during_catalog(): void
+    {
+        foreach (['consent', 'access_token'] as $case) {
+            $site = $this->createSite('bearer-revoke-'.str_replace('_', '-', $case));
+            $this->pair($site);
+            $publisher = $this->publisher('bearer-revoke-'.$case);
+            $this->assignPublisher($publisher, $site);
+            [$bearer, $tokenId, $authorizationId] = $this->issueMcpBearer($publisher);
+            $this->publishInputs = [];
+            $catalogChecks = 0;
+            $this->fakePublishBridge(function () use ($case, $tokenId, $authorizationId, &$catalogChecks): void {
+                $catalogChecks++;
+                if ($case === 'consent') {
+                    DB::table('oauth_authorizations')->where('id', $authorizationId)
+                        ->update(['revoked_at' => now()]);
+                } else {
+                    DB::table('oauth_access_tokens')->where('id', $tokenId)
+                        ->update(['revoked_at' => now()]);
+                }
+            });
+
+            // The real OAuth middleware accepts the bearer at request entry.
+            // The fake downstream catalog then revokes that exact bearer or
+            // its consent before the actual content-upsert dispatch boundary.
+            $result = $this->publishOverAuthenticatedMcp($bearer, $site->target_id);
+            self::assertSame('forbidden', $result['error']['code'] ?? null, $case);
+            self::assertSame(1, $catalogChecks, $case);
+            self::assertCount(0, $this->publishInputs, $case);
+        }
+    }
+
+    public function test_publication_namespace_is_stable_and_isolated_across_clients_targets_and_human_channel(): void
+    {
+        $alpha = $this->createSite('namespace-a');
+        $beta = $this->createSite('namespace-b');
+        $this->pair($alpha);
+        $this->pair($beta);
+        $publisher = $this->publisher('namespace');
+        $this->assignPublisher($publisher, $alpha);
+        $this->assignPublisher($publisher, $beta);
+        $secondClient = 'https://another-agent.example.test/oauth/client';
+        $this->registerFixtureClient($secondClient);
+
+        // Isolated Bridge Create_Claim behavior: upstream Bridge sees the
+        // same downstream Gateway OAuth client/WordPress principal. Within
+        // each Target, receipts are keyed by the downstream operation_id.
+        $receipts = [];
+        $this->fakePublishBridge(null, function (Request $request) use (&$receipts) {
+            $params = $request->data()['params']['arguments']['parameters'];
+            $key = (string) parse_url($request->url(), PHP_URL_HOST).'|'.$params['operation_id'];
+            $digest = hash('sha256', json_encode($params, JSON_THROW_ON_ERROR));
+            if (! isset($receipts[$key])) {
+                $receipts[$key] = ['id' => 900 + count($receipts), 'digest' => $digest];
+            }
+            if (! hash_equals($receipts[$key]['digest'], $digest)) {
+                return Http::response(['error' => 'create_claim_conflict'], 409);
+            }
+
+            return $this->toolSuccess([
+                'id' => $receipts[$key]['id'], 'post_type' => 'post', 'status' => 'publish',
+            ], (int) ($request->data()['id'] ?? 3));
+        });
+
+        $first = $this->publish($publisher, $alpha->target_id);
+        $retry = $this->publish($publisher, $alpha->target_id);
+        $otherClient = app(WordpressTargetMcpToolHandlers::class)->publishCreate(
+            $publisher, $alpha->target_id, 'A bounded published post', '<p>Safe body</p>',
+            'test-20261020-0001', $secondClient, 'fixture', 1,
+        );
+        $otherTarget = $this->publish($publisher, $beta->target_id);
+        $human = app(WordpressTargetOperations::class)->publishCreate(
+            $publisher, $alpha->target_id, 'A bounded published post', '<p>Safe body</p>', 'test-20261020-0001',
+        );
+
+        foreach ([$first, $retry, $otherClient, $otherTarget, $human] as $result) {
+            self::assertTrue($result['ok'] ?? false, json_encode($result));
+        }
+        $keys = array_column($this->publishInputs, 'operation_id');
+        self::assertCount(5, $keys);
+        self::assertSame($keys[0], $keys[1]);
+        self::assertSame($first['remote_id'], $retry['remote_id']);
+        foreach ([2, 3, 4] as $index) {
+            self::assertNotSame($keys[0], $keys[$index]);
+            self::assertNotSame($first['remote_id'], [$otherClient, $otherTarget, $human][$index - 2]['remote_id']);
+        }
+        self::assertCount(4, $receipts);
+
+        // An uncertain response must NOT auto-generate a fresh claim key.
+        $this->publishInputs = [];
+        $this->fakePublishBridge(null, fn (Request $request) => Http::response('lost reply', 502));
+        self::assertSame('outcome_unknown', $this->publish($publisher, $alpha->target_id)['error']['code']);
+        self::assertSame('outcome_unknown', $this->publish($publisher, $alpha->target_id)['error']['code']);
+        self::assertSame($this->publishInputs[0]['operation_id'], $this->publishInputs[1]['operation_id']);
+        self::assertSame($keys[0], $this->publishInputs[0]['operation_id']);
+    }
+
+    public function test_scoped_publisher_denials_and_client_binding_fail_before_remote_dispatch(): void
+    {
+        $site = $this->createSite('publisher-denials');
+        $this->pair($site);
+        $publisher = $this->publisher('scope-denials');
+        $group = $this->assignPublisher($publisher, $site);
+        $this->fakePublishBridge();
+
+        $client = (string) config('oauth.client.id');
+        foreach ([
+            [$client, 'wrong-profile', 1],
+            ['https://unexpected-client.example.test', 'chatgpt', 1],
+            [$client, 'chatgpt', 2],
+        ] as [$clientId, $profile, $generation]) {
+            self::assertSame('forbidden', app(WordpressTargetMcpToolHandlers::class)->publishCreate(
+                $publisher, $site->target_id, 'Title', 'Body', 'test-20261020-0001', $clientId, $profile, $generation,
+            )['error']['code']);
+        }
+        self::assertCount(0, $this->publishInputs);
+
+        foreach ([
+            ['user_permission_denials', ['user_id' => $publisher->id, 'permission' => GatewayPermission::WordpressContentPublishCreate->value]],
+            ['user_target_permission_denials', ['user_id' => $publisher->id, 'target_record_id' => $site->id, 'permission' => GatewayPermission::WordpressContentPublishCreate->value]],
+            ['target_group_permission_denials', ['target_group_id' => $group->id, 'permission' => GatewayPermission::WordpressContentPublishCreate->value]],
+        ] as [$table, $rule]) {
+            DB::table($table)->insert([...$rule, 'created_at' => now(), 'updated_at' => now()]);
+            self::assertSame('target_not_found', $this->publish($publisher, $site->target_id)['error']['code']);
+            DB::table($table)->where($rule)->delete();
+        }
+
+        DB::table('user_target_access')->insert([
+            'user_id' => $publisher->id, 'target_record_id' => $site->id,
+            'allowed' => false, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        self::assertSame('target_not_found', $this->publish($publisher, $site->target_id)['error']['code']);
+        DB::table('user_target_access')->where('user_id', $publisher->id)->delete();
+
+        DB::table('target_group_targets')->where('target_group_id', $group->id)->delete();
+        self::assertSame('target_not_found', $this->publish($publisher, $site->target_id)['error']['code']);
+        DB::table('target_group_targets')->insert([
+            'target_group_id' => $group->id, 'target_record_id' => $site->id,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('target_group_users')->where('target_group_id', $group->id)->delete();
+        self::assertSame('target_not_found', $this->publish($publisher, $site->target_id)['error']['code']);
+        DB::table('target_group_users')->insert([
+            'target_group_id' => $group->id, 'user_id' => $publisher->id,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        $publisher->forceFill(['access_enabled' => false])->save();
+        self::assertSame('target_not_found', $this->publish($publisher, $site->target_id)['error']['code']);
+        $publisher->forceFill(['access_enabled' => true, 'role' => GatewayRole::Viewer->value])->save();
+        self::assertSame('target_not_found', $this->publish($publisher, $site->target_id)['error']['code']);
+        $publisher->forceFill(['role' => GatewayRole::Operator->value])->save();
+
+        $site->forceFill(['operations_paused' => true])->save();
+        self::assertSame('target_paused', $this->publish($publisher, $site->target_id)['error']['code']);
+        self::assertCount(0, $this->publishInputs);
+    }
+
+    public function test_publisher_revocation_during_classification_blocks_dispatch(): void
+    {
+        foreach (['grant', 'membership', 'profile', 'global_deny', 'disabled', 'ai_disabled'] as $case) {
+            $site = $this->createSite('pub-revoke-'.str_replace('_', '-', $case));
+            $this->pair($site);
+            $publisher = $this->publisher($case);
+            $group = $this->assignPublisher($publisher, $site);
+            $this->publishInputs = [];
+            $this->fakePublishBridge(function () use ($publisher, $case): void {
+                if ($case === 'grant') {
+                    DB::table('wordpress_publish_group_grants')->where('user_id', $publisher->id)->delete();
+                } elseif ($case === 'membership') {
+                    DB::table('target_group_users')->where('user_id', $publisher->id)->delete();
+                } elseif ($case === 'profile') {
+                    DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')->update(['disabled_at' => now()]);
+                } elseif ($case === 'global_deny') {
+                    DB::table('user_permission_denials')->insert([
+                        'user_id' => $publisher->id, 'permission' => GatewayPermission::WordpressContentPublishCreate->value,
+                        'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                } elseif ($case === 'ai_disabled') {
+                    $publisher->forceFill(['ai_access_enabled' => false])->save();
+                } else {
+                    $publisher->forceFill(['access_enabled' => false])->save();
+                }
+            });
+            self::assertSame('forbidden', $this->publish($publisher, $site->target_id)['error']['code'], $case);
+            self::assertCount(0, $this->publishInputs, $case);
+            if ($case === 'profile') {
+                DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')->update(['disabled_at' => null]);
+            }
+        }
+    }
+
+    public function test_publisher_rejects_mutable_or_unsupported_provider_contract_and_invalid_inputs(): void
+    {
+        $site = $this->createSite('publisher-contract');
+        $this->pair($site);
+        $publisher = $this->publisher('contract');
+        $this->assignPublisher($publisher, $site);
+        foreach ([
+            ['input_schema' => ['additionalProperties' => true]],
+            ['input_schema' => ['properties' => ['operation_id' => ['minLength' => 1]]]],
+            ['annotations' => ['readonly' => true]],
+            ['bridge_delegation' => 'native_abilities'],
+        ] as $change) {
+            $this->publishInputs = [];
+            $this->fakePublishBridge(null, null, $change);
+            self::assertSame('forbidden', $this->publish($publisher, $site->target_id)['error']['code']);
+            self::assertCount(0, $this->publishInputs);
+        }
+
+        $this->fakePublishBridge();
+        foreach ([
+            ['', 'Body', 'test-20261020-0001'],
+            ['Title', '', 'test-20261020-0001'],
+            ['Title', 'Body', 'bad key'],
+            ['Title', str_repeat('x', 65537), 'test-20261020-0001'],
+        ] as [$title, $body, $id]) {
+            self::assertSame('invalid_input', app(WordpressTargetMcpToolHandlers::class)->publishCreate(
+                $publisher, $site->target_id, $title, $body, $id,
+                (string) config('oauth.client.id'), 'chatgpt', 1,
+            )['error']['code']);
+        }
+        self::assertCount(0, $this->publishInputs);
+    }
+
+    public function test_publisher_post_dispatch_unknown_never_claims_success_or_retries(): void
+    {
+        $site = $this->createSite('publisher-unknown');
+        $this->pair($site);
+        $publisher = $this->publisher('unknown');
+        $this->assignPublisher($publisher, $site);
+        $this->fakePublishBridge(null, fn (Request $request) => Http::response('not-json', 200));
+        $result = $this->publish($publisher, $site->target_id);
+        self::assertSame('outcome_unknown', $result['error']['code']);
+        self::assertCount(1, $this->publishInputs);
+        $this->assertDatabaseHas('activity_events', [
+            'operation' => 'wordpress-content-publish-create', 'outcome' => 'unknown',
+        ]);
+
+        $this->publishInputs = [];
+        $this->fakePublishBridge(null, fn (Request $request) => $this->toolSuccess([
+            'id' => 987, 'post_type' => 'post', 'status' => 'draft',
+        ], (int) ($request->data()['id'] ?? 3)));
+        $invalid = $this->publish($publisher, $site->target_id);
+        self::assertSame('outcome_unknown', $invalid['error']['code']);
+        self::assertCount(1, $this->publishInputs);
+    }
+
+    private function publisher(string $suffix): User
+    {
+        return User::query()->create([
+            'name' => 'Scoped publisher', 'email' => 'publisher-'.$suffix.'-'.uniqid().'@example.test',
+            'password' => 'CorrectHorse!234', 'role' => GatewayRole::Operator->value,
+            'ai_access_enabled' => true,
+            'target_scope_mode' => TargetScopeMode::Selected->value, 'access_enabled' => true,
+            'ai_access_enabled' => true,
+        ]);
+    }
+
+    /** @return array{string,string,string} */
+    private function issueMcpBearer(User $user): array
+    {
+        Artisan::call('gateway:oauth-keygen', ['--force' => true]);
+        $clientId = (string) config('oauth.client.id');
+        $authorizationId = app(OAuthAuthorizationStore::class)->approve(
+            (int) $user->getKey(), $clientId, (string) config('oauth.resource'), [(string) config('oauth.scope')],
+        );
+        $token = app(AccessTokenRepository::class)->getNewToken(
+            new ClientEntity($clientId, 'Authenticated MCP test', []),
+            [new ScopeEntity((string) config('oauth.scope'))], (string) $user->getKey(),
+        );
+        $id = bin2hex(random_bytes(20));
+        $token->setIdentifier($id);
+        $token->setExpiryDateTime((new DateTimeImmutable)->modify('+15 minutes'));
+        $token->setPrivateKey(new CryptKey((string) config('oauth.keys.private')));
+        app(AccessTokenRepository::class)->persistNewAccessToken($token);
+
+        return [$token->toString(), $id, $authorizationId];
+    }
+
+    /** @return array<string,mixed> */
+    private function publishOverAuthenticatedMcp(string $bearer, string $targetId): array
+    {
+        $response = $this->withHeaders([
+            'Authorization' => 'Bearer '.$bearer,
+            'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+            'Mcp-Name' => 'wordpress-content-publish-create',
+        ])->postJson('/mcp', [
+            'jsonrpc' => '2.0', 'id' => 12, 'method' => 'tools/call',
+            'params' => [
+                'name' => 'wordpress-content-publish-create',
+                'arguments' => [
+                    'target_id' => $targetId,
+                    'title' => 'A bounded published post',
+                    'content' => '<p>Safe body</p>',
+                    'operation_id' => 'test-20261020-0001',
+                ],
+                '_meta' => [
+                    'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
+                    'io.modelcontextprotocol/clientCapabilities' => (object) [],
+                    'io.modelcontextprotocol/clientInfo' => ['name' => 'revoke-fixture', 'version' => '1.0'],
+                ],
+            ],
+        ]);
+        self::assertSame(200, $response->getStatusCode());
+        // Streamable MCP transport emits the JSON-RPC body only when sent.
+        ob_start();
+        try {
+            $response->sendContent();
+            $body = (string) ob_get_contents();
+        } finally {
+            ob_end_clean();
+        }
+        $decoded = json_decode($body, true, flags: JSON_THROW_ON_ERROR);
+        $content = $decoded['result']['structuredContent'] ?? null;
+        self::assertIsArray($content, $body);
+
+        return $content;
+    }
+
+    private function registerFixtureClient(string $clientId): void
+    {
+        $key = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+        self::assertNotFalse($key);
+        $details = openssl_pkey_get_details($key);
+        self::assertIsArray($details);
+        self::assertIsArray($details['rsa'] ?? null);
+        $encoded = static fn (string $value): string => rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+        config()->set('oauth.client_profiles', [
+            ...config('oauth.client_profiles'),
+            'fixture' => [
+                'client_id' => $clientId, 'display_name' => 'Isolated second AI client',
+                'strategy' => 'pinned_private_key_jwt', 'enabled' => true,
+                'redirect_uris' => ['https://another-agent.example.test/callback'],
+                'jwks' => ['keys' => [[
+                    'kty' => 'RSA', 'use' => 'sig', 'alg' => 'RS256', 'kid' => 'fixture',
+                    'n' => $encoded($details['rsa']['n']), 'e' => $encoded($details['rsa']['e']),
+                ]]],
+            ],
+        ]);
+        app(ClientProfileRegistry::class)->register('fixture');
+    }
+
+    private function assignPublisher(User $user, Target $site): TargetGroup
+    {
+        $group = TargetGroup::query()->create(['name' => 'Publish '.$site->target_id]);
+        DB::table('target_group_targets')->insert([
+            'target_group_id' => $group->id, 'target_record_id' => $site->id,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('target_group_users')->insert([
+            'target_group_id' => $group->id, 'user_id' => $user->id,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('wordpress_publish_group_grants')->insert([
+            'user_id' => $user->id, 'target_group_id' => $group->id,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // The bounded semantic grant does not implicitly grant broad mutation.
+        DB::table('user_permission_denials')->insertOrIgnore([
+            'user_id' => $user->id,
+            'permission' => GatewayPermission::WordpressAbilitiesExecuteMutating->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        return $group;
+    }
+
+    /** @return array<string,mixed> */
+    private function publish(User $publisher, string $targetId): array
+    {
+        return app(WordpressTargetMcpToolHandlers::class)->publishCreate(
+            $publisher, $targetId, 'A bounded published post', '<p>Safe body</p>', 'test-20261020-0001',
+            (string) config('oauth.client.id'), 'chatgpt', 1,
+        );
+    }
+
+    /**
+     * @param  callable():void|null  $duringCatalog
+     * @param  callable(Request):mixed|null  $dispatchResponse
+     * @param  array<string,mixed>  $overrides
+     */
+    private function fakePublishBridge(?callable $duringCatalog = null, ?callable $dispatchResponse = null, array $overrides = []): void
+    {
+        $this->fakeBridge(function (Request $request) use ($duringCatalog, $dispatchResponse, $overrides) {
+            $payload = $request->data();
+            $arguments = $payload['params']['arguments'] ?? [];
+            $name = $arguments['ability_name'] ?? null;
+            if (($payload['method'] ?? null) === 'tools/call' && $name === 'wp-ai-bridge/abilities-read'
+                && ($arguments['parameters']['action'] ?? null) === 'get'
+                && ($arguments['parameters']['name'] ?? null) === 'wp-ai-bridge/content-upsert') {
+                if ($duringCatalog !== null) {
+                    $duringCatalog();
+                }
+                $contract = array_replace_recursive([
+                    'name' => 'wp-ai-bridge/content-upsert', 'mcp_type' => 'tool',
+                    'bridge_delegation' => 'ability_specific',
+                    'annotations' => ['readonly' => false, 'destructive' => false],
+                    'input_schema' => [
+                        'type' => 'object', 'additionalProperties' => false,
+                        'required' => ['action'],
+                        'properties' => [
+                            'action' => ['type' => 'string', 'enum' => ['create', 'update']],
+                            'post_type' => ['type' => 'string'],
+                            'title' => ['type' => 'string'], 'content' => ['type' => 'string'],
+                            'status' => ['type' => 'string'],
+                            'operation_id' => ['type' => 'string', 'minLength' => 8, 'maxLength' => 128],
+                        ],
+                    ],
+                ], $overrides);
+
+                return $this->toolSuccess(['items' => [$contract]], (int) ($payload['id'] ?? 2));
+            }
+            if (($payload['method'] ?? null) === 'tools/call' && $name === 'wp-ai-bridge/content-upsert') {
+                $this->publishInputs[] = $arguments['parameters'] ?? [];
+
+                return $dispatchResponse !== null ? $dispatchResponse($request)
+                    : $this->toolSuccess(['id' => 987, 'post_type' => 'post', 'status' => 'publish'], (int) ($payload['id'] ?? 3));
+            }
+
+            return $this->bridgeResponse($request);
+        });
     }
 
     private function createSite(string $siteId): Target

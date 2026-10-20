@@ -59,6 +59,9 @@ final class CreateAdministrator extends Command
             'role' => $role->value,
             'target_scope_mode' => TargetScopeMode::All->value,
             'access_enabled' => true,
+            // First Owner retains expected bootstrap AI authority; later CLI
+            // administrators are not automatically allowed to attach clients.
+            'ai_access_enabled' => $role === GatewayRole::Owner,
         ]);
 
         $this->info($role === GatewayRole::Owner

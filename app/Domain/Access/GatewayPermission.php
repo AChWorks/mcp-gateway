@@ -19,6 +19,7 @@ enum GatewayPermission: string
     case WordpressAbilitiesExecuteMutating = 'wordpress.abilities.execute.mutating';
     case WordpressAbilitiesExecuteDestructive = 'wordpress.abilities.execute.destructive';
     case WordpressAbilitiesExecuteUnclassified = 'wordpress.abilities.execute.unclassified';
+    case WordpressContentPublishCreate = 'wordpress.content.publish.create';
     case SshCommandRun = 'ssh.command.run';
     case SshFileRead = 'ssh.file.read';
     case SshFileWrite = 'ssh.file.write';
@@ -45,6 +46,7 @@ enum GatewayPermission: string
             self::WordpressAbilitiesExecuteMutating => 'Run mutating abilities',
             self::WordpressAbilitiesExecuteDestructive => 'Run destructive abilities',
             self::WordpressAbilitiesExecuteUnclassified => 'Run unclassified abilities',
+            self::WordpressContentPublishCreate => 'Create published WordPress posts (restricted)',
             self::SshCommandRun => 'Run SSH remote commands',
             self::SshFileRead => 'Read SSH remote files',
             self::SshFileWrite => 'Write SSH remote files',
@@ -73,6 +75,7 @@ enum GatewayPermission: string
             self::WordpressAbilitiesExecuteMutating => 'Execute downstream abilities classified as mutating but not destructive on Targets inside the user\'s effective Target scope.',
             self::WordpressAbilitiesExecuteDestructive => 'Execute downstream abilities classified as destructive on Targets inside the user\'s effective Target scope. This permission should remain unavailable unless destructive operations are intended.',
             self::WordpressAbilitiesExecuteUnclassified => 'Execute downstream abilities whose safety class cannot be determined. This is a separate high-trust fallback and is not implied by read-only or mutating execution.',
+            self::WordpressContentPublishCreate => 'Create one published WordPress post only through a fixed Bridge operation, requiring an explicit scoped User + Target Group grant for non-Owner users. AI client consent is a separate channel gate; this never permits generic mutations or updates.',
             self::SshCommandRun => 'Run arbitrary remote OS-account commands, including permitted sudo/root. Commands can read and write files even when SSH SFTP read/write switches are disabled; Gateway is not a shell sandbox.',
             self::SshFileRead => 'Read files over SFTP on this Target when available. Disabling SFTP read does not restrict unrestricted SSH commands.',
             self::SshFileWrite => 'Write files over SFTP on this Target when available. Disabling SFTP write does not restrict unrestricted SSH commands.',
@@ -129,6 +132,7 @@ enum GatewayPermission: string
             self::WordpressAbilitiesExecuteMutating,
             self::WordpressAbilitiesExecuteDestructive,
             self::WordpressAbilitiesExecuteUnclassified,
+            self::WordpressContentPublishCreate,
             ...self::sshCapabilities(),
         ];
     }

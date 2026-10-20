@@ -2,7 +2,9 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Application\Access\AccessControl;
 use App\Application\Access\UserAccessManager;
+use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetRegistration;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
@@ -31,6 +33,7 @@ use Illuminate\Support\Str;
 use League\OAuth2\Server\CryptKey;
 use Mcp\Client;
 use Mcp\Client\Transport\HttpTransport;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -53,6 +56,8 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
     private const CLIENT_ID = 'https://acceptance.example.test/client';
 
     private string $privateToken = '';
+
+    private string $lastIssuedAccessTokenId = '';
 
     private int $outboundWpCalls = 0;
 
@@ -251,6 +256,115 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
         self::assertSame(401, $blocked['http_status']);
     }
 
+    /** @return array<string, array{string, string}> */
+    public static function sshRevocationCases(): array
+    {
+        return [
+            'command / user AI disable' => ['ssh-command-run', 'ai_disabled'],
+            'command / exact bearer revoke' => ['ssh-command-run', 'access_token'],
+            'SFTP write / user AI disable' => ['ssh-file-write', 'ai_disabled'],
+            'SFTP write / consent revoke' => ['ssh-file-write', 'consent'],
+            'Job launch / user AI disable' => ['ssh-job-start', 'ai_disabled'],
+            'Job launch / exact bearer revoke' => ['ssh-job-start', 'access_token'],
+        ];
+    }
+
+    #[DataProvider('sshRevocationCases')]
+    public function test_mid_ssh_handshake_ai_or_oauth_revocation_stops_each_effectful_family(
+        string $tool, string $revocation,
+    ): void {
+        // Independent test environment for every OAuth/SSH revocation: no
+        // prior bearer, command admission, TCP policy or Target state can
+        // accidentally decide this scenario before the explicit dial hook.
+        $owner = $this->user('owner');
+        $ssh = $this->registerAndVerifySsh();
+        $bearer = $this->issueAccessToken($owner);
+        $tokenId = $this->lastIssuedAccessTokenId;
+        $consentId = (string) DB::table('oauth_access_tokens')
+            ->where('id', $tokenId)->value('authorization_id');
+        $path = '/home/'.$this->sshUser.'/mcp-revoked-'.bin2hex(random_bytes(9));
+        $mutated = false;
+
+        // Trigger revocation AFTER real MCP bearer admission and while
+        // establishing the pinned SSH connection, before command/SFTP/Job
+        // external effects. The post-login dispatch fence must deny it.
+        $revoke = static function () use ($owner, $revocation, $tokenId, $consentId, &$mutated): void {
+            $mutated = true;
+            if ($revocation === 'ai_disabled') {
+                $owner->forceFill(['ai_access_enabled' => false])->save();
+            } elseif ($revocation === 'consent') {
+                DB::table('oauth_authorizations')->where('id', $consentId)
+                    ->update(['revoked_at' => now()]);
+            } else {
+                DB::table('oauth_access_tokens')->where('id', $tokenId)
+                    ->update(['revoked_at' => now()]);
+            }
+        };
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class($revoke) implements SshDialAddressPolicy
+        {
+            private bool $called = false;
+
+            public function __construct(private readonly \Closure $revoke) {}
+
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                if (! $this->called) {
+                    $this->called = true;
+                    ($this->revoke)();
+                }
+
+                return ['127.0.0.1'];
+            }
+        });
+
+        $arguments = match ($tool) {
+            'ssh-command-run' => ['target_id' => $ssh->target_id,
+                'command' => 'printf should-never-run > '.escapeshellarg($path)],
+            'ssh-file-write' => ['target_id' => $ssh->target_id,
+                'path' => $path, 'content_base64' => base64_encode('should-never-write')],
+            default => ['target_id' => $ssh->target_id, 'request_id' => (string) Str::uuid(),
+                'script' => 'printf should-never-launch > '.escapeshellarg($path)],
+        };
+        $denied = $this->tool($bearer, $tool, $arguments);
+        self::assertTrue($mutated, $tool.' / '.$revocation.' returned before SSH dial: '.json_encode($denied));
+        self::assertFalse($denied['ok'] ?? true, $tool.' / '.$revocation.' '.json_encode($denied));
+
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                return ['127.0.0.1'];
+            }
+        });
+
+        // Confirm the exact requested revocation occurred in persistent
+        // state; don't try to re-authorize an AI client after disable/revoke.
+        if ($revocation === 'ai_disabled') {
+            self::assertFalse($owner->fresh()->ai_access_enabled);
+        } elseif ($revocation === 'consent') {
+            self::assertNotNull(DB::table('oauth_authorizations')
+                ->where('id', $consentId)->value('revoked_at'));
+        } else {
+            self::assertNotNull(DB::table('oauth_access_tokens')
+                ->where('id', $tokenId)->value('revoked_at'));
+        }
+
+        // A genuinely independent human/OS-channel SSH command checks the
+        // ACTUAL remote filesystem: the revoked MCP request must not have
+        // created a command, file or Job marker. This also proves disabling
+        // AI alone does not remove existing human SSH/Target permissions.
+        // Deliberately run last, after ALL MCP requests, so the synthetic
+        // human request does not contaminate the streamed HTTP lifecycle.
+        self::assertTrue(app(AccessControl::class)
+            ->allows($owner, GatewayPermission::SshCommandRun, $ssh));
+        $this->app->instance('request', \Illuminate\Http\Request::create('/admin/targets', 'POST'));
+        $human = app(SshCommandRuntime::class)->run(
+            $owner, $ssh, 'test ! -e '.escapeshellarg($path),
+        );
+        self::assertSame('completed', $human['status'], json_encode($human));
+        self::assertSame(0, $human['exit_code'], json_encode($human));
+    }
+
     public function test_official_mcp_sdk_client_calls_both_families_over_authenticated_http_transport(): void
     {
         $owner = $this->user('owner');
@@ -415,6 +529,8 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
             'role' => $role,
             'target_scope_mode' => $role === 'owner' ? 'all' : 'selected',
             'access_enabled' => true,
+            // This actor deliberately exercises OAuth + MCP; human-only users remain default-denied.
+            'ai_access_enabled' => true,
         ], []);
     }
 
@@ -432,7 +548,8 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
             [new ScopeEntity('mcp')],
             (string) $user->getKey(),
         );
-        $token->setIdentifier(bin2hex(random_bytes(20)));
+        $this->lastIssuedAccessTokenId = bin2hex(random_bytes(20));
+        $token->setIdentifier($this->lastIssuedAccessTokenId);
         $token->setExpiryDateTime((new DateTimeImmutable)->modify('+15 minutes'));
         $token->setPrivateKey(new CryptKey((string) config('oauth.keys.private')));
         app(AccessTokenRepository::class)->persistNewAccessToken($token);
@@ -474,10 +591,24 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
         }
         $response = $this->withHeaders($headers)->postJson('/mcp', $payload);
 
-        return [
-            'http_status' => $response->getStatusCode(),
-            'payload' => $response->getStatusCode() === 401 ? [] : (array) $response->json(),
-        ];
+        $status = $response->getStatusCode();
+        if ($status === 401) {
+            return ['http_status' => $status, 'payload' => []];
+        }
+
+        // The MCP endpoint is a streamed Symfony response. Decode its
+        // captured bytes explicitly rather than having TestResponse::json()
+        // replace malformed/empty wire data with a misleading dynamic
+        // "StreamedResponse::$exception" property error.
+        $body = $response->baseResponse instanceof StreamedResponse
+            ? $response->streamedContent() : $response->getContent();
+        $payload = json_decode((string) $body, true);
+        self::assertIsArray($payload, sprintf(
+            'Invalid streamed MCP response (HTTP %d, Content-Type %s): %s',
+            $status, (string) $response->headers->get('Content-Type'), substr((string) $body, 0, 500),
+        ));
+
+        return ['http_status' => $status, 'payload' => $payload];
     }
 
     /** @param array<string,mixed> $args @return array<string,mixed> */

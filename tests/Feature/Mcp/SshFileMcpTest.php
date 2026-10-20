@@ -14,8 +14,13 @@ use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
+use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use App\Support\OperationDiagnostics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -24,6 +29,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use phpseclib4\Exception\FileSystemException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -197,6 +203,176 @@ final class SshFileMcpTest extends TestCase
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('target_not_found', $exception->reason);
         }
+    }
+
+    public function test_sftp_effect_boundary_checks_fresh_target_and_user_permissions(): void
+    {
+        $operator = $this->user('operator');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        DB::table('user_permission_denials')->where('user_id', $operator->getKey())
+            ->where('permission', GatewayPermission::SshFileWrite->value)->delete();
+
+        // Deliberately use the ORIGINAL, stale Eloquent instances at every
+        // invocation. The new gate must re-read DB state before SFTP effects,
+        // including for the non-MCP human channel.
+        $guard = new \ReflectionMethod(SshFileRuntime::class, 'assertCurrentFileWriteAuthority');
+        $runtime = app(SshFileRuntime::class);
+        $identity = $this->fileConnectionIdentity($target);
+        $guard->invoke($runtime, $operator, $target, ...$identity);
+
+        $assertDenied = static function (string $reason) use ($guard, $runtime, $operator, $target, $identity): void {
+            try {
+                $guard->invoke($runtime, $operator, $target, ...$identity);
+                self::fail('Stale actor or Target state cannot authorize a new SFTP effect.');
+            } catch (SshTargetConnectionException $exception) {
+                self::assertSame($reason, $exception->reason);
+            }
+        };
+
+        DB::table('targets')->where('id', $target->getKey())->update(['operations_paused' => true]);
+        $assertDenied('target_paused');
+        DB::table('targets')->where('id', $target->getKey())->update(['operations_paused' => false]);
+
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $operator->getKey(), 'permission' => GatewayPermission::SshFileWrite->value,
+        ]);
+        $assertDenied('forbidden');
+        DB::table('user_permission_denials')->where('user_id', $operator->getKey())->delete();
+
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::SshFileWrite->value,
+        ]);
+        $assertDenied('forbidden');
+        DB::table('user_target_permission_denials')->where('user_id', $operator->getKey())->delete();
+
+        $group = TargetGroup::query()->create(['name' => 'SSH group deny fixture']);
+        DB::table('target_group_users')->insert([
+            'target_group_id' => $group->getKey(), 'user_id' => $operator->getKey(),
+        ]);
+        DB::table('target_group_targets')->insert([
+            'target_group_id' => $group->getKey(), 'target_record_id' => $target->getKey(),
+        ]);
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $group->getKey(),
+            'permission' => GatewayPermission::SshFileWrite->value,
+        ]);
+        $assertDenied('forbidden');
+        DB::table('target_group_permission_denials')
+            ->where('target_group_id', $group->getKey())->delete();
+
+        DB::table('user_target_access')->where('user_id', $operator->getKey())
+            ->where('target_record_id', $target->getKey())->update(['allowed' => false]);
+        $assertDenied('forbidden');
+        DB::table('user_target_access')->where('user_id', $operator->getKey())
+            ->where('target_record_id', $target->getKey())->update(['allowed' => true]);
+
+        DB::table('users')->where('id', $operator->getKey())->update(['access_enabled' => false]);
+        $assertDenied('forbidden');
+        DB::table('users')->where('id', $operator->getKey())->update(['access_enabled' => true]);
+
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['connection_state' => TargetConnectionState::Disconnected->value]);
+        $assertDenied('forbidden');
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['connection_state' => TargetConnectionState::Connected->value]);
+
+        $guard->invoke($runtime, $operator, $target, ...$identity);
+    }
+
+    /** @return array<string, array{string, string, string|int|null}> */
+    public static function supersededFileConnectionCases(): array
+    {
+        return [
+            'host changed' => ['config', 'host', '192.0.2.44'],
+            'port changed' => ['config', 'port', 2222],
+            'OS user changed' => ['config', 'username', 'other-user'],
+            'authentication method changed' => ['config', 'auth_method', 'private_key'],
+            'host pin changed' => ['config', 'pinned_host_key', 'different-pinned-host-key'],
+            'config record removed' => ['config', 'delete', null],
+            'credential changed' => ['credential', 'encrypted_payload', 'replacement-ciphertext'],
+            'credential record removed' => ['credential', 'delete', null],
+            'credential record replaced with identical ciphertext' => ['credential', 'replace', null],
+            'credential connector changed' => ['credential', 'connector_type', 'wp_ai_bridge'],
+            'credential purpose changed' => ['credential', 'purpose', 'another-purpose'],
+        ];
+    }
+
+    #[DataProvider('supersededFileConnectionCases')]
+    public function test_sftp_effect_boundary_rejects_superseded_authenticated_identity(
+        string $record, string $field, string|int|null $replacement,
+    ): void {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $identity = $this->fileConnectionIdentity($target);
+        $runtime = app(SshFileRuntime::class);
+        $guard = new \ReflectionMethod(SshFileRuntime::class, 'assertCurrentFileWriteAuthority');
+        $guard->invoke($runtime, $owner, $target, ...$identity);
+
+        // The same public Target can become Connected again while an old
+        // session is still alive. Preserve its original scalar snapshot.
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['connection_state' => TargetConnectionState::Disconnected->value]);
+        $table = $record === 'config' ? 'ssh_direct_target_configs' : 'target_credentials';
+        $query = DB::table($table)->where('target_record_id', $target->getKey());
+        if ($field === 'delete') {
+            $query->delete();
+        } elseif ($field === 'replace') {
+            $credential = TargetCredential::query()->whereKey($identity[2])->firstOrFail();
+            $attributes = $credential->only(['target_record_id', 'connector_type', 'purpose', 'encrypted_payload']);
+            $credential->delete();
+            TargetCredential::query()->create($attributes);
+        } else {
+            $query->update([$field => $replacement]);
+        }
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['connection_state' => TargetConnectionState::Connected->value]);
+
+        try {
+            $guard->invoke($runtime, $owner, $target, ...$identity);
+            self::fail('A reconnected Target cannot authorize the superseded SFTP session.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('target_changed', $exception->reason);
+        }
+    }
+
+    public function test_sftp_connection_identity_ignores_health_refresh_but_rejects_credential_rotation(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $identity = $this->fileConnectionIdentity($target);
+        $guard = new \ReflectionMethod(SshFileRuntime::class, 'assertCurrentFileWriteAuthority');
+        $runtime = app(SshFileRuntime::class);
+
+        DB::table('ssh_direct_target_configs')->where('id', $identity[1])->update([
+            'observed_peer_ip' => '127.0.0.1', 'observed_at' => now(),
+            'verification_attempt_id' => (string) Str::ulid(),
+        ]);
+        $guard->invoke($runtime, $owner, $target, ...$identity);
+
+        $config = SshTargetConfig::query()->whereKey($identity[1])->firstOrFail();
+        $credential = TargetCredential::query()->whereKey($identity[2])->firstOrFail();
+        // Even resealing the same valid secret changes the authenticated
+        // credential identity. No per-boundary decryption may hide rotation.
+        $credential->forceFill(['encrypted_payload' => app(SshTargetVault::class)
+            ->seal($target, $config, 'fixture-only-password', null)])->save();
+        try {
+            $guard->invoke($runtime, $owner, $target, ...$identity);
+            self::fail('Credential rotation must invalidate the original authenticated connection.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('target_changed', $exception->reason);
+        }
+
+        // A newly authenticated operation owns a fresh identity snapshot.
+        $currentIdentity = $this->fileConnectionIdentity($target);
+        self::assertNotSame($identity[3], $currentIdentity[3]);
+        $guard->invoke($runtime, $owner, $target, ...$currentIdentity);
     }
 
     public function test_chatgpt_ssh_file_input_denies_ungranted_paused_and_revoked_targets_before_signed_download(): void
@@ -449,6 +625,19 @@ final class SshFileMcpTest extends TestCase
         // Internal stream buffers and aggregate SSH whole-file size retain
         // their independent budgets despite the enlarged inline window.
         self::assertSame(8388608, app(OperationalSettings::class)->sshTransferLimits()['max_bytes']);
+    }
+
+    /** @return array{string, string, string, string} */
+    private function fileConnectionIdentity(Target $target): array
+    {
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->firstOrFail();
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())
+            ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)->firstOrFail();
+
+        return [
+            SshTargetBinding::hash($target, $config), (string) $config->getKey(),
+            (string) $credential->getKey(), hash('sha256', (string) $credential->encrypted_payload),
+        ];
     }
 
     private function target(): Target

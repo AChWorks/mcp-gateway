@@ -126,6 +126,11 @@ final readonly class TargetGroupManager
                 );
             } else {
                 DB::table('target_group_users')->where($identity)->delete();
+                // Revoked membership must not silently recover an earlier
+                // positive publisher grant on later re-assignment.
+                DB::table('wordpress_publish_group_grants')
+                    ->where('user_id', $lockedUser->getKey())
+                    ->where('target_group_id', $lockedGroup->getKey())->delete();
             }
 
             $this->recordRequired('target-group-user-update:'.$lockedGroup->id.':'.$lockedUser->id);

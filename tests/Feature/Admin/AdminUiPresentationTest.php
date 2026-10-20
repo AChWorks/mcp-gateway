@@ -47,6 +47,34 @@ final class AdminUiPresentationTest extends TestCase
             );
     }
 
+    public function test_ai_connection_checkbox_is_a_separate_accessible_user_account_control(): void
+    {
+        $owner = $this->owner();
+        $this->actingAs($owner);
+
+        foreach (['/admin/users/create', '/admin/users/'.$owner->id.'/edit'] as $route) {
+            $html = $this->get($route)->assertOk()->getContent();
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//fieldset[legend[normalize-space(.)="AI / MCP connection"]]'
+                .'//label[@for="ai_access_enabled"])',
+            ));
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//fieldset[legend[normalize-space(.)="AI / MCP connection"]]'
+                .'//input[@type="checkbox"][@id="ai_access_enabled"]'
+                .'[@name="ai_access_enabled"][@value="1"])',
+            ));
+            self::assertStringContainsString('independent of the account role', $html);
+            self::assertStringContainsString('It never adds a Target or action permission.', $html);
+        }
+    }
+
     public function test_ssh_job_script_budget_uses_existing_accessible_owner_setting_fields(): void
     {
         $html = $this->actingAs($this->owner())
