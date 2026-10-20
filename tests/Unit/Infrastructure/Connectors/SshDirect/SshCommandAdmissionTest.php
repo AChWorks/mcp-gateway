@@ -32,7 +32,7 @@ final class SshCommandAdmissionTest extends TestCase
     public function test_selected_command_timeout_extends_same_target_lease_beyond_old_90_seconds(): void
     {
         $admission = new SshCommandAdmission;
-        foreach ([15 => 90, 35 => 125, 95 => 185, 360 => 450] as $commandSeconds => $expectedLease) {
+        foreach ([15 => 90, 35 => 125, 95 => 185, 360 => 450, 600 => 690] as $commandSeconds => $expectedLease) {
             $target = 'lease-dynamic-'.Str::random(12);
             $key = 'ssh-command:'.hash('sha256', $target).':lease';
             $observed = $admission->run($target, static function () use ($key): int {
@@ -46,7 +46,7 @@ final class SshCommandAdmissionTest extends TestCase
         }
 
         try {
-            $admission->run('invalid-lease', static fn (): string => 'wrong', 361);
+            $admission->run('invalid-lease', static fn (): string => 'wrong', 601);
             self::fail('Over-range lease must fail before lock acquisition.');
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('invalid_input', $exception->reason);

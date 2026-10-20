@@ -179,7 +179,7 @@ Remote timeout/response settings are **budgets**, not guarantees of response spe
 | --- | --- | --- |
 | `SSH_FILE_TRANSFER_ENABLED` | `true` for **new installer/template**; `false` when absent | Authenticated SSH Direct whole-file browser/HTTPS exchange only. Existing private `.env` is preserved during updates. It enables the same SFTP backend that optional ChatGPT `target-file-input` SSH mode uses, but does not prove the ChatGPT host delivers a file. Real host, client, Target and resource admission remain required. |
 | `SSH_FILE_TRANSFER_MAX_BYTES` | `8388608` bytes (8 MiB) | Default per-object whole-file size budget; independent of separately Owner-configured SFTP per-call windows (16 KiB defaults) and PHP/proxy caps |
-| `SSH_FILE_TRANSFER_MAX_SECONDS` | `30` seconds | Synchronous whole-file deadline, independent of SSH Job lifetime |
+| `SSH_FILE_TRANSFER_MAX_SECONDS` | `30` seconds | Synchronous whole-file deadline, clamped to 1–3600 s; independent of SSH Job lifetime, supported HTTP/PHP/proxy/client windows and the short signed-source fetch |
 | `SSH_VERIFY_MAX_ATTEMPTS_PER_MINUTE` | `6` attempts/minute | SSH credential verification admission by Target; not a transfer throughput rate |
 | `SSH_VERIFY_DECAY_SECONDS` | `60` seconds | SSH credential verification admission decay period |
 | `SSH_VERIFY_LEASE_SECONDS` | `30` seconds | SSH verification admission lease |
@@ -301,7 +301,7 @@ database-backed Owner control, **not** an invented `.env` key. In particular,
 
 | Setting | Default | Owner range | Meaning |
 | --- | ---: | ---: | --- |
-| `ssh_command_timeout_seconds` | 15 s | 15–360 s | Selected synchronous SSH exec timeout; actual supported host/HTTP/MCP path must be qualified |
+| `ssh_command_timeout_seconds` | 15 s | 15–600 s | Selected synchronous SSH exec timeout; actual supported host/HTTP/MCP path must be qualified |
 | `ssh_command_max_kib` | 8 KiB | 8–512 KiB | Raw UTF-8 command input bytes |
 | `ssh_command_stdout_kib` | 16 KiB | 16–512 KiB | Captured command stdout before discarding further output |
 | `ssh_command_stderr_kib` | 8 KiB | 8–512 KiB | Captured command stderr before discarding further output |
@@ -315,7 +315,7 @@ All newly added controls are nullable typed columns and keep old effective defau
 
 A 512 KiB decoded/raw Tool input is not a 512 KiB JSON HTTP request. For example, a 512 KiB binary SFTP write becomes **699,052 Base64 characters**, before JSON-RPC metadata. The default `MCP_MAX_BODY_BYTES` is 1 MiB **of the entire incoming request**; UTF-8 string escaping and other fields can exceed it despite a valid raw byte budget. The MCP SDK may also duplicate returned arrays as textual and structured content, so two simultaneously large captured command streams can exceed a client's result limit. For PHP clients, use canonical JSON encoding with `JSON_UNESCAPED_SLASHES` for Base64 (or reduce the window); default slash-escaping can nearly double its HTTP size. The source tests cover bounded representative bodies, not all possible client encodings. Measure/qualify the real host and client path; use smaller windows or the detached Job/whole-file route when appropriate.
 
-These values do not replace `SSH_FILE_TRANSFER_MAX_BYTES`, internal stream/chunk budgets, server HTTP body ceilings, PHP worker execution time, reverse-proxy/CDN or MCP client deadlines. A selected 360-second SSH deadline is **not** proof that every deployed hop supports it. Never increase WordPress/OAuth deadlines to compensate; validate the installed chain or use retained Jobs. New settings do not retroactively change identities, permissions, or retained Jobs.
+These values do not replace `SSH_FILE_TRANSFER_MAX_BYTES`, internal stream/chunk budgets, server HTTP body ceilings, PHP worker execution time, reverse-proxy/CDN or MCP client deadlines. Selected SSH command deadlines up to 600 seconds and whole-file deadlines up to 3600 seconds are **not** proof that every deployed hop supports them. Never increase WordPress/OAuth deadlines to compensate; validate the installed chain or use retained Jobs. New settings do not retroactively change identities, permissions, or retained Jobs.
 
 ## Operational cautions
 

@@ -264,6 +264,50 @@ final class ChatGptFileCapacityTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_extended_ssh_reservation_keeps_wp_deadline_short_and_signed_get_bounded(): void
+    {
+        $capacity = app(ChatGptFileCapacity::class);
+        $lease = $capacity->reserve('ssh', 1048576, 3600);
+        try {
+            $expiresAt = strtotime((string) DB::table('chatgpt_file_admission_leases')->value('expires_at'));
+            self::assertIsInt($expiresAt);
+            self::assertEqualsWithDelta(3630, $expiresAt - now()->timestamp, 2);
+            foreach ([['wordpress', 121], ['ssh', 3601]] as [$mode, $seconds]) {
+                try {
+                    $capacity->reserve($mode, 1048576, $seconds);
+                    self::fail('Exceeded '.$mode.' reservation deadline was allowed.');
+                } catch (OutboundRequestException $exception) {
+                    self::assertSame('file_capacity_unavailable', $exception->reason);
+                }
+            }
+        } finally {
+            $lease->release();
+        }
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+
+        $sourceHttpTimeouts = [];
+        Http::globalMiddleware(static function (callable $handler) use (&$sourceHttpTimeouts): callable {
+            return static function ($request, array $options) use ($handler, &$sourceHttpTimeouts) {
+                $sourceHttpTimeouts[] = $options['timeout'] ?? null;
+
+                return $handler($request, $options);
+            };
+        });
+        Http::fake(static fn (Request $request) => Http::response('bounded', 200, ['Content-Length' => '7']));
+        $received = app(ChatGptFileIngress::class)->download(self::FILE, 1048576, 3600, 'ssh');
+        try {
+            self::assertSame(7, $received['bytes']);
+            Http::assertSentCount(1);
+            self::assertCount(1, $sourceHttpTimeouts);
+            self::assertGreaterThan(0, $sourceHttpTimeouts[0]);
+            self::assertLessThanOrEqual(120, $sourceHttpTimeouts[0]);
+        } finally {
+            fclose($received['stream']);
+            $received['capacity_lease']->release();
+        }
+        self::assertSame(0, DB::table('chatgpt_file_admission_leases')->count());
+    }
+
     public function test_oversized_single_reservation_and_mode_budgets_are_bounded(): void
     {
         config()->set('bridge.file_input.capacity.max_reserved_bytes', 1048576);

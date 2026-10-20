@@ -753,7 +753,7 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame(0, ftell($sink));
 
         try {
-            $runtime->downloadToStream($owner, $target, $path, $sink, 20000, 41);
+            $runtime->downloadToStream($owner, $target, $path, $sink, 20000, 3601);
             self::fail('Invalid stream runtime budget must fail before SSH login.');
         } catch (SshTargetConnectionException $e) {
             self::assertSame('invalid_input', $e->reason);

@@ -39,7 +39,7 @@ final readonly class ChatGptFileCapacity
     {
         if (! in_array($mode, ['wordpress', 'ssh'], true)
             || $maxBytes < 1 || $maxBytes > 67108864
-            || $maxSeconds < 1 || $maxSeconds > 120) {
+            || $maxSeconds < 1 || $maxSeconds > ($mode === 'ssh' ? 3600 : 120)) {
             throw new OutboundRequestException('file_capacity_unavailable', 'File admission parameters are invalid.');
         }
         $reserveBytes = $maxBytes * ($mode === 'ssh' ? 2 : 1);

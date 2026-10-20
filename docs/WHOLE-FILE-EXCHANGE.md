@@ -240,9 +240,9 @@ confirmed `OperationalSettings` service, not a duplicate config/ACL system:
 | Axis | Source/env fallback | Owner override | Immutable profile boundary |
 | --- | --- | --- | --- |
 | Complete SSH object, both directions | `SSH_FILE_TRANSFER_MAX_BYTES=8388608` (8 MiB) | `ssh_transfer_max_kib` (256–65536 KiB) | 64 MiB max for *this synchronous SSH profile only* |
-| SFTP+PHP synchronous operation | `SSH_FILE_TRANSFER_MAX_SECONDS=30` | `ssh_transfer_max_seconds` (5–40 seconds) | 40 seconds in existing SFTP stream primitive |
+| SFTP+PHP synchronous operation | `SSH_FILE_TRANSFER_MAX_SECONDS=30` | `ssh_transfer_max_seconds` (5–3600 seconds) | 3600 seconds maximum in the SFTP stream primitive; 30-second default unchanged |
 | Transient in-memory spool | <=64 KiB before disk spill, 64 KiB SFTP write block | No new independent setting | Private `php://temp`, unlinked on close |
-| Per-Target SFTP admission | 30 file operations / 60 sec | Existing enforced policy | Serialized per-Target lease (90 sec); no bypass |
+| Per-Target SFTP admission | 30 file operations / 60 sec | Existing enforced policy | Serialized per-Target lease (90 sec for normal operations; deadline + margin for long streams); no bypass |
 | OAuth/MCP framing | Existing separately validated limits | Separate WP settings | Separately Owner-configured 16–512 KiB MCP inline SFTP windows; unchanged WP decoded HTTP guard |
 
 The configured maximum is **not** allocated on ordinary requests. One
@@ -252,11 +252,13 @@ is bounded by the existing per-Target SFTP admission, server HTTP request
 throttles and independent PHP-FPM/webserver worker, request-body, temp-disk
 and client send/receive timeouts. Those **host/proxy settings must be audited
 per deployment**; this source does not by itself prove an arbitrary client
-or proxy will hold a streaming HTTP connection open for 40 seconds or that
+or proxy will hold a streaming HTTP connection open for the selected deadline (up to 3600 seconds) or that
 host-level stalled socket reads/writes can be interrupted by PHP. In
 particular this is not a multi-GiB transfer or durable resume service.
 Other Target types and future transfer modes can have different measured
 profiles; these SSH bounds are **not a universal Gateway file-size limit**.
+
+An Owner-selected long transfer also extends the per-Target SSH file admission lease, so another operation cannot enter when the former would still be active. ChatGPT signed-source HTTPS fetches remain capped to 120 seconds (or the smaller selected transfer deadline), while their shared temporary-capacity reservation spans the entire SSH transfer deadline. WordPress mode retains its existing independent 120-second maximum. Host/PHP/proxy/client deadlines still need separate qualification.
 
 The established synchronous process uses an aggregate monotonic deadline.
 A client that does not receive all `Content-Length` bytes within its own

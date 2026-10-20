@@ -33,7 +33,7 @@ final class OperationalSettingsController extends Controller
                     (int) config('bridge.http.request_timeout_seconds', 5),
                 ),
                 'ssh_transfer_max_kib' => min(65536, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608) / 1024)),
-                'ssh_transfer_max_seconds' => min(40, max(1, (int) config('ssh.file_transfer.max_seconds', 30))),
+                'ssh_transfer_max_seconds' => min(3600, max(1, (int) config('ssh.file_transfer.max_seconds', 30))),
                 'ssh_command_timeout_seconds' => 15,
                 'ssh_command_max_kib' => 8,
                 'ssh_job_max_active_per_user' => 2,

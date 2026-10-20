@@ -113,6 +113,30 @@ final class AdminUiPresentationTest extends TestCase
         );
     }
 
+    public function test_extended_sync_ssh_limits_remain_owner_only_accessible_numeric_controls(): void
+    {
+        $html = $this->actingAs($this->owner())
+            ->get('/admin/operations')->assertOk()->getContent();
+        $dom = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($dom);
+        foreach ([
+            'ssh_transfer_max_seconds' => ['min' => '5', 'max' => '3600'],
+            'ssh_command_timeout_seconds' => ['min' => '15', 'max' => '600'],
+        ] as $key => $range) {
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//input[@type="number"][@id="setting_'.$key.'"]'
+                .'[@name="values['.$key.']"][@min="'.$range['min'].'"][@max="'.$range['max'].'"]'
+                .'[@aria-describedby="setting_'.$key.'_info"])',
+            ));
+        }
+        self::assertStringContainsString('extended timeout requires suitable PHP', $html);
+        self::assertStringContainsString('up to 600 seconds', $html);
+    }
+
     public function test_target_ai_guidance_forms_reuse_accessible_shared_responsive_controls(): void
     {
         $owner = $this->owner();

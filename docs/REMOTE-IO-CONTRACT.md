@@ -183,7 +183,7 @@ The caller explicitly selects `target_id` and exactly one mode:
 Its deadline covers signed download **and** provider private staging; the
 provider may impose a stricter quota or expiry. The separate SSH mode reuses
 the existing Owner Admin-configurable `ssh_transfer_max_kib` and
-`ssh_transfer_max_seconds`, with source maximum 64 MiB and 40 seconds.
+`ssh_transfer_max_seconds`, with source maximum 64 MiB and 3600 seconds. The signed-file HTTPS fetch retains an independent maximum of 120 seconds; the SSH-mode capacity reservation spans the full chosen overall deadline plus cleanup grace. This does not extend WordPress signed-file deadlines.
 SSH's overall file-input deadline covers signed download and SFTP write,
 not two independent full time budgets. **Every signed file download
 must first acquire a short-lived, database-serialized global temporary-storage

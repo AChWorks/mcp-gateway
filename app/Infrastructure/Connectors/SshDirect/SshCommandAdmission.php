@@ -19,7 +19,7 @@ final class SshCommandAdmission
             // selected exec deadline, and cleanup margin. A fixed 90-second
             // lease would permit overlapping effectful calls after 90s.
             // Preserve the current lease for the default <=30-second path.
-            if ($execTimeoutSeconds < 1 || $execTimeoutSeconds > 360) {
+            if ($execTimeoutSeconds < 1 || $execTimeoutSeconds > 600) {
                 throw new SshTargetConnectionException('invalid_input');
             }
             $lock = Cache::lock($base.':lease', $execTimeoutSeconds <= 30 ? 90 : $execTimeoutSeconds + 90);
