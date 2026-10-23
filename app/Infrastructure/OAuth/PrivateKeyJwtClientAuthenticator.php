@@ -52,7 +52,7 @@ final readonly class PrivateKeyJwtClientAuthenticator
             }
 
             return $clientId;
-        } catch (OAuthServerException $exception) {
+        } catch (OAuthServerException|OAuthClientMetadataUnavailable $exception) {
             throw $exception;
         } catch (Throwable) {
             throw OAuthServerException::invalidClient($request);

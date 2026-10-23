@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\OAuth;
 
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
+use App\Infrastructure\OAuth\OAuthClientMetadataUnavailable;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthScopePolicy;
 use App\Infrastructure\OAuth\OAuthServerManager;
@@ -69,6 +70,15 @@ final readonly class TokenController
             $request->attributes->set('oauth_token_error_code', $exception->getErrorType());
 
             return $this->bridge->error($exception);
+        } catch (OAuthClientMetadataUnavailable $exception) {
+            $request->attributes->set('oauth_token_error_code', 'oauth_client_metadata_unavailable');
+
+            return response()->json([
+                'error' => 'temporarily_unavailable',
+                'error_description' => 'OAuth client identity is temporarily unavailable.',
+            ], 503)->header('Retry-After', '60')
+                ->header('Cache-Control', 'no-store')
+                ->header('Pragma', 'no-cache');
         }
     }
 }

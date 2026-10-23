@@ -112,6 +112,7 @@ If an update stops during migration or recovery, **do not blindly retry** or tre
 
 - **Installer or HTTP error:** confirm PHP/extensions, HTTPS, URL rewrites, the `public/` web root, database access and writable runtime directories.
 - **WordPress `invalid_client`:** verify the exact Gateway client metadata URL is approved in WP AI Bridge and inspect the Target's real consent/recovery status. Do not regenerate signing keys as a shortcut.
+- **ChatGPT OAuth reconnect returns `503 temporarily_unavailable`:** from the Gateway host, check ChatGPT CIMD/JWKS availability and sanitized Laravel/PHP logs with the request correlation ID. The external client identity could not be verified; do not regenerate keys or disable JWT validation. Restore connectivity only after the metadata dependency is healthy. A prior ChatGPT `expired` status needs separate refresh/revocation evidence.
 - **MCP tools missing:** verify OAuth client/user/Target grants, whether a Target is paused, and whether the client needs a Tool catalog refresh.
 - **SSH command or file failure:** check the approved host-key fingerprint, remote OS account permissions, SFTP path and separately enabled whole-file transfer mode.
 - **Unclear failure or interrupted update:** use authorized diagnostic evidence or [recovery instructions](docs/DEPLOYMENT.md); never repeat an operation that may already have changed a remote system.
