@@ -5,6 +5,7 @@ namespace App\Http\Controllers\OAuth;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\Entities\UserEntity;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
+use App\Infrastructure\OAuth\OAuthClientApprovalUnavailable;
 use App\Infrastructure\OAuth\OAuthClientMetadataUnavailable;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthScopePolicy;
@@ -97,12 +98,19 @@ final readonly class AuthorizationController
             );
 
             if ($approved) {
-                $this->authorizations->approve(
-                    (int) $user->getAuthIdentifier(),
-                    $authorization->getClient()->getIdentifier(),
-                    (string) config('oauth.resource'),
-                    $scopes,
-                );
+                try {
+                    $this->authorizations->approve(
+                        (int) $user->getAuthIdentifier(),
+                        $authorization->getClient()->getIdentifier(),
+                        (string) config('oauth.resource'),
+                        $scopes,
+                    );
+                } catch (OAuthClientApprovalUnavailable) {
+                    // Owner disabled/retired this client after the consent
+                    // form was validated. Do not expose an internal 500 or
+                    // issue a code for a stale registration/generation.
+                    throw OAuthServerException::invalidClient($psrRequest);
+                }
             }
 
             try {

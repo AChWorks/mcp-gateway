@@ -6,6 +6,8 @@ use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\DcrClientRegistration;
+use App\Infrastructure\OAuth\OAuthAuthorizationStore;
+use App\Infrastructure\OAuth\OAuthClientApprovalUnavailable;
 use App\Infrastructure\OAuth\RefreshTokenInspector;
 use App\Models\User;
 use Firebase\JWT\JWT;
@@ -286,6 +288,97 @@ final class DcrOAuthFlowTest extends TestCase
         }
         self::assertSame([201, 201, 201, 201, 201, 429, 429], $responses);
         self::assertSame(5, DB::table('oauth_dcr_clients')->count());
+    }
+
+    public function test_stale_consent_preflight_cannot_insert_a_grant_after_dcr_retirement(): void
+    {
+        [$retired, $oldSecret] = $this->registerClient();
+        [$unaffected, $otherSecret] = $this->registerClient();
+        $user = $this->operator();
+
+        $registry = app(ClientProfileRegistry::class);
+        $oldKey = $this->profileKeyFor($retired['client_id']);
+
+        // Simulate consent rendering / OAuth validation that occurs before the
+        // Owner disables the client. The later approval must ignore this stale
+        // positive preflight and inspect the current locked DB state instead.
+        $preflight = $registry->active($retired['client_id']);
+        self::assertSame(1, $preflight['generation'] ?? null);
+
+        $registry->disable($oldKey);
+        $registry->retireDcr($oldKey);
+
+        try {
+            app(OAuthAuthorizationStore::class)->approve(
+                $user->id, $retired['client_id'], (string) config('oauth.resource'), ['mcp'],
+            );
+            self::fail('A stale preflight must never create a grant after retirement.');
+        } catch (OAuthClientApprovalUnavailable $exception) {
+            self::assertStringContainsString('disabled or unregistered', $exception->getMessage());
+        }
+
+        self::assertSame(0, DB::table('oauth_authorizations')->where('client_id', $retired['client_id'])->count());
+        self::assertSame(0, DB::table('oauth_auth_codes')->where('client_id', $retired['client_id'])->count());
+        self::assertSame(0, DB::table('oauth_access_tokens')->where('client_id', $retired['client_id'])->count());
+        self::assertSame(0, DB::table('oauth_refresh_tokens')->where('client_id', $retired['client_id'])->count());
+        self::assertSame(0, DB::table('oauth_refresh_recoveries')->where('client_id', $retired['client_id'])->count());
+        self::assertNotNull(DB::table('oauth_dcr_clients')->where('client_id', $retired['client_id'])->value('retired_at'));
+
+        // The invalidated client cannot complete the browser or token flows.
+        $parameters = $this->authorizationParameters($retired['client_id']);
+        $this->actingAs($user)->post('/oauth/authorize', [
+            ...$parameters, 'decision' => 'approve',
+        ])->assertUnauthorized();
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token', 'client_id' => $retired['client_id'],
+            'client_secret' => $oldSecret, 'refresh_token' => 'invalid-old-token',
+            'resource' => config('oauth.resource'),
+        ])->assertUnauthorized();
+
+        // Another client under the same user is not locked out or revoked.
+        $otherParameters = $this->authorizationParameters($unaffected['client_id']);
+        $authorization = $this->actingAs($user)->post('/oauth/authorize', [
+            ...$otherParameters, 'decision' => 'approve',
+        ])->assertRedirect();
+        $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code',
+            'client_id' => $unaffected['client_id'],
+            'client_secret' => $otherSecret,
+            'redirect_uri' => self::CALLBACK,
+            'code' => $this->redirectCode((string) $authorization->headers->get('Location')),
+            'code_verifier' => str_repeat('v', 64),
+            'resource' => config('oauth.resource'),
+        ])->assertOk()->assertJsonStructure(['access_token', 'refresh_token']);
+        self::assertSame(1, DB::table('oauth_authorizations')
+            ->where('client_id', $unaffected['client_id'])->whereNull('revoked_at')->count());
+    }
+
+    public function test_idempotent_retirement_refuses_a_corrupted_unrevoked_historical_grant(): void
+    {
+        [$client] = $this->registerClient();
+        $registry = app(ClientProfileRegistry::class);
+        $key = $this->profileKeyFor($client['client_id']);
+        $user = $this->operator();
+        $registry->disable($key);
+        $registry->retireDcr($key);
+
+        // A read-only invariant guard must report corruption rather than
+        // silently treating the tombstone as healthy. Historical rows remain.
+        DB::table('oauth_authorizations')->insert([
+            'id' => (string) Str::ulid(),
+            'user_id' => $user->id,
+            'client_id' => $client['client_id'],
+            'client_profile_key' => $key,
+            'client_profile_generation' => 1,
+            'resource' => (string) config('oauth.resource'),
+            'resource_hash' => hash('sha256', (string) config('oauth.resource')),
+            'scopes' => json_encode(['mcp'], JSON_THROW_ON_ERROR),
+            'revoked_at' => null, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Revoke every client authorization');
+        $registry->retireDcr($key);
     }
 
     public function test_dcr_retirement_requires_explicit_disable_and_confirmation_without_reusing_identity(): void

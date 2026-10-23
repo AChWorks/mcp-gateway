@@ -13,13 +13,45 @@ final class OAuthAuthorizationStore
     /** @param list<string> $scopes */
     public function approve(int $userId, string $clientId, string $resource, array $scopes): string
     {
-        $profile = $this->profiles->active($clientId)
-            ?? throw new RuntimeException('OAuth client profile is disabled or unregistered.');
-
         $scopes = $this->normalizeScopes($scopes);
         $resourceHash = hash('sha256', $resource);
 
-        return DB::transaction(function () use ($userId, $clientId, $resource, $resourceHash, $scopes, $profile): string {
+        return DB::transaction(function () use ($userId, $clientId, $resource, $resourceHash, $scopes): string {
+            // Read and lock the *current* durable profile before touching grants.
+            // A consent page/client lookup may have observed a profile before
+            // Owner disable/retirement. A nonlocking pre-transaction lookup here
+            // would let that stale generation create an unrevoked consent after
+            // a DCR registration was permanently retired.
+            //
+            // Lock order: profile -> DCR registration -> user -> authorization.
+            // Disable uses profile; retirement uses anchor -> profile -> DCR,
+            // so no approval can write a grant after retirement commits.
+            $stored = DB::table('oauth_client_profiles')->where('client_id', $clientId)
+                ->lockForUpdate()->first(['profile_key', 'client_id', 'auth_strategy',
+                    'generation', 'disabled_at']);
+            if ($stored === null || $stored->disabled_at !== null) {
+                throw new OAuthClientApprovalUnavailable('OAuth client profile is disabled or unregistered.');
+            }
+
+            if ($stored->auth_strategy === 'dcr_client_secret_post') {
+                $dcr = DB::table('oauth_dcr_clients')->where('client_id', $clientId)
+                    ->lockForUpdate()->first(['client_id', 'profile_key', 'retired_at']);
+                if ($dcr === null || $dcr->retired_at !== null
+                    || ! hash_equals((string) $stored->profile_key, (string) $dcr->profile_key)
+                    || ! hash_equals((string) $stored->client_id, (string) $dcr->client_id)) {
+                    throw new OAuthClientApprovalUnavailable('OAuth client registration is retired or inconsistent.');
+                }
+            }
+
+            $profile = $this->profiles->active($clientId);
+            if ($profile === null
+                || ! hash_equals((string) $stored->client_id, (string) $profile['client_id'])
+                || ! hash_equals((string) $stored->profile_key, (string) $profile['key'])
+                || ! hash_equals((string) $stored->auth_strategy, (string) $profile['strategy'])
+                || (int) $stored->generation !== $profile['generation']) {
+                throw new OAuthClientApprovalUnavailable('OAuth client profile changed before authorization approval.');
+            }
+
             if (DB::table('users')->where('id', $userId)
                 ->where('access_enabled', true)->where('ai_access_enabled', true)
                 ->lockForUpdate()->first() === null) {

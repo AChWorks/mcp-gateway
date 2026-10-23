@@ -407,10 +407,6 @@ final class ClientProfileRegistry
                 throw new RuntimeException('Disable the DCR client before retiring its registration.');
             }
 
-            if ($client->retired_at !== null) {
-                return;
-            }
-
             // All OAuth token/code/recovery rows are FK-bound to their parent
             // authorization; no non-revoked authorization may survive retirement.
             // Revocation via Admin is a separate explicit Owner operation.
@@ -418,6 +414,12 @@ final class ClientProfileRegistry
                 ->where('client_id', $client->client_id)
                 ->whereNull('revoked_at')->exists()) {
                 throw new RuntimeException('Revoke every client authorization before retiring its registration.');
+            }
+
+            // Idempotence is allowed only after checking the durable invariant:
+            // a retired registration must never have an unrevoked parent grant.
+            if ($client->retired_at !== null) {
+                return;
             }
 
             DB::table('oauth_dcr_clients')->where('profile_key', $key)
