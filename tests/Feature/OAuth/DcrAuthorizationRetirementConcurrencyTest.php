@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use PDO;
+use PDOException;
 use PHPUnit\Framework\Attributes\Group;
 use RuntimeException;
 use Tests\TestCase;
@@ -115,6 +116,72 @@ final class DcrAuthorizationRetirementConcurrencyTest extends TestCase
             ->where('client_id', $clientId)->value('retired_at'));
     }
 
+    public function test_approval_holds_profile_lock_before_it_attempts_the_user_lock(): void
+    {
+        [$clientId, $key] = $this->registerDcr();
+        $userId = $this->operatorId();
+
+        $this->runWorker($clientId, $userId, function (string $barrier, string $entered) use ($clientId): void {
+            // The worker reports precisely when it is about to lock the user
+            // *inside* approve(). An old implementation passed this point
+            // without holding the client profile lock, leaving a retirement
+            // window after its earlier active-client read.
+            $deadline = microtime(true) + 10;
+            while (! is_file($entered)) {
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Approval did not reach the database user-lock query.');
+                }
+                usleep(1000);
+            }
+
+            self::assertSame('1', trim((string) file_get_contents($entered)));
+
+            $probe = $this->databaseConnection();
+            $probe->beginTransaction();
+            $profileIsAlreadyLocked = false;
+            try {
+                $query = $probe->prepare(
+                    'SELECT profile_key FROM oauth_client_profiles WHERE client_id = ? FOR UPDATE NOWAIT',
+                );
+                $query->execute([$clientId]);
+                $query->fetchColumn();
+            } catch (PDOException $exception) {
+                // MariaDB 10.11 uses 1205 for NOWAIT row contention (MySQL
+                // variants may use 3572). Syntax/connection failures are not
+                // evidence that the profile was locked.
+                self::assertContains($exception->errorInfo[1] ?? null, [1205, 3572]);
+                $profileIsAlreadyLocked = true;
+            } finally {
+                $probe->rollBack();
+                if (! touch($barrier)) {
+                    throw new RuntimeException('Could not resume approval after the lock probe.');
+                }
+            }
+
+            self::assertTrue(
+                $profileIsAlreadyLocked,
+                'Consent approval must hold the durable profile lock before the user-lock query.',
+            );
+        }, releasesBarrier: false, expectedOutcome: 'approved', mode: 'before-user-query');
+
+        // Approval won the race and committed while the profile lock was held.
+        // The Owner's subsequent disable/revoke/retire must still clear every
+        // unrevoked grant and preserve its history and old generation.
+        self::assertSame(1, DB::table('oauth_authorizations')
+            ->where('client_id', $clientId)->whereNull('revoked_at')->count());
+        $registry = app(ClientProfileRegistry::class);
+        $registry->disable($key);
+        DB::table('oauth_authorizations')->where('client_id', $clientId)
+            ->whereNull('revoked_at')->update(['revoked_at' => now(), 'updated_at' => now()]);
+        $registry->retireDcr($key);
+        self::assertSame(0, DB::table('oauth_authorizations')
+            ->where('client_id', $clientId)->whereNull('revoked_at')->count());
+        self::assertSame(1, DB::table('oauth_authorizations')
+            ->where('client_id', $clientId)->count());
+        self::assertNotNull(DB::table('oauth_dcr_clients')
+            ->where('client_id', $clientId)->value('retired_at'));
+    }
+
     /** @return array{0:string, 1:string} */
     private function registerDcr(): array
     {
@@ -161,6 +228,8 @@ final class DcrAuthorizationRetirementConcurrencyTest extends TestCase
         int $userId,
         callable $ownerTransition,
         bool $releasesBarrier = true,
+        string $expectedOutcome = 'refused',
+        string $mode = 'before-approval',
     ): void {
         $directory = storage_path('framework/testing/dcr-approval-retirement-'.Str::uuid());
         if (! mkdir($directory, 0700, true) && ! is_dir($directory)) {
@@ -177,7 +246,7 @@ final class DcrAuthorizationRetirementConcurrencyTest extends TestCase
             $worker = proc_open([
                 PHP_BINARY,
                 base_path('tests/Support/dcr_concurrent_authorization_request.php'),
-                $clientId, (string) $userId, $ready, $barrier, $entered,
+                $clientId, (string) $userId, $ready, $barrier, $entered, $mode,
             ], [
                 0 => ['file', '/dev/null', 'r'],
                 1 => ['pipe', 'w'],
@@ -212,7 +281,7 @@ final class DcrAuthorizationRetirementConcurrencyTest extends TestCase
 
             self::assertSame(0, $exit, trim((string) $stderr));
             $outcome = json_decode((string) $stdout, true, flags: JSON_THROW_ON_ERROR);
-            self::assertSame('refused', $outcome['result'] ?? null);
+            self::assertSame($expectedOutcome, $outcome['result'] ?? null);
         } finally {
             foreach ($pipes as $pipe) {
                 if (is_resource($pipe)) {

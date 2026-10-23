@@ -5,15 +5,21 @@ declare(strict_types=1);
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Database\Connection;
+use Illuminate\Support\Facades\DB;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
-if ($argc !== 6) {
-    fwrite(STDERR, "usage: dcr_concurrent_authorization_request.php <client> <user_id> <ready> <barrier> <entered>\n");
+if ($argc !== 7) {
+    fwrite(STDERR, "usage: dcr_concurrent_authorization_request.php <client> <user_id> <ready> <barrier> <entered> <mode>\n");
     exit(2);
 }
 
-[, $clientId, $userId, $readyPath, $barrierPath, $enteredPath] = $argv;
+[, $clientId, $userId, $readyPath, $barrierPath, $enteredPath, $mode] = $argv;
+if (! in_array($mode, ['before-approval', 'before-user-query'], true)) {
+    fwrite(STDERR, "Unsupported race fixture mode.\n");
+    exit(2);
+}
 $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
 
@@ -28,17 +34,45 @@ try {
         throw new RuntimeException('Authorization race fixture could not signal readiness.');
     }
 
-    $deadline = microtime(true) + 10;
-    while (! is_file($barrierPath)) {
-        if (microtime(true) >= $deadline) {
-            throw new RuntimeException('Timed out waiting for the authorization-race barrier.');
+    if ($mode === 'before-user-query') {
+        // This is the discriminating point: in the old implementation the
+        // active profile was cached *outside* the transaction, so no durable
+        // profile row lock was held when the user row was about to be locked.
+        // With the fix, a profile lock must already be held before this query.
+        $observed = false;
+        DB::connection()->beforeExecuting(
+            static function (string $sql, array $bindings, Connection $connection) use ($enteredPath, $barrierPath, &$observed): void {
+                $normalized = strtolower($sql);
+                if ($observed || ! str_contains($normalized, 'users')
+                    || ! str_contains($normalized, 'for update')) {
+                    return;
+                }
+                $observed = true;
+                if (file_put_contents($enteredPath, (string) $connection->transactionLevel(), LOCK_EX) === false) {
+                    throw new RuntimeException('Could not report durable approval transaction boundary.');
+                }
+                $deadline = microtime(true) + 10;
+                while (! is_file($barrierPath)) {
+                    if (microtime(true) >= $deadline) {
+                        throw new RuntimeException('Timed out waiting at the user-lock query boundary.');
+                    }
+                    usleep(1000);
+                }
+            },
+        );
+    } else {
+        $deadline = microtime(true) + 10;
+        while (! is_file($barrierPath)) {
+            if (microtime(true) >= $deadline) {
+                throw new RuntimeException('Timed out waiting for the authorization-race barrier.');
+            }
+
+            usleep(1000);
         }
 
-        usleep(1000);
-    }
-
-    if (! touch($enteredPath)) {
-        throw new RuntimeException('Authorization race fixture could not signal entry.');
+        if (! touch($enteredPath)) {
+            throw new RuntimeException('Authorization race fixture could not signal entry.');
+        }
     }
 
     try {
