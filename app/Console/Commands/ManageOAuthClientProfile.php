@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 final class ManageOAuthClientProfile extends Command
@@ -46,20 +47,31 @@ final class ManageOAuthClientProfile extends Command
                 return self::FAILURE;
             }
             try {
-                $profiles = $registry->configured();
+                $profiles = [...$registry->configured(), ...$registry->registeredDcrProfiles()];
             } catch (Throwable $exception) {
                 $this->error($exception->getMessage());
 
                 return self::FAILURE;
             }
 
-            $this->table(['Profile', 'Protocol client ID', 'Authentication', 'Configured enabled'], array_values(array_map(
-                static fn (array $profile): array => [
-                    $profile['key'],
-                    $profile['client_id'],
-                    $profile['strategy'],
-                    $profile['enabled'] ? 'yes' : 'no',
-                ],
+            $registered = DB::table('oauth_client_profiles')
+                ->get(['profile_key', 'client_id', 'auth_strategy', 'disabled_at'])
+                ->keyBy('profile_key');
+
+            $this->table(['Profile', 'Protocol client ID', 'Authentication', 'Effective state'], array_values(array_map(
+                static function (array $profile) use ($registered): array {
+                    $row = $registered->get($profile['key']);
+                    $active = $profile['enabled']
+                        && $row !== null
+                        && $row->disabled_at === null
+                        && $row->client_id === $profile['client_id']
+                        && $row->auth_strategy === $profile['strategy'];
+
+                    return [
+                        $profile['key'], $profile['client_id'], $profile['strategy'],
+                        $active ? 'enabled' : 'disabled/unregistered',
+                    ];
+                },
                 $profiles,
             )));
 

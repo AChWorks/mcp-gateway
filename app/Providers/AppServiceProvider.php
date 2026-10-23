@@ -57,6 +57,10 @@ class AppServiceProvider extends ServiceProvider
             );
         }
 
+        RateLimiter::for('oauth-register', static function (Request $request): Limit {
+            return Limit::perMinute(5)->by('oauth-register:'.$request->ip());
+        });
+
         RateLimiter::for('oauth-token', static function (Request $request): Limit {
             return Limit::perMinute(30)->by('oauth-token:'.$request->ip());
         });

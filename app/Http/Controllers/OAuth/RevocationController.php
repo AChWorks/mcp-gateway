@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers\OAuth;
 
+use App\Infrastructure\OAuth\OAuthClientAuthenticator;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthTokenRevoker;
-use App\Infrastructure\OAuth\PrivateKeyJwtClientAuthenticator;
 use Illuminate\Http\Request;
 use League\OAuth2\Server\Exception\OAuthServerException;
 use Symfony\Component\HttpFoundation\Response;
@@ -12,7 +12,7 @@ use Symfony\Component\HttpFoundation\Response;
 final readonly class RevocationController
 {
     public function __construct(
-        private PrivateKeyJwtClientAuthenticator $clientAuthenticator,
+        private OAuthClientAuthenticator $clientAuthenticator,
         private OAuthTokenRevoker $revoker,
         private OAuthHttpBridge $bridge,
     ) {}

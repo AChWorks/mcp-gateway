@@ -27,7 +27,7 @@ final class OAuthClientAuthorizationsController extends Controller
             'profile' => ['nullable', 'string', 'max:48', 'regex:/^[a-z][a-z0-9_-]*$/D'],
         ]);
         $profileKey = $validated['profile'] ?? null;
-        $configured = $profiles->configured();
+        $configured = [...$profiles->configured(), ...$profiles->registeredDcrProfiles()];
         $registered = DB::table('oauth_client_profiles')->get()->keyBy('profile_key');
 
         $authorizations = DB::table('oauth_authorizations as grants')

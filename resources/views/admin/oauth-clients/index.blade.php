@@ -45,7 +45,7 @@
             </tbody>
         </table>
     </div>
-    <p class="muted">{{ __('Register, disable and re-enable only via the reviewed administrator CLI. Disabling invalidates all previously issued grants.') }}</p>
+    <p class="muted">{{ __('Configured clients and dynamically registered ChatGPT clients are listed separately by immutable profile identity. Only the administrator CLI may disable a registered client; this invalidates all its grants. Revoked DCR clients cannot be re-enabled and must register again.') }}</p>
 </section>
 
 <section class="panel panel-wide ai-client-authorizations">
