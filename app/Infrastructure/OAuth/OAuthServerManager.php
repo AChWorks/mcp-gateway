@@ -2,8 +2,8 @@
 
 namespace App\Infrastructure\OAuth;
 
-use App\Infrastructure\OAuth\League\Grants\PrivateKeyJwtAuthCodeGrant;
-use App\Infrastructure\OAuth\League\Grants\PrivateKeyJwtRefreshTokenGrant;
+use App\Infrastructure\OAuth\League\Grants\GatewayAuthorizationCodeGrant;
+use App\Infrastructure\OAuth\League\Grants\GatewayRefreshTokenGrant;
 use App\Infrastructure\OAuth\League\Repositories\AccessTokenRepository;
 use App\Infrastructure\OAuth\League\Repositories\AuthCodeRepository;
 use App\Infrastructure\OAuth\League\Repositories\ClientRepository;
@@ -27,7 +27,7 @@ final class OAuthServerManager
         private readonly ScopeRepository $scopes,
         private readonly AuthCodeRepository $authCodes,
         private readonly RefreshTokenRepository $refreshTokens,
-        private readonly PrivateKeyJwtClientAuthenticator $clientAuthenticator,
+        private readonly OAuthClientAuthenticator $clientAuthenticator,
         private readonly RefreshTokenRecoveryStore $refreshRecovery,
         private readonly OAuthEncryptionKey $encryptionKeys,
     ) {}
@@ -50,7 +50,7 @@ final class OAuthServerManager
         $server->setDefaultScope((string) config('oauth.scope'));
         $server->revokeRefreshTokens(true);
 
-        $authCodeGrant = new PrivateKeyJwtAuthCodeGrant(
+        $authCodeGrant = new GatewayAuthorizationCodeGrant(
             $this->authCodes,
             $this->refreshTokens,
             $this->secondsInterval((int) config('oauth.ttl.authorization_code_seconds')),
@@ -58,7 +58,7 @@ final class OAuthServerManager
         );
         $authCodeGrant->setRefreshTokenTTL($this->secondsInterval((int) config('oauth.ttl.refresh_token_seconds')));
 
-        $refreshGrant = new PrivateKeyJwtRefreshTokenGrant(
+        $refreshGrant = new GatewayRefreshTokenGrant(
             $this->refreshTokens,
             $this->clientAuthenticator,
             $this->refreshRecovery,

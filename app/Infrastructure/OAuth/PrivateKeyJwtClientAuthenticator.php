@@ -23,6 +23,14 @@ final readonly class PrivateKeyJwtClientAuthenticator
     {
         try {
             $parameters = (array) $request->getParsedBody();
+            // Reject two *client* authentication methods. An unrelated Bearer
+            // resource header is not Basic client authentication, and older
+            // callers may forward it while presenting a valid private_key_jwt.
+            $authorization = trim($request->getHeaderLine('Authorization'));
+            if (array_key_exists('client_secret', $parameters)
+                || ($authorization !== '' && preg_match('/^Bearer\\s+\\S+$/iD', $authorization) !== 1)) {
+                throw OAuthServerException::invalidClient($request);
+            }
             $clientId = $this->boundedString($parameters, 'client_id', 1024);
             $assertionType = $this->boundedString($parameters, 'client_assertion_type', 256);
             $assertion = $this->boundedString($parameters, 'client_assertion', 16384);
@@ -52,7 +60,7 @@ final readonly class PrivateKeyJwtClientAuthenticator
             }
 
             return $clientId;
-        } catch (OAuthServerException $exception) {
+        } catch (OAuthServerException|OAuthClientMetadataUnavailable $exception) {
             throw $exception;
         } catch (Throwable) {
             throw OAuthServerException::invalidClient($request);

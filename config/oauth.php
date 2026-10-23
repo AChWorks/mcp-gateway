@@ -34,6 +34,13 @@ return [
         ],
     ],
 
+    // DCR registration is an explicit operator opt-in; previously registered
+    // clients remain valid if the registration endpoint is later closed.
+    'dcr' => [
+        'registration_enabled' => (bool) env('OAUTH_DCR_REGISTRATION_ENABLED', false),
+        'cimd_advertise' => (bool) env('OAUTH_CHATGPT_CIMD_ADVERTISE', true),
+    ],
+
     'keys' => [
         'private' => $resolvePath((string) env('OAUTH_PRIVATE_KEY_PATH', 'storage/app/private/oauth/private.key')),
         'public' => $resolvePath((string) env('OAUTH_PUBLIC_KEY_PATH', 'storage/app/private/oauth/public.key')),
@@ -42,7 +49,7 @@ return [
     'ttl' => [
         'authorization_code_seconds' => (int) env('OAUTH_AUTH_CODE_TTL_SECONDS', 600),
         'access_token_seconds' => (int) env('OAUTH_ACCESS_TOKEN_TTL_SECONDS', 3600),
-        'refresh_token_seconds' => (int) env('OAUTH_REFRESH_TOKEN_TTL_SECONDS', 2592000),
+        'refresh_token_seconds' => (int) env('OAUTH_REFRESH_TOKEN_TTL_SECONDS', 15552000),
         'client_assertion_seconds' => (int) env('OAUTH_CLIENT_ASSERTION_MAX_SECONDS', 300),
     ],
 

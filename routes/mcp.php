@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Mcp\SshWholeFileController;
 use App\Http\Controllers\OAuth\AuthorizationServerMetadataController;
+use App\Http\Controllers\OAuth\DcrRegistrationController;
 use App\Http\Controllers\OAuth\ProtectedResourceMetadataController;
 use App\Http\Controllers\OAuth\RevocationController;
 use App\Http\Controllers\OAuth\TokenController;
@@ -15,6 +16,7 @@ use Illuminate\Support\Facades\Route;
 Route::get('/.well-known/oauth-protected-resource/mcp', ProtectedResourceMetadataController::class);
 Route::get('/.well-known/oauth-authorization-server', AuthorizationServerMetadataController::class);
 
+Route::post('/oauth/register', DcrRegistrationController::class)->middleware('throttle:oauth-register');
 Route::post('/oauth/token', TokenController::class)->middleware([EnsureCorrelationId::class, ObserveOAuthTokenRequest::class, 'throttle:oauth-token']);
 Route::post('/oauth/revoke', RevocationController::class)->middleware('throttle:oauth-token');
 

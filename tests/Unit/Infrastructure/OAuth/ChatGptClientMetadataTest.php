@@ -3,9 +3,12 @@
 namespace Tests\Unit\Infrastructure\OAuth;
 
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
+use App\Infrastructure\OAuth\OAuthClientMetadataUnavailable;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
@@ -39,6 +42,34 @@ final class ChatGptClientMetadataTest extends TestCase
         self::assertSame('ChatGPT', $service->clientName());
         self::assertSame(['https://chatgpt.com/connector_platform_oauth_redirect'], $service->redirectUris());
         self::assertCount(1, $service->jwks()['keys']);
+    }
+
+    public function test_upstream_http_failure_is_classified_without_exposing_the_client_document(): void
+    {
+        $service = $this->service([new Response(404, ['Content-Type' => 'text/plain'], '')]);
+
+        try {
+            $service->metadata();
+            self::fail('Expected an unavailable OAuth client metadata dependency.');
+        } catch (OAuthClientMetadataUnavailable $exception) {
+            self::assertSame(404, $exception->upstreamStatus);
+            self::assertStringNotContainsString('chatgpt.com', $exception->getMessage());
+        }
+    }
+
+    public function test_upstream_transport_failure_is_classified_as_unavailable(): void
+    {
+        $service = $this->service([
+            new ConnectException('Simulated connection timeout', new Request('GET', 'https://chatgpt.com/oauth/client.json')),
+        ]);
+
+        try {
+            $service->metadata();
+            self::fail('Expected an unavailable OAuth client metadata dependency.');
+        } catch (OAuthClientMetadataUnavailable $exception) {
+            self::assertNull($exception->upstreamStatus);
+            self::assertStringNotContainsString('chatgpt.com', $exception->getMessage());
+        }
     }
 
     public function test_rejects_off_origin_jwks_uri(): void
@@ -99,7 +130,7 @@ final class ChatGptClientMetadataTest extends TestCase
         $service->metadata();
     }
 
-    /** @param list<Response> $responses */
+    /** @param list<Response|\Throwable> $responses */
     private function service(array $responses): ChatGptClientMetadata
     {
         $mock = new MockHandler($responses);

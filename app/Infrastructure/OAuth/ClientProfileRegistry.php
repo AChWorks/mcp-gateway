@@ -163,7 +163,17 @@ final class ClientProfileRegistry
         }
 
         foreach ($registered as $key => $stored) {
-            if (! isset($configured[$key]) && $stored->disabled_at === null) {
+            if (isset($configured[$key])) {
+                continue;
+            }
+            if ($this->isDcrProfile($key, $stored)) {
+                if ($stored->disabled_at === null) {
+                    $activeCount++;
+                }
+
+                continue;
+            }
+            if ($stored->disabled_at === null) {
                 throw new RuntimeException('Revoke the registered OAuth client profile before removing it from configuration.');
             }
         }
@@ -176,6 +186,10 @@ final class ClientProfileRegistry
     /** @return array<string, mixed>|null */
     public function active(string $clientId): ?array
     {
+        if (preg_match('/^dcr_[0-9a-f]{48}$/D', $clientId) === 1) {
+            return $this->activeDcr($clientId);
+        }
+
         foreach ($this->configured() as $profile) {
             if (! hash_equals($profile['client_id'], $clientId)) {
                 continue;
@@ -200,6 +214,75 @@ final class ClientProfileRegistry
         }
 
         return null;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function activeDcr(string $clientId): ?array
+    {
+        $client = DB::table('oauth_dcr_clients')->where('client_id', $clientId)->first();
+        if ($client === null || $client->retired_at !== null) {
+            return null;
+        }
+
+        $stored = DB::table('oauth_client_profiles')->where('profile_key', $client->profile_key)
+            ->first(['client_id', 'auth_strategy', 'generation', 'disabled_at']);
+
+        if ($stored === null || $stored->disabled_at !== null
+            || ! hash_equals((string) $stored->client_id, $clientId)
+            || $stored->auth_strategy !== 'dcr_client_secret_post'
+            || preg_match('/^dcr_[0-9a-f]{32}$/D', (string) $client->profile_key) !== 1) {
+            return null;
+        }
+
+        $redirects = json_decode((string) $client->redirect_uris, true);
+        if (! is_array($redirects) || ! array_is_list($redirects) || $redirects === []) {
+            return null;
+        }
+
+        return [
+            'key' => (string) $client->profile_key,
+            'client_id' => $clientId,
+            'display_name' => (string) $client->display_name,
+            'strategy' => 'dcr_client_secret_post',
+            'enabled' => true,
+            'redirect_uris' => $redirects,
+            'jwks' => [],
+            'generation' => (int) $stored->generation,
+        ];
+    }
+
+    private function isDcrProfile(string $key, object $stored): bool
+    {
+        return preg_match('/^dcr_[0-9a-f]{32}$/D', $key) === 1
+            && $stored->auth_strategy === 'dcr_client_secret_post'
+            && DB::table('oauth_dcr_clients')->where('client_id', $stored->client_id)
+                ->where('profile_key', $key)->exists();
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    public function registeredDcrProfiles(): array
+    {
+        $clients = DB::table('oauth_dcr_clients as clients')
+            ->join('oauth_client_profiles as profiles', 'profiles.profile_key', '=', 'clients.profile_key')
+            ->whereColumn('clients.client_id', 'profiles.client_id')
+            ->where('profiles.auth_strategy', 'dcr_client_secret_post')
+            ->select(['clients.client_id', 'clients.profile_key', 'clients.display_name',
+                'clients.retired_at', 'profiles.disabled_at'])
+            ->orderBy('clients.created_at')->get();
+
+        $profiles = [];
+        foreach ($clients as $client) {
+            $profiles[$client->profile_key] = [
+                'key' => (string) $client->profile_key,
+                'client_id' => (string) $client->client_id,
+                'display_name' => (string) $client->display_name,
+                'strategy' => 'dcr_client_secret_post',
+                'enabled' => true,
+                'retired' => $client->retired_at !== null,
+            ];
+        }
+
+        return $profiles;
     }
 
     public function authorizes(string $clientId, ?string $profileKey, ?int $generation): bool
@@ -280,6 +363,67 @@ final class ClientProfileRegistry
                 'disabled_at' => now(),
                 'updated_at' => now(),
             ]);
+        });
+    }
+
+    /**
+     * Explicit Owner CLI recovery for abandoned DCR admission slots.
+     *
+     * Keep the entire registered client/profile identity as a permanent
+     * tombstone. Only disabled profiles without unrevoked authorizations may
+     * retire. All codes, access/refresh tokens and recovery responses are
+     * scoped to their parent authorization by DB foreign keys; revoking every
+     * authorization guarantees none of these remains usable, even if their
+     * historical token rows are retained for audit.
+     *
+     * The same ChatGPT anchor lock as public registration serializes slot
+     * retirement with concurrent registration near the admission boundary.
+     */
+    public function retireDcr(string $key): void
+    {
+        if (preg_match('/^dcr_[0-9a-f]{32}$/D', $key) !== 1) {
+            throw new InvalidArgumentException('Retirement is supported only for an exact DCR profile key.');
+        }
+
+        DB::transaction(static function () use ($key): void {
+            $anchor = DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')
+                ->lockForUpdate()->first(['profile_key']);
+            if ($anchor === null) {
+                throw new RuntimeException('OAuth registration capacity lock is unavailable.');
+            }
+
+            $profile = DB::table('oauth_client_profiles')->where('profile_key', $key)
+                ->lockForUpdate()->first(['client_id', 'auth_strategy', 'disabled_at']);
+            $client = DB::table('oauth_dcr_clients')->where('profile_key', $key)
+                ->lockForUpdate()->first(['client_id', 'retired_at']);
+
+            if ($profile === null || $client === null
+                || $profile->auth_strategy !== 'dcr_client_secret_post'
+                || ! hash_equals((string) $profile->client_id, (string) $client->client_id)) {
+                throw new RuntimeException('DCR retirement identity is unknown or inconsistent.');
+            }
+
+            if ($profile->disabled_at === null) {
+                throw new RuntimeException('Disable the DCR client before retiring its registration.');
+            }
+
+            // All OAuth token/code/recovery rows are FK-bound to their parent
+            // authorization; no non-revoked authorization may survive retirement.
+            // Revocation via Admin is a separate explicit Owner operation.
+            if (DB::table('oauth_authorizations')
+                ->where('client_id', $client->client_id)
+                ->whereNull('revoked_at')->exists()) {
+                throw new RuntimeException('Revoke every client authorization before retiring its registration.');
+            }
+
+            // Idempotence is allowed only after checking the durable invariant:
+            // a retired registration must never have an unrevoked parent grant.
+            if ($client->retired_at !== null) {
+                return;
+            }
+
+            DB::table('oauth_dcr_clients')->where('profile_key', $key)
+                ->whereNull('retired_at')->update(['retired_at' => now(), 'updated_at' => now()]);
         });
     }
 

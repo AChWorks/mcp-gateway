@@ -1,0 +1,56 @@
+# Independent upstream-dependency monitor. Do not conflate third-party
+# availability with deterministic CI of an offline-operational DCR fallback.
+# Still fails visibly if official CIMD/JWKS are down or incompatible.
+name: Upstream ChatGPT OAuth Compatibility
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - 'app/Infrastructure/OAuth/**'
+      - 'config/oauth.php'
+      - '.github/workflows/upstream-oauth-compatibility.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  chatgpt-cimd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring, openssl
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Validate live ChatGPT OAuth client metadata
+        shell: bash
+        run: |
+          # Read-only public JWKS retrieval occasionally encounters transient
+          # provider/CDN errors. Retry once; a persistent bad response or an
+          # actual compatibility failure MUST still fail CI.
+          if ! php artisan gateway:oauth-client-check --env=testing --refresh; then
+            echo 'Initial live OAuth metadata check failed; retry once after 5 seconds.' >&2
+            sleep 5
+            php artisan gateway:oauth-client-check --env=testing --refresh
+          fi

@@ -2,7 +2,7 @@
 
 namespace App\Infrastructure\OAuth\League\Grants;
 
-use App\Infrastructure\OAuth\PrivateKeyJwtClientAuthenticator;
+use App\Infrastructure\OAuth\OAuthClientAuthenticator;
 use DateInterval;
 use Illuminate\Support\Facades\DB;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
@@ -14,7 +14,7 @@ use League\OAuth2\Server\RequestTypes\AuthorizationRequestInterface;
 use League\OAuth2\Server\ResponseTypes\ResponseTypeInterface;
 use Psr\Http\Message\ServerRequestInterface;
 
-final class PrivateKeyJwtAuthCodeGrant extends AuthCodeGrant
+final class GatewayAuthorizationCodeGrant extends AuthCodeGrant
 {
     use IssuesRefreshTokensForMcpAccess;
 
@@ -24,7 +24,7 @@ final class PrivateKeyJwtAuthCodeGrant extends AuthCodeGrant
         AuthCodeRepositoryInterface $authCodeRepository,
         RefreshTokenRepositoryInterface $refreshTokenRepository,
         DateInterval $authCodeTTL,
-        private readonly PrivateKeyJwtClientAuthenticator $clientAuthenticator,
+        private readonly OAuthClientAuthenticator $clientAuthenticator,
     ) {
         parent::__construct($authCodeRepository, $refreshTokenRepository, $authCodeTTL);
     }

@@ -78,7 +78,9 @@ final class ChatGptOAuthFlowTest extends TestCase
                 'revocation_endpoint' => $issuer.'/oauth/revoke',
                 'grant_types_supported' => ['authorization_code', 'refresh_token'],
                 'code_challenge_methods_supported' => ['S256'],
-                'token_endpoint_auth_methods_supported' => ['private_key_jwt'],
+                'token_endpoint_auth_methods_supported' => ['private_key_jwt', 'client_secret_post'],
+                'revocation_endpoint_auth_methods_supported' => ['private_key_jwt', 'client_secret_post'],
+                'revocation_endpoint_auth_signing_alg_values_supported' => ['RS256'],
                 'client_id_metadata_document_supported' => true,
                 'authorization_response_iss_parameter_supported' => true,
                 'protected_resources' => [$resource],
@@ -103,6 +105,109 @@ final class ChatGptOAuthFlowTest extends TestCase
                 'Content-Security-Policy',
                 "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
             );
+    }
+
+    public function test_cimd_outage_fails_closed_with_retriable_oauth_authorization_response(): void
+    {
+        $mock = new MockHandler([
+            new Response(404, ['Content-Type' => 'text/plain'], ''),
+            new Response(404, ['Content-Type' => 'text/plain'], ''),
+        ]);
+        $this->app->instance(ChatGptClientMetadata::class, new ChatGptClientMetadata(
+            new Client(['handler' => HandlerStack::create($mock)]),
+        ));
+        $user = $this->operator();
+        $parameters = $this->authorizationParameters();
+
+        $this->actingAs($user)
+            ->get('/oauth/authorize?'.http_build_query($parameters))
+            ->assertStatus(503)
+            ->assertHeader('Retry-After', '60')
+            ->assertHeader('X-Frame-Options', 'DENY')
+            ->assertDontSee(self::CLIENT_ID);
+
+        $this->actingAs($user)
+            ->post('/oauth/authorize', [...$parameters, 'decision' => 'approve'])
+            ->assertStatus(503)
+            ->assertHeader('Retry-After', '60');
+
+        self::assertSame(0, DB::table('oauth_authorizations')->count());
+        self::assertSame(0, DB::table('oauth_auth_codes')->count());
+    }
+
+    public function test_unavailable_chatgpt_jwks_reports_transient_token_failure_not_invalid_client(): void
+    {
+        $metadata = [
+            'client_id' => self::CLIENT_ID,
+            'redirect_uris' => [self::REDIRECT_URI],
+            'token_endpoint_auth_method' => 'private_key_jwt',
+            'grant_types' => ['authorization_code', 'refresh_token'],
+            'response_types' => ['code'],
+            'client_name' => 'ChatGPT',
+            'token_endpoint_auth_signing_alg' => 'RS256',
+            'jwks_uri' => 'https://chatgpt.com/oauth/jwks.json',
+        ];
+        $mock = new MockHandler([
+            new Response(200, ['Content-Type' => 'application/json'], json_encode($metadata, JSON_THROW_ON_ERROR)),
+            new Response(404, ['Content-Type' => 'text/plain'], ''),
+        ]);
+        $this->app->instance(ChatGptClientMetadata::class, new ChatGptClientMetadata(
+            new Client(['handler' => HandlerStack::create($mock)]),
+        ));
+
+        $payload = [
+            'grant_type' => 'refresh_token',
+            'client_id' => self::CLIENT_ID,
+            'refresh_token' => 'fixture-token-unused-on-upstream-error',
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ];
+
+        $response = $this->postJson('/oauth/token', $payload)
+            ->assertStatus(503)
+            ->assertHeader('Retry-After', '60')
+            ->assertJsonPath('error', 'temporarily_unavailable');
+        self::assertStringContainsString('no-store', (string) $response->headers->get('Cache-Control'));
+
+        $this->postJson('/oauth/token', [...$payload, 'client_id' => 'https://attacker.example/client.json'])
+            ->assertUnauthorized();
+
+        self::assertSame(0, DB::table('oauth_access_tokens')->count());
+    }
+
+    public function test_cimd_jwks_outage_during_revocation_returns_503_without_revoking_authority(): void
+    {
+        $metadata = [
+            'client_id' => self::CLIENT_ID,
+            'redirect_uris' => [self::REDIRECT_URI],
+            'token_endpoint_auth_method' => 'private_key_jwt',
+            'grant_types' => ['authorization_code', 'refresh_token'],
+            'response_types' => ['code'],
+            'client_name' => 'ChatGPT',
+            'token_endpoint_auth_signing_alg' => 'RS256',
+            'jwks_uri' => 'https://chatgpt.com/oauth/jwks.json',
+        ];
+
+        $mock = new MockHandler([
+            new Response(200, ['Content-Type' => 'application/json'], json_encode($metadata, JSON_THROW_ON_ERROR)),
+            new Response(404, ['Content-Type' => 'text/plain'], ''),
+        ]);
+        $this->app->instance(ChatGptClientMetadata::class, new ChatGptClientMetadata(
+            new Client(['handler' => HandlerStack::create($mock)]),
+        ));
+
+        $this->postJson('/oauth/revoke', [
+            'client_id' => self::CLIENT_ID,
+            'token' => 'synthetic-revocation-fixture',
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/revoke'),
+        ])
+            ->assertStatus(503)
+            ->assertHeader('Retry-After', '60')
+            ->assertJsonPath('error', 'temporarily_unavailable');
+
+        self::assertSame(0, DB::table('oauth_authorizations')->whereNotNull('revoked_at')->count());
     }
 
     public function test_authorization_rejects_wrong_resource_redirect_and_non_s256_pkce(): void
@@ -777,6 +882,30 @@ final class ChatGptOAuthFlowTest extends TestCase
         parse_str((string) parse_url((string) $response->headers->get('Location'), PHP_URL_QUERY), $query);
         self::assertSame('access_denied', $query['error'] ?? null);
         self::assertSame((string) config('oauth.issuer'), $query['iss'] ?? null);
+    }
+
+    public function test_cimd_client_assertion_does_not_accept_a_mixed_secret_method(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+
+        $request = [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ];
+
+        $this->post('/oauth/token', [
+            ...$request, 'client_secret' => 'mixed-secret-not-an-auth-method',
+        ])->assertUnauthorized();
+
+        // A rejected mixed-auth request must not consume the one-time code.
+        $this->post('/oauth/token', $request)->assertOk();
     }
 
     public function test_client_assertion_audience_and_replay_are_rejected(): void

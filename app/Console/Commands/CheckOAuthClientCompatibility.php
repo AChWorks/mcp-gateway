@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
+use App\Infrastructure\OAuth\OAuthClientMetadataUnavailable;
 use Firebase\JWT\JWK;
 use Illuminate\Console\Command;
 
@@ -27,6 +28,13 @@ final class CheckOAuthClientCompatibility extends Command
             $this->line('[OK] Usable RS256 signing keys: '.count($parsedKeys));
 
             return self::SUCCESS;
+        } catch (OAuthClientMetadataUnavailable $exception) {
+            $cause = $exception->upstreamStatus === null
+                ? 'upstream transport unavailable'
+                : 'upstream HTTP '.$exception->upstreamStatus;
+            $this->error('OAuth client compatibility check failed: '.$cause.'.');
+
+            return self::FAILURE;
         } catch (\Throwable $exception) {
             $this->error('OAuth client compatibility check failed: '.$exception->getMessage());
 

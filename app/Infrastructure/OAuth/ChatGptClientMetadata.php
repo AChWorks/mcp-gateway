@@ -4,6 +4,7 @@ namespace App\Infrastructure\OAuth;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
@@ -215,20 +216,24 @@ final class ChatGptClientMetadata
     /** @return array<string, mixed> */
     private function fetchJson(string $url): array
     {
-        $response = $this->http()->request('GET', $url, [
-            'allow_redirects' => false,
-            'connect_timeout' => max(1, (int) config('oauth.client.connect_timeout_seconds')),
-            'timeout' => max(1, (int) config('oauth.client.request_timeout_seconds')),
-            'http_errors' => false,
-            'stream' => true,
-            'headers' => [
-                'Accept' => 'application/json',
-                'User-Agent' => 'MCP-Gateway/'.app()->version(),
-            ],
-        ]);
+        try {
+            $response = $this->http()->request('GET', $url, [
+                'allow_redirects' => false,
+                'connect_timeout' => max(1, (int) config('oauth.client.connect_timeout_seconds')),
+                'timeout' => max(1, (int) config('oauth.client.request_timeout_seconds')),
+                'http_errors' => false,
+                'stream' => true,
+                'headers' => [
+                    'Accept' => 'application/json',
+                    'User-Agent' => 'MCP-Gateway/'.app()->version(),
+                ],
+            ]);
+        } catch (GuzzleException $exception) {
+            throw new OAuthClientMetadataUnavailable(previous: $exception);
+        }
 
         if ($response->getStatusCode() !== 200) {
-            throw new RuntimeException('OAuth client metadata endpoint returned an unexpected status.');
+            throw new OAuthClientMetadataUnavailable(upstreamStatus: $response->getStatusCode());
         }
 
         $contentType = strtolower(trim(explode(';', $response->getHeaderLine('Content-Type'), 2)[0]));

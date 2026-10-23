@@ -2,9 +2,10 @@
 
 namespace App\Http\Controllers\OAuth;
 
+use App\Infrastructure\OAuth\OAuthClientAuthenticator;
+use App\Infrastructure\OAuth\OAuthClientMetadataUnavailable;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthTokenRevoker;
-use App\Infrastructure\OAuth\PrivateKeyJwtClientAuthenticator;
 use Illuminate\Http\Request;
 use League\OAuth2\Server\Exception\OAuthServerException;
 use Symfony\Component\HttpFoundation\Response;
@@ -12,7 +13,7 @@ use Symfony\Component\HttpFoundation\Response;
 final readonly class RevocationController
 {
     public function __construct(
-        private PrivateKeyJwtClientAuthenticator $clientAuthenticator,
+        private OAuthClientAuthenticator $clientAuthenticator,
         private OAuthTokenRevoker $revoker,
         private OAuthHttpBridge $bridge,
     ) {}
@@ -41,6 +42,15 @@ final readonly class RevocationController
                 ->header('Pragma', 'no-cache');
         } catch (OAuthServerException $exception) {
             return $this->bridge->error($exception);
+        } catch (OAuthClientMetadataUnavailable) {
+            // No credential can be revoked safely before authenticating its
+            // owning client. Keep the request retryable without bypassing JWKS.
+            return response()->json([
+                'error' => 'temporarily_unavailable',
+                'error_description' => 'OAuth client identity is temporarily unavailable.',
+            ], 503)->header('Retry-After', '60')
+                ->header('Cache-Control', 'no-store')
+                ->header('Pragma', 'no-cache');
         }
     }
 }

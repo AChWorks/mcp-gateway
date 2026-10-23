@@ -20,6 +20,16 @@ final readonly class RefreshTokenRecoveryStore
         private ClientProfileRegistry $profiles,
     ) {}
 
+    /** @param array<string, mixed>|null $profile */
+    private function recoveryEligible(?array $profile): bool
+    {
+        return $profile !== null && in_array(
+            $profile['strategy'] ?? null,
+            ['cimd_private_key_jwt', 'dcr_client_secret_post'],
+            true,
+        );
+    }
+
     public function stage(
         ServerRequestInterface $request,
         RecoverableBearerTokenResponse $response,
@@ -33,7 +43,7 @@ final readonly class RefreshTokenRecoveryStore
         if ($profile === null) {
             throw new RuntimeException('Refresh recovery client profile is not authenticated.');
         }
-        if ($profile['key'] !== 'chatgpt') {
+        if (! $this->recoveryEligible($profile)) {
             return;
         }
 
@@ -147,7 +157,7 @@ final readonly class RefreshTokenRecoveryStore
         RecoverableBearerTokenResponse $response,
         string $validatedClientId,
     ): ?RecoverableBearerTokenResponse {
-        if (($this->profiles->active($validatedClientId)['key'] ?? null) !== 'chatgpt') {
+        if (! $this->recoveryEligible($this->profiles->active($validatedClientId))) {
             return null;
         }
 
@@ -191,7 +201,7 @@ final readonly class RefreshTokenRecoveryStore
                 || ! $this->isFuture((string) $recovery->recovery_expires_at)
                 || ! hash_equals((string) $recovery->client_id, $validatedClientId)
                 || ! hash_equals((string) $recovery->client_id, $oldClientId)
-                || ($this->profiles->active((string) $recovery->client_id)['key'] ?? null) !== 'chatgpt'
+                || ! $this->recoveryEligible($this->profiles->active((string) $recovery->client_id))
                 || ! hash_equals((string) $recovery->resource, (string) ($parameters['resource'] ?? ''))
                 || ! hash_equals((string) $recovery->resource, (string) config('oauth.resource'))
                 || (string) $recovery->old_refresh_token_id !== $oldRefreshTokenId
@@ -555,6 +565,6 @@ final readonly class RefreshTokenRecoveryStore
         return is_array($refreshPayload)
             && ($refreshPayload['refresh_token_id'] ?? null) === $expectedRefreshTokenId
             && ($refreshPayload['access_token_id'] ?? null) === $expectedAccessTokenId
-            && ($this->profiles->active((string) ($refreshPayload['client_id'] ?? ''))['key'] ?? null) === 'chatgpt';
+            && $this->recoveryEligible($this->profiles->active((string) ($refreshPayload['client_id'] ?? '')));
     }
 }

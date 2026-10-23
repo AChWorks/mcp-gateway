@@ -3,7 +3,7 @@
 namespace App\Infrastructure\OAuth\League\Grants;
 
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
-use App\Infrastructure\OAuth\PrivateKeyJwtClientAuthenticator;
+use App\Infrastructure\OAuth\OAuthClientAuthenticator;
 use App\Infrastructure\OAuth\RefreshTokenRecoveryStore;
 use DateInterval;
 use Illuminate\Support\Facades\DB;
@@ -17,7 +17,7 @@ use League\OAuth2\Server\ResponseTypes\ResponseTypeInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use RuntimeException;
 
-final class PrivateKeyJwtRefreshTokenGrant extends RefreshTokenGrant
+final class GatewayRefreshTokenGrant extends RefreshTokenGrant
 {
     private const VALIDATED_CLIENT_ATTRIBUTE = 'gateway.oauth.validated_client';
 
@@ -26,7 +26,7 @@ final class PrivateKeyJwtRefreshTokenGrant extends RefreshTokenGrant
 
     public function __construct(
         RefreshTokenRepositoryInterface $refreshTokenRepository,
-        private readonly PrivateKeyJwtClientAuthenticator $clientAuthenticator,
+        private readonly OAuthClientAuthenticator $clientAuthenticator,
         private readonly RefreshTokenRecoveryStore $recovery,
     ) {
         parent::__construct($refreshTokenRepository);

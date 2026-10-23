@@ -5,6 +5,8 @@ namespace App\Http\Controllers\OAuth;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\Entities\UserEntity;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
+use App\Infrastructure\OAuth\OAuthClientApprovalUnavailable;
+use App\Infrastructure\OAuth\OAuthClientMetadataUnavailable;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthScopePolicy;
 use App\Infrastructure\OAuth\OAuthServerManager;
@@ -59,6 +61,8 @@ final readonly class AuthorizationController
             ]), $redirectUri);
         } catch (OAuthServerException $exception) {
             return $this->bridge->error($exception);
+        } catch (OAuthClientMetadataUnavailable $exception) {
+            return $this->metadataUnavailableResponse($exception);
         }
     }
 
@@ -94,12 +98,19 @@ final readonly class AuthorizationController
             );
 
             if ($approved) {
-                $this->authorizations->approve(
-                    (int) $user->getAuthIdentifier(),
-                    $authorization->getClient()->getIdentifier(),
-                    (string) config('oauth.resource'),
-                    $scopes,
-                );
+                try {
+                    $this->authorizations->approve(
+                        (int) $user->getAuthIdentifier(),
+                        $authorization->getClient()->getIdentifier(),
+                        (string) config('oauth.resource'),
+                        $scopes,
+                    );
+                } catch (OAuthClientApprovalUnavailable) {
+                    // Owner disabled/retired this client after the consent
+                    // form was validated. Do not expose an internal 500 or
+                    // issue a code for a stale registration/generation.
+                    throw OAuthServerException::invalidClient($psrRequest);
+                }
             }
 
             try {
@@ -123,7 +134,26 @@ final readonly class AuthorizationController
             return $this->bridge->laravel($this->bridge->authorizationResponse($psrResponse));
         } catch (OAuthServerException $exception) {
             return $this->bridge->error($exception);
+        } catch (OAuthClientMetadataUnavailable $exception) {
+            return $this->metadataUnavailableResponse($exception);
         }
+    }
+
+    private function metadataUnavailableResponse(OAuthClientMetadataUnavailable $exception): Response
+    {
+        try {
+            Log::warning('OAuth client identity metadata is unavailable.', [
+                'correlation_id' => CorrelationId::current(),
+                'upstream_status' => $exception->upstreamStatus,
+            ]);
+        } catch (Throwable) {
+            // Diagnostics must not interfere with safe authorization failure.
+        }
+
+        return $this->browserResponse(
+            response('OAuth client identity is temporarily unavailable. Retry later.', 503)
+                ->header('Retry-After', '60'),
+        );
     }
 
     private function browserResponse(Response $response, ?string $authorizedRedirectUri = null): Response
