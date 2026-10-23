@@ -70,6 +70,9 @@ See [Direct SSH and Jobs](docs/DIRECT-SSH-CONNECTOR.md) and [whole-file exchange
 
 Manage client profiles and grants under **Admin → AI clients** (`/admin/oauth-clients`). After an upgrade, refresh/reconnect the MCP connection if your client still displays an outdated Tool catalog.
 
+
+**ChatGPT OAuth choices:** the original fixed ChatGPT CIMD/`private_key_jwt` connection remains supported. This release also supports a separate opt-in DCR/`client_secret_post` connection: public registration starts **OFF**, and existing CIMD discovery stays ON. An administrator may deliberately enable DCR onboarding, create a **new** ChatGPT connection and approve its own consent; no grants, credentials or tokens transfer from the old connection. Closing public registration after onboarding does not revoke the new client. Read the [OAuth client registration and recovery guide](docs/OAUTH-CLIENT-REGISTRATION.md) before changing installed settings; publishing a release is not deployment or proof of actual ChatGPT interoperability.
+
 **ChatGPT attachments:** native ChatGPT FileParams handoff is **paused and OFF by default**. The optional `target-file-input` and `wordpress-file-input` tools are not advertised while `CHATGPT_FILEPARAMS_ENABLED` is absent or `false`; a reliable host-provided file handoff has not been demonstrated for the current integration. Do not enable it just to retry attachments or weaken source-URL security. **This does not disable** ordinary SFTP, supported SSH browser/HTTPS binary transfer, or WordPress's native file-transfer Abilities. A file attached to a ChatGPT conversation is **not automatically available** to these tools.
 
 ## MCP tools at a glance
