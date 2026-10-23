@@ -129,7 +129,7 @@ Values below are the defaults in the sample template, **not necessarily** the pr
 | `OAUTH_REMOTE_CONNECT_TIMEOUT_SECONDS` | `2` seconds | Outbound OAuth metadata connection timeout |
 | `OAUTH_REMOTE_REQUEST_TIMEOUT_SECONDS` | `5` seconds | Outbound OAuth metadata request timeout |
 | `OAUTH_REMOTE_MAX_RESPONSE_BYTES` | `65536` bytes (64 KiB) | Maximum permitted remote OAuth metadata response |
-| `OAUTH_DCR_REGISTRATION_ENABLED` | false | Opt-in public ChatGPT DCR client-registration endpoint; disabling it does not revoke previously registered clients. |
+| `OAUTH_DCR_REGISTRATION_ENABLED` | false | Opt-in ChatGPT DCR onboarding. Five registrations/minute/source IP and 512 **unretired** identities; Owner may recover abandoned slots with CLI `disable`, grant revocation and `retire`. Disabling registration does not revoke existing DCR clients. |
 | `OAUTH_CHATGPT_CIMD_ADVERTISE` | true | Offer CIMD on discovery to new connections; false favors DCR when remote ChatGPT CIMD/JWKS unavailable, without revoking existing CIMD clients. |
 | `OAUTH_AUTH_CODE_TTL_SECONDS` | `600` seconds | Short-lived one-time authorization code |
 | `OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` seconds | Gateway-issued bearer token validity |

@@ -78,7 +78,9 @@ final class ChatGptOAuthFlowTest extends TestCase
                 'revocation_endpoint' => $issuer.'/oauth/revoke',
                 'grant_types_supported' => ['authorization_code', 'refresh_token'],
                 'code_challenge_methods_supported' => ['S256'],
-                'token_endpoint_auth_methods_supported' => ['private_key_jwt'],
+                'token_endpoint_auth_methods_supported' => ['private_key_jwt', 'client_secret_post'],
+                'revocation_endpoint_auth_methods_supported' => ['private_key_jwt', 'client_secret_post'],
+                'revocation_endpoint_auth_signing_alg_values_supported' => ['RS256'],
                 'client_id_metadata_document_supported' => true,
                 'authorization_response_iss_parameter_supported' => true,
                 'protected_resources' => [$resource],
@@ -880,6 +882,30 @@ final class ChatGptOAuthFlowTest extends TestCase
         parse_str((string) parse_url((string) $response->headers->get('Location'), PHP_URL_QUERY), $query);
         self::assertSame('access_denied', $query['error'] ?? null);
         self::assertSame((string) config('oauth.issuer'), $query['iss'] ?? null);
+    }
+
+    public function test_cimd_client_assertion_does_not_accept_a_mixed_secret_method(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+
+        $request = [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ];
+
+        $this->post('/oauth/token', [
+            ...$request, 'client_secret' => 'mixed-secret-not-an-auth-method',
+        ])->assertUnauthorized();
+
+        // A rejected mixed-auth request must not consume the one-time code.
+        $this->post('/oauth/token', $request)->assertOk();
     }
 
     public function test_client_assertion_audience_and_replay_are_rejected(): void

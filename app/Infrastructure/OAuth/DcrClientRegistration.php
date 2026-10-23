@@ -68,7 +68,8 @@ final class DcrClientRegistration
             // This makes the global admission limit meaningful under concurrency.
             $anchor = DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')
                 ->lockForUpdate()->first(['profile_key']);
-            if ($anchor === null || DB::table('oauth_dcr_clients')->count() >= self::REGISTRATION_LIMIT) {
+            if ($anchor === null || DB::table('oauth_dcr_clients')
+                ->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
                 throw new RuntimeException('OAuth client registration capacity is unavailable.');
             }
 
@@ -87,6 +88,7 @@ final class DcrClientRegistration
                 'secret_hash' => hash('sha256', $secret),
                 'redirect_uris' => json_encode($redirectUris, JSON_THROW_ON_ERROR),
                 'display_name' => trim($name),
+                'retired_at' => null,
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);

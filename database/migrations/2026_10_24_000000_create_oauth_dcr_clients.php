@@ -15,6 +15,9 @@ return new class extends Migration
             $table->char('secret_hash', 64);
             $table->json('redirect_uris');
             $table->string('display_name', 160);
+            // Retired clients retain immutable identity/secret verifier history
+            // but no longer occupy an onboarding admission slot.
+            $table->timestamp('retired_at')->nullable()->index();
             $table->timestamps();
         });
     }

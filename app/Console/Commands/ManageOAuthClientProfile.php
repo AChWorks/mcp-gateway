@@ -10,9 +10,9 @@ use Throwable;
 final class ManageOAuthClientProfile extends Command
 {
     protected $signature = 'gateway:oauth-client-profile
-        {operation : check, list, register, disable, or enable}
+        {operation : check, list, register, disable, enable, or retire}
         {key? : Exact immutable profile key}
-        {--confirm : Explicitly acknowledge profile activation or token revocation}';
+        {--confirm : Explicitly acknowledge profile activation, revocation, or DCR retirement}';
 
     protected $description = 'Inspect or explicitly change the durable OAuth client profile lifecycle';
 
@@ -62,6 +62,7 @@ final class ManageOAuthClientProfile extends Command
                 static function (array $profile) use ($registered): array {
                     $row = $registered->get($profile['key']);
                     $active = $profile['enabled']
+                        && ! ($profile['retired'] ?? false)
                         && $row !== null
                         && $row->disabled_at === null
                         && $row->client_id === $profile['client_id']
@@ -69,7 +70,7 @@ final class ManageOAuthClientProfile extends Command
 
                     return [
                         $profile['key'], $profile['client_id'], $profile['strategy'],
-                        $active ? 'enabled' : 'disabled/unregistered',
+                        ($profile['retired'] ?? false) ? 'retired (permanent)' : ($active ? 'enabled' : 'disabled/unregistered'),
                     ];
                 },
                 $profiles,
@@ -78,10 +79,10 @@ final class ManageOAuthClientProfile extends Command
             return self::SUCCESS;
         }
 
-        if (! in_array($operation, ['register', 'disable', 'enable'], true)
+        if (! in_array($operation, ['register', 'disable', 'enable', 'retire'], true)
             || ! is_string($key) || $key === '' || strlen($key) > 48
             || ! $this->option('confirm')) {
-            $this->error('Specify register, disable or enable, an exact profile key and --confirm.');
+            $this->error('Specify register, disable, enable or retire, an exact profile key and --confirm.');
 
             return self::FAILURE;
         }
@@ -91,6 +92,7 @@ final class ManageOAuthClientProfile extends Command
                 'register' => $registry->register($key),
                 'disable' => $registry->disable($key),
                 'enable' => $registry->enable($key),
+                'retire' => $registry->retireDcr($key),
             };
             $this->info('OAuth client profile '.$operation.' completed for '.$key.'.');
 

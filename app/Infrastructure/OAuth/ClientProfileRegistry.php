@@ -220,7 +220,7 @@ final class ClientProfileRegistry
     private function activeDcr(string $clientId): ?array
     {
         $client = DB::table('oauth_dcr_clients')->where('client_id', $clientId)->first();
-        if ($client === null) {
+        if ($client === null || $client->retired_at !== null) {
             return null;
         }
 
@@ -266,7 +266,8 @@ final class ClientProfileRegistry
             ->join('oauth_client_profiles as profiles', 'profiles.profile_key', '=', 'clients.profile_key')
             ->whereColumn('clients.client_id', 'profiles.client_id')
             ->where('profiles.auth_strategy', 'dcr_client_secret_post')
-            ->select(['clients.client_id', 'clients.profile_key', 'clients.display_name', 'profiles.disabled_at'])
+            ->select(['clients.client_id', 'clients.profile_key', 'clients.display_name',
+                'clients.retired_at', 'profiles.disabled_at'])
             ->orderBy('clients.created_at')->get();
 
         $profiles = [];
@@ -277,6 +278,7 @@ final class ClientProfileRegistry
                 'display_name' => (string) $client->display_name,
                 'strategy' => 'dcr_client_secret_post',
                 'enabled' => true,
+                'retired' => $client->retired_at !== null,
             ];
         }
 
@@ -361,6 +363,65 @@ final class ClientProfileRegistry
                 'disabled_at' => now(),
                 'updated_at' => now(),
             ]);
+        });
+    }
+
+    /**
+     * Explicit Owner CLI recovery for abandoned DCR admission slots.
+     *
+     * Keep the entire registered client/profile identity as a permanent
+     * tombstone. Only disabled profiles without unrevoked authorizations may
+     * retire. All codes, access/refresh tokens and recovery responses are
+     * scoped to their parent authorization by DB foreign keys; revoking every
+     * authorization guarantees none of these remains usable, even if their
+     * historical token rows are retained for audit.
+     *
+     * The same ChatGPT anchor lock as public registration serializes slot
+     * retirement with concurrent registration near the admission boundary.
+     */
+    public function retireDcr(string $key): void
+    {
+        if (preg_match('/^dcr_[0-9a-f]{32}$/D', $key) !== 1) {
+            throw new InvalidArgumentException('Retirement is supported only for an exact DCR profile key.');
+        }
+
+        DB::transaction(static function () use ($key): void {
+            $anchor = DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')
+                ->lockForUpdate()->first(['profile_key']);
+            if ($anchor === null) {
+                throw new RuntimeException('OAuth registration capacity lock is unavailable.');
+            }
+
+            $profile = DB::table('oauth_client_profiles')->where('profile_key', $key)
+                ->lockForUpdate()->first(['client_id', 'auth_strategy', 'disabled_at']);
+            $client = DB::table('oauth_dcr_clients')->where('profile_key', $key)
+                ->lockForUpdate()->first(['client_id', 'retired_at']);
+
+            if ($profile === null || $client === null
+                || $profile->auth_strategy !== 'dcr_client_secret_post'
+                || ! hash_equals((string) $profile->client_id, (string) $client->client_id)) {
+                throw new RuntimeException('DCR retirement identity is unknown or inconsistent.');
+            }
+
+            if ($profile->disabled_at === null) {
+                throw new RuntimeException('Disable the DCR client before retiring its registration.');
+            }
+
+            if ($client->retired_at !== null) {
+                return;
+            }
+
+            // All OAuth token/code/recovery rows are FK-bound to their parent
+            // authorization; no non-revoked authorization may survive retirement.
+            // Revocation via Admin is a separate explicit Owner operation.
+            if (DB::table('oauth_authorizations')
+                ->where('client_id', $client->client_id)
+                ->whereNull('revoked_at')->exists()) {
+                throw new RuntimeException('Revoke every client authorization before retiring its registration.');
+            }
+
+            DB::table('oauth_dcr_clients')->where('profile_key', $key)
+                ->whereNull('retired_at')->update(['retired_at' => now(), 'updated_at' => now()]);
         });
     }
 

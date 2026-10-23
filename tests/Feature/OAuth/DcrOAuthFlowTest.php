@@ -5,6 +5,7 @@ namespace Tests\Feature\OAuth;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
+use App\Infrastructure\OAuth\DcrClientRegistration;
 use App\Infrastructure\OAuth\RefreshTokenInspector;
 use App\Models\User;
 use Firebase\JWT\JWT;
@@ -41,7 +42,10 @@ final class DcrOAuthFlowTest extends TestCase
             ->assertJsonPath('registration_endpoint', rtrim((string) config('oauth.issuer'), '/').'/oauth/register')
             ->assertJsonPath('client_id_metadata_document_supported', false)
             ->assertJsonPath('token_endpoint_auth_methods_supported.0', 'private_key_jwt')
-            ->assertJsonPath('token_endpoint_auth_methods_supported.1', 'client_secret_post');
+            ->assertJsonPath('token_endpoint_auth_methods_supported.1', 'client_secret_post')
+            ->assertJsonPath('revocation_endpoint_auth_methods_supported.0', 'private_key_jwt')
+            ->assertJsonPath('revocation_endpoint_auth_methods_supported.1', 'client_secret_post')
+            ->assertJsonPath('revocation_endpoint_auth_signing_alg_values_supported.0', 'RS256');
 
         $profile = app(ClientProfileRegistry::class)->active('https://chatgpt.com/oauth/client.json');
         self::assertSame('cimd_private_key_jwt', $profile['strategy'] ?? null);
@@ -68,7 +72,7 @@ final class DcrOAuthFlowTest extends TestCase
     public function test_dcr_auth_code_refresh_recovery_revocation_and_identity_isolation(): void
     {
         [$first, $secret] = $this->registerClient();
-        [$second] = $this->registerClient();
+        [$second, $secondSecret] = $this->registerClient();
         $user = $this->operator();
 
         $verifier = str_repeat('v', 64);
@@ -135,6 +139,22 @@ final class DcrOAuthFlowTest extends TestCase
         $replacementPayload = app(RefreshTokenInspector::class)->inspect($replacement);
         self::assertIsArray($replacementPayload);
         self::assertSame($first['client_id'], $replacementPayload['client_id'] ?? null);
+
+        // Authentication is required before revocation. A different correctly
+        // authenticated client still has no authority over this grant.
+        $revoke = ['client_id' => $first['client_id'], 'client_secret' => $secret,
+            'token' => $replacement, 'token_type_hint' => 'refresh_token'];
+        $this->post('/oauth/revoke', [...$revoke, 'client_secret' => 'incorrect-secret'])
+            ->assertUnauthorized();
+        $this->post('/oauth/revoke', array_diff_key($revoke, ['client_secret' => true]))
+            ->assertUnauthorized();
+        $this->post('/oauth/revoke', [...$revoke, 'client_assertion' => 'mixed-method'])
+            ->assertUnauthorized();
+        $this->post('/oauth/revoke', [...$revoke, 'client_id' => $second['client_id'],
+            'client_secret' => $secondSecret])->assertOk();
+        self::assertSame(0, DB::table('oauth_authorizations')
+            ->where('client_id', $first['client_id'])->whereNotNull('revoked_at')->count());
+
         $this->post('/oauth/revoke', [
             'client_id' => $first['client_id'], 'client_secret' => $secret,
             'token' => $replacement, 'token_type_hint' => 'refresh_token',
@@ -266,6 +286,168 @@ final class DcrOAuthFlowTest extends TestCase
         }
         self::assertSame([201, 201, 201, 201, 201, 429, 429], $responses);
         self::assertSame(5, DB::table('oauth_dcr_clients')->count());
+    }
+
+    public function test_dcr_retirement_requires_explicit_disable_and_confirmation_without_reusing_identity(): void
+    {
+        [$client, $secret] = $this->registerClient();
+        [$unaffected] = $this->registerClient();
+        $profileKey = $this->profileKeyFor($client['client_id']);
+
+        self::assertNotSame(0, Artisan::call('gateway:oauth-client-profile', [
+            'operation' => 'retire', 'key' => $profileKey,
+        ]));
+        self::assertNotSame(0, Artisan::call('gateway:oauth-client-profile', [
+            'operation' => 'retire', 'key' => $profileKey, '--confirm' => true,
+        ]));
+        self::assertSame(0, DB::table('oauth_dcr_clients')->whereNotNull('retired_at')->count());
+
+        app(ClientProfileRegistry::class)->disable($profileKey);
+
+        self::assertSame(0, Artisan::call('gateway:oauth-client-profile', [
+            'operation' => 'retire', 'key' => $profileKey, '--confirm' => true,
+        ]));
+        self::assertSame(1, DB::table('oauth_dcr_clients')->whereNotNull('retired_at')->count());
+        self::assertSame(2, DB::table('oauth_dcr_clients')->count());
+        self::assertNotNull(DB::table('oauth_dcr_clients')->where('client_id', $client['client_id'])
+            ->value('secret_hash'));
+        self::assertNull(app(ClientProfileRegistry::class)->active($client['client_id']));
+        self::assertNotNull(app(ClientProfileRegistry::class)->active($unaffected['client_id']));
+        self::assertSame(2, (int) DB::table('oauth_client_profiles')
+            ->where('profile_key', $profileKey)->value('generation'));
+
+        // The tombstone and disabled generation survive repeated commands;
+        // neither the secret nor the old profile can be resurrected.
+        self::assertSame(0, Artisan::call('gateway:oauth-client-profile', [
+            'operation' => 'retire', 'key' => $profileKey, '--confirm' => true,
+        ]));
+        self::assertNotSame(0, Artisan::call('gateway:oauth-client-profile', [
+            'operation' => 'enable', 'key' => $profileKey, '--confirm' => true,
+        ]));
+        self::assertSame(1, DB::table('oauth_dcr_clients')->whereNotNull('retired_at')->count());
+
+        Artisan::call('gateway:oauth-client-profile', ['operation' => 'list']);
+        self::assertStringContainsString('retired (permanent)', Artisan::output());
+
+        $owner = User::query()->create([
+            'name' => 'Retirement Owner', 'email' => 'retirement-owner@example.test',
+            'password' => Hash::make('Only-a-test-fixture-secret'),
+            'role' => GatewayRole::Owner->value, 'target_scope_mode' => TargetScopeMode::All->value,
+            'access_enabled' => true, 'ai_access_enabled' => true,
+        ]);
+        $this->actingAs($owner)->get('/admin/oauth-clients')
+            ->assertOk()->assertSee('Retired (permanent)')->assertDontSee($secret);
+    }
+
+    public function test_dcr_retirement_refuses_unrevoked_grants_and_preserves_existing_token_history(): void
+    {
+        [$client, $secret] = $this->registerClient();
+        $profileKey = $this->profileKeyFor($client['client_id']);
+        $user = $this->operator();
+        $verifier = str_repeat('v', 64);
+        $parameters = $this->authorizationParameters($client['client_id'], $verifier);
+        $redirect = $this->actingAs($user)->post('/oauth/authorize', [
+            ...$parameters, 'decision' => 'approve',
+        ])->assertRedirect();
+        $code = $this->redirectCode((string) $redirect->headers->get('Location'));
+
+        $issued = $this->post('/oauth/token', [
+            'grant_type' => 'authorization_code', 'client_id' => $client['client_id'],
+            'client_secret' => $secret, 'code' => $code, 'code_verifier' => $verifier,
+            'redirect_uri' => self::CALLBACK, 'resource' => config('oauth.resource'),
+        ])->assertOk();
+        $oldRefresh = (string) $issued->json('refresh_token');
+        self::assertNotSame('', $oldRefresh);
+
+        $registry = app(ClientProfileRegistry::class);
+        $registry->disable($profileKey);
+
+        try {
+            $registry->retireDcr($profileKey);
+            self::fail('Retirement must reject a remaining unrevoked consent.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('Revoke every client authorization', $exception->getMessage());
+        }
+        self::assertSame(0, DB::table('oauth_dcr_clients')->whereNotNull('retired_at')->count());
+
+        // Revoking the parent consent makes ALL its FK-bound codes, access
+        // tokens, refresh tokens and recovery envelopes unusable. Do not
+        // delete the child/history rows to reclaim a registration slot.
+        $authorizationId = DB::table('oauth_authorizations')->where('client_id', $client['client_id'])
+            ->value('id');
+        self::assertNotNull($authorizationId);
+        DB::table('oauth_authorizations')->where('id', $authorizationId)
+            ->update(['revoked_at' => now(), 'updated_at' => now()]);
+        self::assertSame(1, DB::table('oauth_access_tokens')
+            ->where('client_id', $client['client_id'])->count());
+        self::assertSame(1, DB::table('oauth_refresh_tokens')
+            ->where('client_id', $client['client_id'])->count());
+
+        $registry->retireDcr($profileKey);
+        self::assertNotNull(DB::table('oauth_dcr_clients')->where('profile_key', $profileKey)
+            ->value('retired_at'));
+        self::assertSame(1, DB::table('oauth_access_tokens')
+            ->where('client_id', $client['client_id'])->count());
+        self::assertSame(1, DB::table('oauth_refresh_tokens')
+            ->where('client_id', $client['client_id'])->count());
+        $this->post('/oauth/token', [
+            'grant_type' => 'refresh_token', 'client_id' => $client['client_id'],
+            'client_secret' => $secret, 'refresh_token' => $oldRefresh,
+            'resource' => config('oauth.resource'),
+        ])->assertUnauthorized();
+        app(ClientProfileRegistry::class)->assertReady();
+    }
+
+    public function test_dcr_retirement_restores_capacity_with_tombstones_retained(): void
+    {
+        // Seed 512 structurally valid dormant registered clients without using
+        // the public HTTP throttle or any real Gateway credential.
+        $profileRows = [];
+        $clientRows = [];
+        for ($i = 0; $i < 512; $i++) {
+            $id = 'dcr_'.str_pad(dechex($i), 48, '0', STR_PAD_LEFT);
+            $key = 'dcr_'.str_pad(dechex($i), 32, '0', STR_PAD_LEFT);
+            $profileRows[] = ['profile_key' => $key, 'client_id' => $id,
+                'auth_strategy' => 'dcr_client_secret_post', 'generation' => 1,
+                'disabled_at' => null, 'created_at' => now(), 'updated_at' => now()];
+            $clientRows[] = ['client_id' => $id, 'profile_key' => $key,
+                'secret_hash' => hash('sha256', $id),
+                'redirect_uris' => json_encode([self::CALLBACK], JSON_THROW_ON_ERROR),
+                'display_name' => 'ChatGPT (DCR)', 'retired_at' => null,
+                'created_at' => now(), 'updated_at' => now()];
+        }
+        foreach (array_chunk($profileRows, 60) as $chunk) {
+            DB::table('oauth_client_profiles')->insert($chunk);
+        }
+        foreach (array_chunk($clientRows, 60) as $chunk) {
+            DB::table('oauth_dcr_clients')->insert($chunk);
+        }
+
+        $registration = app(DcrClientRegistration::class);
+        try {
+            $registration->register($this->registrationMetadata());
+            self::fail('Registration must reject exactly 512 occupied slots.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('capacity is unavailable', $exception->getMessage());
+        }
+        self::assertSame(512, DB::table('oauth_dcr_clients')->whereNull('retired_at')->count());
+
+        // Reclaim a dormant disabled registration without deleting its
+        // immutable identity. No existing registered profile is reactivated.
+        $registry = app(ClientProfileRegistry::class);
+        $retiredKey = $profileRows[0]['profile_key'];
+        $registry->disable($retiredKey);
+        $registry->retireDcr($retiredKey);
+
+        $fresh = $registration->register($this->registrationMetadata());
+        self::assertMatchesRegularExpression('/^dcr_[0-9a-f]{48}$/D', $fresh['client_id']);
+        self::assertSame(513, DB::table('oauth_dcr_clients')->count());
+        self::assertSame(512, DB::table('oauth_dcr_clients')->whereNull('retired_at')->count());
+        self::assertSame(1, DB::table('oauth_dcr_clients')->whereNotNull('retired_at')->count());
+        self::assertSame(2, (int) DB::table('oauth_client_profiles')
+            ->where('profile_key', $retiredKey)->value('generation'));
+        self::assertNotNull($registry->active($profileRows[1]['client_id']));
+        self::assertNull($registry->active($profileRows[0]['client_id']));
     }
 
     public function test_dcr_refresh_ttl_is_extended_by_rotation_without_regranting_or_reenabling(): void

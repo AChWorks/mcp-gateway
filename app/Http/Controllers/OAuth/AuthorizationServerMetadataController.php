@@ -23,7 +23,7 @@ final class AuthorizationServerMetadataController
             'code_challenge_methods_supported' => ['S256'],
             'token_endpoint_auth_methods_supported' => ['private_key_jwt', 'client_secret_post'],
             'token_endpoint_auth_signing_alg_values_supported' => ['RS256'],
-            'revocation_endpoint_auth_methods_supported' => ['private_key_jwt'],
+            'revocation_endpoint_auth_methods_supported' => ['private_key_jwt', 'client_secret_post'],
             'revocation_endpoint_auth_signing_alg_values_supported' => ['RS256'],
             'client_id_metadata_document_supported' => (bool) config('oauth.dcr.cimd_advertise'),
             ...($dcrEnabled ? ['registration_endpoint' => $issuer.'/oauth/register'] : []),

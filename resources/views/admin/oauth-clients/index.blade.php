@@ -28,7 +28,8 @@
                     $identityMatches = $stored !== null
                         && $stored->client_id === $profile['client_id']
                         && $stored->auth_strategy === $profile['strategy'];
-                    $isActive = $profile['enabled'] && $identityMatches && $stored->disabled_at === null;
+                    $isRetired = (bool) ($profile['retired'] ?? false);
+                    $isActive = $profile['enabled'] && !$isRetired && $identityMatches && $stored->disabled_at === null;
                 @endphp
                 <tr>
                     <td>
@@ -38,14 +39,14 @@
                     <td><code class="small-code">{{ $profile['client_id'] }}</code></td>
                     <td><code>{{ $profile['strategy'] }}</code></td>
                     <td>
-                        <span class="badge badge-{{ $isActive ? 'success' : 'danger' }}">{{ $isActive ? __('Enabled') : __('Disabled / unregistered') }}</span>
+                        <span class="badge badge-{{ $isActive ? 'success' : 'danger' }}">{{ $isRetired ? __('Retired (permanent)') : ($isActive ? __('Enabled') : __('Disabled / unregistered')) }}</span>
                     </td>
                 </tr>
             @endforeach
             </tbody>
         </table>
     </div>
-    <p class="muted">{{ __('Configured clients and dynamically registered ChatGPT clients are listed separately by immutable profile identity. Only the administrator CLI may disable a registered client; this invalidates all its grants. Revoked DCR clients cannot be re-enabled and must register again.') }}</p>
+    <p class="muted">{{ __('Configured and dynamically registered clients retain immutable profile identities. The administrator CLI can disable a DCR client and explicitly retire its unused registration after every consent is revoked. Retirement frees one registration slot without deleting identity history or restoring old credentials; it cannot be reversed.') }}</p>
 </section>
 
 <section class="panel panel-wide ai-client-authorizations">
