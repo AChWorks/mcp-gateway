@@ -4,6 +4,7 @@ namespace Tests\Feature\Admin;
 
 use App\Domain\Access\GatewayRole;
 use App\Models\User;
+use App\Support\AdminLoginIdentity;
 use Illuminate\Cache\RateLimiter as CacheRateLimiter;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -61,7 +62,56 @@ final class AdminLoginCollationMariaDbTest extends TestCase
             ->assertRedirect('/admin');
     }
 
-    public function test_valid_login_clears_canonical_id_counter_and_unknown_alias_has_generic_errors(): void
+    public function test_existing_and_missing_unicode_equivalent_accounts_have_identical_quota_responses(): void
+    {
+        $this->owner('owner@cafe.example.test');
+
+        $known = ['owner@cafe.example.test', 'owner@café.example.test'];
+        $missing = ['absent@cafe.example.test', 'absent@café.example.test'];
+        self::assertSame(
+            DB::scalar('SELECT COLLATION(email) FROM users LIMIT 1'),
+            DB::scalar('SELECT COLLATION(?)', [$known[0]]),
+            'The login comparison-weight connection must match the real users.email column collation.',
+        );
+        $identity = app(AdminLoginIdentity::class);
+        self::assertSame($identity->failureKey($known[0]), $identity->failureKey($known[1]));
+        self::assertSame($identity->failureKey($missing[0]), $identity->failureKey($missing[1]));
+        self::assertNotSame($identity->failureKey($known[0]), $identity->failureKey($missing[0]));
+
+        foreach ($missing as $email) {
+            self::assertNull(DB::table('users')->where('email', $email)->value('id'));
+        }
+
+        $observations = [];
+        foreach (['known' => $known, 'missing' => $missing] as $scenario => $aliases) {
+            $observations[$scenario] = [];
+            for ($i = 0; $i <= 10; $i++) {
+                // Distinct IPs make the cross-IP identity budget decisive.
+                $response = $this->withServerVariables(['REMOTE_ADDR' => '192.0.'.($scenario === 'known' ? '2' : '3').'.'.($i + 1)])
+                    ->post('/admin/login', [
+                        'email' => $aliases[$i % 2],
+                        'password' => 'wrong-password',
+                    ]);
+                $observations[$scenario][] = [
+                    'status' => $response->getStatusCode(),
+                    'retry' => $response->headers->has('Retry-After'),
+                ];
+                if ($i === 10) {
+                    $response->assertTooManyRequests()->assertHeader('Retry-After');
+                } else {
+                    $response->assertSessionHasErrors('email', __('The provided credentials are invalid.'));
+                }
+            }
+        }
+
+        self::assertSame($observations['known'], $observations['missing']);
+        self::assertSame(array_merge(
+            array_fill(0, 10, ['status' => 302, 'retry' => false]),
+            [['status' => 429, 'retry' => true]],
+        ), $observations['known']);
+    }
+
+    public function test_valid_login_clears_collation_equivalent_counter_and_unknown_alias_has_generic_errors(): void
     {
         $user = $this->owner('owner@cafe.example.test');
 
@@ -99,10 +149,23 @@ final class AdminLoginCollationMariaDbTest extends TestCase
             ])->assertSessionHasErrors('email', __('The provided credentials are invalid.'));
     }
 
-    public function test_parallel_failed_aliases_cannot_overrun_canonical_account_budget(): void
+    public function test_parallel_existing_and_missing_aliases_have_the_same_serialized_budget(): void
     {
-        $user = $this->owner('owner@cafe.example.test');
-        $key = 'admin-login:failed-identity:user:'.$user->id;
+        $this->owner('owner@cafe.example.test');
+
+        $known = $this->runParallelAliasBudget('owner@cafe.example.test', 'owner@café.example.test');
+        $missing = $this->runParallelAliasBudget('absent@cafe.example.test', 'absent@café.example.test');
+
+        self::assertSame($known, $missing);
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function runParallelAliasBudget(string $primaryEmail, string $aliasEmail): array
+    {
+        $key = app(AdminLoginIdentity::class)->failureKey($primaryEmail);
+        self::assertSame($key, app(AdminLoginIdentity::class)->failureKey($aliasEmail));
         // File store is shared by external PHP workers. The parent PHPUnit
         // application was booted with an array limiter, so inspect the
         // actual shared store with an explicit RateLimiter instance.
@@ -126,7 +189,7 @@ final class AdminLoginCollationMariaDbTest extends TestCase
             $warmPipes = [];
             $warm = proc_open([
                 PHP_BINARY, base_path('tests/Support/admin_concurrent_login_request.php'),
-                $warmBarrier, $warmReady, $user->email, '203.0.113.1', '8',
+                $warmBarrier, $warmReady, $primaryEmail, '203.0.113.1', '8',
             ], [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
                 $warmPipes, base_path());
             if (! is_resource($warm)) {
@@ -147,7 +210,7 @@ final class AdminLoginCollationMariaDbTest extends TestCase
                 $pipes = [];
                 $worker = proc_open([
                     PHP_BINARY, base_path('tests/Support/admin_concurrent_login_request.php'),
-                    $barrier, $ready, $i % 2 ? 'owner@café.example.test' : $user->email,
+                    $barrier, $ready, $i % 2 ? $aliasEmail : $primaryEmail,
                     '203.0.113.'.($i + 31),
                 ], [
                     0 => ['file', '/dev/null', 'r'],
@@ -188,6 +251,7 @@ final class AdminLoginCollationMariaDbTest extends TestCase
             self::assertSame([302, 302, 429, 429], $codes);
             self::assertSame(10, $fileLimiter->attempts($key));
         } finally {
+            $fileLimiter->clear($key);
             foreach ($workers as $worker) {
                 if (is_resource($worker['worker'])) {
                     proc_terminate($worker['worker']);
@@ -201,6 +265,9 @@ final class AdminLoginCollationMariaDbTest extends TestCase
             }
             rmdir($folder);
         }
+        self::assertSame(0, $fileLimiter->attempts($key));
+
+        return $codes;
     }
 
     private function owner(string $email): User
