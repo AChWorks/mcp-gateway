@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureCorrelationId;
+use App\Http\Middleware\SecureAdminResponses;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -27,11 +28,15 @@ return Application::configure(basePath: dirname(__DIR__))
         // Admin, OAuth, MCP and future HTTP routes share a request reference.
         // Existing MCP-local middleware reuses the attribute already set.
         $middleware->append(EnsureCorrelationId::class);
+        $middleware->appendToGroup('web', SecureAdminResponses::class);
         // MCP routes are registered outside the stateful web middleware group.
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // SSH secrets are not session-flashed after failed validation.
-        $exceptions->dontFlash(['ssh_password', 'ssh_private_key', 'ssh_passphrase']);
+        $exceptions->dontFlash([
+            'password', 'password_confirmation', 'current_password',
+            'ssh_password', 'ssh_private_key', 'ssh_passphrase',
+        ]);
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );

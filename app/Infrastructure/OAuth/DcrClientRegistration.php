@@ -3,6 +3,7 @@
 namespace App\Infrastructure\OAuth;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -11,6 +12,14 @@ final class DcrClientRegistration
     private const REGISTRATION_LIMIT = 512;
 
     private const MAX_REDIRECT_URIS = 4;
+
+    // Count successful admissions globally, not invalid or malformed requests.
+    // With 24-hour orphan reclamation this bounds distributed pre-consent abuse.
+    private const MAX_ADMISSIONS_PER_HOUR = 15;
+
+    private const UNCONSENTED_GRACE_HOURS = 24;
+
+    private const RECLAIM_BATCH_SIZE = 8;
 
     /**
      * RFC 7591 public registration of an authenticated, PKCE-required client.
@@ -63,13 +72,28 @@ final class DcrClientRegistration
         $profileKey = 'dcr_'.bin2hex(random_bytes(16));
         $secret = rtrim(strtr(base64_encode(random_bytes(48)), '+/', '-_'), '=');
 
-        DB::transaction(static function () use ($clientId, $profileKey, $secret, $redirectUris, $name): void {
+        DB::transaction(function () use ($clientId, $profileKey, $secret, $redirectUris, $name): void {
             // Serialize registrations using one existing durable row on MariaDB.
             // This makes the global admission limit meaningful under concurrency.
             $anchor = DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')
                 ->lockForUpdate()->first(['profile_key']);
-            if ($anchor === null || DB::table('oauth_dcr_clients')
-                ->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
+            if ($anchor === null) {
+                throw new RuntimeException('OAuth client registration capacity is unavailable.');
+            }
+
+            // Check the shared success budget *before* any capacity-recovery
+            // effects. Rate-rejected requests must never retire even an orphan.
+            // The admission anchor serializes the check and subsequent hit.
+            $budget = 'oauth-dcr:successful-registrations:global';
+            if (RateLimiter::tooManyAttempts($budget, self::MAX_ADMISSIONS_PER_HOUR)) {
+                throw new DcrRegistrationRateLimited(max(1, RateLimiter::availableIn($budget)));
+            }
+
+            if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
+                $this->reclaimExpiredNeverAuthorizedRegistrations();
+            }
+
+            if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
                 throw new RuntimeException('OAuth client registration capacity is unavailable.');
             }
 
@@ -92,6 +116,10 @@ final class DcrClientRegistration
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
+
+            // A rare DB commit failure may conservatively charge an attempt.
+            // Never admit uncounted registrations if the limiter store fails.
+            RateLimiter::hit($budget, 3600);
         });
 
         return [
@@ -105,6 +133,65 @@ final class DcrClientRegistration
             'response_types' => ['code'],
             'token_endpoint_auth_method' => 'client_secret_post',
         ];
+    }
+
+    /**
+     * Capacity-pressure recovery only: an old registration that has NEVER
+     * obtained any authorization can be retired without revoking a consent.
+     *
+     * Keep the exact admission -> profile -> DCR lock order. OAuth consent
+     * locks profile -> DCR; after waiting for that lock, use a CURRENT
+     * (FOR UPDATE) grant read, not the earlier MariaDB repeatable-read
+     * snapshot, before permanently fencing the pending identity.
+     */
+    private function reclaimExpiredNeverAuthorizedRegistrations(): void
+    {
+        $cutoff = now()->subHours(self::UNCONSENTED_GRACE_HOURS);
+        $candidates = DB::table('oauth_dcr_clients as clients')
+            ->whereNull('clients.retired_at')
+            ->where('clients.created_at', '<=', $cutoff)
+            ->whereNotExists(static function ($query): void {
+                $query->selectRaw('1')->from('oauth_authorizations as grants')
+                    ->whereColumn('grants.client_id', 'clients.client_id');
+            })
+            ->orderBy('clients.created_at')
+            ->limit(self::RECLAIM_BATCH_SIZE)
+            ->get(['clients.client_id', 'clients.profile_key']);
+
+        foreach ($candidates as $candidate) {
+            $profile = DB::table('oauth_client_profiles')
+                ->where('profile_key', $candidate->profile_key)
+                ->lockForUpdate()->first(['client_id', 'auth_strategy', 'generation', 'disabled_at']);
+            $client = DB::table('oauth_dcr_clients')
+                ->where('profile_key', $candidate->profile_key)
+                ->where('created_at', '<=', $cutoff)
+                ->lockForUpdate()->first(['client_id', 'retired_at']);
+
+            if ($profile === null || $client === null
+                || $profile->auth_strategy !== 'dcr_client_secret_post'
+                || $profile->client_id !== $candidate->client_id
+                || $client->client_id !== $candidate->client_id
+                || $client->retired_at !== null
+                || DB::table('oauth_authorizations')->where('client_id', $candidate->client_id)
+                    ->lockForUpdate()->first(['id']) !== null) {
+                continue;
+            }
+
+            if ($profile->disabled_at === null) {
+                DB::table('oauth_client_profiles')->where('profile_key', $candidate->profile_key)
+                    ->update([
+                        'generation' => (int) $profile->generation + 1,
+                        'disabled_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+            }
+
+            // Keep the immutable client/secret digest and audit histories.
+            // Retired client IDs cannot ever be reused or re-enabled.
+            DB::table('oauth_dcr_clients')->where('profile_key', $candidate->profile_key)
+                ->whereNull('retired_at')
+                ->update(['retired_at' => now(), 'updated_at' => now()]);
+        }
     }
 
     private function trustedChatGptCallback(string $uri): bool

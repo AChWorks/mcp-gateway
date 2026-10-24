@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\OAuth;
 
 use App\Infrastructure\OAuth\DcrClientRegistration;
+use App\Infrastructure\OAuth\DcrRegistrationRateLimited;
 use App\Support\CorrelationId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -60,6 +61,9 @@ final readonly class DcrRegistrationController
                 ->header('Pragma', 'no-cache');
         } catch (InvalidArgumentException) {
             return $this->error('invalid_client_metadata', 'Unsupported OAuth client registration metadata.', 400);
+        } catch (DcrRegistrationRateLimited $exception) {
+            return $this->error('slow_down', 'Registration rate limit exceeded.', 429)
+                ->header('Retry-After', (string) $exception->retryAfterSeconds);
         } catch (RuntimeException) {
             return $this->error('temporarily_unavailable', 'Registration capacity is temporarily unavailable.', 503);
         }

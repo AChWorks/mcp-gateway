@@ -3,6 +3,7 @@
 namespace Tests\Feature\OAuth;
 
 use App\Infrastructure\OAuth\ClientProfileRegistry;
+use App\Models\User;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -137,6 +138,112 @@ final class DcrRegistrationConcurrencyTest extends TestCase
         }
     }
 
+    public function test_expired_registration_cannot_be_retired_after_concurrent_consent_commits(): void
+    {
+        $this->seedDormantProfiles(512);
+        $clientId = 'dcr_'.str_pad('0', 48, '0', STR_PAD_LEFT);
+        $profileKey = 'dcr_'.str_pad('0', 32, '0', STR_PAD_LEFT);
+        DB::table('oauth_dcr_clients')->where('client_id', $clientId)
+            ->update(['created_at' => now()->subHours(25)]);
+
+        $user = User::query()->create([
+            'name' => 'Concurrent consent owner',
+            'email' => 'consent-race@example.test',
+            'password' => 'CorrectHorse!234',
+        ]);
+
+        // Consent holds the profile lock while creating its authorization.
+        // Registration may have selected the orphan under MariaDB's older
+        // transaction snapshot, but MUST re-read grants after acquiring the
+        // profile lock. This test proves that exact race under two PDO sessions.
+        $consent = $this->newDatabaseConnection();
+        $consent->beginTransaction();
+        $locked = $consent->prepare('SELECT profile_key FROM oauth_client_profiles WHERE profile_key=? FOR UPDATE');
+        $locked->execute([$profileKey]);
+        self::assertSame($profileKey, $locked->fetchColumn());
+
+        $directory = storage_path('framework/testing/dcr-consent-race-'.Str::uuid());
+        if (! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+            throw new RuntimeException('Cannot create disposable DCR consent race fixture.');
+        }
+
+        $barrier = $directory.'/go';
+        $ready = $directory.'/ready';
+        $pipes = [];
+        $worker = null;
+
+        try {
+            $worker = proc_open([
+                PHP_BINARY,
+                base_path('tests/Support/dcr_concurrent_registration_request.php'),
+                $barrier,
+                $ready,
+            ], [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, base_path());
+            if (! is_resource($worker)) {
+                throw new RuntimeException('Cannot start concurrent DCR registration fixture.');
+            }
+
+            $deadline = microtime(true) + 10;
+            while (! is_file($ready)) {
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Concurrent DCR registration did not report readiness.');
+                }
+                usleep(1000);
+            }
+            if (! touch($barrier)) {
+                throw new RuntimeException('Cannot release concurrent DCR registration barrier.');
+            }
+
+            // Registration selects the old unconsented candidate and must
+            // block when acquiring its profile row FOR UPDATE.
+            usleep(500_000);
+
+            $insert = $consent->prepare(
+                'INSERT INTO oauth_authorizations '
+                .'(id, user_id, client_id, client_profile_key, client_profile_generation, '
+                .'resource, resource_hash, scopes, revoked_at, created_at, updated_at) '
+                .'VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NOW(), NOW())',
+            );
+            $resource = (string) config('oauth.resource');
+            $insert->execute([
+                (string) Str::ulid(), $user->id, $clientId, $profileKey, 1,
+                $resource, hash('sha256', $resource),
+                json_encode(['mcp'], JSON_THROW_ON_ERROR),
+            ]);
+            $consent->commit();
+
+            $stdout = stream_get_contents($pipes[1]);
+            $stderr = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $exit = proc_close($worker);
+            $worker = null;
+
+            self::assertSame(0, $exit, trim((string) $stderr));
+            self::assertSame('capacity', json_decode((string) $stdout, true, flags: JSON_THROW_ON_ERROR)['outcome']);
+            self::assertSame(512, DB::table('oauth_dcr_clients')->whereNull('retired_at')->count());
+            self::assertNull(DB::table('oauth_dcr_clients')->where('client_id', $clientId)->value('retired_at'));
+            self::assertNull(DB::table('oauth_client_profiles')->where('profile_key', $profileKey)->value('disabled_at'));
+            self::assertSame(1, DB::table('oauth_authorizations')->where('client_id', $clientId)->count());
+        } finally {
+            if ($consent->inTransaction()) {
+                $consent->rollBack();
+            }
+            if (is_resource($worker)) {
+                proc_terminate($worker);
+                proc_close($worker);
+            }
+            foreach ([$barrier, $ready] as $path) {
+                if (is_file($path)) {
+                    unlink($path);
+                }
+            }
+            if (is_dir($directory)) {
+                rmdir($directory);
+            }
+        }
+    }
+
     private function seedDormantProfiles(int $count): void
     {
         $profiles = [];
@@ -164,6 +271,19 @@ final class DcrRegistrationConcurrencyTest extends TestCase
 
     private function lockRegistrationAnchor(): PDO
     {
+        $pdo = $this->newDatabaseConnection();
+        $pdo->beginTransaction();
+        $row = $pdo->query("SELECT profile_key FROM oauth_client_profiles WHERE profile_key='chatgpt' FOR UPDATE");
+        if ($row === false || $row->fetchColumn() === false) {
+            $pdo->rollBack();
+            throw new RuntimeException('DCR admission lock anchor is missing.');
+        }
+
+        return $pdo;
+    }
+
+    private function newDatabaseConnection(): PDO
+    {
         $configuration = DB::connection()->getConfig();
         $socket = (string) ($configuration['unix_socket'] ?? '');
         $dsn = $socket !== ''
@@ -174,18 +294,10 @@ final class DcrRegistrationConcurrencyTest extends TestCase
                 (string) ($configuration['port'] ?? '3306'),
                 (string) ($configuration['database'] ?? ''));
 
-        $pdo = new PDO($dsn, (string) ($configuration['username'] ?? ''),
+        return new PDO($dsn, (string) ($configuration['username'] ?? ''),
             (string) ($configuration['password'] ?? ''), [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_EMULATE_PREPARES => false,
             ]);
-        $pdo->beginTransaction();
-        $row = $pdo->query("SELECT profile_key FROM oauth_client_profiles WHERE profile_key='chatgpt' FOR UPDATE");
-        if ($row === false || $row->fetchColumn() === false) {
-            $pdo->rollBack();
-            throw new RuntimeException('DCR admission lock anchor is missing.');
-        }
-
-        return $pdo;
     }
 }
