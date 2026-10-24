@@ -4,9 +4,10 @@ namespace Tests\Feature\Admin;
 
 use App\Domain\Access\GatewayRole;
 use App\Models\User;
+use Illuminate\Cache\RateLimiter as CacheRateLimiter;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
@@ -102,15 +103,11 @@ final class AdminLoginCollationMariaDbTest extends TestCase
     {
         $user = $this->owner('owner@cafe.example.test');
         $key = 'admin-login:failed-identity:user:'.$user->id;
-        RateLimiter::clear($key);
-
-        for ($i = 0; $i < 8; $i++) {
-            $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.'.($i + 1)])
-                ->post('/admin/login', [
-                    'email' => $i % 2 ? 'owner@café.example.test' : $user->email,
-                    'password' => 'wrong-password',
-                ])->assertSessionHasErrors('email');
-        }
+        // File store is shared by external PHP workers. The parent PHPUnit
+        // application was booted with an array limiter, so inspect the
+        // actual shared store with an explicit RateLimiter instance.
+        $fileLimiter = new CacheRateLimiter(Cache::store('file'));
+        $fileLimiter->clear($key);
 
         $folder = storage_path('framework/testing/admin-login-race-'.Str::uuid());
         if (! mkdir($folder, 0700, true) && ! is_dir($folder)) {
@@ -120,6 +117,31 @@ final class AdminLoginCollationMariaDbTest extends TestCase
         $workers = [];
 
         try {
+            $warmBarrier = $folder.'/warm-go';
+            $warmReady = $folder.'/warm-ready';
+            if (! touch($warmBarrier)) {
+                throw new RuntimeException('Could not start warm-up fixture.');
+            }
+
+            $warmPipes = [];
+            $warm = proc_open([
+                PHP_BINARY, base_path('tests/Support/admin_concurrent_login_request.php'),
+                $warmBarrier, $warmReady, $user->email, '203.0.113.1', '8',
+            ], [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+                $warmPipes, base_path());
+            if (! is_resource($warm)) {
+                throw new RuntimeException('Could not start warm-up worker.');
+            }
+
+            $warmStdout = stream_get_contents($warmPipes[1]);
+            $warmStderr = stream_get_contents($warmPipes[2]);
+            fclose($warmPipes[1]);
+            fclose($warmPipes[2]);
+            self::assertSame(0, proc_close($warm), trim((string) $warmStderr));
+            self::assertSame(array_fill(0, 8, 302),
+                json_decode((string) $warmStdout, true, flags: JSON_THROW_ON_ERROR)['statuses']);
+            self::assertSame(8, $fileLimiter->attempts($key));
+
             for ($i = 0; $i < 4; $i++) {
                 $ready = $folder.'/ready-'.$i;
                 $pipes = [];
@@ -164,7 +186,7 @@ final class AdminLoginCollationMariaDbTest extends TestCase
             }
             sort($codes);
             self::assertSame([302, 302, 429, 429], $codes);
-            self::assertSame(10, RateLimiter::attempts($key));
+            self::assertSame(10, $fileLimiter->attempts($key));
         } finally {
             foreach ($workers as $worker) {
                 if (is_resource($worker['worker'])) {
