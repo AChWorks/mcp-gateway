@@ -251,19 +251,25 @@ final class AdminLoginCollationMariaDbTest extends TestCase
             self::assertSame([302, 302, 429, 429], $codes);
             self::assertSame(10, $fileLimiter->attempts($key));
         } finally {
-            $fileLimiter->clear($key);
-            foreach ($workers as $worker) {
-                if (is_resource($worker['worker'])) {
-                    proc_terminate($worker['worker']);
-                    proc_close($worker['worker']);
+            try {
+                foreach ($workers as $worker) {
+                    if (is_resource($worker['worker'])) {
+                        proc_terminate($worker['worker']);
+                        proc_close($worker['worker']);
+                    }
                 }
-            }
-            foreach (glob($folder.'/*') ?: [] as $file) {
-                if (is_file($file)) {
-                    unlink($file);
+                foreach (glob($folder.'/*') ?: [] as $file) {
+                    if (is_file($file)) {
+                        unlink($file);
+                    }
                 }
+                rmdir($folder);
+            } finally {
+                // Clear only after workers have exited, even when fixture
+                // cleanup fails. A running worker could otherwise recreate
+                // the same shared file-backed failure counter.
+                $fileLimiter->clear($key);
             }
-            rmdir($folder);
         }
         self::assertSame(0, $fileLimiter->attempts($key));
 
