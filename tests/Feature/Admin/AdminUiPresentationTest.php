@@ -581,6 +581,50 @@ final class AdminUiPresentationTest extends TestCase
             ->assertDontSee('Existing denial retained');
     }
 
+    public function test_ai_client_registry_paginates_durable_history_and_supports_exact_profile_lookup(): void
+    {
+        $profiles = [];
+        $clients = [];
+        for ($i = 0; $i < 53; $i++) {
+            $profile = 'dcr_'.str_pad(dechex($i), 32, '0', STR_PAD_LEFT);
+            $client = 'dcr_'.str_pad(dechex($i), 48, '0', STR_PAD_LEFT);
+            $profiles[] = [
+                'profile_key' => $profile, 'client_id' => $client,
+                'auth_strategy' => 'dcr_client_secret_post',
+                'generation' => 1, 'disabled_at' => null,
+                'created_at' => now()->addSeconds($i), 'updated_at' => now(),
+            ];
+            $clients[] = [
+                'profile_key' => $profile, 'client_id' => $client,
+                'display_name' => 'ChatGPT (DCR)', 'secret_hash' => hash('sha256', $client),
+                'redirect_uris' => json_encode(['https://chatgpt.com/connector_platform_oauth_redirect'], JSON_THROW_ON_ERROR),
+                'retired_at' => $i === 0 ? now() : null,
+                'created_at' => now()->addSeconds($i), 'updated_at' => now(),
+            ];
+        }
+        foreach (array_chunk($profiles, 40) as $rows) {
+            DB::table('oauth_client_profiles')->insert($rows);
+        }
+        foreach (array_chunk($clients, 40) as $rows) {
+            DB::table('oauth_dcr_clients')->insert($rows);
+        }
+
+        $this->actingAs($this->owner());
+        $first = $this->get('/admin/oauth-clients')->assertOk()->assertSee('DCR client profile pages');
+        self::assertSame(50, substr_count($first->getContent(), '<code>dcr_client_secret_post</code>'));
+        $first->assertDontSee('<code>dcr_'.str_pad('0', 32, '0', STR_PAD_LEFT).'</code>', false)
+            ->assertSee('clients_page=2');
+
+        $second = $this->get('/admin/oauth-clients?clients_page=2')->assertOk();
+        self::assertSame(3, substr_count($second->getContent(), '<code>dcr_client_secret_post</code>'));
+        $second->assertSee('<code>dcr_'.str_pad('0', 32, '0', STR_PAD_LEFT).'</code>', false)
+            ->assertSee('Retired (permanent)');
+
+        $filtered = $this->get('/admin/oauth-clients?profile=dcr_'.str_pad('0', 32, '0', STR_PAD_LEFT))
+            ->assertOk();
+        self::assertSame(1, substr_count($filtered->getContent(), '<code>dcr_client_secret_post</code>'));
+    }
+
     private function owner(): User
     {
         return User::query()->create([
