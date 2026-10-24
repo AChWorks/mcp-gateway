@@ -5,11 +5,12 @@ namespace Tests\Feature\OAuth;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\DcrClientRegistration;
 use App\Infrastructure\OAuth\DcrRegistrationRateLimited;
+use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
-use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
 final class DcrRegistrationAbuseTest extends TestCase
@@ -63,21 +64,16 @@ final class DcrRegistrationAbuseTest extends TestCase
             'name' => 'Gateway Tester',
             'email' => 'existing-grant@example.test',
             'password' => 'CorrectHorse!234',
+            'ai_access_enabled' => true,
         ]);
         $resource = (string) config('oauth.resource');
-        DB::table('oauth_authorizations')->insert([
-            'id' => (string) Str::ulid(),
-            'user_id' => $user->id,
-            'client_id' => $historical['id'],
-            'client_profile_key' => $historical['profile'],
-            'client_profile_generation' => 1,
-            'resource' => $resource,
-            'resource_hash' => hash('sha256', $resource),
-            'scopes' => json_encode(['mcp'], JSON_THROW_ON_ERROR),
-            'revoked_at' => now()->subMinutes(30),
-            'created_at' => $old,
-            'updated_at' => now(),
-        ]);
+        // Use the real transactional consent path to persist the witness,
+        // then revoke the grant without undoing prior consent.
+        app(OAuthAuthorizationStore::class)->approve(
+            (int) $user->id, $historical['id'], $resource, ['mcp'],
+        );
+        DB::table('oauth_authorizations')->where('client_id', $historical['id'])
+            ->update(['revoked_at' => now()->subMinutes(30)]);
 
         $registered = app(DcrClientRegistration::class)->register($this->registrationMetadata());
 
@@ -92,6 +88,65 @@ final class DcrRegistrationAbuseTest extends TestCase
         self::assertNotNull(app(ClientProfileRegistry::class)->active($historical['id']));
         self::assertNotNull(app(ClientProfileRegistry::class)->active((string) $registered['client_id']));
         self::assertSame(1, DB::table('oauth_authorizations')->where('client_id', $historical['id'])->count());
+    }
+
+    #[Group('database-concurrency')]
+    public function test_real_consent_witness_survives_user_deletion_and_protects_client_at_capacity(): void
+    {
+        $authorized = app(DcrClientRegistration::class)->register($this->registrationMetadata());
+        $authorizedId = (string) $authorized['client_id'];
+        $user = User::query()->create([
+            'name' => 'Deleted authorized user',
+            'email' => 'deleted-dcr@example.test',
+            'password' => 'CorrectHorse!234',
+            'ai_access_enabled' => true,
+        ]);
+
+        app(OAuthAuthorizationStore::class)->approve(
+            (int) $user->id, $authorizedId, (string) config('oauth.resource'), ['mcp'],
+        );
+        self::assertNotNull(DB::table('oauth_dcr_clients')->where('client_id', $authorizedId)->value('ever_authorized_at'));
+        self::assertFalse((bool) DB::table('oauth_dcr_clients')->where('client_id', $authorizedId)->value('auto_retirement_eligible'));
+
+        // Cascading user deletion erases grants but not the independent DCR
+        // witness. A never-authorized older identity should be retired instead.
+        DB::table('oauth_authorizations')->where('client_id', $authorizedId)
+            ->update(['revoked_at' => now()]);
+        $user->delete();
+        self::assertSame(0, DB::table('oauth_authorizations')->where('client_id', $authorizedId)->count());
+
+        $this->seedRegisteredClients(511);
+        $neverAuthorized = $this->client(0);
+        DB::table('oauth_dcr_clients')->where('client_id', $authorizedId)
+            ->update(['created_at' => now()->subHours(29)]);
+        DB::table('oauth_dcr_clients')->where('client_id', $neverAuthorized['id'])
+            ->update(['created_at' => now()->subHours(28)]);
+
+        app(DcrClientRegistration::class)->register($this->registrationMetadata());
+
+        self::assertNull(DB::table('oauth_dcr_clients')->where('client_id', $authorizedId)->value('retired_at'));
+        self::assertNotNull(app(ClientProfileRegistry::class)->active($authorizedId));
+        self::assertNotNull(DB::table('oauth_dcr_clients')->where('client_id', $neverAuthorized['id'])->value('retired_at'));
+    }
+
+    public function test_unknown_legacy_history_is_not_assumed_never_authorized(): void
+    {
+        $this->seedRegisteredClients(512);
+        $legacy = $this->client(0);
+        DB::table('oauth_dcr_clients')->where('client_id', $legacy['id'])->update([
+            'created_at' => now()->subDays(30),
+            'auto_retirement_eligible' => false,
+            'ever_authorized_at' => null,
+        ]);
+
+        try {
+            app(DcrClientRegistration::class)->register($this->registrationMetadata());
+            self::fail('Old unknown DCR histories cannot be automatically retired.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('capacity is unavailable', $exception->getMessage());
+        }
+
+        self::assertNull(DB::table('oauth_dcr_clients')->where('client_id', $legacy['id'])->value('retired_at'));
     }
 
     public function test_rate_rejected_registration_never_retires_even_an_expired_orphan(): void
@@ -172,6 +227,8 @@ final class DcrRegistrationAbuseTest extends TestCase
                 'secret_hash' => hash('sha256', $client['id']),
                 'redirect_uris' => json_encode([self::CALLBACK], JSON_THROW_ON_ERROR),
                 'display_name' => 'ChatGPT (DCR)',
+                'auto_retirement_eligible' => true,
+                'ever_authorized_at' => null,
                 'retired_at' => null,
                 'created_at' => now(),
                 'updated_at' => now(),

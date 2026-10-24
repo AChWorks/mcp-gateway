@@ -3,9 +3,12 @@
 namespace Tests\Feature\OAuth;
 
 use App\Infrastructure\OAuth\ClientProfileRegistry;
+use App\Infrastructure\OAuth\DcrClientRegistration;
+use App\Infrastructure\OAuth\DcrRegistrationRateLimited;
 use App\Models\User;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use PDO;
 use PHPUnit\Framework\Attributes\Group;
@@ -144,7 +147,7 @@ final class DcrRegistrationConcurrencyTest extends TestCase
         $clientId = 'dcr_'.str_pad('0', 48, '0', STR_PAD_LEFT);
         $profileKey = 'dcr_'.str_pad('0', 32, '0', STR_PAD_LEFT);
         DB::table('oauth_dcr_clients')->where('client_id', $clientId)
-            ->update(['created_at' => now()->subHours(25)]);
+            ->update(['created_at' => now()->subHours(25), 'auto_retirement_eligible' => true]);
 
         $user = User::query()->create([
             'name' => 'Concurrent consent owner',
@@ -210,6 +213,11 @@ final class DcrRegistrationConcurrencyTest extends TestCase
                 $resource, hash('sha256', $resource),
                 json_encode(['mcp'], JSON_THROW_ON_ERROR),
             ]);
+            $witness = $consent->prepare(
+                'UPDATE oauth_dcr_clients SET ever_authorized_at = COALESCE(ever_authorized_at, NOW()), '
+                .'auto_retirement_eligible = 0 WHERE client_id = ?',
+            );
+            $witness->execute([$clientId]);
             $consent->commit();
 
             $stdout = stream_get_contents($pipes[1]);
@@ -225,6 +233,8 @@ final class DcrRegistrationConcurrencyTest extends TestCase
             self::assertNull(DB::table('oauth_dcr_clients')->where('client_id', $clientId)->value('retired_at'));
             self::assertNull(DB::table('oauth_client_profiles')->where('profile_key', $profileKey)->value('disabled_at'));
             self::assertSame(1, DB::table('oauth_authorizations')->where('client_id', $clientId)->count());
+            self::assertNotNull(DB::table('oauth_dcr_clients')->where('client_id', $clientId)
+                ->value('ever_authorized_at'));
         } finally {
             if ($consent->inTransaction()) {
                 $consent->rollBack();
@@ -241,6 +251,35 @@ final class DcrRegistrationConcurrencyTest extends TestCase
             if (is_dir($directory)) {
                 rmdir($directory);
             }
+        }
+    }
+
+    public function test_exhausted_global_budget_is_rejected_without_waiting_for_database_anchor(): void
+    {
+        $budget = 'oauth-dcr:successful-registrations:global';
+        for ($i = 0; $i < 15; $i++) {
+            RateLimiter::hit($budget, 3600);
+        }
+
+        $blocker = $this->lockRegistrationAnchor();
+        try {
+            // If the precheck regresses, this would wait for the row lock.
+            // Bound the test session's failure instead of hanging CI.
+            DB::statement('SET SESSION innodb_lock_wait_timeout = 2');
+
+            $this->expectException(DcrRegistrationRateLimited::class);
+            app(DcrClientRegistration::class)->register([
+                'client_name' => 'ChatGPT',
+                'redirect_uris' => [self::CALLBACK],
+                'grant_types' => ['authorization_code', 'refresh_token'],
+                'response_types' => ['code'],
+                'token_endpoint_auth_method' => 'client_secret_post',
+            ]);
+        } finally {
+            if ($blocker->inTransaction()) {
+                $blocker->rollBack();
+            }
+            RateLimiter::clear($budget);
         }
     }
 

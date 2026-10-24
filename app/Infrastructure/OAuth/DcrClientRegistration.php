@@ -17,6 +17,8 @@ final class DcrClientRegistration
     // With 24-hour orphan reclamation this bounds distributed pre-consent abuse.
     private const MAX_ADMISSIONS_PER_HOUR = 15;
 
+    private const GLOBAL_ADMISSION_KEY = 'oauth-dcr:successful-registrations:global';
+
     private const UNCONSENTED_GRACE_HOURS = 24;
 
     private const RECLAIM_BATCH_SIZE = 8;
@@ -68,6 +70,11 @@ final class DcrClientRegistration
         // Redirects are strictly ChatGPT-owned, but untrusted registration metadata
         // must never control the consent UI's trusted-looking application name.
         $name = 'ChatGPT (DCR)';
+
+        // Cheap preliminary rejection keeps already-exhausted distributed
+        // traffic off the MariaDB admission lock. The *authoritative* repeat
+        // under that lock is still required to prevent quota races.
+        $this->assertGlobalAdmissionAvailable();
         $clientId = 'dcr_'.bin2hex(random_bytes(24));
         $profileKey = 'dcr_'.bin2hex(random_bytes(16));
         $secret = rtrim(strtr(base64_encode(random_bytes(48)), '+/', '-_'), '=');
@@ -84,10 +91,7 @@ final class DcrClientRegistration
             // Check the shared success budget *before* any capacity-recovery
             // effects. Rate-rejected requests must never retire even an orphan.
             // The admission anchor serializes the check and subsequent hit.
-            $budget = 'oauth-dcr:successful-registrations:global';
-            if (RateLimiter::tooManyAttempts($budget, self::MAX_ADMISSIONS_PER_HOUR)) {
-                throw new DcrRegistrationRateLimited(max(1, RateLimiter::availableIn($budget)));
-            }
+            $this->assertGlobalAdmissionAvailable();
 
             if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
                 $this->reclaimExpiredNeverAuthorizedRegistrations();
@@ -112,6 +116,8 @@ final class DcrClientRegistration
                 'secret_hash' => hash('sha256', $secret),
                 'redirect_uris' => json_encode($redirectUris, JSON_THROW_ON_ERROR),
                 'display_name' => trim($name),
+                'ever_authorized_at' => null,
+                'auto_retirement_eligible' => true,
                 'retired_at' => null,
                 'created_at' => now(),
                 'updated_at' => now(),
@@ -119,7 +125,7 @@ final class DcrClientRegistration
 
             // A rare DB commit failure may conservatively charge an attempt.
             // Never admit uncounted registrations if the limiter store fails.
-            RateLimiter::hit($budget, 3600);
+            RateLimiter::hit(self::GLOBAL_ADMISSION_KEY, 3600);
         });
 
         return [
@@ -133,6 +139,15 @@ final class DcrClientRegistration
             'response_types' => ['code'],
             'token_endpoint_auth_method' => 'client_secret_post',
         ];
+    }
+
+    private function assertGlobalAdmissionAvailable(): void
+    {
+        if (RateLimiter::tooManyAttempts(self::GLOBAL_ADMISSION_KEY, self::MAX_ADMISSIONS_PER_HOUR)) {
+            throw new DcrRegistrationRateLimited(max(
+                1, RateLimiter::availableIn(self::GLOBAL_ADMISSION_KEY),
+            ));
+        }
     }
 
     /**
@@ -149,6 +164,8 @@ final class DcrClientRegistration
         $cutoff = now()->subHours(self::UNCONSENTED_GRACE_HOURS);
         $candidates = DB::table('oauth_dcr_clients as clients')
             ->whereNull('clients.retired_at')
+            ->where('clients.auto_retirement_eligible', true)
+            ->whereNull('clients.ever_authorized_at')
             ->where('clients.created_at', '<=', $cutoff)
             ->whereNotExists(static function ($query): void {
                 $query->selectRaw('1')->from('oauth_authorizations as grants')
@@ -165,13 +182,15 @@ final class DcrClientRegistration
             $client = DB::table('oauth_dcr_clients')
                 ->where('profile_key', $candidate->profile_key)
                 ->where('created_at', '<=', $cutoff)
-                ->lockForUpdate()->first(['client_id', 'retired_at']);
+                ->lockForUpdate()->first(['client_id', 'retired_at', 'ever_authorized_at', 'auto_retirement_eligible']);
 
             if ($profile === null || $client === null
                 || $profile->auth_strategy !== 'dcr_client_secret_post'
                 || $profile->client_id !== $candidate->client_id
                 || $client->client_id !== $candidate->client_id
                 || $client->retired_at !== null
+                || $client->ever_authorized_at !== null
+                || ! (bool) $client->auto_retirement_eligible
                 || DB::table('oauth_authorizations')->where('client_id', $candidate->client_id)
                     ->lockForUpdate()->first(['id']) !== null) {
                 continue;
@@ -190,7 +209,7 @@ final class DcrClientRegistration
             // Retired client IDs cannot ever be reused or re-enabled.
             DB::table('oauth_dcr_clients')->where('profile_key', $candidate->profile_key)
                 ->whereNull('retired_at')
-                ->update(['retired_at' => now(), 'updated_at' => now()]);
+                ->update(['retired_at' => now(), 'auto_retirement_eligible' => false, 'updated_at' => now()]);
         }
     }
 

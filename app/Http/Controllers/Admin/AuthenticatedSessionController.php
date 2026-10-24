@@ -30,7 +30,15 @@ final readonly class AuthenticatedSessionController
             'password' => ['required', 'string', 'max:255'],
         ]);
 
-        $failureKey = 'admin-login:failed-identity:'.hash('sha256', $credentials['email']);
+        // MariaDB's Unicode collation can resolve multiple valid email
+        // spellings to one stored account. The admission key must follow the
+        // *database* identity, not the presented text, including for the lock.
+        // Unknown email addresses retain a bounded, non-disclosing key.
+        $accountId = User::query()->where('email', $credentials['email'])->value('id');
+        $identity = $accountId === null
+            ? 'unknown:'.hash('sha256', $credentials['email'])
+            : 'user:'.$accountId;
+        $failureKey = 'admin-login:failed-identity:'.$identity;
 
         return $attemptLock->run($failureKey, function () use ($credentials, $request, $failureKey): RedirectResponse {
             if (RateLimiter::tooManyAttempts($failureKey, self::IDENTITY_FAILURE_LIMIT)) {

@@ -28,7 +28,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Admin, OAuth, MCP and future HTTP routes share a request reference.
         // Existing MCP-local middleware reuses the attribute already set.
         $middleware->append(EnsureCorrelationId::class);
-        $middleware->appendToGroup('web', SecureAdminResponses::class);
+        // Enclose route matching, web CSRF and Admin authorization/throttles.
+        // Appends inside the web group miss early 419/auth rejections.
+        $middleware->prepend(SecureAdminResponses::class);
         // MCP routes are registered outside the stateful web middleware group.
     })
     ->withExceptions(function (Exceptions $exceptions): void {
