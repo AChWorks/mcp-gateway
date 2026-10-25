@@ -58,6 +58,18 @@ final class OAuthAuthorizationStore
                 throw new RuntimeException('OAuth operator no longer exists.');
             }
 
+            if ($stored->auth_strategy === 'dcr_client_secret_post') {
+                // Already holding profile -> DCR -> user locks. Persist the
+                // first successful consent independently of the grant/user FK
+                // lifetime; a subsequent user deletion may cascade grants.
+                // The surrounding transaction rolls this back on failure.
+                DB::table('oauth_dcr_clients')->where('client_id', $clientId)->update([
+                    'ever_authorized_at' => DB::raw('COALESCE(ever_authorized_at, CURRENT_TIMESTAMP)'),
+                    'auto_retirement_eligible' => false,
+                    'updated_at' => now(),
+                ]);
+            }
+
             $active = DB::table('oauth_authorizations')
                 ->where('client_id', $clientId)
                 ->where('user_id', $userId)
