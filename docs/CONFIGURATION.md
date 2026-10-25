@@ -129,7 +129,7 @@ Values below are the defaults in the sample template, **not necessarily** the pr
 | `OAUTH_REMOTE_CONNECT_TIMEOUT_SECONDS` | `2` seconds | Outbound OAuth metadata connection timeout |
 | `OAUTH_REMOTE_REQUEST_TIMEOUT_SECONDS` | `5` seconds | Outbound OAuth metadata request timeout |
 | `OAUTH_REMOTE_MAX_RESPONSE_BYTES` | `65536` bytes (64 KiB) | Maximum permitted remote OAuth metadata response |
-| `OAUTH_DCR_REGISTRATION_ENABLED` | false | Opt-in ChatGPT DCR onboarding. Five registrations/minute/source IP and 512 **unretired** identities; Owner may recover abandoned slots with CLI `disable`, grant revocation and `retire`. Disabling registration does not revoke existing DCR clients. |
+| `OAUTH_DCR_REGISTRATION_ENABLED` | false | Opt-in **anonymous** ChatGPT DCR onboarding; registration itself grants no user/Target access. Safeguards in v2.3.10 are **5 incoming registration requests/minute/source IP**, **15 successfully committed new registrations/hour Gateway-wide**, and **512 unretired identities**. Only under capacity pressure may a new, positively never-authorized identity aged at least 24 hours be auto-retired; ever-authorized or unknown-history identities are protected. Owner-only explicit lifecycle commands remain separate. Disabling public registration does not revoke existing clients. |
 | `OAUTH_CHATGPT_CIMD_ADVERTISE` | true | Offer CIMD on discovery to new connections; false favors DCR when remote ChatGPT CIMD/JWKS unavailable, without revoking existing CIMD clients. |
 | `OAUTH_AUTH_CODE_TTL_SECONDS` | `600` seconds | Short-lived one-time authorization code |
 | `OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` seconds | Gateway-issued bearer token validity |
@@ -137,6 +137,8 @@ Values below are the defaults in the sample template, **not necessarily** the pr
 | `OAUTH_CLIENT_ASSERTION_MAX_SECONDS` | `300` seconds | Maximum supported client-assertion window |
 | `OAUTH_REFRESH_RECOVERY_SECONDS` | `30` seconds | Narrow authenticated committed-refresh replay window; clamped to 5–60 |
 | `OAUTH_REFRESH_RECOVERY_MAX_RECORDS` | `1000` records | Bound on replay records; clamped to 100–10000 |
+
+The DCR success quota, 512-client ceiling and conservative consent-history rules are **application safeguards, not adjustable `.env` budgets**. Before activating v2.3.10 security behavior on a real host, verify a shared lock-capable cache across serving workers, consistent PHP worker versions, and matching actual `users.email` column vs `DB_COLLATION` comparison semantics; see [deployment abuse boundaries](DEPLOYMENT.md#admin-and-dcr-abuse-boundaries-source-implementation) and [OAuth client registration](OAUTH-CLIENT-REGISTRATION.md). Source documentation does not prove the installed configuration.
 
 ### Gateway ingress rate limits
 
