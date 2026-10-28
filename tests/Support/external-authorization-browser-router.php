@@ -18,6 +18,43 @@ use Illuminate\Support\Facades\Route;
 
 require __DIR__.'/../../vendor/autoload.php';
 
+/**
+ * Test-only rendezvous, after StartSession loads its file snapshot.
+ * Both GETs must overlap with a stale session writer; that writer cannot
+ * finish until the HTTP test releases it after both GET responses.
+ */
+final class BrowserAuthorizationRaceBarrier
+{
+    public function handle(Request $request, Closure $next)
+    {
+        $race = $request->query('fixture_race');
+        if ($race === null) {
+            return $next($request);
+        }
+
+        abort_unless(is_string($race) && preg_match('/\A[a-f0-9]{16}\z/D', $race), 400);
+        $directory = getenv('GATEWAY_BROWSER_FIXTURE_RACE_DIR');
+        abort_unless(is_string($directory) && is_dir($directory), 500);
+        $marker = $directory.'/'.$race.'.'.bin2hex(random_bytes(8)).'.ready';
+        abort_unless(file_put_contents($marker, 'ready') !== false, 500);
+
+        $deadline = microtime(true) + 12;
+        while (count(glob($directory.'/'.$race.'.*.ready') ?: []) < 3) {
+            abort_if(microtime(true) > $deadline, 500, 'Concurrent request rendezvous timed out.');
+            usleep(10000);
+        }
+
+        if ($request->is('__browser__/stale-session-writer')) {
+            while (! is_file($directory.'/'.$race.'.release')) {
+                abort_if(microtime(true) > $deadline, 500, 'Stale session writer release timed out.');
+                usleep(10000);
+            }
+        }
+
+        return $next($request);
+    }
+}
+
 $app = require __DIR__.'/../../bootstrap/app.php';
 $kernel = $app->make(Kernel::class);
 $kernel->bootstrap();
@@ -75,6 +112,15 @@ Http::fake(static function (OutboundRequest $request) {
     };
 });
 
+// The named production route is decorated only inside this disposable fixture.
+$router = app('router');
+$router->aliasMiddleware('fixture-authorization-race', BrowserAuthorizationRaceBarrier::class);
+$handoffRoute = $router->getRoutes()->getByName('admin.targets.external-authorization');
+if ($handoffRoute === null) {
+    throw new RuntimeException('Expected Admin external authorization route is absent.');
+}
+$handoffRoute->middleware('fixture-authorization-race');
+
 // A test-only login bootstrap, never on a production Laravel route.
 Route::middleware('web')->get('/__browser__/enter', static function () {
     $owner = User::query()->firstOrCreate(['email' => 'browser-fixture@example.test'], [
@@ -95,5 +141,33 @@ Route::middleware('web')->get('/__browser__/enter', static function () {
 
     return redirect()->route('admin.targets.show', ['target' => 'browser-wp']);
 });
+
+// Deliberately overlaps a GET with a non-handoff Admin session write,
+// then saves the older in-memory handoff collection after both GETs finish.
+Route::middleware(['web', 'auth', 'fixture-authorization-race'])
+    ->get('/__browser__/stale-session-writer', static function (Request $request) {
+        $request->session()->put('browser_fixture_unrelated_session_write', 'complete');
+
+        return response('written');
+    });
+
+Route::middleware(['web', 'auth'])->get('/__browser__/race-release/{race}', static function (string $race) {
+    abort_unless(preg_match('/\A[a-f0-9]{16}\z/D', $race), 400);
+    $directory = getenv('GATEWAY_BROWSER_FIXTURE_RACE_DIR');
+    abort_unless(is_string($directory) && is_dir($directory), 500);
+    abort_unless(file_put_contents($directory.'/'.$race.'.release', 'release') !== false, 500);
+
+    return response('', 204);
+});
+
+Route::middleware(['web', 'auth'])->get('/__browser__/handoff-present/{handoff}', static function (
+    Request $request, string $handoff,
+) {
+    $pending = $request->session()->get('admin.external_authorization_handoffs', []);
+
+    return response()->json([
+        'stale_entry_present' => is_array($pending) && array_key_exists($handoff, $pending),
+    ]);
+})->where('handoff', '[a-f0-9]{32}');
 
 $app->handleRequest(Request::capture());

@@ -52,12 +52,20 @@ final class ConnectorExternalAuthorizationTest extends TestCase
         $location = (string) $post->headers->get('Location');
         self::assertStringNotContainsString('identity.example.test', $location);
         self::assertStringNotContainsString('state=', $location);
+        $staleSessionSnapshot = session()->get('admin.external_authorization_handoffs');
+        self::assertIsArray($staleSessionSnapshot);
 
         $html = html_entity_decode($this->get($location)->assertOk()->getContent(), ENT_QUOTES | ENT_HTML5);
         self::assertStringContainsString(
             'content="0;url=https://identity.example.test/consent?state=opaque&audience=other"', $html,
         );
         self::assertStringContainsString('rel="noreferrer noopener"', $html);
+        $this->get($location)->assertRedirect('/admin/targets/other-connector')
+            ->assertSessionHasErrors('target');
+
+        // Simulate a concurrent Admin request saving its pre-consumption
+        // session snapshot after the handoff was already claimed.
+        $this->withSession(['admin.external_authorization_handoffs' => $staleSessionSnapshot]);
         $this->get($location)->assertRedirect('/admin/targets/other-connector')
             ->assertSessionHasErrors('target');
     }

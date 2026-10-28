@@ -21,6 +21,7 @@ use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Gate;
 use InvalidArgumentException;
 use Symfony\Component\HttpFoundation\Response;
@@ -248,7 +249,12 @@ final class TargetConnectionController extends Controller
         unset($pending[$handoff]);
         $request->session()->put(self::HANDOFF_SESSION_KEY, $pending);
 
+        // The session read/write above is not atomic across PHP workers.
+        // An independent expiring cache claim prevents overlapping GETs or a
+        // stale concurrent session writer from reusing the same handoff.
+        // Supported production cache stores provide atomic add semantics.
         if (! is_array($entry)
+            || ! Cache::add('admin:external-authorization:claimed:'.hash('sha256', $handoff), true, self::HANDOFF_TTL_SECONDS)
             || ($entry['target_id'] ?? null) !== $target->target_id
             || ($entry['target_record_id'] ?? null) !== (string) $target->getKey()
             || ($entry['user_id'] ?? null) !== (string) $request->user()?->getAuthIdentifier()

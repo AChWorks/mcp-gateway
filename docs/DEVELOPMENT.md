@@ -239,7 +239,7 @@ npx playwright install chromium
 bash bin/check-admin-external-authorization-browser.sh
 ```
 
-The harness explicitly enables the isolated `tests/Support/external-authorization-browser-router.php` router, binds `127.0.0.1` only, creates ephemeral credentials/database, and removes the temporary fixture at exit. This development check is not a production dependency, replaces no unit/feature/OAuth-contract tests, and cannot establish real WordPress consent acceptance.
+The same command first runs a controlled **multi-worker HTTP race** using independent loopback PHP listeners sharing encrypted file-backed sessions and atomic file cache. Two simultaneous handoff GETs must produce exactly one provider document; a delayed unrelated Admin session writer deliberately restores an old handoff entry, which must still be rejected. To run only this HTTP concurrency regression with PHP and Python (without Node/Chromium), use `bash bin/check-admin-external-authorization-browser.sh concurrency-only`. The default command always runs both the race and actual Chromium. The harness explicitly enables the isolated `tests/Support/external-authorization-browser-router.php` router, binds `127.0.0.1` only, creates ephemeral credentials/database/cache and removes the temporary fixture at exit. This development check is not a production dependency, replaces no unit/feature/OAuth-contract tests, and cannot establish real WordPress consent acceptance.
 
 ## MCP bootstrap compatibility fixture
 
