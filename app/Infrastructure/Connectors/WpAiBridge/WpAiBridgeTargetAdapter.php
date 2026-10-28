@@ -93,7 +93,11 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
     public function connect(Target $target): TargetConnectorResult
     {
         try {
-            return new TargetConnectorResult(redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target));
+            return new TargetConnectorResult(
+                redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target),
+                authorizedOrigin: (string) WpAiBridgeTargetConfig::query()
+                    ->where('target_record_id', $target->getKey())->value('base_url'),
+            );
         } catch (WpAiBridgeTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
@@ -104,7 +108,11 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
         try {
             $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target);
 
-            return new TargetConnectorResult(redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target));
+            return new TargetConnectorResult(
+                redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target),
+                authorizedOrigin: (string) WpAiBridgeTargetConfig::query()
+                    ->where('target_record_id', $target->getKey())->value('base_url'),
+            );
         } catch (WpAiBridgeTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }

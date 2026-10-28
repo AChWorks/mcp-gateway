@@ -11,6 +11,7 @@ use App\Domain\Targets\TargetGroup;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\ViewErrorBag;
 use Tests\TestCase;
 
 final class AdminUiPresentationTest extends TestCase
@@ -34,6 +35,41 @@ final class AdminUiPresentationTest extends TestCase
         self::assertIsString($css);
         self::assertStringContainsString('.operation-result-preview {', $css);
         self::assertStringContainsString('overflow-wrap: anywhere;', $css);
+    }
+
+    public function test_external_authorization_handoff_reuses_admin_layout_and_has_accessible_fallback(): void
+    {
+        $this->actingAs($this->owner());
+        $target = new Target([
+            'target_id' => 'generic-provider',
+            'connector_type' => 'ssh_direct',
+            'display_name' => 'Other connector',
+        ]);
+        $html = view('admin.targets.external-authorization', [
+            'target' => $target,
+            'destination' => 'https://consent.example.test/authorize?state=nonsecret&scope=read',
+            'providerHost' => 'consent.example.test',
+            'errors' => new ViewErrorBag,
+        ])->render();
+
+        $dom = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($dom);
+
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//head/meta[@http-equiv="refresh"][starts-with(@content,"0;url=https://consent.example.test/")])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//main//section[contains(@class,"panel")]/h1[@id="external-authorization-title"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//main//a[@rel="noreferrer noopener"][contains(@class,"button-primary")])',
+        ));
+        self::assertStringContainsString('Do not resubmit the connection form.', $html);
+        self::assertStringContainsString('css/admin.css?v=', $html);
     }
 
     public function test_admin_stylesheet_is_versioned_from_release_identity(): void
