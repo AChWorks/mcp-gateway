@@ -323,10 +323,26 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->actingAs($owner)->get('/admin/targets/alpha')->assertOk()
             ->assertSee('Authorize WordPress');
         $response = $this->post('/admin/targets/alpha/connect');
-        $response->assertRedirect();
-        $url = (string) $response->headers->get('Location');
+        $response->assertStatus(303);
+        $handoffUrl = (string) $response->headers->get('Location');
+        self::assertStringStartsWith('/admin/targets/alpha/external-authorization/', (string) parse_url($handoffUrl, PHP_URL_PATH));
+        self::assertStringNotContainsString('state=', $handoffUrl);
+
+        $handoff = $this->get($handoffUrl)->assertOk()
+            ->assertHeader('Referrer-Policy', 'no-referrer');
+        self::assertStringContainsString("form-action 'self'", (string) $handoff->headers->get('Content-Security-Policy'));
+        $html = html_entity_decode($handoff->getContent(), ENT_QUOTES | ENT_HTML5);
+        self::assertSame(1, preg_match('/<meta http-equiv="refresh" content="0;url=([^"]+)">/', $html, $matches));
+        $url = $matches[1];
+        self::assertStringStartsWith('https://alpha.example.test/wp-ai-bridge/oauth/authorize?', $url);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
         self::assertArrayHasKey('state', $args);
+
+        // The handoff is consumed, and refreshing its GET cannot issue OAuth
+        // again or replay the original Admin POST.
+        $this->get($handoffUrl)->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHasErrors('target');
+        self::assertSame(1, DB::table('wp_ai_bridge_oauth_flows')->count());
 
         $this->get('/oauth/targets/callback?'.http_build_query([
             'state' => $args['state'],
@@ -344,6 +360,103 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->post('/admin/targets/alpha/disconnect')->assertRedirect('/admin/targets/alpha');
         $this->get('/admin/targets/alpha')->assertOk()->assertSee('Authorize WordPress');
         self::assertSame(TargetConnectionState::Disconnected, $alpha->refresh()->connection_state);
+    }
+
+    public function test_authorization_handoff_is_bound_to_admin_identity_and_expires_without_restarting_oauth(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $other = $this->user('viewer', 'all');
+        $alpha = $this->target('alpha');
+
+        $this->actingAs($owner);
+        $first = (string) $this->post('/admin/targets/alpha/connect')
+            ->assertStatus(303)->headers->get('Location');
+        self::assertSame(1, DB::table('wp_ai_bridge_oauth_flows')->count());
+        self::assertSame(TargetConnectionState::Pending, $alpha->fresh()->connection_state);
+
+        // Changing the authenticated principal does not transfer the URL,
+        // even if the session still carries the one-time handoff value.
+        $this->actingAs($other)->get($first)
+            ->assertRedirect('/admin/targets/alpha')->assertSessionHasErrors('target');
+        $this->actingAs($owner)->get($first)->assertRedirect('/admin/targets/alpha');
+
+        $second = (string) $this->post('/admin/targets/alpha/connect')
+            ->assertStatus(303)->headers->get('Location');
+        $this->travel(121)->seconds();
+        $this->get($second)->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHasErrors('target');
+        self::assertSame(1, DB::table('wp_ai_bridge_oauth_flows')->count());
+    }
+
+    public function test_restart_of_pending_admin_authorization_rotates_state_without_duplicate_flow_or_post_replay(): void
+    {
+        $alpha = $this->target('alpha');
+        $this->actingAs($this->user('owner', 'all'));
+        $firstGet = (string) $this->post('/admin/targets/alpha/connect')
+            ->assertStatus(303)->headers->get('Location');
+        $firstHtml = html_entity_decode($this->get($firstGet)->assertOk()->getContent(), ENT_QUOTES | ENT_HTML5);
+        self::assertSame(1, preg_match('/<meta http-equiv="refresh" content="0;url=([^"]+)">/', $firstHtml, $firstMatch));
+        parse_str((string) parse_url($firstMatch[1], PHP_URL_QUERY), $firstArgs);
+
+        $secondGet = (string) $this->post('/admin/targets/alpha/connect')
+            ->assertStatus(303)->headers->get('Location');
+        $secondHtml = html_entity_decode($this->get($secondGet)->assertOk()->getContent(), ENT_QUOTES | ENT_HTML5);
+        self::assertSame(1, preg_match('/<meta http-equiv="refresh" content="0;url=([^"]+)">/', $secondHtml, $secondMatch));
+        parse_str((string) parse_url($secondMatch[1], PHP_URL_QUERY), $secondArgs);
+
+        self::assertNotSame($firstArgs['state'], $secondArgs['state']);
+        self::assertSame(1, DB::table('wp_ai_bridge_oauth_flows')->count());
+        self::assertSame(TargetConnectionState::Pending, $alpha->fresh()->connection_state);
+
+        try {
+            app(WpAiBridgeTargetConnectionService::class)
+                ->completeCallback($firstArgs['state'], 'old-code', 'https://alpha.example.test', null);
+            self::fail('Superseded authorization state was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('invalid_state', $exception->reason);
+        }
+
+        $this->get('/oauth/targets/callback?'.http_build_query([
+            'state' => $secondArgs['state'], 'code' => 'alpha-code', 'iss' => 'https://alpha.example.test',
+        ]))->assertRedirect('/admin/targets/alpha');
+        self::assertSame(TargetConnectionState::Connected, $alpha->fresh()->connection_state);
+        self::assertSame(0, DB::table('wp_ai_bridge_oauth_flows')->count());
+    }
+
+    public function test_connected_target_reconnect_uses_the_same_secure_browser_handoff(): void
+    {
+        $alpha = $this->target('alpha');
+        $this->pair($alpha);
+        $this->actingAs($this->user('owner', 'all'));
+        $handoff = (string) $this->post('/admin/targets/alpha/reconnect')
+            ->assertStatus(303)->headers->get('Location');
+        self::assertStringContainsString('/admin/targets/alpha/external-authorization/', $handoff);
+        $html = html_entity_decode($this->get($handoff)->assertOk()->getContent(), ENT_QUOTES | ENT_HTML5);
+        self::assertSame(1, preg_match('/<meta http-equiv="refresh" content="0;url=([^"]+)">/', $html, $matches));
+        parse_str((string) parse_url($matches[1], PHP_URL_QUERY), $args);
+        self::assertSame('S256', $args['code_challenge_method']);
+        self::assertSame(TargetConnectionState::Pending, $alpha->fresh()->connection_state);
+        self::assertSame(0, TargetCredential::query()->where('target_record_id', $alpha->getKey())->count());
+        self::assertSame(1, DB::table('wp_ai_bridge_oauth_flows')->count());
+    }
+
+    public function test_external_authorization_get_rechecks_current_permission_and_cannot_be_opened_anonymously(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $this->target('alpha');
+        $this->get('/admin/targets/alpha/external-authorization/'.str_repeat('a', 32))
+            ->assertRedirect('/admin/login');
+
+        $this->actingAs($owner);
+        $handoff = (string) $this->post('/admin/targets/alpha/connect')
+            ->assertStatus(303)->headers->get('Location');
+
+        // If the user's role is reduced after POST, the subsequent GET
+        // must not expose the provider URL or bypass the new access policy.
+        $owner->forceFill(['role' => 'viewer'])->save();
+        $this->get($handoff)->assertForbidden();
+        $this->get($handoff)->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHasErrors('target');
     }
 
     public function test_changed_connector_endpoints_cannot_receive_an_existing_oauth_secret(): void

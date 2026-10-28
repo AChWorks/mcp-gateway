@@ -13,6 +13,7 @@
         $cssFingerprint = is_string($cssDigest) ? substr($cssDigest, 0, 12) : 'unavailable';
     @endphp
     <link rel="stylesheet" href="{{ asset('css/admin.css').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$cssFingerprint }}">
+    @yield('head')
 </head>
 <body>
 <header class="site-header">

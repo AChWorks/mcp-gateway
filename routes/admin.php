@@ -43,6 +43,8 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
     Route::delete('/targets/{target:target_id}', [TargetController::class, 'destroy'])->name('targets.destroy');
     Route::delete('/targets/{target:target_id}/forget', [TargetController::class, 'forget'])->name('targets.forget');
     Route::post('/targets/{target:target_id}/connect', [TargetConnectionController::class, 'connect'])->name('targets.connect');
+    Route::get('/targets/{target:target_id}/external-authorization/{handoff}', [TargetConnectionController::class, 'externalAuthorization'])
+        ->where('handoff', '[a-f0-9]{32}')->name('targets.external-authorization');
     Route::post('/targets/{target:target_id}/reconnect', [TargetConnectionController::class, 'reconnect'])->name('targets.reconnect');
     Route::post('/targets/{target:target_id}/disconnect', [TargetConnectionController::class, 'disconnect'])->name('targets.disconnect');
     Route::post('/targets/{target:target_id}/finish-disconnect', [TargetConnectionController::class, 'finishDisconnect'])->name('targets.finish-disconnect');

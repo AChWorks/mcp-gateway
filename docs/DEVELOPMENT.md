@@ -227,6 +227,20 @@ Normal CI runs both artifact builders/verifiers after the application test steps
 
 The browser-updater recovery semantics are one state machine across implementation, tests, operator documentation, and release notes. Any change to that state machine must update `README.md`, `docs/DEPLOYMENT.md`, the relevant repository-owned updater regressions, and release-note behavior in the same reviewed change. Any future change that alters application runtime files, Composer dependencies, updater logic, package scripts, or release packaging must keep the applicable gates green at the candidate/release boundary that owns that proof. Ordinary runtime-code iteration does not require the full released-package browser-update integration on every synchronization when updater/package/schema/dependency behavior is unchanged; release publication still requires the exact-candidate browser-update and backup-integrity proofs. If a new legitimate runtime file is required, update the builder/verifier intentionally in the same reviewed change rather than weakening the hygiene checks broadly.
 
+## Real Chromium Admin external-authorization regression
+
+The Admin CSP intentionally retains `form-action 'self'`, so an HTTP assertion about a 302 redirect alone cannot prove that browser authorization works. The source-controlled `Admin External Authorization Browser` GitHub workflow uses a loopback-only disposable Laravel/SQLite instance, its own signing keys, a simulated HTTPS provider, and real Chromium. It checks **POST → 303 → internal GET → external provider**, production-equivalent Admin security headers, no duplicate POST, JavaScript-disabled mobile navigation and rejection of unrelated cross-origin forms. No live WordPress or Production host is used.
+
+Run it locally only in a disposable development checkout with Composer, Node, the pinned `playwright@1.61.1` package and its Chromium browser installed:
+
+```bash
+npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.61.1
+npx playwright install chromium
+bash bin/check-admin-external-authorization-browser.sh
+```
+
+The same command first runs a controlled **multi-worker HTTP race** using independent loopback PHP listeners sharing encrypted file-backed sessions and atomic file cache. Two simultaneous handoff GETs must produce exactly one provider document; a delayed unrelated Admin session writer deliberately restores an old handoff entry, which must still be rejected. To run only this HTTP concurrency regression with PHP and Python (without Node/Chromium), use `bash bin/check-admin-external-authorization-browser.sh concurrency-only`. The default command always runs both the race and actual Chromium. The harness explicitly enables the isolated `tests/Support/external-authorization-browser-router.php` router, binds `127.0.0.1` only, creates ephemeral credentials/database/cache and removes the temporary fixture at exit. This development check is not a production dependency, replaces no unit/feature/OAuth-contract tests, and cannot establish real WordPress consent acceptance.
+
 ## MCP bootstrap compatibility fixture
 
 `/_internal/mcp-bootstrap` exists only to prove the Laravel/PSR/MCP SDK integration during bootstrap. It is disabled by default and returns `404` unless both of these test-only settings are supplied:

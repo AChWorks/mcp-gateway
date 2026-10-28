@@ -1,0 +1,76 @@
+name: Admin External Authorization Browser
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/Application/Targets/**'
+      - 'app/Http/Controllers/Admin/TargetConnectionController.php'
+      - 'app/Http/Middleware/SecureAdminResponses.php'
+      - 'app/Infrastructure/Connectors/WpAiBridge/**'
+      - 'resources/views/admin/**'
+      - 'routes/admin.php'
+      - 'tests/Browser/**'
+      - 'tests/Support/external-authorization-browser-router.php'
+      - 'tests/Support/external_authorization_concurrency.py'
+      - 'bin/check-admin-external-authorization-browser.sh'
+      - '.github/workflows/admin-authorization-browser.yml'
+      - 'composer.json'
+      - 'composer.lock'
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - 'app/Application/Targets/**'
+      - 'app/Http/Controllers/Admin/TargetConnectionController.php'
+      - 'app/Http/Middleware/SecureAdminResponses.php'
+      - 'app/Infrastructure/Connectors/WpAiBridge/**'
+      - 'resources/views/admin/**'
+      - 'routes/admin.php'
+      - 'tests/Browser/**'
+      - 'tests/Support/external-authorization-browser-router.php'
+      - 'tests/Support/external_authorization_concurrency.py'
+      - 'bin/check-admin-external-authorization-browser.sh'
+      - '.github/workflows/admin-authorization-browser.yml'
+      - 'composer.json'
+      - 'composer.lock'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: admin-browser-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actual-chromium:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring, openssl, pdo_sqlite, sodium
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP development dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Install isolated browser test dependencies
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.61.1
+          npx playwright install --with-deps chromium
+
+      - name: Verify real Chromium authorization and CSP restrictions
+        run: bash bin/check-admin-external-authorization-browser.sh
