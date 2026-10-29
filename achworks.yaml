@@ -34,8 +34,7 @@ spec:
     - type: https-oauth
       name: client-and-connector-oauth
 
-  dependencies:
-    - wp-ai-bridge
+  dependencies: []
 
   documentation:
     path: docs/
@@ -47,3 +46,5 @@ spec:
   extensions:
     achworks:
       koinon: AChWorks/koinon
+      optionalIntegrations:
+        - AChWorks/wp-ai-bridge
