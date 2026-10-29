@@ -63,6 +63,130 @@ final class OperationDiagnosticsTest extends TestCase
         self::assertStringContainsString('revocation', OperationDiagnostics::summary('revocation_pending'));
     }
 
+    public function test_shared_unsafe_target_guidance_is_specific_without_leaking_untrusted_context(): void
+    {
+        $details = [
+            'outbound_rejection_reason' => 'dns_non_public',
+            'outbound_rejected_address' => '127.0.0.1',
+            'outbound_address_class' => 'loopback',
+            'failure_stage' => 'dns_lookup',
+            'retry_safe' => true,
+            'raw_query' => 'Bearer NEVER_INCLUDE_THIS',
+        ];
+
+        $safe = OperationDiagnostics::safeContext($details);
+        self::assertSame('127.0.0.1', $safe['outbound_rejected_address']);
+        self::assertSame('dns_non_public', $safe['outbound_rejection_reason']);
+        self::assertArrayNotHasKey('raw_query', $safe);
+        self::assertStringContainsString('127.0.0.1', OperationDiagnostics::summary('unsafe_target', $safe));
+        self::assertStringContainsString('/etc/hosts', OperationDiagnostics::nextStep('unsafe_target', $safe));
+        self::assertStringContainsString('SSRF', OperationDiagnostics::nextStep('unsafe_target', $safe));
+
+        $malicious = OperationDiagnostics::safeContext([
+            'outbound_rejection_reason' => 'evil_reason',
+            'outbound_rejected_address' => "127.0.0.1\nAuthorization: secret",
+            'outbound_address_class' => 'private',
+        ]);
+        self::assertArrayNotHasKey('outbound_rejection_reason', $malicious);
+        self::assertArrayNotHasKey('outbound_rejected_address', $malicious);
+        self::assertSame('The outbound security policy rejected this destination.',
+            OperationDiagnostics::summary('unsafe_target', $malicious));
+
+        $invented = OperationDiagnostics::safeContext([
+            'outbound_rejection_reason' => 'dns_non_public',
+            'outbound_rejected_address' => '8.8.8.8',
+        ]);
+        self::assertArrayNotHasKey('outbound_rejected_address', $invented);
+
+        self::assertStringContainsString('A or AAAA',
+            OperationDiagnostics::summary('unsafe_target', ['outbound_rejection_reason' => 'dns_no_address']));
+        self::assertStringContainsString('HTTPS',
+            OperationDiagnostics::summary('unsafe_target', ['outbound_rejection_reason' => 'https_required']));
+        self::assertStringContainsString('DNS', OperationDiagnostics::nextStep('unsafe_target'));
+    }
+
+    public function test_literal_and_dns_rejections_have_distinct_actionable_warnings(): void
+    {
+        foreach (['unsafe_target', 'egress_denied'] as $code) {
+            foreach (['127.0.0.1' => 'loopback', '10.0.0.2' => 'private'] as $address => $kind) {
+                $base = [
+                    'outbound_rejection_reason' => 'dns_non_public',
+                    'outbound_rejected_address' => $address,
+                    'outbound_address_class' => $kind,
+                ];
+                $literal = [...$base, 'outbound_address_source' => 'literal', 'failure_stage' => 'admission'];
+                $dns = [...$base, 'outbound_address_source' => 'dns', 'failure_stage' => 'dns_lookup'];
+
+                self::assertSame('literal', OperationDiagnostics::safeContext($literal)['outbound_address_source']);
+                self::assertSame('dns', OperationDiagnostics::safeContext($dns)['outbound_address_source']);
+                self::assertStringContainsString('configured', OperationDiagnostics::summary($code, $literal));
+                self::assertStringNotContainsString('DNS resolved', OperationDiagnostics::summary($code, $literal));
+                self::assertStringNotContainsString('/etc/hosts', OperationDiagnostics::nextStep($code, $literal));
+                self::assertStringContainsString('DNS resolved', OperationDiagnostics::summary($code, $dns));
+                self::assertStringContainsString('/etc/hosts', OperationDiagnostics::nextStep($code, $dns));
+            }
+        }
+        $invented = OperationDiagnostics::safeContext([
+            'outbound_rejection_reason' => 'dns_non_public',
+            'outbound_rejected_address' => '8.8.8.8',
+            'outbound_address_source' => 'literal',
+        ]);
+        self::assertArrayNotHasKey('outbound_rejected_address', $invented);
+        self::assertArrayNotHasKey('outbound_address_source', $invented);
+        self::assertStringNotContainsString('8.8.8.8',
+            OperationDiagnostics::summary('unsafe_target', $invented));
+    }
+
+    public function test_incompatible_metadata_uses_policy_details_only_when_trusted_and_preserves_machine_code(): void
+    {
+        foreach ([
+            ['origin_mismatch', null, 'different origin'],
+            ['dns_non_public', '127.0.0.1', 'blocked'],
+        ] as [$reason, $address, $expected]) {
+            $details = ['outbound_rejection_reason' => $reason];
+            if ($address !== null) {
+                $details['outbound_rejected_address'] = $address;
+                $details['outbound_address_class'] = 'loopback';
+                $details['outbound_address_source'] = 'dns';
+            }
+            self::assertStringContainsString($expected,
+                OperationDiagnostics::summary('incompatible_metadata', $details));
+            self::assertStringNotContainsString('metadata is incompatible or returned',
+                OperationDiagnostics::summary('incompatible_metadata', $details));
+            self::assertNotSame('', OperationDiagnostics::nextStep('incompatible_metadata', $details));
+        }
+        self::assertStringContainsString('metadata is incompatible',
+            OperationDiagnostics::summary('incompatible_metadata'));
+        self::assertStringContainsString('Compare the WordPress Bridge',
+            OperationDiagnostics::nextStep('incompatible_metadata'));
+    }
+
+    public function test_shared_network_and_ssh_egress_guidance_keeps_transport_specific_evidence(): void
+    {
+        $ssh = [
+            'outbound_rejection_reason' => 'dns_non_public',
+            'outbound_rejected_address' => '127.0.0.1',
+            'outbound_address_class' => 'loopback',
+            'failure_stage' => 'dns_lookup',
+        ];
+        self::assertStringContainsString('127.0.0.1', OperationDiagnostics::summary('egress_denied', $ssh));
+        self::assertStringContainsString('/etc/hosts', OperationDiagnostics::nextStep('egress_denied', $ssh));
+
+        self::assertStringContainsString('DNS', OperationDiagnostics::summary('network_failure', [
+            'failure_stage' => 'dns_timeout',
+        ]));
+        self::assertStringContainsString('DNS', OperationDiagnostics::nextStep('network_failure', [
+            'failure_stage' => 'dns_lookup',
+        ]));
+        self::assertStringContainsString('TCP', OperationDiagnostics::summary('network_failure', [
+            'failure_stage' => 'tcp_connect',
+        ]));
+        self::assertStringContainsString('connector', OperationDiagnostics::nextStep('network_failure'));
+        self::assertStringContainsString('address', OperationDiagnostics::summary('egress_denied', [
+            'outbound_rejection_reason' => 'dns_too_many_addresses',
+        ]));
+    }
+
     public function test_mcp_activity_failure_uses_same_correlation_id_in_structured_log(): void
     {
         Log::spy();

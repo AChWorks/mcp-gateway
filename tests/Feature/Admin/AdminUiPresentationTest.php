@@ -37,6 +37,90 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('overflow-wrap: anywhere;', $css);
     }
 
+    public function test_endpoint_preflight_is_in_shared_enrollment_actions_for_both_connectors(): void
+    {
+        $this->actingAs($this->owner());
+
+        foreach (['wp_ai_bridge', 'ssh_direct'] as $type) {
+            $html = $this->get('/admin/targets/create?connector_type='.$type)
+                ->assertOk()->getContent();
+
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//form[@id="target-create-form"]/div[@data-target-actions]'
+                .'//button[@type="submit"][@formnovalidate][@formaction])',
+            ));
+            self::assertSame(0, (int) $xpath->evaluate(
+                'count(//fieldset[@data-connector-panel]//button[@formnovalidate][@formaction])',
+            ));
+            self::assertStringContainsString('Preflight is optional and read-only.', $html);
+            self::assertStringContainsString('Register Target', $html);
+        }
+
+        session()->flash('target_endpoint_preflight', [
+            'ok' => false,
+            'message' => 'Unsafe <script>untrusted</script> result',
+            'next_step' => 'Inspect Gateway DNS',
+            'reference' => 'test-reference',
+        ]);
+        $this->get('/admin/targets/create?connector_type=ssh_direct')
+            ->assertOk()
+            ->assertSee('role="alert"', false)
+            ->assertSee('Unsafe &lt;script&gt;untrusted&lt;/script&gt; result', false)
+            ->assertDontSee('Unsafe <script>untrusted</script> result', false)
+            ->assertSee('Inspect Gateway DNS');
+    }
+
+    public function test_successful_preflight_is_explicitly_bound_to_checked_fields_and_can_be_invalidated(): void
+    {
+        $this->actingAs($this->owner());
+        foreach ([
+            ['wp_ai_bridge', 'https://wordpress.example.test/path', ['base_url' => 'https://wordpress.example.test/path']],
+            ['ssh_direct', '[2606:4700:4700::1111]:2222', ['ssh_host' => '[2606:4700:4700::1111]', 'ssh_port' => '2222']],
+        ] as [$type, $subject, $fields]) {
+            session()->flash('target_endpoint_preflight', [
+                'ok' => true,
+                'message' => 'Public destination observed.',
+                'limitation' => 'This does not authorize a connection.',
+                'checked_subject' => $subject,
+                'checked_connector' => $type,
+                'checked_fields' => $fields,
+            ]);
+            session()->flashInput(['connector_type' => $type, ...$fields]);
+            $html = $this->get('/admin/targets/create?connector_type='.$type)
+                ->assertOk()
+                ->assertSee('Checked endpoint')
+                ->assertSee('target-preflight-stale')
+                ->getContent();
+            self::assertStringContainsString('const syncPreflight =', $html);
+            self::assertStringContainsString('preflightInvalidated = true', $html);
+            self::assertStringContainsString('Object.keys(checkedFields || {})', $html);
+
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+            self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="target-endpoint-preflight"][@data-checked-connector])'));
+            self::assertSame($type,
+                $xpath->evaluate('string(//*[@id="target-endpoint-preflight"]/@data-checked-connector)'));
+            $parsed = json_decode($xpath->evaluate(
+                'string(//*[@id="target-endpoint-preflight"]/@data-checked-fields)',
+            ), true, 512, JSON_THROW_ON_ERROR);
+            self::assertSame($fields, $parsed);
+            self::assertSame($subject,
+                trim($xpath->evaluate('string(//*[@id="target-endpoint-preflight"]//code)')));
+            self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="target-preflight-stale"][@hidden][@role="status"])'));
+        }
+    }
+
     public function test_external_authorization_handoff_reuses_admin_layout_and_has_accessible_fallback(): void
     {
         $this->actingAs($this->owner());

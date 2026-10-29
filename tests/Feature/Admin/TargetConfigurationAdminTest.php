@@ -21,6 +21,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use phpseclib4\Crypt\EC;
@@ -391,6 +392,108 @@ final class TargetConfigurationAdminTest extends TestCase
         self::assertSame('https://one.example.test',
             WpAiBridgeTargetConfig::query()->where('base_url', 'https://one.example.test')->sole()->base_url);
         self::assertSame(2, WpAiBridgeTargetConfig::query()->count());
+    }
+
+    public function test_wordpress_origin_reconfiguration_reports_localhost_dns_override_without_mutation(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'wp-dns-override',
+            'display_name' => 'WordPress DNS override',
+            'base_url' => 'https://old.example.test',
+        ])->assertRedirect('/admin/targets/wp-dns-override');
+
+        $target = Target::query()->where('target_id', 'wp-dns-override')->sole();
+        $revision = $this->editRevision('wp-dns-override');
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $host === 'blocked.example.test' ? ['127.0.0.1'] : ['1.1.1.1'];
+            }
+        });
+
+        $this->put('/admin/targets/wp-dns-override/configuration', $this->wpUpdate(
+            $revision, 'https://blocked.example.test',
+        ))->assertSessionHasErrors('base_url')
+            ->assertSessionHas('diagnostic_code', 'unsafe_target')
+            ->assertSessionHas('diagnostic_context', static fn (array $details): bool => ($details['outbound_rejection_reason'] ?? null) === 'dns_non_public'
+                && ($details['outbound_rejected_address'] ?? null) === '127.0.0.1'
+            );
+
+        $this->get('/admin/targets/wp-dns-override/edit')->assertOk()
+            ->assertSee('127.0.0.1')
+            ->assertSee('/etc/hosts')
+            ->assertDontSee('CorrectHorse!234');
+        self::assertSame('https://old.example.test',
+            WpAiBridgeTargetConfig::query()->where('target_record_id', $target->getKey())->sole()->base_url);
+        self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame(0, DB::table('activity_events')->where('operation', 'wordpress-origin-reconfigure')->count());
+        Http::assertSentCount(2); // Initial registration only.
+    }
+
+    public function test_wordpress_origin_edit_does_not_replay_signed_or_credential_urls(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'wp-url-secrets',
+            'display_name' => 'Original WordPress',
+            'base_url' => 'https://old.example.test',
+        ])->assertRedirect('/admin/targets/wp-url-secrets');
+
+        $target = Target::query()->where('target_id', 'wp-url-secrets')->sole();
+        $revision = $this->editRevision('wp-url-secrets');
+        Log::spy();
+
+        foreach ([
+            'https://user:DO_NOT_REPLAY_USERNAME_PASSWORD@new.example.test/',
+            'https://new.example.test/path?signature=DO_NOT_REPLAY_SIGNED_TOKEN',
+            'https://new.example.test/path#DO_NOT_REPLAY_FRAGMENT',
+            'not a valid URL with DO_NOT_REPLAY_BAD_PARSE',
+        ] as $url) {
+            $response = $this->put('/admin/targets/wp-url-secrets/configuration',
+                $this->wpUpdate($revision, $url));
+            $response->assertSessionHasErrors('base_url');
+
+            $old = session()->getOldInput();
+            self::assertArrayNotHasKey('base_url', $old);
+            self::assertArrayNotHasKey('current_password', $old);
+            $payload = json_encode([
+                'old' => $old,
+                'diagnostic' => session('diagnostic_context'),
+                'code' => session('diagnostic_code'),
+            ], JSON_THROW_ON_ERROR);
+            foreach (['DO_NOT_REPLAY_USERNAME_PASSWORD', 'DO_NOT_REPLAY_SIGNED_TOKEN',
+                'DO_NOT_REPLAY_FRAGMENT', 'DO_NOT_REPLAY_BAD_PARSE'] as $secret) {
+                self::assertStringNotContainsString($secret, $payload);
+                $this->get('/admin/targets/wp-url-secrets/edit')
+                    ->assertOk()->assertDontSee($secret);
+            }
+            self::assertSame('https://old.example.test',
+                WpAiBridgeTargetConfig::query()->where('target_record_id', $target->getKey())->sole()->base_url);
+        }
+
+        self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame(0, DB::table('activity_events')
+            ->where('operation', 'wordpress-origin-reconfigure')->count());
+
+        Log::shouldHaveReceived('warning')->times(3)->withArgs(
+            static function (string $message, array $details): bool {
+                $json = json_encode($details, JSON_THROW_ON_ERROR);
+                foreach (['DO_NOT_REPLAY_USERNAME_PASSWORD', 'DO_NOT_REPLAY_SIGNED_TOKEN',
+                    'DO_NOT_REPLAY_FRAGMENT', 'DO_NOT_REPLAY_BAD_PARSE'] as $secret) {
+                    if (str_contains($json, $secret)) {
+                        return false;
+                    }
+                }
+
+                return $message === 'Gateway operation failure.'
+                    && ($details['operation'] ?? null) === 'target-configuration-update'
+                    && ($details['error_code'] ?? null) === 'unsafe_target';
+            },
+        );
     }
 
     private function ssh(): Target

@@ -636,6 +636,8 @@ a:focus-visible {
     overflow-wrap: anywhere;
 }
 
+.alert[hidden] { display: none; }
+
 .alert {
     margin-bottom: 1rem;
     padding: 0.8rem 1rem;

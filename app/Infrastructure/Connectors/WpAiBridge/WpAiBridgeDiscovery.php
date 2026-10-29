@@ -21,7 +21,7 @@ final class WpAiBridgeDiscovery
             $protectedUrl = $this->targets->appendPath($baseUrl, '/.well-known/oauth-protected-resource');
             $protected = $this->http->get($protectedUrl);
         } catch (UnsafeOutboundTarget $exception) {
-            throw new BridgeDiscoveryException('unsafe_target', 'The WordPress site is not a safe public HTTPS target.');
+            throw new BridgeDiscoveryException('unsafe_target', 'The WordPress site is not a safe public HTTPS target.', $exception->diagnostics());
         } catch (OutboundRequestException $exception) {
             throw $this->transportFailure($exception);
         }
@@ -58,7 +58,7 @@ final class WpAiBridgeDiscovery
             $resource = $this->targets->assertSameOrigin($resource, $baseUrl)->url;
             $issuer = $this->targets->canonicalBaseUrl($authorizationServers[0]);
         } catch (UnsafeOutboundTarget $exception) {
-            throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge metadata points outside the configured public site origin.');
+            throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge metadata points outside the configured public site origin.', $exception->diagnostics());
         }
 
         if (! hash_equals($baseUrl, $issuer)) {
@@ -69,7 +69,7 @@ final class WpAiBridgeDiscovery
             $serverUrl = $this->targets->appendPath($issuer, '/.well-known/oauth-authorization-server');
             $server = $this->http->get($serverUrl);
         } catch (UnsafeOutboundTarget $exception) {
-            throw new BridgeDiscoveryException('unsafe_target', 'WP AI Bridge authorization metadata target is unsafe.');
+            throw new BridgeDiscoveryException('unsafe_target', 'WP AI Bridge authorization metadata target is unsafe.', $exception->diagnostics());
         } catch (OutboundRequestException $exception) {
             throw $this->transportFailure($exception);
         }
@@ -116,7 +116,7 @@ final class WpAiBridgeDiscovery
             $tokenUrl = $this->targets->assertSameOrigin($tokenUrl, $baseUrl)->url;
             $revocationUrl = $this->targets->assertSameOrigin($revocationUrl, $baseUrl)->url;
         } catch (UnsafeOutboundTarget $exception) {
-            throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge OAuth endpoints must remain on the configured public site origin.');
+            throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge OAuth endpoints must remain on the configured public site origin.', $exception->diagnostics());
         }
 
         return new BridgeDiscovery(

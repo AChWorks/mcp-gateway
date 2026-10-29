@@ -6,6 +6,7 @@ use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshTcpAddressPolicy;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\PublicIpAddressPolicy;
+use App\Infrastructure\Http\UnsafeOutboundTarget;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -104,6 +105,50 @@ final class SshTcpAddressPolicyTest extends TestCase
         $this->expectUnsafe($this->policy([
             'prod.example.test.' => array_fill(0, 17, '8.8.8.8'),
         ]), $endpoint);
+    }
+
+    public function test_shared_diagnostics_reason_preserves_ssh_public_address_policy(): void
+    {
+        $endpoint = SshRegisteredEndpoint::fromInput('host.example.test', 22, 'deploy');
+        foreach ([
+            [['8.8.8.8', '127.0.0.1'], 'dns_non_public', '127.0.0.1'],
+            [[], 'dns_no_address', null],
+            [array_fill(0, 17, '8.8.8.8'), 'dns_too_many_addresses', null],
+            [['NOT_AN_IP'], 'dns_invalid_address', null],
+        ] as [$addresses, $reason, $blocked]) {
+            try {
+                $this->policy(['host.example.test.' => $addresses])->approvedDialAddresses($endpoint);
+                self::fail('Unapproved address set passed the SSH policy.');
+            } catch (UnsafeOutboundTarget $exception) {
+                self::assertSame($reason, $exception->reason);
+                self::assertSame($blocked, $exception->rejectedAddress);
+                self::assertSame($reason, $exception->diagnostics()['outbound_rejection_reason']);
+            }
+        }
+    }
+
+    public function test_ssh_literal_vs_resolved_private_destination_provenance(): void
+    {
+        foreach ([
+            ['127.0.0.1', 'literal', 'admission', '127.0.0.1'],
+            ['10.1.2.3', 'literal', 'admission', '10.1.2.3'],
+            ['blocked.example.test', 'dns', 'dns_lookup', '127.0.0.1'],
+            ['mixed.example.test', 'dns', 'dns_lookup', '10.1.2.3'],
+        ] as [$host, $source, $stage, $ip]) {
+            $policy = $this->policy([
+                'blocked.example.test.' => ['127.0.0.1'],
+                'mixed.example.test.' => ['8.8.8.8', '10.1.2.3'],
+            ]);
+            try {
+                $policy->approvedDialAddresses(SshRegisteredEndpoint::fromInput($host, 2222, 'root'));
+                self::fail('Blocked SSH destination passed the policy.');
+            } catch (UnsafeOutboundTarget $exception) {
+                self::assertSame('dns_non_public', $exception->reason);
+                self::assertSame($ip, $exception->rejectedAddress);
+                self::assertSame($source, $exception->diagnostics()['outbound_address_source']);
+                self::assertSame($stage, $exception->diagnostics()['failure_stage']);
+            }
+        }
     }
 
     /** @param array<string, list<string>> $answers */

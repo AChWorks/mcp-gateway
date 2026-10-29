@@ -74,6 +74,67 @@ Once the application is running, administrator sign-in is available at `/admin/l
 
 Access-control mutations require the acting Owner's current password, preserve at least one enabled recoverable Owner, and record required bounded Activity evidence transactionally. Disabling a user blocks new login, invalidates existing Admin/OAuth-consent sessions on their next request, and makes existing MCP bearer tokens unusable because current user state is rechecked. The admin routes continue to use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
+### Shared Target endpoint preflight and actionable errors
+
+The connector-neutral **Add Target → Check endpoint from Gateway** action
+is authenticated, CSRF-protected, separately rate-limited and **read-only**.
+The Admin controller routes through the explicit `TargetConnectorRegistry`
+to an implemented adapter opting into `TargetEnrollmentPreflight`.
+That optional interface defines only its non-secret preflight validation
+rules and returns a `TargetPreflightResult`. A future connector does not
+inherit an arbitrary network probe just by existing in the registry.
+
+`TargetEndpointPreflight` is the common transport-aware service reused
+by the current supported connectors:
+
+- **HTTPS** (`wp_ai_bridge` today): public HTTPS URL/origin, effective A/AAAA
+  resolution, public-IP/SSRF policy. No HTTP request to the downstream
+  WordPress site, TLS handshake, Bridge discovery or OAuth credential check.
+- **SSH TCP** (`ssh_direct` today): the registered SSH host and port are
+  parsed through `SshRegisteredEndpoint` and its existing
+  `SshDialAddressPolicy`, including the public-address and maximum-DNS-answer
+  rules. No TCP connection, independently pinned host-key check, SSH login,
+  remote command or credential use. A result is not a trusted SSH peer.
+
+A successful preflight displays the exact checked endpoint and binds the
+result to the selected connector and its reviewed endpoint input fields.
+Changing the connector, host, URL or SSH port invalidates the old success
+in the shared Admin form, even if the operator later restores the same text.
+No checked destination is retained as dispatch authorization.
+
+DNS preflight is a **time-of-check snapshot**, never a cached authorization.
+Every registration/operation must repeat its appropriate trust checks, DNS
+and actual peer binding. HTTP and SSH retain their distinct protocol policies;
+do not apply HTTPS/TLS semantics to SSH or use a generic caller-selected
+host/URL to bypass connector admission.
+
+All Target registration, preflight and origin-configuration redirects
+reuse `TargetFormInput` to replay only allowlisted non-secret fields, and
+never retain URL userinfo, query tokens, fragments or malformed origins in
+session old input. Shared connection redirects also retain only
+`OperationDiagnostics::safeContext` so the browser diagnostic panel can
+present observed facts rather than generic fallbacks.
+
+A policy rejection retains existing machine codes (`unsafe_target` for
+HTTP, `egress_denied` for SSH) while carrying allowlisted, bounded
+`outbound_rejection_reason`, an observed rejected numeric IP when relevant,
+and its address class. A finite `outbound_address_source` differentiates
+configured numeric IP literals (no DNS lookup) from actual resolver answers,
+so a configured localhost address is not incorrectly blamed on /etc/hosts.
+`incompatible_metadata` keeps its machine identity while displaying any
+proven underlying outbound-policy cause. `OperationDiagnostics` is the shared boundary for
+operator-visible summaries, concrete next steps, diagnostic references and
+redacted evidence in logs; no per-connector diagnostic stack is added.
+A loopback result identifies actual Gateway DNS/local override evidence and
+suggests checking `/etc/hosts` when appropriate. User input, URLs with
+credentials or signed query components, remote response bodies and
+authentication secrets must not be copied into a diagnostic merely to
+explain an error. Do not infer a remote effect or classify it safe to
+retry from a local DNS rejection: the multi-step OAuth/SSH operation owns
+its own effect/recovery certainty. New connector families reuse these
+shared components when their real protocol and trust policy fit; unsupported
+preflight stays explicitly unavailable, not guessed or silently successful.
+
 ## Admin UI foundation
 
 The administration panel uses one small server-rendered visual system in `public/css/admin.css`. New Admin views must reuse this foundation rather than falling back to browser-native controls or creating a second page-specific design system.

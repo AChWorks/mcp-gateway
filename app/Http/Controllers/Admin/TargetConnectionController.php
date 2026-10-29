@@ -372,6 +372,7 @@ final class TargetConnectionController extends Controller
             ->withErrors(['target' => $message])
             ->with('diagnostic_code', $code)
             ->with('diagnostic_stage', $safeStage)
+            ->with('diagnostic_context', OperationDiagnostics::safeContext($diagnostics))
             ->with('diagnostic_reference', $reference);
     }
 }

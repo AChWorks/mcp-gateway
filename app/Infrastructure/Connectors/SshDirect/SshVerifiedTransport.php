@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Connectors\SshDirect;
 
 use App\Application\Targets\SshTargetConnectionException;
+use App\Infrastructure\Http\UnsafeOutboundTarget;
 use Closure;
 use phpseclib4\Crypt\PublicKeyLoader;
 use phpseclib4\Crypt\RSA;
@@ -98,6 +99,12 @@ final readonly class SshVerifiedTransport
             // A DNS deadline must retain its typed timeout, not turn into a
             // misleading network policy denial.
             throw $exception;
+        } catch (UnsafeOutboundTarget $exception) {
+            $this->assertDeadline($deadlineNs);
+
+            // Keep verified local address provenance; never infer a peer
+            // identity, send a credential, or change SSH retry semantics.
+            throw new SshTargetConnectionException('egress_denied', $exception->diagnostics());
         } catch (Throwable) {
             $this->assertDeadline($deadlineNs);
 

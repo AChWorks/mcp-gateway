@@ -33,6 +33,8 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
     Route::get('/targets', [TargetController::class, 'index'])->name('targets.index');
     Route::get('/targets/create', [TargetController::class, 'create'])->name('targets.create');
     Route::post('/targets', [TargetController::class, 'store'])->name('targets.store');
+    Route::post('/targets/preflight', [TargetController::class, 'preflight'])
+        ->middleware('throttle:10,1')->name('targets.preflight');
     Route::get('/targets/{target:target_id}', [TargetController::class, 'show'])->name('targets.show');
     Route::get('/targets/{target:target_id}/edit', [TargetController::class, 'edit'])->name('targets.edit');
     Route::post('/targets/{target}/wordpress/bridge-info', WordpressBridgeInfoController::class)

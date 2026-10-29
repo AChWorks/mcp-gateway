@@ -153,7 +153,15 @@ final class SshTargetRegistrationTest extends TestCase
 
         $this->actingAs($owner)->post('/admin/targets/unsafe/test')
             ->assertRedirect('/admin/targets/unsafe')
-            ->assertSessionHasErrors('target');
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'egress_denied')
+            ->assertSessionHas('diagnostic_context', static fn (array $context): bool => ($context['outbound_address_source'] ?? null) === 'literal'
+                && ($context['outbound_rejected_address'] ?? null) === '127.0.0.1'
+                && ($context['failure_stage'] ?? null) === 'admission');
+        $this->get('/admin/targets/unsafe')->assertOk()
+            ->assertSee('configured')
+            ->assertSee('127.0.0.1')
+            ->assertSee('SSRF');
         $target->refresh();
         self::assertSame('egress_denied', $target->last_error_code);
         self::assertNull(SshTargetConfig::query()->sole()->observed_peer_ip);

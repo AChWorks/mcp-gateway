@@ -7,6 +7,7 @@ use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
+use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
@@ -18,6 +19,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
+use App\Support\TargetFormInput;
 use App\Support\TargetRecoveryPresentation;
 use DomainException;
 use Illuminate\Http\RedirectResponse;
@@ -109,6 +111,74 @@ final class TargetController extends Controller
         ]);
     }
 
+    /**
+     * One authenticated enrollment preflight path for all supported connector
+     * families. Each adapter opts in and owns its protocol validation; neither
+     * submitted field names nor a connector label can choose an arbitrary probe.
+     */
+    public function preflight(Request $request, TargetConnectorRegistry $connectors): RedirectResponse
+    {
+        Gate::authorize(GatewayPermission::TargetsCreate->value);
+
+        $adapter = null;
+        $selected = $request->input('connector_type');
+        $query = is_string($selected) && in_array($selected, $connectors->types(), true)
+            ? ['connector_type' => $selected] : [];
+
+        try {
+            $choice = $request->validate([
+                'connector_type' => ['required', Rule::in($connectors->types())],
+            ]);
+            $adapter = $connectors->forType((string) $choice['connector_type']);
+            if (! $adapter instanceof TargetEnrollmentPreflight) {
+                throw ValidationException::withMessages([
+                    'connector_type' => __('This connector does not support endpoint preflight.'),
+                ]);
+            }
+            $validated = $request->validate($adapter->preflightRules());
+        } catch (ValidationException $exception) {
+            if ($request->expectsJson()) {
+                throw $exception;
+            }
+
+            return redirect()->route('admin.targets.create', $query)
+                ->withInput($this->safeOldInput($request, $adapter))
+                ->withErrors($exception->errors());
+        }
+
+        try {
+            $checked = $adapter->preflight($validated);
+            $result = [
+                'ok' => true,
+                'message' => $checked->message,
+                'limitation' => $checked->limitation,
+                'checked_subject' => $checked->checkedSubject,
+                'checked_connector' => $adapter->type(),
+                'checked_fields' => $checked->checkedFields,
+            ];
+        } catch (TargetConnectorFailure $exception) {
+            $code = $exception->reason ?? 'invalid_input';
+            // DNS is an observation, never a remote operation. No new Target,
+            // credential or authorized connection is created, even on success.
+            $context = [
+                ...$exception->diagnostics,
+                'pre_dispatch' => true,
+                'retry_safe' => true,
+            ];
+            $reference = OperationDiagnostics::failure('target-endpoint-preflight-'.$adapter->type(), $code, null, $context);
+            $result = [
+                'ok' => false,
+                'message' => $exception->getMessage(),
+                'next_step' => OperationDiagnostics::nextStep($code, $context),
+                'reference' => $reference,
+            ];
+        }
+
+        return redirect()->route('admin.targets.create', $query)
+            ->withInput($this->safeOldInput($request, $adapter))
+            ->with('target_endpoint_preflight', $result);
+    }
+
     public function store(
         Request $request,
         TargetConnectorRegistry $connectors,
@@ -152,6 +222,7 @@ final class TargetController extends Controller
             return back()->withInput($this->safeOldInput($request, $adapter))
                 ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()])
                 ->with('diagnostic_code', $code)
+                ->with('diagnostic_context', OperationDiagnostics::safeContext($exception->diagnostics))
                 ->with('diagnostic_reference', $reference);
         }
 
@@ -346,7 +417,7 @@ final class TargetController extends Controller
     ): array {
         // Allowlist replayable fields; new connector secrets stay private by
         // default even when the adapter introduces an unfamiliar form field.
-        return $request->only([
+        return TargetFormInput::replayable($request, [
             'connector_type',
             'target_id',
             'display_name',

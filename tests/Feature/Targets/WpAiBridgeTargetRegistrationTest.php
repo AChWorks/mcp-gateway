@@ -9,8 +9,10 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Http\DnsResolver;
+use App\Support\OperationDiagnostics;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -133,6 +135,67 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
         self::assertSame(0, Target::query()->count());
         self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
         self::assertSame(0, DB::table('wp_ai_bridge_target_reservations')->count());
+    }
+
+    public function test_metadata_rejection_preserves_specific_policy_details_without_leaking_untrusted_urls(): void
+    {
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $host === 'blocked.example.test' ? ['127.0.0.1'] : ['1.1.1.1'];
+            }
+        });
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request): PromiseInterface {
+            $host = (string) parse_url($request->url(), PHP_URL_HOST);
+            if ((string) parse_url($request->url(), PHP_URL_PATH) === '/.well-known/oauth-protected-resource') {
+                $base = 'https://'.$host;
+                $resource = match ($host) {
+                    'cross.example.test' => 'https://other.example.test/wp-json/wp-ai-bridge/v1/mcp',
+                    'blocked-meta.example.test' => 'https://blocked.example.test/wp-json/wp-ai-bridge/v1/mcp',
+                    default => $base.'/wp-json/wp-ai-bridge/v1/mcp',
+                };
+
+                return Http::response([
+                    'resource' => $resource,
+                    'authorization_servers' => $host === 'plain-meta.example.test' ? [] : [$base],
+                    'scopes_supported' => ['mcp:use'],
+                    'bearer_methods_supported' => ['header'],
+                ]);
+            }
+
+            return $this->metadata($request);
+        });
+        foreach ([
+            'cross.example.test' => ['origin_mismatch', 'different origin'],
+            'blocked-meta.example.test' => ['dns_non_public', '127.0.0.1'],
+            'plain-meta.example.test' => [null, 'incompatible'],
+        ] as $host => [$reason, $hint]) {
+            try {
+                app(WpAiBridgeTargetRegistration::class)
+                    ->register('wp-'.str_replace('.', '-', $host), 'Rejected', 'https://'.$host);
+                self::fail('Untrusted metadata was accepted: '.$host);
+            } catch (BridgeDiscoveryException $exception) {
+                self::assertSame('incompatible_metadata', $exception->reason);
+                $details = $exception->diagnostics;
+                if ($reason !== null) {
+                    self::assertSame($reason, $details['outbound_rejection_reason'] ?? null);
+                } else {
+                    self::assertArrayNotHasKey('outbound_rejection_reason', $details);
+                }
+                self::assertStringContainsString($hint,
+                    OperationDiagnostics::summary($exception->reason, $details));
+                self::assertNotSame('', OperationDiagnostics::nextStep($exception->reason, $details));
+                self::assertStringNotContainsString('other.example.test',
+                    json_encode($details, JSON_THROW_ON_ERROR));
+            }
+        }
+
+        self::assertSame(0, Target::query()->count());
+        self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
+        self::assertSame(0, TargetCredential::query()->count());
     }
 
     private function metadata(Request $request): PromiseInterface

@@ -12,6 +12,7 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
@@ -36,8 +37,13 @@ final readonly class WpAiBridgeTargetReconfiguration
     {
         try {
             $url = $this->policy->canonicalBaseUrl((string) $input['base_url']);
-        } catch (UnsafeOutboundTarget) {
-            throw new TargetConnectorFailure(__('The WordPress origin must be a safe public HTTPS URL.'), 'base_url');
+        } catch (UnsafeOutboundTarget $exception) {
+            throw new TargetConnectorFailure(
+                OperationDiagnostics::summary('unsafe_target', $exception->diagnostics()),
+                'base_url',
+                'unsafe_target',
+                $exception->diagnostics(),
+            );
         }
 
         // This preflight is advisory; identical conditions are checked under
@@ -62,9 +68,12 @@ final readonly class WpAiBridgeTargetReconfiguration
         try {
             $discovered = $this->discovery->discover($url);
         } catch (BridgeDiscoveryException $exception) {
-            throw new TargetConnectorFailure(__('New WordPress OAuth/MCP metadata could not be verified safely (:reason).', [
-                'reason' => $exception->reason,
-            ]), 'base_url');
+            throw new TargetConnectorFailure(
+                OperationDiagnostics::summary($exception->reason, $exception->diagnostics),
+                'base_url',
+                $exception->reason,
+                $exception->diagnostics,
+            );
         }
 
         try {
