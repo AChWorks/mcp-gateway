@@ -127,6 +127,30 @@ final class SshTcpAddressPolicyTest extends TestCase
         }
     }
 
+    public function test_ssh_literal_vs_resolved_private_destination_provenance(): void
+    {
+        foreach ([
+            ['127.0.0.1', 'literal', 'admission', '127.0.0.1'],
+            ['10.1.2.3', 'literal', 'admission', '10.1.2.3'],
+            ['blocked.example.test', 'dns', 'dns_lookup', '127.0.0.1'],
+            ['mixed.example.test', 'dns', 'dns_lookup', '10.1.2.3'],
+        ] as [$host, $source, $stage, $ip]) {
+            $policy = $this->policy([
+                'blocked.example.test.' => ['127.0.0.1'],
+                'mixed.example.test.' => ['8.8.8.8', '10.1.2.3'],
+            ]);
+            try {
+                $policy->approvedDialAddresses(SshRegisteredEndpoint::fromInput($host, 2222, 'root'));
+                self::fail('Blocked SSH destination passed the policy.');
+            } catch (UnsafeOutboundTarget $exception) {
+                self::assertSame('dns_non_public', $exception->reason);
+                self::assertSame($ip, $exception->rejectedAddress);
+                self::assertSame($source, $exception->diagnostics()['outbound_address_source']);
+                self::assertSame($stage, $exception->diagnostics()['failure_stage']);
+            }
+        }
+    }
+
     /** @param array<string, list<string>> $answers */
     private function policy(array $answers): SshTcpAddressPolicy
     {

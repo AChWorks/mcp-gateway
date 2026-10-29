@@ -221,6 +221,56 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         );
     }
 
+    public function test_admin_connection_discovery_retains_actionable_public_dns_rejection_context(): void
+    {
+        $target = $this->target('alpha');
+        $this->actingAs($this->user('owner', 'all'));
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $host === 'alpha.example.test' ? ['127.0.0.1'] : ['1.1.1.1'];
+            }
+        });
+
+        Log::spy();
+        $response = $this->post('/admin/targets/alpha/test', [
+            'base_url' => 'https://user:DO_NOT_LOG_PASSWORD@evil.example.test/?token=DO_NOT_LOG_TOKEN',
+        ])->assertRedirect('/admin/targets/alpha')
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'unsafe_target')
+            ->assertSessionHas('diagnostic_stage', 'dns_lookup')
+            ->assertSessionHas('diagnostic_context', static fn (array $context): bool => ($context['outbound_address_source'] ?? null) === 'dns'
+                && ($context['outbound_rejection_reason'] ?? null) === 'dns_non_public'
+                && ($context['outbound_rejected_address'] ?? null) === '127.0.0.1'
+                && ($context['outbound_address_class'] ?? null) === 'loopback'
+            );
+
+        $reference = (string) session('diagnostic_reference');
+        self::assertTrue(Str::isUuid($reference));
+        $response->assertHeader('X-Correlation-ID', $reference);
+        $html = $this->get('/admin/targets/alpha')->assertOk()
+            ->assertSee('unsafe_target')
+            ->assertSee('127.0.0.1')
+            ->assertSee('loopback')
+            ->assertSee('/etc/hosts')
+            ->assertSee($reference)
+            ->getContent();
+        self::assertStringNotContainsString('DO_NOT_LOG_PASSWORD', $html);
+        self::assertStringNotContainsString('DO_NOT_LOG_TOKEN', $html);
+        self::assertStringNotContainsString('DO_NOT_LOG_PASSWORD', json_encode(session('diagnostic_context'), JSON_THROW_ON_ERROR));
+        self::assertSame(0, TargetCredential::query()->count());
+
+        Log::shouldHaveReceived('warning')->once()->withArgs(static function (string $message, array $context): bool {
+            $evidence = json_encode($context, JSON_THROW_ON_ERROR);
+
+            return $message === 'Gateway operation failure.'
+                && ($context['outbound_rejected_address'] ?? null) === '127.0.0.1'
+                && ! str_contains($evidence, 'DO_NOT_LOG_PASSWORD')
+                && ! str_contains($evidence, 'DO_NOT_LOG_TOKEN');
+        });
+    }
+
     public function test_uncertain_disconnect_cannot_replay_and_requires_wordpress_side_attestation(): void
     {
         $alpha = $this->target('alpha');

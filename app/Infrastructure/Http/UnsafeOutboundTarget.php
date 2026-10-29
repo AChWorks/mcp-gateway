@@ -16,6 +16,7 @@ final class UnsafeOutboundTarget extends RuntimeException
         string $message,
         public readonly string $reason = 'invalid_target',
         public readonly ?string $rejectedAddress = null,
+        public readonly ?string $addressSource = null,
     ) {
         parent::__construct($message);
     }
@@ -25,7 +26,8 @@ final class UnsafeOutboundTarget extends RuntimeException
     {
         $context = [
             'failure_origin' => 'gateway_admission',
-            'failure_stage' => str_starts_with($this->reason, 'dns_') ? 'dns_lookup' : 'admission',
+            'failure_stage' => $this->addressSource === 'literal'
+                ? 'admission' : (str_starts_with($this->reason, 'dns_') ? 'dns_lookup' : 'admission'),
             'outbound_rejection_reason' => $this->reason,
             'gateway_error_message' => $this->getMessage(),
         ];
@@ -33,6 +35,9 @@ final class UnsafeOutboundTarget extends RuntimeException
         if ($this->rejectedAddress !== null && filter_var($this->rejectedAddress, FILTER_VALIDATE_IP) !== false) {
             $context['outbound_rejected_address'] = $this->rejectedAddress;
             $context['outbound_address_class'] = $this->addressClass($this->rejectedAddress);
+            if (in_array($this->addressSource, ['literal', 'dns'], true)) {
+                $context['outbound_address_source'] = $this->addressSource;
+            }
         }
 
         return $context;

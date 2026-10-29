@@ -21,6 +21,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use phpseclib4\Crypt\EC;
@@ -430,6 +431,69 @@ final class TargetConfigurationAdminTest extends TestCase
         self::assertSame(0, TargetCredential::query()->count());
         self::assertSame(0, DB::table('activity_events')->where('operation', 'wordpress-origin-reconfigure')->count());
         Http::assertSentCount(2); // Initial registration only.
+    }
+
+    public function test_wordpress_origin_edit_does_not_replay_signed_or_credential_urls(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'wp-url-secrets',
+            'display_name' => 'Original WordPress',
+            'base_url' => 'https://old.example.test',
+        ])->assertRedirect('/admin/targets/wp-url-secrets');
+
+        $target = Target::query()->where('target_id', 'wp-url-secrets')->sole();
+        $revision = $this->editRevision('wp-url-secrets');
+        Log::spy();
+
+        foreach ([
+            'https://user:DO_NOT_REPLAY_USERNAME_PASSWORD@new.example.test/',
+            'https://new.example.test/path?signature=DO_NOT_REPLAY_SIGNED_TOKEN',
+            'https://new.example.test/path#DO_NOT_REPLAY_FRAGMENT',
+            'not a valid URL with DO_NOT_REPLAY_BAD_PARSE',
+        ] as $url) {
+            $response = $this->put('/admin/targets/wp-url-secrets/configuration',
+                $this->wpUpdate($revision, $url));
+            $response->assertSessionHasErrors('base_url');
+
+            $old = session()->getOldInput();
+            self::assertArrayNotHasKey('base_url', $old);
+            self::assertArrayNotHasKey('current_password', $old);
+            $payload = json_encode([
+                'old' => $old,
+                'diagnostic' => session('diagnostic_context'),
+                'code' => session('diagnostic_code'),
+            ], JSON_THROW_ON_ERROR);
+            foreach (['DO_NOT_REPLAY_USERNAME_PASSWORD', 'DO_NOT_REPLAY_SIGNED_TOKEN',
+                'DO_NOT_REPLAY_FRAGMENT', 'DO_NOT_REPLAY_BAD_PARSE'] as $secret) {
+                self::assertStringNotContainsString($secret, $payload);
+                $this->get('/admin/targets/wp-url-secrets/edit')
+                    ->assertOk()->assertDontSee($secret);
+            }
+            self::assertSame('https://old.example.test',
+                WpAiBridgeTargetConfig::query()->where('target_record_id', $target->getKey())->sole()->base_url);
+        }
+
+        self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame(0, DB::table('activity_events')
+            ->where('operation', 'wordpress-origin-reconfigure')->count());
+
+        Log::shouldHaveReceived('warning')->times(3)->withArgs(
+            static function (string $message, array $details): bool {
+                $json = json_encode($details, JSON_THROW_ON_ERROR);
+                foreach (['DO_NOT_REPLAY_USERNAME_PASSWORD', 'DO_NOT_REPLAY_SIGNED_TOKEN',
+                    'DO_NOT_REPLAY_FRAGMENT', 'DO_NOT_REPLAY_BAD_PARSE'] as $secret) {
+                    if (str_contains($json, $secret)) {
+                        return false;
+                    }
+                }
+
+                return $message === 'Gateway operation failure.'
+                    && ($details['operation'] ?? null) === 'target-configuration-update'
+                    && ($details['error_code'] ?? null) === 'unsafe_target';
+            },
+        );
     }
 
     private function ssh(): Target

@@ -173,8 +173,15 @@
         </div>
         @if (session('target_endpoint_preflight'))
             @php($preflight = (array) session('target_endpoint_preflight'))
-            <div class="alert {{ ($preflight['ok'] ?? false) ? 'alert-success' : 'alert-error' }}"
-                role="{{ ($preflight['ok'] ?? false) ? 'status' : 'alert' }}">
+            <div id="target-endpoint-preflight" class="alert {{ ($preflight['ok'] ?? false) ? 'alert-success' : 'alert-error' }}"
+                role="{{ ($preflight['ok'] ?? false) ? 'status' : 'alert' }}"
+                @if (($preflight['ok'] ?? false) && isset($preflight['checked_connector'], $preflight['checked_fields']))
+                    data-checked-connector="{{ $preflight['checked_connector'] }}"
+                    data-checked-fields="{{ json_encode($preflight['checked_fields'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) }}"
+                @endif>
+                @if (! empty($preflight['checked_subject']))
+                    <p><strong>{{ __('Checked endpoint') }}:</strong> <code>{{ $preflight['checked_subject'] }}</code></p>
+                @endif
                 <strong>{{ __('Gateway endpoint preflight') }}:</strong> {{ $preflight['message'] ?? '' }}
                 @if (! empty($preflight['limitation']))
                     <p>{{ $preflight['limitation'] }}</p>
@@ -186,6 +193,9 @@
                     <p><strong>{{ __('Log reference') }}:</strong> <code>{{ $preflight['reference'] }}</code></p>
                 @endif
             </div>
+            @if (($preflight['ok'] ?? false) && ! empty($preflight['checked_fields']))
+                <p id="target-preflight-stale" class="field-help" role="status" hidden>{{ __('The endpoint changed after preflight. The previous result no longer applies; check the new endpoint again.') }}</p>
+            @endif
         @endif
         <p class="field-help">{{ __('Preflight is optional and read-only. It uses the selected connector network policy and does not register, contact, authenticate or trust a Target. Actual connections independently recheck DNS and verify their required identity protections.') }}</p>
     </form>
@@ -203,6 +213,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const trustedCheckbox = form.querySelector('input[name="ssh_trust_confirmed"]');
     const hostKey = form.querySelector('#ssh_host_key');
     const fingerprint = form.querySelector('#host_fingerprint');
+    const preflight = form.querySelector('#target-endpoint-preflight');
+    const staleNotice = form.querySelector('#target-preflight-stale');
+
+    // This is a time-of-check observation, never a future authorization. As
+    // soon as the connector or any checked field changes, old success is stale.
+    let preflightInvalidated = false;
+    let checkedFields = null;
+    if (preflight && preflight.dataset.checkedConnector) {
+        try {
+            checkedFields = JSON.parse(preflight.dataset.checkedFields || '{}');
+        } catch (_) {
+            preflightInvalidated = true;
+        }
+    }
+    const syncPreflight = () => {
+        if (!preflight || !preflight.dataset.checkedConnector) return;
+        if (connector.value !== preflight.dataset.checkedConnector) preflightInvalidated = true;
+        if (!checkedFields || !Object.entries(checkedFields).every(([name, value]) => {
+            const field = Array.from(form.elements).find(el => el.name === name);
+            return field && field.value === String(value);
+        })) preflightInvalidated = true;
+        if (preflightInvalidated) {
+            preflight.hidden = true;
+            if (staleNotice) staleNotice.hidden = false;
+        }
+    };
+    Object.keys(checkedFields || {}).forEach(name => {
+        const field = form.elements.namedItem(name);
+        if (field) {
+            field.addEventListener('input', syncPreflight);
+            field.addEventListener('change', syncPreflight);
+        }
+    });
 
     const syncAuthentication = () => {
         const current = method.value;
@@ -226,6 +269,7 @@ document.addEventListener('DOMContentLoaded', () => {
             panel.disabled = !active;
         });
         syncAuthentication();
+        syncPreflight();
     };
     connector.addEventListener('change', syncConnector);
     method.addEventListener('change', syncAuthentication);

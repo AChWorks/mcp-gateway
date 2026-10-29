@@ -384,6 +384,9 @@ final class TargetManagementAdminTest extends TestCase
         $result = session('target_endpoint_preflight');
         self::assertIsArray($result);
         self::assertTrue($result['ok']);
+        self::assertSame('wp_ai_bridge', $result['checked_connector']);
+        self::assertSame('https://wordpress.example.test/', $result['checked_subject']);
+        self::assertSame(['base_url' => 'https://wordpress.example.test/'], $result['checked_fields']);
         self::assertStringContainsString('1.1.1.1', $result['message']);
         $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
             ->assertOk()
@@ -451,6 +454,9 @@ final class TargetManagementAdminTest extends TestCase
         $result = session('target_endpoint_preflight');
         self::assertIsArray($result);
         self::assertTrue($result['ok']);
+        self::assertSame('ssh_direct', $result['checked_connector']);
+        self::assertSame('8.8.8.8:2222', $result['checked_subject']);
+        self::assertSame(['ssh_host' => '8.8.8.8', 'ssh_port' => '2222'], $result['checked_fields']);
         self::assertStringContainsString('8.8.8.8', $result['message']);
         self::assertStringContainsString('host key', $result['limitation']);
         foreach (['ssh_private_key', 'ssh_password', 'ssh_passphrase', 'secret_unknown'] as $secret) {
@@ -460,6 +466,7 @@ final class TargetManagementAdminTest extends TestCase
             ->assertOk()
             ->assertSee('Gateway endpoint preflight')
             ->assertSee('8.8.8.8')
+            ->assertSee('Checked endpoint')
             ->assertSee('host key')
             ->assertDontSee('NEVER_FLASH_SSH_PRIVATE_KEY')
             ->assertDontSee('NEVER_FLASH_SSH_PASSWORD');

@@ -53,11 +53,15 @@ final class TargetEndpointPreflightTest extends TestCase
         self::assertStringContainsString('1.1.1.1, 8.8.8.8', $https->message);
         self::assertStringContainsString('does not verify TLS', $https->limitation);
         self::assertSame(1, $dns->calls);
+        self::assertSame('https://generic-service.example.test/', $https->checkedSubject);
+        self::assertSame(['base_url' => 'https://generic-service.example.test/'], $https->checkedFields);
 
         $tcp = $service->publicSshTcpEndpoint('generic-ssh.example.test', 2222);
         self::assertStringContainsString('9.9.9.9', $tcp->message);
         self::assertStringContainsString('host key', $tcp->limitation);
         self::assertSame(1, $ssh->calls);
+        self::assertSame('generic-ssh.example.test:2222', $tcp->checkedSubject);
+        self::assertSame(['ssh_host' => 'generic-ssh.example.test', 'ssh_port' => '2222'], $tcp->checkedFields);
         self::assertSame(1, $dns->calls, 'SSH must not inherit HTTP DNS policy.');
     }
 

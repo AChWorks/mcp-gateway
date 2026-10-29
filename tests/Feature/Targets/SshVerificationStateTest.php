@@ -109,6 +109,9 @@ final class SshVerificationStateTest extends TestCase
             self::fail('Loopback must be rejected by production SSH address policy.');
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('egress_denied', $exception->reason);
+            self::assertSame('literal', $exception->diagnostics['outbound_address_source'] ?? null);
+            self::assertSame('127.0.0.1', $exception->diagnostics['outbound_rejected_address'] ?? null);
+            self::assertSame('admission', $exception->diagnostics['failure_stage'] ?? null);
         }
 
         self::assertSame('error', $target->fresh()->connection_state->value);

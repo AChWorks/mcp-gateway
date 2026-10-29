@@ -179,14 +179,17 @@ final class OutboundTargetPolicy
     /** @return list<string> */
     private function resolvePublicAddresses(string $host, ?int $deadlineNs = null): array
     {
-        $addresses = $this->dns->resolve($host, $deadlineNs);
+        // Numeric literals are already the destination: never ascribe their
+        // policy rejection to a DNS lookup, nor consult an external resolver.
+        $literal = filter_var($host, FILTER_VALIDATE_IP) !== false;
+        $addresses = $literal ? [$host] : $this->dns->resolve($host, $deadlineNs);
         if ($addresses === []) {
             throw new UnsafeOutboundTarget('Outbound target host did not resolve to an address.', 'dns_no_address');
         }
 
         foreach ($addresses as $address) {
             if (! $this->ipPolicy->isPublic($address)) {
-                throw new UnsafeOutboundTarget('Outbound target resolved to a non-public address.', 'dns_non_public', $address);
+                throw new UnsafeOutboundTarget('Outbound target contains a non-public address.', 'dns_non_public', $address, $literal ? 'literal' : 'dns');
             }
         }
 

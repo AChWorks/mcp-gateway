@@ -10,6 +10,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
 use App\Support\OperationDiagnostics;
+use App\Support\TargetFormInput;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -69,6 +70,6 @@ final class TargetConfigurationController extends Controller
      */
     private function safeInput(Request $request, array $fields): array
     {
-        return $request->only($fields);
+        return TargetFormInput::replayable($request, $fields);
     }
 }

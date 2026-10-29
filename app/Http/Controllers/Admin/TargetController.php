@@ -19,6 +19,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
+use App\Support\TargetFormInput;
 use App\Support\TargetRecoveryPresentation;
 use DomainException;
 use Illuminate\Http\RedirectResponse;
@@ -151,6 +152,9 @@ final class TargetController extends Controller
                 'ok' => true,
                 'message' => $checked->message,
                 'limitation' => $checked->limitation,
+                'checked_subject' => $checked->checkedSubject,
+                'checked_connector' => $adapter->type(),
+                'checked_fields' => $checked->checkedFields,
             ];
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'invalid_input';
@@ -413,26 +417,13 @@ final class TargetController extends Controller
     ): array {
         // Allowlist replayable fields; new connector secrets stay private by
         // default even when the adapter introduces an unfamiliar form field.
-        $input = $request->only([
+        return TargetFormInput::replayable($request, [
             'connector_type',
             'target_id',
             'display_name',
             'ai_guidance',
             ...($adapter?->safeOldInputFields() ?? []),
         ]);
-        // A URL with embedded credentials or signed query data is not safe to
-        // retain in an error redirect's session, even when its form field is
-        // normally non-secret. Avoid re-rendering such opaque tokens.
-        $url = $input['base_url'] ?? null;
-        if (is_string($url)) {
-            $parts = parse_url($url);
-            if (! is_array($parts) || isset($parts['user']) || isset($parts['pass'])
-                || isset($parts['query']) || isset($parts['fragment'])) {
-                unset($input['base_url']);
-            }
-        }
-
-        return $input;
     }
 
     private function trimmed(?string $text): ?string

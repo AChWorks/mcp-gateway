@@ -119,6 +119,44 @@ final class OutboundTargetPolicyTest extends TestCase
         }
     }
 
+    public function test_literal_ips_and_dns_answers_have_distinct_safe_provenance_without_policy_bypass(): void
+    {
+        $dns = new class implements DnsResolver
+        {
+            /** @var list<string> */
+            public array $queried = [];
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                $this->queried[] = $host;
+
+                return match ($host) {
+                    'dns-local.example.test' => ['127.0.0.1'],
+                    'dns-mixed.example.test' => ['1.1.1.1', '10.0.0.2'],
+                    default => [],
+                };
+            }
+        };
+        $policy = new OutboundTargetPolicy($dns, new PublicIpAddressPolicy);
+        foreach ([
+            ['https://127.0.0.1', 'literal', 'admission', '127.0.0.1'],
+            ['https://10.0.0.2', 'literal', 'admission', '10.0.0.2'],
+            ['https://dns-local.example.test', 'dns', 'dns_lookup', '127.0.0.1'],
+            ['https://dns-mixed.example.test', 'dns', 'dns_lookup', '10.0.0.2'],
+        ] as [$url, $source, $stage, $ip]) {
+            try {
+                $policy->validate($url);
+                self::fail('Non-public endpoint passed the HTTPS policy.');
+            } catch (UnsafeOutboundTarget $exception) {
+                self::assertSame('dns_non_public', $exception->reason);
+                self::assertSame($ip, $exception->rejectedAddress);
+                self::assertSame($source, $exception->diagnostics()['outbound_address_source']);
+                self::assertSame($stage, $exception->diagnostics()['failure_stage']);
+            }
+        }
+        self::assertSame(['dns-local.example.test', 'dns-mixed.example.test'], $dns->queried);
+    }
+
     public function test_ambiguous_and_cross_origin_targets_are_rejected(): void
     {
         $policy = $this->policy([

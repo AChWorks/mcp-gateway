@@ -96,16 +96,33 @@ by the current supported connectors:
   rules. No TCP connection, independently pinned host-key check, SSH login,
   remote command or credential use. A result is not a trusted SSH peer.
 
+A successful preflight displays the exact checked endpoint and binds the
+result to the selected connector and its reviewed endpoint input fields.
+Changing the connector, host, URL or SSH port invalidates the old success
+in the shared Admin form, even if the operator later restores the same text.
+No checked destination is retained as dispatch authorization.
+
 DNS preflight is a **time-of-check snapshot**, never a cached authorization.
 Every registration/operation must repeat its appropriate trust checks, DNS
 and actual peer binding. HTTP and SSH retain their distinct protocol policies;
 do not apply HTTPS/TLS semantics to SSH or use a generic caller-selected
 host/URL to bypass connector admission.
 
+All Target registration, preflight and origin-configuration redirects
+reuse `TargetFormInput` to replay only allowlisted non-secret fields, and
+never retain URL userinfo, query tokens, fragments or malformed origins in
+session old input. Shared connection redirects also retain only
+`OperationDiagnostics::safeContext` so the browser diagnostic panel can
+present observed facts rather than generic fallbacks.
+
 A policy rejection retains existing machine codes (`unsafe_target` for
 HTTP, `egress_denied` for SSH) while carrying allowlisted, bounded
 `outbound_rejection_reason`, an observed rejected numeric IP when relevant,
-and its address class. `OperationDiagnostics` is the shared boundary for
+and its address class. A finite `outbound_address_source` differentiates
+configured numeric IP literals (no DNS lookup) from actual resolver answers,
+so a configured localhost address is not incorrectly blamed on /etc/hosts.
+`incompatible_metadata` keeps its machine identity while displaying any
+proven underlying outbound-policy cause. `OperationDiagnostics` is the shared boundary for
 operator-visible summaries, concrete next steps, diagnostic references and
 redacted evidence in logs; no per-connector diagnostic stack is added.
 A loopback result identifies actual Gateway DNS/local override evidence and

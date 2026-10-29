@@ -58,7 +58,7 @@ final class SshTcpAddressPolicy implements SshDialAddressPolicy
             if (! $this->publicIps->isPublic($address)) {
                 // Reject the entire candidate set; never silently pick public
                 // answers out of a mixed private/public DNS response.
-                throw new UnsafeOutboundTarget('SSH destination includes an unapproved TCP address.', 'dns_non_public', $address);
+                throw new UnsafeOutboundTarget('SSH destination includes an unapproved TCP address.', 'dns_non_public', $address, $literal !== null ? 'literal' : 'dns');
             }
 
             $canonical = inet_ntop($packed);

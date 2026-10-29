@@ -32,6 +32,8 @@ final readonly class TargetEndpointPreflight
                 'addresses' => implode(', ', $checked->addresses),
             ]),
             __('DNS and public-IP policy only. This does not verify TLS, the remote service, its authentication, or a future connection. Registration and dispatch check again.'),
+            $checked->url,
+            ['base_url' => $url],
         );
     }
 
@@ -48,6 +50,8 @@ final readonly class TargetEndpointPreflight
                 'addresses' => implode(', ', $addresses),
             ]),
             __('DNS/TCP destination policy only. This does not connect, verify the SSH host key, authenticate, or grant trust. Every actual SSH connection rechecks and verifies its pinned host key.'),
+            (str_contains($endpoint->host, ':') ? '['.$endpoint->host.']' : $endpoint->host).':'.$port,
+            ['ssh_host' => $host, 'ssh_port' => (string) $port],
         );
     }
 }

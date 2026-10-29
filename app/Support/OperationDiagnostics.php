@@ -91,6 +91,11 @@ final class OperationDiagnostics
                     && ! (new PublicIpAddressPolicy)->isPublic($address)) {
                     $safe['outbound_rejected_address'] = $address;
                 }
+                $addressSource = $details['outbound_address_source'] ?? null;
+                if (isset($safe['outbound_rejected_address']) && is_string($addressSource)
+                    && in_array($addressSource, ['literal', 'dns'], true)) {
+                    $safe['outbound_address_source'] = $addressSource;
+                }
                 $addressClass = $details['outbound_address_class'] ?? null;
                 if (is_string($addressClass) && in_array($addressClass, [
                     'loopback', 'private', 'link_local', 'restricted',
@@ -209,7 +214,9 @@ final class OperationDiagnostics
             'tls_failure' => __('The remote TLS certificate, hostname or secure handshake could not be verified.'),
             'unsafe_target' => self::outboundSummary($details),
             'missing_bridge' => __('The WordPress Bridge discovery endpoint was not found.'),
-            'incompatible_metadata' => __('The WordPress OAuth or MCP metadata is incompatible or returned an unexpected response.'),
+            'incompatible_metadata' => isset(self::safeContext($details)['outbound_rejection_reason'])
+                ? __('The WordPress OAuth/MCP metadata violates the Target outbound policy: :reason', ['reason' => self::outboundSummary($details)])
+                : __('The WordPress OAuth or MCP metadata is incompatible or returned an unexpected response.'),
             'revocation_pending', 'disconnect_pending' => __('WordPress credential revocation has not been confirmed. The existing credential remains blocked, not forgotten.'),
             'revocation_failed' => __('WordPress did not confirm the OAuth credential revocation.'),
             'revocation_conflict' => __('The credential or revocation state changed while the operation was running.'),
@@ -249,7 +256,9 @@ final class OperationDiagnostics
             'tls_failure' => __('Check certificate validity, hostname/SNI and full certificate chain from the Gateway host. Do not disable TLS verification.'),
             'unsafe_target' => self::outboundNextStep($details),
             'missing_bridge' => __('Check that WP AI Bridge is installed, active and exposes its well-known OAuth metadata routes.'),
-            'incompatible_metadata' => __('Compare the WordPress Bridge version, advertised OAuth endpoints and exact issuer/resource metadata.'),
+            'incompatible_metadata' => isset(self::safeContext($details)['outbound_rejection_reason'])
+                ? self::outboundNextStep($details)
+                : __('Compare the WordPress Bridge version, advertised OAuth endpoints and exact issuer/resource metadata.'),
             'revocation_pending', 'disconnect_pending', 'revocation_failed', 'revocation_uncertain' => __('Open Target Details → Connection and recovery. Resume only a step explicitly marked proven-not-sent. For unknown results, the Owner must remove the Gateway client approval in WordPress and complete attested reconciliation. A green Metadata check does not change this.'),
             'cancel_not_safe', 'cancel_verification_failed', 'cancel_verification_unavailable' => __('Do not assume Cancel succeeded. The Owner can finish a proven-not-sent revoke or independently reconcile the authorization at WordPress.'),
             'operation_unconfirmed' => __('Reload Target Details to inspect the durable intent phase and use only the action offered there. Do not blindly resubmit remote operations.'),
@@ -316,6 +325,12 @@ final class OperationDiagnostics
                 default => __('non-public'),
             };
 
+            if (($safe['outbound_address_source'] ?? null) === 'literal') {
+                return is_string($address)
+                    ? __('The configured :kind IP address (:address) is blocked by Gateway policy.', ['kind' => $kind, 'address' => $address])
+                    : __('The configured :kind IP address is blocked by Gateway policy.', ['kind' => $kind]);
+            }
+
             return is_string($address)
                 ? __('Gateway DNS resolved this hostname to a blocked :kind IP address (:address).', [
                     'kind' => $kind, 'address' => $address,
@@ -330,7 +345,7 @@ final class OperationDiagnostics
             'https_required' => __('The destination must use HTTPS.'),
             'unsupported_url_components' => __('The URL includes credentials, query parameters or a fragment that cannot be used for a Target origin.'),
             'invalid_url', 'invalid_host', 'invalid_path' => __('The URL or hostname is invalid or contains an ambiguous path.'),
-            'origin_mismatch' => __('The remote OAuth/MCP metadata points to a different origin than the configured Target.'),
+            'origin_mismatch' => __('The remote endpoint advertises a different origin than the configured Target.'),
             'origin_not_allowed' => __('The remote URL origin is not authorized for this operation.'),
             default => __('The outbound security policy rejected this destination.'),
         };
@@ -343,15 +358,17 @@ final class OperationDiagnostics
         $reason = $safe['outbound_rejection_reason'] ?? null;
 
         return match ($reason) {
-            'dns_non_public' => ($safe['outbound_address_class'] ?? null) === 'loopback'
+            'dns_non_public' => ($safe['outbound_address_source'] ?? null) === 'literal'
+                ? __('Replace the configured numeric IP with a verified public address, or correct the intended endpoint. No DNS lookup occurred for this literal. Do not bypass SSRF protections.')
+                : (($safe['outbound_address_class'] ?? null) === 'loopback'
                 ? __('The destination is loopback. Replace a configured localhost IP or correct a Gateway /etc/hosts override after verifying the intended public address. Do not bypass SSRF protections.')
-                : __('Check the Gateway host DNS resolver, local overrides (including /etc/hosts), and the authoritative A/AAAA records. Every returned IP must be publicly routable. Do not bypass SSRF protections.'),
+                : __('Check the Gateway host DNS resolver, local overrides (including /etc/hosts), and the authoritative A/AAAA records. Every returned IP must be publicly routable. Do not bypass SSRF protections.')),
             'dns_no_address' => __('Verify public A/AAAA records and the Gateway host DNS configuration. An empty answer does not prove the site is offline; fix DNS before retrying.'),
             'dns_too_many_addresses' => __('Review the hostname DNS records and reduce the answer set to the connector limit. Do not disable the public-IP policy.'),
             'dns_invalid_address' => __('Review the DNS answer set and Gateway resolver. Every permitted address must be a valid public IPv4 or IPv6 address.'),
             'https_required' => __('Enter the canonical https:// URL and configure a valid TLS certificate on the Target.'),
             'unsupported_url_components', 'invalid_url', 'invalid_host', 'invalid_path' => __('Enter only the canonical public HTTPS origin or supported site path; remove credentials, query strings, fragments and ambiguous path segments.'),
-            'origin_mismatch', 'origin_not_allowed' => __('Verify that the connector metadata advertises the same verified HTTPS origin as the configured site. Do not follow an untrusted cross-origin redirect.'),
+            'origin_mismatch', 'origin_not_allowed' => __('Verify that the advertised remote endpoint uses the same approved HTTPS origin as the configured Target. Do not follow an untrusted cross-origin redirect.'),
             default => __('Use a public HTTPS origin and review its DNS records and the Gateway outbound policy. Do not bypass SSRF protections.'),
         };
     }

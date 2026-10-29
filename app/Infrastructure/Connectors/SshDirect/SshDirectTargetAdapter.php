@@ -175,7 +175,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
 
             return new TargetConnectorResult(statusMessage: __('SSH host key, numeric TCP peer and login verified. No command was run.'));
         } catch (SshTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason);
+            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -186,7 +186,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
 
             return new TargetConnectorResult(statusMessage: __('SSH recheck verified the pinned host key and login.'));
         } catch (SshTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason);
+            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -197,7 +197,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
 
             return new TargetConnectorResult(statusMessage: __('SSH credential deleted from this Gateway. This does NOT revoke the remote Unix account or terminate external sessions.'));
         } catch (SshTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason);
+            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -208,7 +208,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
 
             return new TargetConnectorResult(statusMessage: __('SSH TCP peer, pinned host key and login verified.'));
         } catch (SshTargetConnectionException $exception) {
-            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason);
+            throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
     }
 
@@ -242,7 +242,9 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
     private function failureMessage(SshTargetConnectionException $exception): string
     {
         return match ($exception->reason) {
-            'egress_denied' => __('The registered SSH destination is not permitted by the TCP/DNS policy.'),
+            'egress_denied' => isset($exception->diagnostics['outbound_rejection_reason'])
+                ? OperationDiagnostics::summary('egress_denied', $exception->diagnostics)
+                : __('The registered SSH destination is not permitted by the TCP/DNS policy.'),
             'tcp_peer_mismatch', 'host_key_mismatch', 'ssh_handshake_failed' => __('SSH server identity could not be verified. No credentials were sent after a host-key mismatch.'),
             'authentication_failed' => __('SSH authentication failed after server identity verification.'),
             'tcp_unreachable' => __('The approved numeric SSH endpoint could not be reached.'),
