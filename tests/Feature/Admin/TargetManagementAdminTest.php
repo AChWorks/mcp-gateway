@@ -113,7 +113,7 @@ final class TargetManagementAdminTest extends TestCase
             self::assertSame($wpDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="wp_ai_bridge"][@disabled])'));
             self::assertSame($sshDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="ssh_direct"][@disabled])'));
             self::assertSame(1, (int) $xpath->evaluate(
-                'count(//fieldset[@data-connector-panel="wp_ai_bridge"]//button[@formnovalidate][@formaction])',
+                'count(//div[@data-target-actions]//button[@formnovalidate][@formaction])',
             ));
             self::assertStringContainsString('How to obtain and verify the server host key', $html);
             self::assertStringContainsString('ssh_host_rsa_key.pub', $html);
@@ -350,7 +350,7 @@ final class TargetManagementAdminTest extends TestCase
             'ssh_password' => 'NEVER_FLASH_SECRET',
         ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
 
-        $result = session('target_dns_preflight');
+        $result = session('target_endpoint_preflight');
         self::assertIsArray($result);
         self::assertFalse($result['ok']);
         self::assertStringContainsString('127.0.0.1', $result['message']);
@@ -360,7 +360,7 @@ final class TargetManagementAdminTest extends TestCase
 
         $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
             ->assertOk()
-            ->assertSee('Gateway DNS preflight')
+            ->assertSee('Gateway endpoint preflight')
             ->assertSee('127.0.0.1')
             ->assertSee('/etc/hosts')
             ->assertDontSee('NEVER_FLASH_SECRET');
@@ -381,18 +381,18 @@ final class TargetManagementAdminTest extends TestCase
             'base_url' => 'https://wordpress.example.test/',
         ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
 
-        $result = session('target_dns_preflight');
+        $result = session('target_endpoint_preflight');
         self::assertIsArray($result);
         self::assertTrue($result['ok']);
         self::assertStringContainsString('1.1.1.1', $result['message']);
         $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
             ->assertOk()
-            ->assertSee('Registration rechecks everything independently.');
+            ->assertSee('Actual connections independently recheck DNS');
         Http::assertNothingSent();
         self::assertSame(0, Target::query()->count());
     }
 
-    public function test_dns_preflight_requires_authorized_user_and_wordpress_url_schema(): void
+    public function test_endpoint_preflight_requires_authentication_and_connector_specific_schema(): void
     {
         $this->post('/admin/targets/preflight', [
             'connector_type' => 'wp_ai_bridge',
@@ -408,6 +408,10 @@ final class TargetManagementAdminTest extends TestCase
         $this->post('/admin/targets/preflight', [
             'connector_type' => 'ssh_direct',
             'base_url' => 'https://wordpress.example.test',
+        ])->assertSessionHasErrors('ssh_host');
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'unimplemented_connector',
+            'base_url' => 'https://wordpress.example.test',
         ])->assertSessionHasErrors('connector_type');
         $this->post('/admin/targets/preflight', [
             'connector_type' => 'wp_ai_bridge',
@@ -421,6 +425,97 @@ final class TargetManagementAdminTest extends TestCase
         foreach (['ssh_password', 'ssh_private_key', 'future_secret'] as $secret) {
             self::assertArrayNotHasKey($secret, $old);
         }
+        Http::assertNothingSent();
+        self::assertSame(0, Target::query()->count());
+    }
+
+    public function test_ssh_preflight_uses_ssh_policy_without_host_key_login_or_registration(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'ssh-check',
+            'display_name' => 'SSH check',
+            'ssh_host' => '8.8.8.8',
+            'ssh_port' => '2222',
+            'ssh_username' => 'deploy',
+            'ssh_host_key' => 'ssh-ed25519 PUBLIC_KEY_FIXTURE',
+            'ssh_auth_method' => 'private_key',
+            'ssh_trust_confirmed' => 'yes',
+            'ssh_private_key' => 'NEVER_FLASH_SSH_PRIVATE_KEY',
+            'ssh_password' => 'NEVER_FLASH_SSH_PASSWORD',
+            'ssh_passphrase' => 'NEVER_FLASH_SSH_PASSPHRASE',
+            'secret_unknown' => 'NEVER_FLASH_UNKNOWN_SECRET',
+        ])->assertRedirect('/admin/targets/create?connector_type=ssh_direct');
+
+        $result = session('target_endpoint_preflight');
+        self::assertIsArray($result);
+        self::assertTrue($result['ok']);
+        self::assertStringContainsString('8.8.8.8', $result['message']);
+        self::assertStringContainsString('host key', $result['limitation']);
+        foreach (['ssh_private_key', 'ssh_password', 'ssh_passphrase', 'secret_unknown'] as $secret) {
+            self::assertArrayNotHasKey($secret, session()->getOldInput());
+        }
+        $this->get('/admin/targets/create?connector_type=ssh_direct')
+            ->assertOk()
+            ->assertSee('Gateway endpoint preflight')
+            ->assertSee('8.8.8.8')
+            ->assertSee('host key')
+            ->assertDontSee('NEVER_FLASH_SSH_PRIVATE_KEY')
+            ->assertDontSee('NEVER_FLASH_SSH_PASSWORD');
+
+        Http::assertNothingSent();
+        self::assertSame(0, Target::query()->count());
+        self::assertSame(0, DB::table('target_credentials')->count());
+    }
+
+    public function test_ssh_preflight_rejects_loopback_and_records_actionable_shared_diagnostics(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'ssh-blocked',
+            'display_name' => 'Blocked SSH',
+            'ssh_host' => '127.0.0.1',
+            'ssh_port' => 22,
+            'ssh_private_key' => 'NEVER_FLASH_THIS_PRIVATE_KEY',
+        ])->assertRedirect('/admin/targets/create?connector_type=ssh_direct');
+
+        $result = session('target_endpoint_preflight');
+        self::assertIsArray($result);
+        self::assertFalse($result['ok']);
+        self::assertStringContainsString('127.0.0.1', $result['message']);
+        self::assertStringContainsString('SSRF', $result['next_step']);
+        self::assertTrue(Str::isUuid($result['reference']));
+        self::assertArrayNotHasKey('ssh_private_key', session()->getOldInput());
+
+        $this->get('/admin/targets/create?connector_type=ssh_direct')
+            ->assertOk()->assertSee('127.0.0.1')->assertSee('What to check');
+        Http::assertNothingSent();
+        self::assertSame(0, Target::query()->count());
+    }
+
+    public function test_preflight_and_registration_never_replay_signed_or_credential_bearing_url_input(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        foreach (['/admin/targets/preflight', '/admin/targets'] as $path) {
+            $response = $this->post($path, [
+                'connector_type' => 'wp_ai_bridge',
+                'target_id' => 'url-secret-check',
+                'display_name' => 'Do not flash URLs',
+                'base_url' => 'https://user:SECRET_PASSWORD@wordpress.example.test/?token=SECRET_TOKEN',
+            ]);
+            if ($path === '/admin/targets/preflight') {
+                $response->assertSessionHas('target_endpoint_preflight');
+                self::assertFalse(session('target_endpoint_preflight')['ok']);
+            } else {
+                $response->assertSessionHasErrors('base_url');
+            }
+            self::assertArrayNotHasKey('base_url', session()->getOldInput());
+            $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
+                ->assertOk()->assertDontSee('SECRET_PASSWORD')->assertDontSee('SECRET_TOKEN');
+        }
+
         Http::assertNothingSent();
         self::assertSame(0, Target::query()->count());
     }

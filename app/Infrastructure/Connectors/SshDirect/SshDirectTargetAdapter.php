@@ -9,15 +9,20 @@ use App\Application\Targets\SshTargetRegistration;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorResult;
+use App\Application\Targets\TargetEndpointPreflight;
+use App\Application\Targets\TargetEnrollmentPreflight;
+use App\Application\Targets\TargetPreflightResult;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Http\UnsafeOutboundTarget;
+use App\Support\OperationDiagnostics;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 use RuntimeException;
 
 /** SSH-specific enrollment, trust and verification never become generic OAuth behavior. */
-final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
+final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, TargetEnrollmentPreflight
 {
     public function __construct(private Container $container) {}
 
@@ -48,6 +53,57 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter
             'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
             'ssh_auth_method', 'ssh_trust_confirmed',
         ];
+    }
+
+    public function preflightRules(): array
+    {
+        return [
+            'ssh_host' => ['required', 'string', 'max:253'],
+            'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
+        ];
+    }
+
+    public function preflight(array $input): TargetPreflightResult
+    {
+        try {
+            return $this->container->make(TargetEndpointPreflight::class)->publicSshTcpEndpoint(
+                (string) $input['ssh_host'],
+                (int) $input['ssh_port'],
+            );
+        } catch (UnsafeOutboundTarget $exception) {
+            throw new TargetConnectorFailure(
+                OperationDiagnostics::summary('egress_denied', $exception->diagnostics()),
+                'ssh_host', 'egress_denied', $exception->diagnostics(),
+            );
+        } catch (InvalidArgumentException $exception) {
+            throw new TargetConnectorFailure(
+                __('The SSH host or port is invalid. Enter a canonical public hostname or IP address and a valid TCP port.'),
+                'ssh_host', 'invalid_input',
+            );
+        } catch (SshTargetConnectionException $exception) {
+            $context = [
+                'failure_origin' => 'gateway_admission',
+                'failure_stage' => $exception->reason === 'transfer_timed_out' ? 'dns_timeout' : 'dns_lookup',
+                'pre_dispatch' => true,
+            ];
+
+            throw new TargetConnectorFailure(
+                OperationDiagnostics::summary('network_failure', $context),
+                'ssh_host', 'network_failure', $context,
+            );
+        } catch (RuntimeException $exception) {
+            $context = [
+                'failure_origin' => 'gateway_admission',
+                'failure_stage' => 'dns_lookup',
+                'pre_dispatch' => true,
+                'gateway_error_message' => $exception->getMessage(),
+            ];
+
+            throw new TargetConnectorFailure(
+                OperationDiagnostics::summary('network_failure', $context),
+                'ssh_host', 'network_failure', $context,
+            );
+        }
     }
 
     public function register(array $input): Target

@@ -4,7 +4,7 @@ namespace App\Infrastructure\Connectors\SshDirect;
 
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\PublicIpAddressPolicy;
-use RuntimeException;
+use App\Infrastructure\Http\UnsafeOutboundTarget;
 
 /**
  * Resolve an operator-registered SSH endpoint to bounded public numeric peers.
@@ -42,22 +42,28 @@ final class SshTcpAddressPolicy implements SshDialAddressPolicy
             ? $this->dns->resolve($endpoint->host.'.')
             : $this->boundedDns->resolveBeforeDeadline($endpoint->host.'.', $deadlineNs));
 
-        if ($answers === [] || count($answers) > self::MAX_DNS_ADDRESSES) {
-            throw new RuntimeException('SSH destination has no bounded approved DNS address set.');
+        if ($answers === []) {
+            throw new UnsafeOutboundTarget('SSH destination has no DNS address.', 'dns_no_address');
+        }
+        if (count($answers) > self::MAX_DNS_ADDRESSES) {
+            throw new UnsafeOutboundTarget('SSH destination exceeds the approved DNS address count.', 'dns_too_many_addresses');
         }
 
         $approved = [];
         foreach ($answers as $address) {
             $packed = @inet_pton($address);
-            if ($packed === false || ! $this->publicIps->isPublic($address)) {
+            if ($packed === false) {
+                throw new UnsafeOutboundTarget('SSH DNS returned an invalid numeric address.', 'dns_invalid_address');
+            }
+            if (! $this->publicIps->isPublic($address)) {
                 // Reject the entire candidate set; never silently pick public
                 // answers out of a mixed private/public DNS response.
-                throw new RuntimeException('SSH destination includes an unapproved TCP address.');
+                throw new UnsafeOutboundTarget('SSH destination includes an unapproved TCP address.', 'dns_non_public', $address);
             }
 
             $canonical = inet_ntop($packed);
             if ($canonical === false) {
-                throw new RuntimeException('SSH destination includes an invalid TCP address.');
+                throw new UnsafeOutboundTarget('SSH destination includes an invalid TCP address.', 'dns_invalid_address');
             }
 
             $approved[$canonical] = true;

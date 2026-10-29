@@ -105,6 +105,32 @@ final class OperationDiagnosticsTest extends TestCase
         self::assertStringContainsString('DNS', OperationDiagnostics::nextStep('unsafe_target'));
     }
 
+    public function test_shared_network_and_ssh_egress_guidance_keeps_transport_specific_evidence(): void
+    {
+        $ssh = [
+            'outbound_rejection_reason' => 'dns_non_public',
+            'outbound_rejected_address' => '127.0.0.1',
+            'outbound_address_class' => 'loopback',
+            'failure_stage' => 'dns_lookup',
+        ];
+        self::assertStringContainsString('127.0.0.1', OperationDiagnostics::summary('egress_denied', $ssh));
+        self::assertStringContainsString('/etc/hosts', OperationDiagnostics::nextStep('egress_denied', $ssh));
+
+        self::assertStringContainsString('DNS', OperationDiagnostics::summary('network_failure', [
+            'failure_stage' => 'dns_timeout',
+        ]));
+        self::assertStringContainsString('DNS', OperationDiagnostics::nextStep('network_failure', [
+            'failure_stage' => 'dns_lookup',
+        ]));
+        self::assertStringContainsString('TCP', OperationDiagnostics::summary('network_failure', [
+            'failure_stage' => 'tcp_connect',
+        ]));
+        self::assertStringContainsString('connector', OperationDiagnostics::nextStep('network_failure'));
+        self::assertStringContainsString('address', OperationDiagnostics::summary('egress_denied', [
+            'outbound_rejection_reason' => 'dns_too_many_addresses',
+        ]));
+    }
+
     public function test_mcp_activity_failure_uses_same_correlation_id_in_structured_log(): void
     {
         Log::spy();

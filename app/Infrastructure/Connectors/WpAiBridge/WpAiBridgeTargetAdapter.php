@@ -5,19 +5,24 @@ namespace App\Infrastructure\Connectors\WpAiBridge;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorResult;
+use App\Application\Targets\TargetEndpointPreflight;
+use App\Application\Targets\TargetEnrollmentPreflight;
+use App\Application\Targets\TargetPreflightResult;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetReconfiguration;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Http\OutboundRequestException;
+use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Support\OperationDiagnostics;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 /** WordPress-specific work stays behind the common Target lifecycle boundary. */
-final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
+final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, TargetEnrollmentPreflight
 {
     public function __construct(private Container $container) {}
 
@@ -36,6 +41,30 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
     public function safeOldInputFields(): array
     {
         return ['base_url'];
+    }
+
+    public function preflightRules(): array
+    {
+        return ['base_url' => ['required', 'string', 'url:https', 'max:2048']];
+    }
+
+    public function preflight(array $input): TargetPreflightResult
+    {
+        try {
+            return $this->container->make(TargetEndpointPreflight::class)
+                ->publicHttpsOrigin((string) $input['base_url']);
+        } catch (UnsafeOutboundTarget $exception) {
+            throw new TargetConnectorFailure(
+                OperationDiagnostics::summary('unsafe_target', $exception->diagnostics()),
+                'base_url', 'unsafe_target', $exception->diagnostics(),
+            );
+        } catch (OutboundRequestException $exception) {
+            throw new TargetConnectorFailure(
+                OperationDiagnostics::summary($exception->reason, $exception->details),
+                'base_url', $exception->reason,
+                [...$exception->details, 'pre_dispatch' => $exception->preDispatch],
+            );
+        }
     }
 
     public function register(array $input): Target

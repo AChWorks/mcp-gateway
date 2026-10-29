@@ -74,32 +74,49 @@ Once the application is running, administrator sign-in is available at `/admin/l
 
 Access-control mutations require the acting Owner's current password, preserve at least one enabled recoverable Owner, and record required bounded Activity evidence transactionally. Disabling a user blocks new login, invalidates existing Admin/OAuth-consent sessions on their next request, and makes existing MCP bearer tokens unusable because current user state is rechecked. The admin routes continue to use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
-### Target URL security preflight and actionable errors
+### Shared Target endpoint preflight and actionable errors
 
-The WordPress **Add Target** form offers an authenticated, CSRF-protected,
-rate-limited **Check DNS from Gateway** action. It reads the host's configured
-A/AAAA resolution and applies the same public-HTTPS/DNS policy as registration
-without creating a Target, reading a credential, contacting WordPress or
-granting authorization. A success is a **time-of-check snapshot only**:
-registration and every outbound HTTPS request independently validate and pin
-their destinations, verify TLS and reject redirects. This is not a WordPress
-Bridge health, OAuth or certificate test.
+The connector-neutral **Add Target → Check endpoint from Gateway** action
+is authenticated, CSRF-protected, separately rate-limited and **read-only**.
+The Admin controller routes through the explicit `TargetConnectorRegistry`
+to an implemented adapter opting into `TargetEnrollmentPreflight`.
+That optional interface defines only its non-secret preflight validation
+rules and returns a `TargetPreflightResult`. A future connector does not
+inherit an arbitrary network probe just by existing in the registry.
 
-Policy rejections (including WordPress origin reconfiguration and Bridge
-connection discovery) retain the compatibility code `unsafe_target` but also
-carry a bounded, allowlisted local rejection reason, DNS/address class and
-validated numeric rejected address where observed. The shared
-`OperationDiagnostics` layer translates that evidence into a human-readable
-description and specific operator action (e.g. inspect the Gateway's
-`/etc/hosts` and effective DNS on a loopback result). The same scoped
-diagnostic reference remains available; no arbitrary URLs, credentials,
-remote bodies or unknown provenance are surfaced. A diagnostic must never
-silently change retry/effect certainty: the reusable security exception
-does **not** mark an entire multi-step operation safe to replay. New
-connectors/errors should reuse `OperationDiagnostics` and preserve original
-observed codes/messages for authorized operators rather than introduce
-per-connector log stores or generic catch-all text. Do not bypass
-SSRF/TLS restrictions or silently switch to third-party DNS.
+`TargetEndpointPreflight` is the common transport-aware service reused
+by the current supported connectors:
+
+- **HTTPS** (`wp_ai_bridge` today): public HTTPS URL/origin, effective A/AAAA
+  resolution, public-IP/SSRF policy. No HTTP request to the downstream
+  WordPress site, TLS handshake, Bridge discovery or OAuth credential check.
+- **SSH TCP** (`ssh_direct` today): the registered SSH host and port are
+  parsed through `SshRegisteredEndpoint` and its existing
+  `SshDialAddressPolicy`, including the public-address and maximum-DNS-answer
+  rules. No TCP connection, independently pinned host-key check, SSH login,
+  remote command or credential use. A result is not a trusted SSH peer.
+
+DNS preflight is a **time-of-check snapshot**, never a cached authorization.
+Every registration/operation must repeat its appropriate trust checks, DNS
+and actual peer binding. HTTP and SSH retain their distinct protocol policies;
+do not apply HTTPS/TLS semantics to SSH or use a generic caller-selected
+host/URL to bypass connector admission.
+
+A policy rejection retains existing machine codes (`unsafe_target` for
+HTTP, `egress_denied` for SSH) while carrying allowlisted, bounded
+`outbound_rejection_reason`, an observed rejected numeric IP when relevant,
+and its address class. `OperationDiagnostics` is the shared boundary for
+operator-visible summaries, concrete next steps, diagnostic references and
+redacted evidence in logs; no per-connector diagnostic stack is added.
+A loopback result identifies actual Gateway DNS/local override evidence and
+suggests checking `/etc/hosts` when appropriate. User input, URLs with
+credentials or signed query components, remote response bodies and
+authentication secrets must not be copied into a diagnostic merely to
+explain an error. Do not infer a remote effect or classify it safe to
+retry from a local DNS rejection: the multi-step OAuth/SSH operation owns
+its own effect/recovery certainty. New connector families reuse these
+shared components when their real protocol and trust policy fit; unsupported
+preflight stays explicitly unavailable, not guessed or silently successful.
 
 ## Admin UI foundation
 

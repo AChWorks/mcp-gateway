@@ -7,6 +7,7 @@ use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
+use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
@@ -15,9 +16,6 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
-use App\Infrastructure\Http\OutboundRequestException;
-use App\Infrastructure\Http\OutboundTargetPolicy;
-use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
@@ -113,71 +111,68 @@ final class TargetController extends Controller
     }
 
     /**
-     * Read-only, separately rate-limited WordPress URL preflight. It uses the
-     * same strict outbound policy as enrollment, but stores no Target, opens no
-     * HTTP connection and never interprets a DNS pass as OAuth/Bridge approval.
+     * One authenticated enrollment preflight path for all supported connector
+     * families. Each adapter opts in and owns its protocol validation; neither
+     * submitted field names nor a connector label can choose an arbitrary probe.
      */
-    public function preflight(Request $request, OutboundTargetPolicy $outbound): RedirectResponse
+    public function preflight(Request $request, TargetConnectorRegistry $connectors): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
-        // The button is inside the normal enrollment form. Never flash other
-        // connector fields or potential SSH credentials, even on validation failure.
-        $safeInput = $request->only([
-            'connector_type', 'target_id', 'display_name', 'ai_guidance', 'base_url',
-        ]);
+        $adapter = null;
+        $selected = $request->input('connector_type');
+        $query = is_string($selected) && in_array($selected, $connectors->types(), true)
+            ? ['connector_type' => $selected] : [];
+
         try {
-            $validated = $request->validate([
-                'connector_type' => ['required', 'in:wp_ai_bridge'],
-                'base_url' => ['required', 'string', 'url:https', 'max:2048'],
+            $choice = $request->validate([
+                'connector_type' => ['required', Rule::in($connectors->types())],
             ]);
+            $adapter = $connectors->forType((string) $choice['connector_type']);
+            if (! $adapter instanceof TargetEnrollmentPreflight) {
+                throw ValidationException::withMessages([
+                    'connector_type' => __('This connector does not support endpoint preflight.'),
+                ]);
+            }
+            $validated = $request->validate($adapter->preflightRules());
         } catch (ValidationException $exception) {
             if ($request->expectsJson()) {
                 throw $exception;
             }
 
-            return redirect()->route('admin.targets.create', ['connector_type' => 'wp_ai_bridge'])
-                ->withInput($safeInput)->withErrors($exception->errors());
+            return redirect()->route('admin.targets.create', $query)
+                ->withInput($this->safeOldInput($request, $adapter))
+                ->withErrors($exception->errors());
         }
 
         try {
-            $baseUrl = $outbound->canonicalBaseUrl((string) $validated['base_url']);
-            // Recheck with the same bounded A+AAAA resolver used for dispatch.
-            // A preflight snapshot is never reused as authorization to connect.
-            $checked = $outbound->validate($baseUrl, 1024, hrtime(true) + 8_000_000_000);
+            $checked = $adapter->preflight($validated);
             $result = [
                 'ok' => true,
-                'message' => __('The Gateway resolved this site to public IP addresses: :addresses.', [
-                    'addresses' => implode(', ', $checked->addresses),
-                ]),
+                'message' => $checked->message,
+                'limitation' => $checked->limitation,
             ];
-        } catch (UnsafeOutboundTarget $exception) {
-            $context = [...$exception->diagnostics(), 'pre_dispatch' => true, 'retry_safe' => true];
-            $reference = OperationDiagnostics::failure('target-dns-preflight', 'unsafe_target', null, $context);
-            $result = [
-                'ok' => false,
-                'message' => OperationDiagnostics::summary('unsafe_target', $context),
-                'next_step' => OperationDiagnostics::nextStep('unsafe_target', $context),
-                'reference' => $reference,
-            ];
-        } catch (OutboundRequestException $exception) {
+        } catch (TargetConnectorFailure $exception) {
+            $code = $exception->reason ?? 'invalid_input';
+            // DNS is an observation, never a remote operation. No new Target,
+            // credential or authorized connection is created, even on success.
             $context = [
-                ...$exception->details,
-                'failure_origin' => 'gateway_admission',
+                ...$exception->diagnostics,
                 'pre_dispatch' => true,
                 'retry_safe' => true,
             ];
-            $reference = OperationDiagnostics::failure('target-dns-preflight', $exception->reason, null, $context);
+            $reference = OperationDiagnostics::failure('target-endpoint-preflight-'.$adapter->type(), $code, null, $context);
             $result = [
                 'ok' => false,
-                'message' => OperationDiagnostics::summary($exception->reason, $context),
-                'next_step' => OperationDiagnostics::nextStep($exception->reason, $context),
+                'message' => $exception->getMessage(),
+                'next_step' => OperationDiagnostics::nextStep($code, $context),
                 'reference' => $reference,
             ];
         }
 
-        return redirect()->route('admin.targets.create', ['connector_type' => 'wp_ai_bridge'])
-            ->withInput($safeInput)->with('target_dns_preflight', $result);
+        return redirect()->route('admin.targets.create', $query)
+            ->withInput($this->safeOldInput($request, $adapter))
+            ->with('target_endpoint_preflight', $result);
     }
 
     public function store(
@@ -418,13 +413,26 @@ final class TargetController extends Controller
     ): array {
         // Allowlist replayable fields; new connector secrets stay private by
         // default even when the adapter introduces an unfamiliar form field.
-        return $request->only([
+        $input = $request->only([
             'connector_type',
             'target_id',
             'display_name',
             'ai_guidance',
             ...($adapter?->safeOldInputFields() ?? []),
         ]);
+        // A URL with embedded credentials or signed query data is not safe to
+        // retain in an error redirect's session, even when its form field is
+        // normally non-secret. Avoid re-rendering such opaque tokens.
+        $url = $input['base_url'] ?? null;
+        if (is_string($url)) {
+            $parts = parse_url($url);
+            if (! is_array($parts) || isset($parts['user']) || isset($parts['pass'])
+                || isset($parts['query']) || isset($parts['fragment'])) {
+                unset($input['base_url']);
+            }
+        }
+
+        return $input;
     }
 
     private function trimmed(?string $text): ?string

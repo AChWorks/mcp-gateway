@@ -37,6 +37,46 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('overflow-wrap: anywhere;', $css);
     }
 
+    public function test_endpoint_preflight_is_in_shared_enrollment_actions_for_both_connectors(): void
+    {
+        $this->actingAs($this->owner());
+
+        foreach (['wp_ai_bridge', 'ssh_direct'] as $type) {
+            $html = $this->get('/admin/targets/create?connector_type='.$type)
+                ->assertOk()->getContent();
+
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//form[@id="target-create-form"]/div[@data-target-actions]'
+                .'//button[@type="submit"][@formnovalidate][@formaction])',
+            ));
+            self::assertSame(0, (int) $xpath->evaluate(
+                'count(//fieldset[@data-connector-panel]//button[@formnovalidate][@formaction])',
+            ));
+            self::assertStringContainsString('Preflight is optional and read-only.', $html);
+            self::assertStringContainsString('Register Target', $html);
+        }
+
+        session()->flash('target_endpoint_preflight', [
+            'ok' => false,
+            'message' => 'Unsafe <script>untrusted</script> result',
+            'next_step' => 'Inspect Gateway DNS',
+            'reference' => 'test-reference',
+        ]);
+        $this->get('/admin/targets/create?connector_type=ssh_direct')
+            ->assertOk()
+            ->assertSee('role="alert"', false)
+            ->assertSee('Unsafe &lt;script&gt;untrusted&lt;/script&gt; result', false)
+            ->assertDontSee('Unsafe <script>untrusted</script> result', false)
+            ->assertSee('Inspect Gateway DNS');
+    }
+
     public function test_external_authorization_handoff_reuses_admin_layout_and_has_accessible_fallback(): void
     {
         $this->actingAs($this->owner());
