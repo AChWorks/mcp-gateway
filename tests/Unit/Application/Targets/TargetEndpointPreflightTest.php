@@ -65,6 +65,44 @@ final class TargetEndpointPreflightTest extends TestCase
         self::assertSame(1, $dns->calls, 'SSH must not inherit HTTP DNS policy.');
     }
 
+    public function test_successful_public_https_ip_literal_uses_no_dns_and_claims_no_resolution_or_identity_proof(): void
+    {
+        $dns = new class implements DnsResolver
+        {
+            public int $calls = 0;
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                $this->calls++;
+
+                throw new RuntimeException('A numeric HTTPS destination must never trigger DNS lookup.');
+            }
+        };
+        $ssh = new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                throw new RuntimeException('HTTPS preflight must never use SSH address policy.');
+            }
+        };
+        $url = 'https://8.8.8.8/wordpress';
+        $result = (new TargetEndpointPreflight(
+            new OutboundTargetPolicy($dns, new PublicIpAddressPolicy), $ssh,
+        ))->publicHttpsOrigin($url);
+
+        self::assertSame(0, $dns->calls);
+        self::assertSame($url, $result->checkedSubject);
+        self::assertSame(['base_url' => $url], $result->checkedFields);
+        self::assertStringContainsString('approved these public HTTPS destination addresses', $result->message);
+        self::assertStringContainsString('8.8.8.8', $result->message);
+        self::assertStringNotContainsString('resolved', strtolower($result->message));
+        self::assertStringContainsString('DNS is checked for hostnames', $result->limitation);
+        self::assertStringContainsString('does not verify TLS', $result->limitation);
+        self::assertStringContainsString('remote service identity', $result->limitation);
+        self::assertStringContainsString('authentication', $result->limitation);
+        self::assertStringContainsString('Registration and dispatch check again', $result->limitation);
+    }
+
     public function test_https_preflight_never_uses_an_unbounded_resolver_or_a_later_trust_grant(): void
     {
         $dns = new class implements DnsResolver

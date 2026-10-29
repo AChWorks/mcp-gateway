@@ -28,10 +28,10 @@ final readonly class TargetEndpointPreflight
         $checked = $this->https->validate($url, 1024, hrtime(true) + self::DNS_BUDGET_NS);
 
         return new TargetPreflightResult(
-            __('Gateway resolved this public HTTPS destination to: :addresses.', [
+            __('Gateway approved these public HTTPS destination addresses under the outbound policy: :addresses.', [
                 'addresses' => implode(', ', $checked->addresses),
             ]),
-            __('DNS and public-IP policy only. This does not verify TLS, the remote service, its authentication, or a future connection. Registration and dispatch check again.'),
+            __('Public-address policy only; DNS is checked for hostnames. This does not verify TLS, remote service identity, authentication, or a future connection. Registration and dispatch check again.'),
             $checked->url,
             ['base_url' => $url],
         );

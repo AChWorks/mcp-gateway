@@ -395,6 +395,61 @@ final class TargetManagementAdminTest extends TestCase
         self::assertSame(0, Target::query()->count());
     }
 
+    public function test_numeric_https_preflight_success_does_not_claim_dns_resolution_in_admin(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+
+        $dns = new class implements DnsResolver
+        {
+            public int $calls = 0;
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                $this->calls++;
+
+                throw new \RuntimeException('Numeric URL should not invoke the DNS resolver.');
+            }
+        };
+        $this->app->instance(DnsResolver::class, $dns);
+
+        $url = 'https://8.8.8.8/wordpress';
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'numeric-https-check',
+            'display_name' => 'Public numeric HTTPS',
+            'base_url' => $url,
+        ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
+
+        self::assertSame(0, $dns->calls);
+        $result = session('target_endpoint_preflight');
+        self::assertIsArray($result);
+        self::assertTrue($result['ok']);
+        self::assertSame($url, $result['checked_subject']);
+        self::assertSame(['base_url' => $url], $result['checked_fields']);
+        self::assertSame('wp_ai_bridge', $result['checked_connector']);
+        self::assertStringContainsString('approved these public HTTPS destination addresses', $result['message']);
+        self::assertStringNotContainsString('resolved', strtolower($result['message']));
+        self::assertStringContainsString('does not verify TLS', $result['limitation']);
+        self::assertStringContainsString('remote service identity', $result['limitation']);
+        self::assertStringContainsString('authentication', $result['limitation']);
+
+        $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
+            ->assertOk()
+            ->assertSee('Checked endpoint')
+            ->assertSee($url)
+            ->assertSee('Gateway approved these public HTTPS destination addresses')
+            ->assertSee('DNS is checked for hostnames')
+            ->assertDontSee('Gateway resolved this public HTTPS destination')
+            ->assertSee('does not verify TLS')
+            ->assertSee('remote service identity')
+            ->assertSee('authentication');
+
+        self::assertSame(0, $dns->calls);
+        Http::assertNothingSent();
+        self::assertSame(0, Target::query()->count());
+        self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
+    }
+
     public function test_endpoint_preflight_requires_authentication_and_connector_specific_schema(): void
     {
         $this->post('/admin/targets/preflight', [
