@@ -85,7 +85,8 @@ registration and every outbound HTTPS request independently validate and pin
 their destinations, verify TLS and reject redirects. This is not a WordPress
 Bridge health, OAuth or certificate test.
 
-Policy rejections retain the compatibility code `unsafe_target` but also
+Policy rejections (including WordPress origin reconfiguration and Bridge
+connection discovery) retain the compatibility code `unsafe_target` but also
 carry a bounded, allowlisted local rejection reason, DNS/address class and
 validated numeric rejected address where observed. The shared
 `OperationDiagnostics` layer translates that evidence into a human-readable

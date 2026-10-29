@@ -52,6 +52,7 @@ final class TargetConfigurationController extends Controller
                 ->withErrors([$exception->field ?? 'configuration' => $exception->getMessage()])
                 ->withInput($this->safeInput($request, $adapter->safeOldInputFields()))
                 ->with('diagnostic_code', $code)
+                ->with('diagnostic_context', OperationDiagnostics::safeContext($exception->diagnostics))
                 ->with('diagnostic_reference', $reference);
         }
 

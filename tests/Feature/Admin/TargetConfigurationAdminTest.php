@@ -393,6 +393,45 @@ final class TargetConfigurationAdminTest extends TestCase
         self::assertSame(2, WpAiBridgeTargetConfig::query()->count());
     }
 
+    public function test_wordpress_origin_reconfiguration_reports_localhost_dns_override_without_mutation(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'wp-dns-override',
+            'display_name' => 'WordPress DNS override',
+            'base_url' => 'https://old.example.test',
+        ])->assertRedirect('/admin/targets/wp-dns-override');
+
+        $target = Target::query()->where('target_id', 'wp-dns-override')->sole();
+        $revision = $this->editRevision('wp-dns-override');
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $host === 'blocked.example.test' ? ['127.0.0.1'] : ['1.1.1.1'];
+            }
+        });
+
+        $this->put('/admin/targets/wp-dns-override/configuration', $this->wpUpdate(
+            $revision, 'https://blocked.example.test',
+        ))->assertSessionHasErrors('base_url')
+            ->assertSessionHas('diagnostic_code', 'unsafe_target')
+            ->assertSessionHas('diagnostic_context', static fn (array $details): bool => ($details['outbound_rejection_reason'] ?? null) === 'dns_non_public'
+                && ($details['outbound_rejected_address'] ?? null) === '127.0.0.1'
+            );
+
+        $this->get('/admin/targets/wp-dns-override/edit')->assertOk()
+            ->assertSee('127.0.0.1')
+            ->assertSee('/etc/hosts')
+            ->assertDontSee('CorrectHorse!234');
+        self::assertSame('https://old.example.test',
+            WpAiBridgeTargetConfig::query()->where('target_record_id', $target->getKey())->sole()->base_url);
+        self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame(0, DB::table('activity_events')->where('operation', 'wordpress-origin-reconfigure')->count());
+        Http::assertSentCount(2); // Initial registration only.
+    }
+
     private function ssh(): Target
     {
         return app(SshTargetRegistration::class)->register(

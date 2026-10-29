@@ -187,7 +187,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
     public function connectionFailureMessage(WpAiBridgeTargetConnectionException $exception): string
     {
         return match ($exception->reason) {
-            'unsafe_target' => __('Use a reachable public HTTPS WordPress Target.'),
+            'unsafe_target' => OperationDiagnostics::summary('unsafe_target', $exception->diagnostics),
             'missing_bridge', 'incompatible_metadata' => __('WordPress connector OAuth/MCP metadata is missing or incompatible.'),
             'already_connected' => __('Disconnect or reconnect the existing credential before starting a new authorization.'),
             'callback_pending' => __('An OAuth callback is being completed. Check its result before retrying.'),
