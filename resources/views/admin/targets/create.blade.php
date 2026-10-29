@@ -77,6 +77,24 @@
                     autocomplete="url" placeholder="https://wordpress.example.com" required value="{{ old('base_url') }}">
                 @error('base_url')<p class="field-error" role="alert">{{ $message }}</p>@enderror
             </div>
+            <button class="button button-secondary" type="submit"
+                formaction="{{ route('admin.targets.preflight') }}" formnovalidate>
+                {{ __('Check DNS from Gateway (no registration)') }}
+            </button>
+            @if (session('target_dns_preflight'))
+                @php($preflight = (array) session('target_dns_preflight'))
+                <div class="alert {{ ($preflight['ok'] ?? false) ? 'alert-success' : 'alert-error' }}"
+                    role="{{ ($preflight['ok'] ?? false) ? 'status' : 'alert' }}">
+                    <strong>{{ __('Gateway DNS preflight') }}:</strong> {{ $preflight['message'] ?? '' }}
+                    @if (! empty($preflight['next_step']))
+                        <p><strong>{{ __('What to check') }}:</strong> {{ $preflight['next_step'] }}</p>
+                    @endif
+                    @if (! empty($preflight['reference']))
+                        <p><strong>{{ __('Log reference') }}:</strong> <code>{{ $preflight['reference'] }}</code></p>
+                    @endif
+                </div>
+            @endif
+            <p class="field-help">{{ __('This checks the effective Gateway DNS and public-IP policy only. It does not contact WordPress, verify TLS, install Bridge, grant access or reserve an IP. Registration rechecks everything independently.') }}</p>
         </fieldset>
 
         <fieldset class="target-form-section" data-connector-panel="ssh_direct" @if($selected !== 'ssh_direct') hidden disabled @endif>

@@ -21,7 +21,7 @@ final class WpAiBridgeDiscovery
             $protectedUrl = $this->targets->appendPath($baseUrl, '/.well-known/oauth-protected-resource');
             $protected = $this->http->get($protectedUrl);
         } catch (UnsafeOutboundTarget $exception) {
-            throw new BridgeDiscoveryException('unsafe_target', 'The WordPress site is not a safe public HTTPS target.');
+            throw new BridgeDiscoveryException('unsafe_target', 'The WordPress site is not a safe public HTTPS target.', $exception->diagnostics());
         } catch (OutboundRequestException $exception) {
             throw $this->transportFailure($exception);
         }
@@ -69,7 +69,7 @@ final class WpAiBridgeDiscovery
             $serverUrl = $this->targets->appendPath($issuer, '/.well-known/oauth-authorization-server');
             $server = $this->http->get($serverUrl);
         } catch (UnsafeOutboundTarget $exception) {
-            throw new BridgeDiscoveryException('unsafe_target', 'WP AI Bridge authorization metadata target is unsafe.');
+            throw new BridgeDiscoveryException('unsafe_target', 'WP AI Bridge authorization metadata target is unsafe.', $exception->diagnostics());
         } catch (OutboundRequestException $exception) {
             throw $this->transportFailure($exception);
         }

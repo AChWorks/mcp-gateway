@@ -63,6 +63,48 @@ final class OperationDiagnosticsTest extends TestCase
         self::assertStringContainsString('revocation', OperationDiagnostics::summary('revocation_pending'));
     }
 
+    public function test_shared_unsafe_target_guidance_is_specific_without_leaking_untrusted_context(): void
+    {
+        $details = [
+            'outbound_rejection_reason' => 'dns_non_public',
+            'outbound_rejected_address' => '127.0.0.1',
+            'outbound_address_class' => 'loopback',
+            'failure_stage' => 'dns_lookup',
+            'retry_safe' => true,
+            'raw_query' => 'Bearer NEVER_INCLUDE_THIS',
+        ];
+
+        $safe = OperationDiagnostics::safeContext($details);
+        self::assertSame('127.0.0.1', $safe['outbound_rejected_address']);
+        self::assertSame('dns_non_public', $safe['outbound_rejection_reason']);
+        self::assertArrayNotHasKey('raw_query', $safe);
+        self::assertStringContainsString('127.0.0.1', OperationDiagnostics::summary('unsafe_target', $safe));
+        self::assertStringContainsString('/etc/hosts', OperationDiagnostics::nextStep('unsafe_target', $safe));
+        self::assertStringContainsString('SSRF', OperationDiagnostics::nextStep('unsafe_target', $safe));
+
+        $malicious = OperationDiagnostics::safeContext([
+            'outbound_rejection_reason' => 'evil_reason',
+            'outbound_rejected_address' => "127.0.0.1\nAuthorization: secret",
+            'outbound_address_class' => 'private',
+        ]);
+        self::assertArrayNotHasKey('outbound_rejection_reason', $malicious);
+        self::assertArrayNotHasKey('outbound_rejected_address', $malicious);
+        self::assertSame('The outbound security policy rejected this destination.',
+            OperationDiagnostics::summary('unsafe_target', $malicious));
+
+        $invented = OperationDiagnostics::safeContext([
+            'outbound_rejection_reason' => 'dns_non_public',
+            'outbound_rejected_address' => '8.8.8.8',
+        ]);
+        self::assertArrayNotHasKey('outbound_rejected_address', $invented);
+
+        self::assertStringContainsString('A or AAAA',
+            OperationDiagnostics::summary('unsafe_target', ['outbound_rejection_reason' => 'dns_no_address']));
+        self::assertStringContainsString('HTTPS',
+            OperationDiagnostics::summary('unsafe_target', ['outbound_rejection_reason' => 'https_required']));
+        self::assertStringContainsString('DNS', OperationDiagnostics::nextStep('unsafe_target'));
+    }
+
     public function test_mcp_activity_failure_uses_same_correlation_id_in_structured_log(): void
     {
         Log::spy();

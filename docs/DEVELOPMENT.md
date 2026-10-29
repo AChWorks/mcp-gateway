@@ -74,6 +74,32 @@ Once the application is running, administrator sign-in is available at `/admin/l
 
 Access-control mutations require the acting Owner's current password, preserve at least one enabled recoverable Owner, and record required bounded Activity evidence transactionally. Disabling a user blocks new login, invalidates existing Admin/OAuth-consent sessions on their next request, and makes existing MCP bearer tokens unusable because current user state is rechecked. The admin routes continue to use Laravel's stateful web session and CSRF middleware. Production continues to require the secure session settings checked by `gateway:check`; do not weaken HTTPS-only, encrypted, HTTP-only, or SameSite cookie behavior to make local authentication easier.
 
+### Target URL security preflight and actionable errors
+
+The WordPress **Add Target** form offers an authenticated, CSRF-protected,
+rate-limited **Check DNS from Gateway** action. It reads the host's configured
+A/AAAA resolution and applies the same public-HTTPS/DNS policy as registration
+without creating a Target, reading a credential, contacting WordPress or
+granting authorization. A success is a **time-of-check snapshot only**:
+registration and every outbound HTTPS request independently validate and pin
+their destinations, verify TLS and reject redirects. This is not a WordPress
+Bridge health, OAuth or certificate test.
+
+Policy rejections retain the compatibility code `unsafe_target` but also
+carry a bounded, allowlisted local rejection reason, DNS/address class and
+validated numeric rejected address where observed. The shared
+`OperationDiagnostics` layer translates that evidence into a human-readable
+description and specific operator action (e.g. inspect the Gateway's
+`/etc/hosts` and effective DNS on a loopback result). The same scoped
+diagnostic reference remains available; no arbitrary URLs, credentials,
+remote bodies or unknown provenance are surfaced. A diagnostic must never
+silently change retry/effect certainty: the reusable security exception
+does **not** mark an entire multi-step operation safe to replay. New
+connectors/errors should reuse `OperationDiagnostics` and preserve original
+observed codes/messages for authorized operators rather than introduce
+per-connector log stores or generic catch-all text. Do not bypass
+SSRF/TLS restrictions or silently switch to third-party DNS.
+
 ## Admin UI foundation
 
 The administration panel uses one small server-rendered visual system in `public/css/admin.css`. New Admin views must reuse this foundation rather than falling back to browser-native controls or creating a second page-specific design system.

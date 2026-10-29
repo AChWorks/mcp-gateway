@@ -15,6 +15,9 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Http\OutboundRequestException;
+use App\Infrastructure\Http\OutboundTargetPolicy;
+use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
@@ -109,6 +112,74 @@ final class TargetController extends Controller
         ]);
     }
 
+    /**
+     * Read-only, separately rate-limited WordPress URL preflight. It uses the
+     * same strict outbound policy as enrollment, but stores no Target, opens no
+     * HTTP connection and never interprets a DNS pass as OAuth/Bridge approval.
+     */
+    public function preflight(Request $request, OutboundTargetPolicy $outbound): RedirectResponse
+    {
+        Gate::authorize(GatewayPermission::TargetsCreate->value);
+
+        // The button is inside the normal enrollment form. Never flash other
+        // connector fields or potential SSH credentials, even on validation failure.
+        $safeInput = $request->only([
+            'connector_type', 'target_id', 'display_name', 'ai_guidance', 'base_url',
+        ]);
+        try {
+            $validated = $request->validate([
+                'connector_type' => ['required', 'in:wp_ai_bridge'],
+                'base_url' => ['required', 'string', 'url:https', 'max:2048'],
+            ]);
+        } catch (ValidationException $exception) {
+            if ($request->expectsJson()) {
+                throw $exception;
+            }
+
+            return redirect()->route('admin.targets.create', ['connector_type' => 'wp_ai_bridge'])
+                ->withInput($safeInput)->withErrors($exception->errors());
+        }
+
+        try {
+            $baseUrl = $outbound->canonicalBaseUrl((string) $validated['base_url']);
+            // Recheck with the same bounded A+AAAA resolver used for dispatch.
+            // A preflight snapshot is never reused as authorization to connect.
+            $checked = $outbound->validate($baseUrl, 1024, hrtime(true) + 8_000_000_000);
+            $result = [
+                'ok' => true,
+                'message' => __('The Gateway resolved this site to public IP addresses: :addresses.', [
+                    'addresses' => implode(', ', $checked->addresses),
+                ]),
+            ];
+        } catch (UnsafeOutboundTarget $exception) {
+            $context = [...$exception->diagnostics(), 'pre_dispatch' => true, 'retry_safe' => true];
+            $reference = OperationDiagnostics::failure('target-dns-preflight', 'unsafe_target', null, $context);
+            $result = [
+                'ok' => false,
+                'message' => OperationDiagnostics::summary('unsafe_target', $context),
+                'next_step' => OperationDiagnostics::nextStep('unsafe_target', $context),
+                'reference' => $reference,
+            ];
+        } catch (OutboundRequestException $exception) {
+            $context = [
+                ...$exception->details,
+                'failure_origin' => 'gateway_admission',
+                'pre_dispatch' => true,
+                'retry_safe' => true,
+            ];
+            $reference = OperationDiagnostics::failure('target-dns-preflight', $exception->reason, null, $context);
+            $result = [
+                'ok' => false,
+                'message' => OperationDiagnostics::summary($exception->reason, $context),
+                'next_step' => OperationDiagnostics::nextStep($exception->reason, $context),
+                'reference' => $reference,
+            ];
+        }
+
+        return redirect()->route('admin.targets.create', ['connector_type' => 'wp_ai_bridge'])
+            ->withInput($safeInput)->with('target_dns_preflight', $result);
+    }
+
     public function store(
         Request $request,
         TargetConnectorRegistry $connectors,
@@ -152,6 +223,7 @@ final class TargetController extends Controller
             return back()->withInput($this->safeOldInput($request, $adapter))
                 ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()])
                 ->with('diagnostic_code', $code)
+                ->with('diagnostic_context', OperationDiagnostics::safeContext($exception->diagnostics))
                 ->with('diagnostic_reference', $reference);
         }
 

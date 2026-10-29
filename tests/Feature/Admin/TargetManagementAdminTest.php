@@ -112,6 +112,9 @@ final class TargetManagementAdminTest extends TestCase
             }
             self::assertSame($wpDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="wp_ai_bridge"][@disabled])'));
             self::assertSame($sshDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="ssh_direct"][@disabled])'));
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//fieldset[@data-connector-panel="wp_ai_bridge"]//button[@formnovalidate][@formaction])',
+            ));
             self::assertStringContainsString('How to obtain and verify the server host key', $html);
             self::assertStringContainsString('ssh_host_rsa_key.pub', $html);
             self::assertStringContainsString('ssh_host_ed25519_key.pub', $html);
@@ -294,6 +297,132 @@ final class TargetManagementAdminTest extends TestCase
 
         self::assertSame(0, Target::query()->count());
         self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
+    }
+
+    public function test_wordpress_registration_shows_the_actual_blocked_address_and_a_remedy(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $host === 'blinko.example.test' ? ['1.1.1.1', '127.0.0.1'] : ['1.1.1.1'];
+            }
+        });
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'blinko',
+            'display_name' => 'Blinko',
+            'base_url' => 'https://blinko.example.test',
+        ])->assertSessionHasErrors('base_url')
+            ->assertSessionHas('diagnostic_code', 'unsafe_target')
+            ->assertSessionHas('diagnostic_context', static fn (array $details): bool => ($details['outbound_rejection_reason'] ?? null) === 'dns_non_public'
+                && ($details['outbound_rejected_address'] ?? null) === '127.0.0.1'
+                && ($details['outbound_address_class'] ?? null) === 'loopback'
+            );
+
+        $this->get('/admin/targets/create?connector_type=wp_ai_bridge')->assertOk()
+            ->assertSee('127.0.0.1')
+            ->assertSee('/etc/hosts')
+            ->assertSee('Do not bypass SSRF protections.');
+
+        self::assertSame(0, Target::query()->count());
+        Http::assertNothingSent();
+    }
+
+    public function test_dns_preflight_is_read_only_and_shows_the_actual_gateway_loopback_override(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $host === 'blinko.example.test' ? ['127.0.0.1'] : ['1.1.1.1'];
+            }
+        });
+
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'blinko',
+            'display_name' => 'Blinko',
+            'base_url' => 'https://blinko.example.test/',
+            'ssh_password' => 'NEVER_FLASH_SECRET',
+        ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
+
+        $result = session('target_dns_preflight');
+        self::assertIsArray($result);
+        self::assertFalse($result['ok']);
+        self::assertStringContainsString('127.0.0.1', $result['message']);
+        self::assertStringContainsString('/etc/hosts', $result['next_step']);
+        self::assertTrue(Str::isUuid($result['reference']));
+        self::assertArrayNotHasKey('ssh_password', session()->getOldInput());
+
+        $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
+            ->assertOk()
+            ->assertSee('Gateway DNS preflight')
+            ->assertSee('127.0.0.1')
+            ->assertSee('/etc/hosts')
+            ->assertDontSee('NEVER_FLASH_SECRET');
+
+        Http::assertNothingSent();
+        self::assertSame(0, Target::query()->count());
+        self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
+    }
+
+    public function test_dns_preflight_public_success_is_not_an_enrollment_or_bridge_check(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'should-not-register',
+            'display_name' => 'A test',
+            'base_url' => 'https://wordpress.example.test/',
+        ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
+
+        $result = session('target_dns_preflight');
+        self::assertIsArray($result);
+        self::assertTrue($result['ok']);
+        self::assertStringContainsString('1.1.1.1', $result['message']);
+        $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
+            ->assertOk()
+            ->assertSee('Registration rechecks everything independently.');
+        Http::assertNothingSent();
+        self::assertSame(0, Target::query()->count());
+    }
+
+    public function test_dns_preflight_requires_authorized_user_and_wordpress_url_schema(): void
+    {
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'wp_ai_bridge',
+            'base_url' => 'https://wordpress.example.test',
+        ])->assertRedirect('/admin/login');
+
+        $this->actingAs($this->user('viewer', 'all'))->post('/admin/targets/preflight', [
+            'connector_type' => 'wp_ai_bridge',
+            'base_url' => 'https://wordpress.example.test',
+        ])->assertForbidden();
+
+        $this->actingAs($this->user('owner', 'all'));
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'ssh_direct',
+            'base_url' => 'https://wordpress.example.test',
+        ])->assertSessionHasErrors('connector_type');
+        $this->post('/admin/targets/preflight', [
+            'connector_type' => 'wp_ai_bridge',
+            'base_url' => 'http://wordpress.example.test',
+            'ssh_password' => 'DO_NOT_FLASH_PASSWORD',
+            'ssh_private_key' => 'DO_NOT_FLASH_PRIVATE_KEY',
+            'future_secret' => 'DO_NOT_FLASH_OTHER_SECRET',
+        ])->assertSessionHasErrors('base_url');
+
+        $old = session()->getOldInput();
+        foreach (['ssh_password', 'ssh_private_key', 'future_secret'] as $secret) {
+            self::assertArrayNotHasKey($secret, $old);
+        }
+        Http::assertNothingSent();
+        self::assertSame(0, Target::query()->count());
     }
 
     public function test_registration_uses_only_the_selected_connector_schema_and_does_not_flash_ssh_secrets(): void

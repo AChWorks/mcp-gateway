@@ -29,7 +29,7 @@ final class OutboundTargetPolicy
     public function validateChatgptFileUrl(string $url, ?int $deadlineNs = null): ValidatedOutboundUrl
     {
         if ($url === '' || strlen($url) > 8192 || preg_match('/[\x00-\x20\x7f]/', $url) === 1) {
-            throw new UnsafeOutboundTarget('Private file URL is invalid.');
+            throw new UnsafeOutboundTarget('Private file URL is invalid.', 'invalid_url');
         }
         $parts = parse_url($url);
         if (! is_array($parts)
@@ -38,7 +38,7 @@ final class OutboundTargetPolicy
             || ! is_string($parts['path'] ?? null) || $parts['path'] === ''
             || isset($parts['port']) || isset($parts['user']) || isset($parts['pass'])
             || isset($parts['fragment'])) {
-            throw new UnsafeOutboundTarget('Private file URL origin is not allowed.');
+            throw new UnsafeOutboundTarget('Private file URL origin is not allowed.', 'origin_not_allowed');
         }
         // Reuse the normal strict path/canonical-host and DNS checks, without
         // interpreting signed query bytes as a new origin, or logging them.
@@ -67,7 +67,7 @@ final class OutboundTargetPolicy
     public function appendPath(string $canonicalBaseUrl, string $absolutePath): string
     {
         if ($absolutePath === '' || $absolutePath[0] !== '/' || str_contains($absolutePath, '?') || str_contains($absolutePath, '#')) {
-            throw new UnsafeOutboundTarget('Outbound metadata path is invalid.');
+            throw new UnsafeOutboundTarget('Outbound metadata path is invalid.', 'invalid_path');
         }
 
         $parts = $this->parseHttpsUrl($canonicalBaseUrl, 1024);
@@ -84,7 +84,7 @@ final class OutboundTargetPolicy
         $basePort = $base['port'] ?? 443;
 
         if (! hash_equals($base['host'], $candidate->host) || $basePort !== $candidate->port) {
-            throw new UnsafeOutboundTarget('Outbound metadata points to a different origin.');
+            throw new UnsafeOutboundTarget('Outbound metadata points to a different origin.', 'origin_mismatch');
         }
 
         return $candidate;
@@ -97,30 +97,30 @@ final class OutboundTargetPolicy
     {
         $url = trim($url);
         if ($url === '' || strlen($url) > $maxLength || preg_match('/[\x00-\x20\x7f]/', $url) === 1) {
-            throw new UnsafeOutboundTarget('Outbound target URL is invalid.');
+            throw new UnsafeOutboundTarget('Outbound target URL is invalid.', 'invalid_url');
         }
 
         $parts = parse_url($url);
         if (! is_array($parts)) {
-            throw new UnsafeOutboundTarget('Outbound target URL is malformed.');
+            throw new UnsafeOutboundTarget('Outbound target URL is malformed.', 'invalid_url');
         }
 
         if (strtolower((string) ($parts['scheme'] ?? '')) !== 'https') {
-            throw new UnsafeOutboundTarget('Outbound targets must use HTTPS.');
+            throw new UnsafeOutboundTarget('Outbound targets must use HTTPS.', 'https_required');
         }
         if (isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
-            throw new UnsafeOutboundTarget('Outbound target URL contains unsupported components.');
+            throw new UnsafeOutboundTarget('Outbound target URL contains unsupported components.', 'unsupported_url_components');
         }
 
         $host = strtolower(trim((string) ($parts['host'] ?? ''), '[]'));
         if ($host === '' || strlen($host) > 253 || preg_match('/[^\x20-\x7e]/', $host) === 1) {
-            throw new UnsafeOutboundTarget('Outbound target host is invalid.');
+            throw new UnsafeOutboundTarget('Outbound target host is invalid.', 'invalid_host');
         }
 
         if (filter_var($host, FILTER_VALIDATE_IP) === false) {
             $host = rtrim($host, '.');
             if ($host === '' || ! $this->validDnsName($host)) {
-                throw new UnsafeOutboundTarget('Outbound target host is invalid.');
+                throw new UnsafeOutboundTarget('Outbound target host is invalid.', 'invalid_host');
             }
         }
 
@@ -133,10 +133,10 @@ final class OutboundTargetPolicy
         if ($path !== '') {
             $decodedPath = rawurldecode($path);
             if (str_contains($decodedPath, '\\') || preg_match('~(?:^|/)\.{1,2}(?:/|$)~', $decodedPath) === 1) {
-                throw new UnsafeOutboundTarget('Outbound target path is ambiguous.');
+                throw new UnsafeOutboundTarget('Outbound target path is ambiguous.', 'invalid_path');
             }
             if ($path[0] !== '/') {
-                throw new UnsafeOutboundTarget('Outbound target path is invalid.');
+                throw new UnsafeOutboundTarget('Outbound target path is invalid.', 'invalid_path');
             }
         }
 
@@ -181,12 +181,12 @@ final class OutboundTargetPolicy
     {
         $addresses = $this->dns->resolve($host, $deadlineNs);
         if ($addresses === []) {
-            throw new UnsafeOutboundTarget('Outbound target host did not resolve to an address.');
+            throw new UnsafeOutboundTarget('Outbound target host did not resolve to an address.', 'dns_no_address');
         }
 
         foreach ($addresses as $address) {
             if (! $this->ipPolicy->isPublic($address)) {
-                throw new UnsafeOutboundTarget('Outbound target resolved to a non-public address.');
+                throw new UnsafeOutboundTarget('Outbound target resolved to a non-public address.', 'dns_non_public', $address);
             }
         }
 

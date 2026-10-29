@@ -11,6 +11,7 @@ use App\Application\Targets\WpAiBridgeTargetReconfiguration;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
+use App\Support\OperationDiagnostics;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -48,9 +49,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter
             );
         } catch (BridgeDiscoveryException $exception) {
             throw new TargetConnectorFailure(
-                __('The WordPress connector metadata could not be verified (:reason).', [
-                    'reason' => $exception->reason,
-                ]),
+                OperationDiagnostics::summary($exception->reason, $exception->diagnostics),
                 'base_url',
                 $exception->reason,
                 $exception->diagnostics,
