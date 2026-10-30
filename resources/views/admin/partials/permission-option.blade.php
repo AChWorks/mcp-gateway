@@ -10,7 +10,7 @@
     >
     <span class="permission-copy">
         <span class="permission-heading">
-            <span class="permission-label">{{ $permission->title() }}</span>
+            <span class="permission-label">{{ __('Deny :permission', ['permission' => $permission->title()]) }}</span>
             <span class="badge badge-neutral permission-scope" id="{{ $permissionId }}-scope">{{ $permission->scopeLabel() }}</span>
         </span>
         <code class="permission-key" id="{{ $permissionId }}-key" dir="ltr">{{ $permission->value }}</code>

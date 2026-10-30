@@ -941,6 +941,32 @@ final class AdminUiPresentationTest extends TestCase
         }
     }
 
+    public function test_permission_options_visibly_name_denial_and_user_creation_keeps_primary_fields_outside_advanced_restrictions(): void
+    {
+        $html = $this->actingAs($this->owner())->get('/admin/users/create')->assertOk()->getContent();
+        $dom = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($dom);
+        $options = $xpath->query('//label[contains(concat(" ", normalize-space(@class), " "), " permission-option ")]');
+        self::assertGreaterThan(10, $options->length);
+        foreach ($options as $option) {
+            $labels = $xpath->query('.//span[contains(concat(" ", normalize-space(@class), " "), " permission-label ")]', $option);
+            self::assertSame(1, $labels->length);
+            self::assertStringStartsWith('Deny ', trim($labels->item(0)->textContent));
+            $checkbox = $xpath->query('.//input[@name="denied_permissions[]"]', $option)->item(0);
+            self::assertStringStartsWith('Deny ', $checkbox->getAttribute('aria-label'));
+        }
+        foreach (['name', 'email', 'role', 'target_scope_mode'] as $field) {
+            self::assertSame(0, (int) $xpath->evaluate('count(//*[@id="'.$field.'"]/ancestor::details)'));
+        }
+        self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"]/ancestor::details/summary[contains(., "checked means blocked")])'));
+        self::assertSame(3, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"][@checked][starts-with(@value,"ssh.")])'));
+        self::assertSame(0, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"][@value="dashboard.view"][@checked])'));
+    }
+
     private function owner(): User
     {
         return User::query()->create([
