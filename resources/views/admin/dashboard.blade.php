@@ -55,10 +55,10 @@
         <p class="empty-state">{{ __('No permitted Targets currently match the review criteria. This does not verify live remote health.') }}</p>
     @else
         <div class="table-wrap">
-            <table>
+            <table class="table-readable">
                 <thead>
                 <tr>
-                    <th scope="col">{{ __('Target') }}</th>
+                    <th scope="col" class="table-identity">{{ __('Target') }}</th>
                     <th scope="col">{{ __('Recorded condition') }}</th>
                     <th scope="col">{{ __('Evidence') }}</th>
                     <th scope="col">{{ __('Next step') }}</th>
@@ -121,11 +121,11 @@
             <p class="empty-state">{{ __('No routed activity has been recorded yet.') }}</p>
         @else
             <div class="table-wrap">
-                <table>
+                <table class="table-readable">
                     <thead>
                     <tr>
                         <th scope="col">{{ __('Time') }}</th>
-                        <th scope="col">{{ __('Target') }}</th>
+                        <th scope="col" class="table-identity">{{ __('Target') }}</th>
                         <th scope="col">{{ __('Operation') }}</th>
                         <th scope="col">{{ __('Outcome') }}</th>
                     </tr>

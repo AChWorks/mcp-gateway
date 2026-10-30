@@ -39,16 +39,16 @@
         <p class="empty-state">{{ __('No activity matches these filters.') }}</p>
     @else
         <div class="table-wrap">
-            <table>
+            <table class="table-readable">
                 <thead>
                 <tr>
                     <th scope="col">{{ __('Time') }}</th>
-                    <th scope="col">{{ __('Target') }}</th>
-                    <th scope="col">{{ __('Client profile') }}</th>
+                    <th scope="col" class="table-identity">{{ __('Target') }}</th>
+                    <th scope="col" class="table-identity">{{ __('Client profile') }}</th>
                     <th scope="col">{{ __('Operation') }}</th>
                     <th scope="col">{{ __('Outcome') }}</th>
                     <th scope="col">{{ __('Error') }}</th>
-                    <th scope="col">{{ __('Correlation ID') }}</th>
+                    <th scope="col" class="table-identity">{{ __('Correlation ID') }}</th>
                 </tr>
                 </thead>
                 <tbody>

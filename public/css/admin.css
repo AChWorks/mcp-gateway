@@ -1001,6 +1001,16 @@ table {
     border-collapse: collapse;
 }
 
+/* Opt in dense operational readouts; simple tables and the responsive Target
+   inventory retain their own sizing. Scrolling belongs to .table-wrap. */
+table.table-readable {
+    min-inline-size: 48rem;
+}
+
+.table-readable .table-identity {
+    min-inline-size: 12rem;
+}
+
 th,
 td {
     padding: 0.85rem 0.75rem;
