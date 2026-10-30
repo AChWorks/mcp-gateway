@@ -349,6 +349,23 @@ final class AccessBatchWorkflowTest extends TestCase
         $this->assertDatabaseHas('user_permission_denials', ['user_id' => $user->id, 'permission' => 'ssh.command.run']);
     }
 
+    public function test_disabled_subject_can_be_configured_without_enabling_it_and_scope_drift_requires_new_review(): void
+    {
+        $user = $this->user();
+        $user->forceFill(['access_enabled' => false])->save();
+        $group = $this->group();
+        $target = $this->target();
+        $review = $this->workflow->review($this->owner, 'user-groups', (string) $user->id, 'add', [$group->id]);
+        self::assertStringContainsString('account is disabled', implode(' ', $review['warnings']));
+        $this->workflow->apply($this->owner, 'user-groups', (string) $user->id, $review['token']);
+        self::assertFalse((bool) $user->refresh()->access_enabled);
+        $oldScope = $this->workflow->review($this->owner, 'user-targets', (string) $user->id, 'allow', [$target->id]);
+        $user->forceFill(['target_scope_mode' => 'all'])->save();
+        $this->fails('batch_review_stale', fn () => $this->workflow->apply($this->owner, 'user-targets', (string) $user->id, $oldScope['token']));
+        self::assertSame(0, DB::table('user_target_access')->count());
+        self::assertFalse((bool) $user->refresh()->access_enabled);
+    }
+
     public function test_actor_must_match_request_attribution_and_withdrawn_actor_access_cannot_apply_old_review(): void
     {
         $group = $this->group();
