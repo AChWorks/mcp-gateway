@@ -1,3 +1,16 @@
+# MCP Gateway v2.4.1
+
+**Stable v2.4.1 — coherent shared Admin widths and spacing, aligned permission badges, and ten recent Activity entries.**
+
+This bounded follow-up to official v2.4.0 addresses the [Owner-reported Admin layout issues #136](https://github.com/AChWorks/mcp-gateway/issues/136):
+
+- **Form and panel widths:** correct the shared composition of outer panels, inner forms and explanatory content so Users, Target Groups, enrollment, AI clients and related screens use their available space without stranding narrow content inside oversized panels.
+- **Spacing and permission alignment:** separate the Dashboard Needs review panel from the following content grid and align permission-scope badges consistently at the trailing edge, including longer capability titles and narrow-screen wrapping.
+- **Recent Activity:** show the ten newest authorized Dashboard Activity entries instead of five. Effective user/Target scope and newest-first order remain intact; Needs review stays bounded to five Targets.
+- **Upgrade boundary:** no new database migration, environment key, mandatory service, credential rotation or permission-policy change is introduced. Existing native forms, CSRF and password-confirmation boundaries remain intact. Both package workflows include official v2.4.0 in the stable upgrade and backup-integrity matrices.
+
+Publication and installation are separate from source preparation; installed-host acceptance requires its own verification.
+
 # MCP Gateway v2.4.0
 
 **Stable v2.4.0 — connector-neutral Dashboard and shared Admin experience, preserving existing access, native forms, OAuth and file-transfer boundaries.**
