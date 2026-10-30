@@ -15,7 +15,6 @@ final class SshTargetAdminPresenter implements TargetConnectorAdminPresenter
             label: __('Direct SSH'),
             enrollmentView: 'admin.targets.connectors.ssh.enrollment',
             configurationView: 'admin.targets.connectors.ssh.configuration',
-            enrollmentScriptView: 'admin.targets.connectors.ssh.enrollment-script',
             inventoryIdentityView: 'admin.targets.connectors.ssh.inventory-identity',
             inventoryStatusView: 'admin.targets.connectors.ssh.inventory-status',
             detailRowsView: 'admin.targets.connectors.ssh.detail-rows',

@@ -10,7 +10,6 @@ final readonly class TargetConnectorAdminDefinition
         public string $label,
         public ?string $enrollmentView = null,
         public ?string $configurationView = null,
-        public ?string $enrollmentScriptView = null,
         public ?string $inventoryIdentityView = null,
         public ?string $inventoryStatusView = null,
         public ?string $detailRowsView = null,

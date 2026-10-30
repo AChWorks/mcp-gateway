@@ -20,7 +20,7 @@ final class AdminUiPresentationTest extends TestCase
 
     public function test_target_wordpress_operation_uses_shared_admin_markup(): void
     {
-        $source = file_get_contents(resource_path('views/admin/targets/show.blade.php'));
+        $source = file_get_contents(resource_path('views/admin/targets/connectors/wordpress/operations.blade.php'));
         $result = file_get_contents(resource_path('views/admin/targets/wordpress-bridge-info.blade.php'));
         self::assertIsString($source);
         self::assertIsString($result);
@@ -98,9 +98,11 @@ final class AdminUiPresentationTest extends TestCase
                 ->assertSee('Checked endpoint')
                 ->assertSee('target-preflight-stale')
                 ->getContent();
-            self::assertStringContainsString('const syncPreflight =', $html);
-            self::assertStringContainsString('preflightInvalidated = true', $html);
-            self::assertStringContainsString('Object.keys(checkedFields || {})', $html);
+            self::assertStringContainsString('js/admin-forms.js?v=', $html);
+            $behavior = (string) file_get_contents(public_path('js/admin-forms.js'));
+            self::assertStringContainsString('const syncPreflight =', $behavior);
+            self::assertStringContainsString('preflightInvalidated = true', $behavior);
+            self::assertStringContainsString('Object.keys(checkedFields || {})', $behavior);
 
             $dom = new \DOMDocument;
             $previous = libxml_use_internal_errors(true);
@@ -524,7 +526,7 @@ final class AdminUiPresentationTest extends TestCase
 
         self::assertSame(['Unsupported connector', 'unrecognized_connector'], $connectorLabelFor('legacy-unsupported'));
         self::assertSame(['Direct SSH', 'ssh_direct'], $connectorLabelFor('supported-ssh'));
-        self::assertSame(['WordPress', 'wp_ai_bridge'], $connectorLabelFor('supported-wordpress'));
+        self::assertSame(['WordPress (WP AI Bridge)', 'wp_ai_bridge'], $connectorLabelFor('supported-wordpress'));
         self::assertSame('unrecognized_connector', DB::table('targets')->where('id', $legacy->getKey())->value('connector_type'));
     }
 

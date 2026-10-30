@@ -4,6 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
+    <meta name="turbo-cache-control" content="no-cache">
+    <meta name="turbo-prefetch" content="false">
+    @guest<meta name="turbo-visit-control" content="reload">@endguest
     <title>@yield('title', __('Administration')) · {{ config('app.name') }}</title>
     @php
         // Fingerprint bytes as well as VERSION: corrected builds of the same
@@ -13,11 +16,21 @@
         $jsDigest = hash_file('sha256', public_path('js/admin.js'));
         $jsFingerprint = is_string($jsDigest) ? substr($jsDigest, 0, 12) : 'unavailable';
     @endphp
-    <link rel="stylesheet" href="{{ asset('css/admin.css').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$cssFingerprint }}">
-    <script src="{{ asset('js/admin.js').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$jsFingerprint }}" defer></script>
+    <link data-turbo-track="reload" rel="stylesheet" href="{{ asset('css/admin.css').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$cssFingerprint }}">
+    <script src="{{ asset('js/admin.js').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$jsFingerprint }}" data-turbo-track="reload" defer></script>
+    @auth
+        @foreach (['vendor/turbo-8.0.23.js', 'admin-forms.js', 'admin-navigation.js'] as $adminScript)
+            @php($scriptFingerprint = substr((string) hash_file('sha256', public_path('js/'.$adminScript)), 0, 12))
+            <script src="{{ asset('js/'.$adminScript).'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$scriptFingerprint }}" data-turbo-track="reload" defer></script>
+        @endforeach
+    @endauth
     @yield('head')
 </head>
-<body @class(['admin-app' => auth()->check(), 'auth-page' => ! auth()->check()])>
+<body @class(['admin-app' => auth()->check(), 'auth-page' => ! auth()->check()])
+    data-admin-root="{{ route('admin.dashboard') }}"
+    data-unsaved-message="{{ __('You have unsaved changes. Leave this page and discard them?') }}"
+    data-loading-message="{{ __('Loading page…') }}"
+    data-navigation-error-message="{{ __('The page could not be loaded. Use the original link to try again.') }}">
 <a class="skip-link" href="#main-content">{{ __('Skip to main content') }}</a>
 <div @class(['admin-shell' => auth()->check(), 'guest-shell' => ! auth()->check()])>
     @auth
@@ -57,6 +70,7 @@
             </div>
         </header>
 
+        <p id="admin-navigation-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
         <main id="main-content" class="shell main-content" tabindex="-1">
             @if (session('status'))
                 <div class="alert alert-success" role="status">{{ session('status') }}</div>
@@ -67,7 +81,7 @@
             @endif
 
             @if (session('target_connection_failed'))
-                <div class="alert alert-error" role="alert">{{ __('WordPress Target authorization did not complete. Open your Target and try again.') }}</div>
+                <div class="alert alert-error" role="alert">{{ __('Target authorization did not complete. Open your Target and try again.') }}</div>
             @endif
             @if ($errors->has('target'))
                 <div class="alert alert-error" role="alert">{{ $errors->first('target') }}</div>

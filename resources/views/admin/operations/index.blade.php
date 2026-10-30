@@ -222,18 +222,5 @@
     </form>
 </section>
 
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('[data-clear-setting]').forEach(button => {
-        const input = document.getElementById(button.dataset.clearSetting);
-        if (!input) return;
-        button.hidden = false;
-        button.addEventListener('click', () => {
-            input.value = '';
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.focus();
-        });
-    });
-});
-</script>
+
 @endsection

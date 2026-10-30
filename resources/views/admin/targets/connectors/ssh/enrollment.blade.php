@@ -42,7 +42,8 @@
             <code>sudo ssh-keygen -lf /etc/ssh/ssh_host_rsa_key.pub -E sha256</code>
             <div class="target-fingerprint-tools">
                 <button class="button button-secondary" type="button" id="show_host_fingerprint">{{ __('Preview pasted key fingerprint') }}</button>
-                <output id="host_fingerprint" role="status" aria-live="polite"></output>
+                <output data-invalid-message="{{ __('Paste one supported public host key with no trailing comment.') }}"
+                    data-unavailable-message="{{ __('Cannot preview this key. Check its format or use the trusted server console.') }}" id="host_fingerprint" role="status" aria-live="polite"></output>
             </div>
             <p class="field-help">{{ __('A fingerprint copied from this form alone does not prove server identity. Verify it against the independent server console before confirming.') }}</p>
         </details>

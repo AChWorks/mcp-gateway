@@ -81,25 +81,3 @@
         <button class="button button-primary" type="submit">{{ __('Save SSH settings and require re-verification') }}</button>
     </div>
 </form>
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-    const form = document.getElementById('ssh-reconfiguration');
-    if (!form) return;
-    const method = form.querySelector('#ssh_edit_auth_method');
-    const trust = form.querySelector('input[name="ssh_trust_confirmed"]');
-    const sync = () => {
-        form.querySelectorAll('[data-edit-ssh-credential]').forEach(group => {
-            const active = group.dataset.editSshCredential === method.value;
-            group.hidden = !active;
-            group.querySelectorAll('input,textarea').forEach(field => field.disabled = !active);
-        });
-    };
-    method.addEventListener('change', sync);
-    ['ssh_host','ssh_port','ssh_username','ssh_host_key'].forEach(name => {
-        form.querySelector('[name="' + name + '"]').addEventListener('input', () => {
-            trust.checked = false;
-        });
-    });
-    sync();
-});
-</script>
