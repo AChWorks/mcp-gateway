@@ -308,7 +308,8 @@ async function groupTasks(browser) {
         await page.waitForURL(exactEditor);
         assert.equal(await page.locator('.page-heading code').innerText(), 'group-browser-blocked');
         assert.equal(await page.getByLabel('Explicit scope rule', { exact: true }).inputValue(), 'deny');
-        assert.equal(await page.evaluate(() => document.activeElement.tagName), 'H1');
+        // Individual ACL editors intentionally use native full navigation outside Turbo's finite allowlist.
+        assert.equal(await page.locator('.admin-nav [aria-current="page"]').innerText(), 'Users');
         await page.getByRole('link', { name: 'Back to target access', exact: true }).click();
         await page.waitForURL(base + userPath(fixture.users.member.id) + '/targets');
         await row(page, fixture.special.blocked.label).getByText('Deny', { exact: true }).waitFor();
