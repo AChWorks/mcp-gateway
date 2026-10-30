@@ -150,6 +150,7 @@
         enhanceLinks();
         currentHistoryIndex = history.state?.turbo?.restorationIndex ?? currentHistoryIndex;
         allowUnload = false;
+        submittedDirtyForm = null;
         if (navigating) {
             const heading = document.querySelector('main h1, h1');
             const destination = heading || document.getElementById('main-content');
