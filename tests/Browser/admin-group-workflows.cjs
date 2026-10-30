@@ -76,12 +76,40 @@ async function apply(page, ssh = false) {
     await post(page, page.getByRole('button', { name: 'Apply reviewed changes', exact: true }));
     await page.getByRole('status').filter({ hasText: 'Changes saved:' }).waitFor();
 }
-async function capture(page, name) {
+async function sectionSpacing(page, probeFormStack = false) {
+    const spacing = await page.evaluate((probe) => {
+        const form = document.querySelector('[data-access-selection]');
+        if (!form) return null;
+        const heading = form.parentElement.querySelector(':scope > .section-heading');
+        const next = heading.nextElementSibling;
+        const alert = next && next.classList.contains('alert') ? next : null;
+        const root = getComputedStyle(document.documentElement);
+        const raw = root.getPropertyValue('--ui-panel-stack-gap').trim();
+        const expected = parseFloat(raw) * (raw.endsWith('rem') ? parseFloat(root.fontSize) : 1);
+        const gaps = [
+            (alert || form).getBoundingClientRect().top - heading.getBoundingClientRect().bottom,
+        ];
+        if (alert) gaps.push(form.getBoundingClientRect().top - alert.getBoundingClientRect().bottom);
+        if (probe) {
+            const existed = form.classList.contains('form-stack');
+            form.classList.add('form-stack');
+            gaps.push(form.getBoundingClientRect().top - (alert || heading).getBoundingClientRect().bottom);
+            if (!existed) form.classList.remove('form-stack');
+        }
+        return { expected, gaps };
+    }, probeFormStack);
+    if (spacing) for (const gap of spacing.gaps) {
+        assert.ok(Math.abs(gap - spacing.expected) <= 1,
+            'Collection heading/form spacing must be exactly one shared token: ' + JSON.stringify(spacing));
+    }
+}
+async function capture(page, name, fullPage = false) {
+    await sectionSpacing(page);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false,
         'Grouping page overflow: ' + name);
     if (artifactDirectory) {
         await page.mouse.move(1, 1);
-        await page.screenshot({ path: join(artifactDirectory, name + '.png') });
+        await page.screenshot({ path: join(artifactDirectory, name + '.png'), fullPage });
     }
 }
 function finish(run) {
@@ -213,6 +241,7 @@ async function groupTasks(browser) {
         await choose(page, fixture.groups.denial.label);
         await review(page);
         assert.equal(await page.locator('#confirm_ssh_changes').count(), 1, 'SSH-denial group lost its applicable review.');
+        assert.match(await page.locator('label[for="confirm_ssh_changes"]').innerText(), /memberships/i);
         const sshReviewId = await page.locator('input[name="review_id"]').inputValue();
         await page.getByLabel('Your current password', { exact: true }).fill(password);
         await post(page, page.getByRole('button', { name: 'Apply reviewed changes', exact: true }));
@@ -241,6 +270,22 @@ async function groupTasks(browser) {
         await page.getByText('An explicit direct Deny must be reviewed in the individual Target editor.', { exact: true }).waitFor();
         await page.goto(base + userPath(fixture.users.member.id) + '/targets');
         await row(page, fixture.special.blocked.label).getByText('Deny', { exact: true }).waitFor();
+
+        await page.getByRole('link', { name: 'Add Targets', exact: true }).click();
+        await post(page, page.getByRole('button', { name: 'Clear selection', exact: true }));
+        await filter(page, fixture.special.ssh.label);
+        await choose(page, fixture.special.ssh.label);
+        await review(page);
+        assert.equal(await page.locator('#confirm_ssh_changes').count(), 1);
+        const directSshCopy = await page.locator('label[for="confirm_ssh_changes"]').innerText();
+        assert.match(directSshCopy, /direct Target scope changes/i);
+        assert.match(directSshCopy, /Allow or Deny/);
+        assert.match(directSshCopy, /Inherit/);
+        assert.doesNotMatch(directSshCopy, /memberships/i);
+        await capture(page, 'direct-ssh-review-1440-light', true);
+        await page.setViewportSize({ width: 390, height: 1000 });
+        await page.emulateMedia({ colorScheme: 'dark' });
+        await capture(page, 'direct-ssh-review-390-dark', true);
 
         let renders = 0;
         for (const width of [390, 768, 1440]) for (const theme of ['light', 'dark']) {
@@ -281,6 +326,10 @@ async function nativeAndDenied(browser) {
         assert.equal(await counter(page).innerText(), 'Saved selection: 50');
         await post(page, page.getByRole('button', { name: 'Clear selection', exact: true }));
         assert.equal(await counter(page).innerText(), 'Saved selection: 0');
+        await post(page, page.getByRole('button', { name: 'Review selection', exact: true }));
+        await page.getByText('Select at least one item to review.', { exact: true }).waitFor();
+        await sectionSpacing(page, true);
+        await capture(page, 'empty-selection-error-mobile-dark');
         await page.getByRole('link', { name: 'View current members', exact: true }).click();
         await page.getByRole('link', { name: 'Add Targets', exact: true }).click();
         await filter(page, 'Group fixture Target ');
@@ -304,7 +353,7 @@ async function nativeAndDenied(browser) {
         assert.equal(await denied.page.locator('.admin-nav').getByRole('link', { name: 'Target groups', exact: true }).count(), 0);
         await capture(denied.page, 'operator-forbidden-mobile-dark');
         finish(denied);
-        pass('Operator remains forbidden from group access administration');
+        pass('Operator remains forbidden from group access administration; shared section/form/alert gaps and distinct direct-SSH review copy');
     } finally { await denied.context.close(); }
 }
 
