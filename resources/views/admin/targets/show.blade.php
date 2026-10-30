@@ -17,6 +17,29 @@
     </div>
 </div>
 
+<section class="panel panel-wide target-recovery-panel" aria-labelledby="target-recovery-title">
+    <div class="section-heading">
+        <div>
+            <div class="eyebrow">{{ __('Connection and recovery') }}</div>
+            <h2 id="target-recovery-title">{{ $recovery['title'] }}</h2>
+        </div>
+        <span class="badge badge-{{ $recovery['tone'] === 'caution' ? 'warning' : 'neutral' }}">{{ $recovery['tone'] === 'caution' ? __('Action required') : __('Status') }}</span>
+    </div>
+    <p class="target-recovery-intro" role="status">{{ $recovery['description'] }}</p>
+    <dl class="target-recovery-grid">
+        <div><dt>{{ __('Reachability evidence') }}</dt><dd>{{ $recovery['reachability'] }}</dd></div>
+        <div><dt>{{ __('Authorization') }}</dt><dd>{{ $recovery['authorization'] }}</dd></div>
+        <div><dt>{{ __('Ongoing operation') }}</dt><dd>{{ $recovery['operation'] }}</dd></div>
+    </dl>
+    @if ($recovery['history'] !== null)
+        <p class="target-recovery-history"><strong>{{ __('Diagnostic history') }}:</strong> {{ $recovery['history'] }}</p>
+    @endif
+
+    @if ($connectorUi?->recoveryActionsView !== null)
+        @include($connectorUi->recoveryActionsView)
+    @endif
+</section>
+
 <section class="panel panel-wide" aria-labelledby="target-operations-title">
     <h2 id="target-operations-title">{{ __('Gateway operations') }}</h2>
     <p role="status"><strong>{{ $target->operations_paused ? __('Paused') : __('Enabled') }}</strong>
@@ -46,29 +69,6 @@
 @if ($connectorUi?->operationsView !== null && ! $target->operations_paused)
     @include($connectorUi->operationsView)
 @endif
-
-<section class="panel panel-wide target-recovery-panel" aria-labelledby="target-recovery-title">
-    <div class="section-heading">
-        <div>
-            <div class="eyebrow">{{ __('Connection and recovery') }}</div>
-            <h2 id="target-recovery-title">{{ $recovery['title'] }}</h2>
-        </div>
-        <span class="badge badge-{{ $recovery['tone'] === 'caution' ? 'warning' : 'neutral' }}">{{ $recovery['tone'] === 'caution' ? __('Action required') : __('Status') }}</span>
-    </div>
-    <p class="target-recovery-intro" role="status">{{ $recovery['description'] }}</p>
-    <dl class="target-recovery-grid">
-        <div><dt>{{ __('Reachability evidence') }}</dt><dd>{{ $recovery['reachability'] }}</dd></div>
-        <div><dt>{{ __('Authorization') }}</dt><dd>{{ $recovery['authorization'] }}</dd></div>
-        <div><dt>{{ __('Ongoing operation') }}</dt><dd>{{ $recovery['operation'] }}</dd></div>
-    </dl>
-    @if ($recovery['history'] !== null)
-        <p class="target-recovery-history"><strong>{{ __('Diagnostic history') }}:</strong> {{ $recovery['history'] }}</p>
-    @endif
-
-    @if ($connectorUi?->recoveryActionsView !== null)
-        @include($connectorUi->recoveryActionsView)
-    @endif
-</section>
 
 <section class="panel panel-wide" aria-label="{{ __('Target information') }}">
     <dl class="detail-list">
@@ -120,7 +120,7 @@
             @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
                 <div class="target-subsection" aria-labelledby="forget-target-title">
                     <h3 id="forget-target-title">{{ __('Remove locally without remote revocation (Owner only)') }}</h3>
-                    <p class="field-help">{{ __('This permanently deletes the Target, encrypted credentials, pending OAuth/refresh/revocation state and Target-specific access assignments from this Gateway. No WordPress or SSH connection is attempted. Existing remote OAuth authorization or Unix-account access may remain valid, and remote in-flight operations cannot be undone. Revoke access separately at the remote service when possible.') }}</p>
+                    <p class="field-help">{{ __('This permanently deletes the Target, encrypted credentials, pending OAuth/refresh/revocation state and Target-specific access assignments from this Gateway. No remote connection or revocation is attempted. Existing remote OAuth authorization or Unix-account access may remain valid, and remote in-flight operations cannot be undone. Revoke access separately at the remote service when possible.') }}</p>
                     <form method="post" action="{{ route('admin.targets.forget', ['target' => $target->target_id]) }}" class="form-stack">
                         @csrf
                         @method('DELETE')
@@ -136,7 +136,7 @@
                         @error('confirm_local_only')<p class="form-error" role="alert">{{ $message }}</p>@enderror
                         <label class="target-trust-confirmation">
                             <input type="checkbox" name="confirm_remote_revocation_unknown" value="yes" required>
-                            <span>{{ __('I understand WordPress OAuth or remote SSH access is NOT revoked or verified by this action.') }}</span>
+                            <span>{{ __('I understand remote authorization or access is NOT revoked or verified by this action.') }}</span>
                         </label>
                         @error('confirm_remote_revocation_unknown')<p class="form-error" role="alert">{{ $message }}</p>@enderror
                         <div class="field">

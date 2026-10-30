@@ -19,6 +19,13 @@
 - Verify both light and dark media preference, reduced-motion setting, longest realistic localized text, and RTL-compatible layout when relevant. Keep text wrapping, sufficient touch targets and readable monospace/code snippets.
 - Preserve server-rendered Blade, escaped output, CSRF, per-user/Target permissions, redaction, Owner password reauthentication and the current security/transport boundaries. UI polish must not silently relax behavior.
 
+## Connector and navigation consistency
+
+- Shared shell, field/table, feedback and evidence patterns are connector-neutral. Connector companions supply only reviewed local content/partial references; preserve their distinct authentication/recovery meaning and existing server authority. Unknown types must not inherit SSH or WordPress claims.
+- Dashboard counts, review list and review-filtered inventory share the same scoped predicate. Show all lifecycle states, and explain that Pause and review indicators overlap lifecycle totals. Recorded connected is never a live health verdict.
+- Put Connection/recovery before general operations on Target details. Keep uncertainty visible and retain useful authorized diagnostic codes, messages, paths/context and correlation; redact actual secrets precisely.
+- Preserve native forms and one-use/file/auth routes during enhanced GET navigation. Explicitly disable application snapshot caches/prefetch, refresh server-authorized navigation, and check direct URLs, Back/Forward, unsaved forms, session/permission changes, focus/title, repeated widget initialization and coherent asset updates. Native/no-JS navigation remains usable.
+
 ## Acceptance and durable regression discipline
 
 1. Identify which shared layout class/token owns a visible problem. **Fix that one shared rule**; review every view using it for side effects. Do not bury a repeated issue with a special class on the latest page.

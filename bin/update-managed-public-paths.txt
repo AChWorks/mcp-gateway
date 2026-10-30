@@ -2,4 +2,10 @@
 css/admin.css
 index.php
 install.php
+js/admin-forms.js
+js/admin-navigation.js
+js/admin.js
+js/vendor/README.md
+js/vendor/turbo-8.0.23.js
+js/vendor/turbo-MIT-LICENSE.txt
 robots.txt
