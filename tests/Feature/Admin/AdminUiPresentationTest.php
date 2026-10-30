@@ -19,6 +19,26 @@ final class AdminUiPresentationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_light_control_boundaries_meet_non_text_contrast_on_shared_surfaces(): void
+    {
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        $luminance = static function (string $hex): float {
+            $channels = array_map(static function (string $channel): float {
+                $value = hexdec($channel) / 255;
+
+                return $value <= 0.04045 ? $value / 12.92 : (($value + 0.055) / 1.055) ** 2.4;
+            }, str_split($hex, 2));
+
+            return 0.2126 * $channels[0] + 0.7152 * $channels[1] + 0.0722 * $channels[2];
+        };
+        self::assertSame(1, preg_match('/--ui-border-strong: #([a-f0-9]{6});/', $css, $border));
+        foreach (['ui-surface', 'ui-canvas', 'ui-surface-subtle', 'ui-surface-hover'] as $token) {
+            self::assertSame(1, preg_match('/--'.preg_quote($token, '/').': #([a-f0-9]{6});/', $css, $surface));
+            $contrast = ($luminance($surface[1]) + 0.05) / ($luminance($border[1]) + 0.05);
+            self::assertGreaterThanOrEqual(3.0, $contrast, $token.' control boundary contrast');
+        }
+    }
+
     public function test_target_wordpress_operation_uses_shared_admin_markup(): void
     {
         $source = file_get_contents(resource_path('views/admin/targets/connectors/wordpress/operations.blade.php'));
