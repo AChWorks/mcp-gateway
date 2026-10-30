@@ -71,7 +71,7 @@
         </header>
 
         <p id="admin-navigation-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-        <main id="main-content" class="shell main-content" tabindex="-1">
+        <main id="main-content" @class(['shell', 'main-content', 'form-page' => $__env->hasSection('form-page')]) tabindex="-1">
             @if (session('status'))
                 <div class="alert alert-success" role="status">{{ session('status') }}</div>
             @endif

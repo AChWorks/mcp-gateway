@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Edit Target'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">

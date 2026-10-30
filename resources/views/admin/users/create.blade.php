@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Add user'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -13,7 +14,7 @@
 </div>
 
 <section class="panel panel-wide">
-    <form class="form-stack form-width" method="post" action="{{ route('admin.users.store') }}">
+    <form class="form-stack" method="post" action="{{ route('admin.users.store') }}">
         @csrf
 
         <div class="form-grid">

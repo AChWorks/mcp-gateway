@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Edit group target membership'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -13,7 +14,7 @@
 </div>
 
 <section class="panel panel-wide">
-    <form class="form-stack form-width" method="post" action="{{ route('admin.target-groups.targets.update', ['targetGroup' => $targetGroup->id, 'target' => $target->target_id]) }}">
+    <form class="form-stack" method="post" action="{{ route('admin.target-groups.targets.update', ['targetGroup' => $targetGroup->id, 'target' => $target->target_id]) }}">
         @csrf
         @method('PUT')
         <input type="hidden" name="assigned" value="0">

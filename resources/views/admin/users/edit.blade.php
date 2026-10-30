@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Manage user'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -25,7 +26,7 @@
         <div class="alert alert-success" role="status">{{ __('Owners retain unrestricted all-target authority for recovery. Global/per-target denials and target-group assignments are cleared for this role.') }}</div>
     @endif
 
-    <form class="form-stack form-width" method="post" action="{{ route('admin.users.update', ['user' => $managedUser->id]) }}">
+    <form class="form-stack" method="post" action="{{ route('admin.users.update', ['user' => $managedUser->id]) }}">
         @csrf
         @method('PUT')
 

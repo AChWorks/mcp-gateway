@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Edit group user assignment'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -16,7 +17,7 @@
     @if ($isOwner)
         <div class="alert alert-success" role="status">{{ __('Owners remain unrestricted for recovery and cannot be assigned to a narrowing target group.') }}</div>
     @else
-        <form class="form-stack form-width" method="post" action="{{ route('admin.target-groups.users.update', ['targetGroup' => $targetGroup->id, 'user' => $managedUser->id]) }}">
+        <form class="form-stack" method="post" action="{{ route('admin.target-groups.users.update', ['targetGroup' => $targetGroup->id, 'user' => $managedUser->id]) }}">
             @csrf
             @method('PUT')
             <input type="hidden" name="assigned" value="0">

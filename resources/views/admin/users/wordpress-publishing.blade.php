@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('WordPress publisher grants'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -58,7 +59,7 @@
     @if (!$canPublish || $groups->isEmpty())
         <p class="empty-state">{{ __('An enabled Administrator or Operator assigned to a WordPress Target Group is required. Configure the User and Target Group first.') }}</p>
     @else
-        <form class="form-stack form-width" method="post" action="{{ route('admin.users.publishing.store', ['user' => $managedUser->id]) }}">
+        <form class="form-stack" method="post" action="{{ route('admin.users.publishing.store', ['user' => $managedUser->id]) }}">
             @csrf
             <div class="form-grid">
                 <div class="field">
