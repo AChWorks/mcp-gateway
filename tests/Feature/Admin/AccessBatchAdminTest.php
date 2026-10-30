@@ -214,7 +214,10 @@ final class AccessBatchAdminTest extends TestCase
         $saved = $this->review('user-targets', (string) $user->id, [$target->id], ['intent' => 'allow', 'shown_intent' => 'allow']);
         self::assertFalse($saved['preview']['can_apply']);
         $this->get($this->reviewUrl($saved))->assertOk()->assertSee('blocked change')
-            ->assertSee('Open individual Target rules')->assertSee('disabled', false);
+            ->assertSee('Open individual Target rules')->assertSee('disabled', false)
+            ->assertSee(route('admin.users.targets.edit', ['user' => $user->id, 'target' => $target->target_id]), false);
+        $this->get(route('admin.users.targets.edit', ['user' => $user->id, 'target' => $target->target_id]))
+            ->assertOk()->assertSee($target->display_name)->assertSee($target->target_id)->assertSee('Explicit scope rule');
         $this->post($this->applyUrl('user-targets', (string) $user->id), [
             'review_id' => $saved['id'], 'current_password' => 'CorrectHorse!234',
         ])->assertSessionHasErrors('selection');

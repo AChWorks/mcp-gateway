@@ -41,7 +41,10 @@
                         @if ($item['blocked'] !== null)
                             <p class="field-error">{{ $item['blocked'] }}</p>
                             @if ($context === 'user-targets')
-                                <a href="{{ route('admin.users.targets.index', ['user' => $subjectId, 'membership' => 'all', 'search' => $item['label']]) }}">{{ __('Open individual Target rules') }}</a>
+                                @php($individualRulesUrl = isset($item['target_id'])
+                                    ? route('admin.users.targets.edit', ['user' => $subjectId, 'target' => $item['target_id']])
+                                    : route('admin.users.targets.index', ['user' => $subjectId, 'membership' => 'all', 'search' => $item['label']]))
+                                <a href="{{ $individualRulesUrl }}">{{ __('Open individual Target rules') }}</a>
                             @endif
                         @endif
                     </td>

@@ -294,6 +294,7 @@ final readonly class AccessBatchWorkflow
             $items[] = [
                 'id' => $id, 'label' => $profile['label'] ?? $profile['name'],
                 'detail' => $profile['target_id'] ?? $profile['email'] ?? __('Target group'),
+                'target_id' => $profile['target_id'] ?? null,
                 'connector_type' => $profile['connector_type'] ?? null,
                 'before' => $before, 'after' => $after, 'changed' => $changed, 'blocked' => $blocked,
             ];
