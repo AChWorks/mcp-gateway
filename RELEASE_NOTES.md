@@ -4,7 +4,7 @@ The temporary browser updater now requires an enabled Owner in role-aware instal
 
 Owner sign-in can return directly to the exact local `/update/` entrypoint. Ordinary users and unsafe redirect destinations do not gain access through this return path. There is no new configuration, service or database migration.
 
-Admin forms and collection pages now use one workspace centering rule. The breadcrumb, heading and main content share the same page frame, while existing readable form widths and responsive spacing are preserved.
+Admin forms and collection pages now use one workspace centering rule. The breadcrumb, heading and main content share the same page frame, while existing readable form widths and responsive spacing are preserved. Client lifecycle notes use ordinary readable paragraphs outside the wide profile table card.
 
 The official release gates include all 25 configured published deployment baselines through v2.4.1, complete browser updates and backup-integrity fail-safe verification. This release does not deploy itself to installed hosts; stage only the matching official update ZIP and checksum for an approved update.
 
