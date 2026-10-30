@@ -28,6 +28,12 @@ A password error retains the exact existing review and never retains the passwor
 
 If the browser cannot confirm completion, reopen the member list and inspect saved state before creating another review. The interface never automatically replays an uncertain mutation.
 
+## Read saved User account restrictions
+
+The User Account form loads the saved role, Target scope, human/AI access flags and global Deny checks. Its restriction summary distinguishes **Saved**, **Unsaved** and fresh-create **Defaults**, including zero checked controls; existing checked restrictions are visible when reopening the account. Counts describe the current rendered restriction controls, not hidden historical keys or effective permission grants.
+
+After a password or validation error, the displayed choices are an unsaved draft. An entirely unchecked list remains empty rather than restoring saved restrictions or fresh-create SSH defaults. Reopen the account to inspect saved state. Checked still means Deny; unchecked controls cannot bypass role ceilings, group/direct Target restrictions, scope or the required Owner SSH confirmation.
+
 ## Interpret access correctly
 
 - Group membership can supply reachability for **Selected targets** users. It does not grant a capability missing from the role or global ceiling.

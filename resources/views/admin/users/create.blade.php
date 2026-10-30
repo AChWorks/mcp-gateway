@@ -4,6 +4,13 @@
 @section('form-page', '1')
 
 @section('content')
+@php
+    $hasSubmittedRestrictions = session()->hasOldInput();
+    $selectedDenials = old('denied_permissions', $hasSubmittedRestrictions ? [] : $sshDefaultDenials);
+    $selectedDenials = is_array($selectedDenials) ? $selectedDenials : [];
+    $checkedRestrictionCount = count(array_filter($permissions, static fn ($permission): bool =>
+        in_array($permission->value, $selectedDenials, true)));
+@endphp
 <div class="page-heading">
     <div>
         <div class="eyebrow">{{ __('Access control') }}</div>
@@ -84,8 +91,8 @@
             <p class="field-help">{{ __('This Gateway-wide connection gate is independent of the account role and human Admin/Target permissions. It never adds a Target or action permission. Disabling revokes existing AI client consents/tokens; re-enabling requires fresh client authorization. New users start with AI access disabled; existing users retain their prior state after upgrade.') }}</p>
         </fieldset>
 
-        <details class="permission-category-collapsible" @if ($errors->hasAny(['denied_permissions', 'confirm_ssh_permission_changes']) || old('denied_permissions') !== null) open @endif>
-            <summary>{{ __('Advanced permission restrictions — checked means blocked') }}</summary>
+        <details id="user-permission-restrictions" class="permission-category-collapsible" @if ($hasSubmittedRestrictions || $errors->hasAny(['denied_permissions', 'confirm_ssh_permission_changes'])) open @endif>
+            <summary>{{ __('Advanced permission restrictions — checked means blocked') }} ({{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Defaults: :count checked', ['count' => $checkedRestrictionCount]) }})</summary>
             <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
@@ -93,7 +100,7 @@
             <input type="hidden" name="ssh_permissions_reviewed" value="1">
             @include('admin.partials.permission-groups', [
                 'permissions' => $permissions,
-                'selectedDenials' => old('denied_permissions', $sshDefaultDenials),
+                'selectedDenials' => $selectedDenials,
                 'sshPermissionsEditable' => true,
                 'sshPermissionContext' => 'user',
             ])
@@ -107,7 +114,11 @@
 
             </div>
         </details>
-        <p class="field-help">{{ __('Restriction checkboxes block the named capability. Leave them unchecked to keep the role ceiling; new accounts still start with SSH blocked unless explicitly reviewed.') }}</p>
+        <p class="field-help" data-user-permission-state="{{ $hasSubmittedRestrictions ? 'submitted' : 'defaults' }}">
+            {{ __($hasSubmittedRestrictions
+                ? 'Showing unsaved restriction choices after an unsuccessful submission. No account changes were saved.'
+                : 'Restriction checkboxes block the named capability. New accounts start with SSH blocked unless explicitly reviewed; unchecked boxes never bypass the role or Target restrictions.') }}
+        </p>
 
         <div class="field">
             <label for="current_password">{{ __('Your current password') }}</label>

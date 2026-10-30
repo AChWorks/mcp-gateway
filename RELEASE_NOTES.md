@@ -1,3 +1,15 @@
+# MCP Gateway v2.5.1
+
+**Stable v2.5.1 — accurate User restriction form state and one shared Admin canvas.**
+
+This patch addresses the [Owner-reported Admin follow-up #136](https://github.com/AChWorks/mcp-gateway/issues/136). Existing access policy and stored permission semantics remain authoritative.
+
+- **Saved versus unsaved restrictions:** reopening a User shows the stored restriction checks with an explicit Saved count and visible existing restrictions. Password or validation failures retain an entirely unchecked submitted list instead of restoring saved or default Deny checks. Unsaved choices are labelled separately, including zero; create defaults apply only to a fresh form. Role, Target scope, human/AI access flags and the existing Owner/SSH confirmation rules are preserved.
+- **One inherited outer canvas:** authenticated Admin pages, breadcrumbs, headings and standalone panels share the existing responsive workspace width. Add/Edit User and sibling forms no longer select a separate narrower workspace; Settings upper and lower panels align. Intentional interior grids, readable fields and guest authentication cards retain their appropriate composition.
+- **Readable lifecycle guidance:** AI client explanations use three stacked labelled rows across the shared frame, with bounded readable descriptions and narrow-screen reflow. All existing lifecycle meaning and source reading order are retained without newspaper columns or JavaScript dependency.
+- **Regression coverage:** native create/save/list/reopen and error recovery are covered with JavaScript enabled and disabled. Cross-page width and panel-edge comparisons cover mobile through 2048px in both themes, plus affected 200% text and no-JavaScript states.
+- **Upgrade boundary:** no new migration, permission model, environment setting, mandatory service or framework. All six package workflow loops include the 27 supported released baselines through v2.5.0. Publication does not update an installed host; release and installed acceptance remain separate.
+
 # MCP Gateway v2.5.0
 
 **Stable v2.5.0 — member-first Target groups and bounded, reviewed multi-selection for group and user access.**

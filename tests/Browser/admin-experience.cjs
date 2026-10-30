@@ -4,7 +4,7 @@
 // No production accounts, real downstream request, payload or credential logging.
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
-const { readFileSync } = require('node:fs');
+const { readFileSync, mkdirSync } = require('node:fs');
 const { createHash } = require('node:crypto');
 const { join } = require('node:path');
 const base = process.env.GATEWAY_BROWSER_BASE_URL;
@@ -12,6 +12,13 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
     throw new Error('A local-only GATEWAY_BROWSER_BASE_URL is required.');
 }
 const pass = (name) => console.log('PASS: ' + name);
+const artifactDirectory = process.env.GATEWAY_UI_ARTIFACT_DIR;
+if (artifactDirectory) mkdirSync(artifactDirectory, { recursive: true });
+const lifecycleParagraphs = [
+    'Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record.',
+    'Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure.',
+    'The administrator CLI can explicitly disable a DCR client and retire its unused registration after consent revocation. Retirement frees one slot without deleting identity history or restoring credentials; it cannot be reversed.',
+];
 
 async function create(browser, options = {}) {
     const context = await browser.newContext({
@@ -68,6 +75,12 @@ async function assertCenteredFrame(page, path) {
             contentStart: rtl ? mainBox.right - parseFloat(style.paddingRight) : mainBox.left + parseFloat(style.paddingLeft),
             breadcrumbStart: breadcrumb ? start(breadcrumb) : null,
             headingStart: heading ? start(heading) : null,
+            contentLeft: mainBox.left + parseFloat(style.paddingLeft),
+            contentRight: mainBox.right - parseFloat(style.paddingRight),
+            panels: Array.from(main.querySelectorAll(':scope > .panel')).map(panel => ({
+                left: rect(panel).left, right: rect(panel).right,
+                label: panel.getAttribute('aria-label') || panel.querySelector('h2')?.textContent,
+            })),
         };
     });
     const close = (actual, expected, message) => assert.ok(Math.abs(actual - expected) <= 1,
@@ -79,7 +92,44 @@ async function assertCenteredFrame(page, path) {
         if (frame.breadcrumbStart !== null) close(frame.breadcrumbStart, frame.contentStart, 'breadcrumb must align with content');
     }
     if (frame.headingStart !== null) close(frame.headingStart, frame.contentStart, 'page heading must align with content');
+    for (const panel of frame.panels) {
+        close(panel.left, frame.contentLeft, 'standalone panel start ' + panel.label);
+        close(panel.right, frame.contentRight, 'standalone panel end ' + panel.label);
+    }
+    return frame;
 }
+
+async function assertLifecycleRows(page) {
+    const notes = page.getByRole('complementary', { name: 'Client profile lifecycle notes', exact: true });
+    assert.deepEqual(await notes.locator('dt').allTextContents(),
+        ['Finding profiles', 'Automatic retirement', 'Administrator actions']);
+    assert.deepEqual(await notes.locator('dd p').allTextContents(), lifecycleParagraphs);
+    const geometry = await notes.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        return {
+            left: box.left, right: box.right,
+            rows: Array.from(element.querySelectorAll('dl > div')).map(row => {
+                const label = row.querySelector('dt').getBoundingClientRect();
+                const description = row.querySelector('dd').getBoundingClientRect();
+                const columns = getComputedStyle(row).gridTemplateColumns.trim().split(/\s+/).length;
+                return { columns, label: { left: label.left, top: label.top, bottom: label.bottom },
+                    description: { left: description.left, right: description.right, top: description.top } };
+            }),
+        };
+    });
+    for (const row of geometry.rows) {
+        assert.ok(Math.abs(row.label.left - geometry.left) <= 1, 'Lifecycle labels lost the shared starting edge.');
+        assert.ok(Math.abs(row.description.right - geometry.right) <= 1,
+            'Lifecycle descriptions must compose the opposite edge, not strand a narrow note: ' + JSON.stringify(geometry));
+        if (row.columns === 1) {
+            assert.ok(row.description.top >= row.label.bottom, 'Narrow lifecycle reading order must stack label then paragraph.');
+            assert.ok(Math.abs(row.description.left - geometry.left) <= 1);
+        } else {
+            assert.ok(row.description.left > row.label.left, 'Wide lifecycle rows must separate the label and readable body.');
+        }
+    }
+}
+
 
 async function matrix(browser) {
     const run = await create(browser);
@@ -104,27 +154,50 @@ async function matrix(browser) {
         assert.ok(!rowCount.includes('UI pending authorization'));
         assert.ok(!rowCount.includes('UI SSH build host'));
 
+        await run.page.goto(base + '/admin/users');
+        const accountPath = new URL(await run.page.getByRole('link', { name: /^Manage / }).first().getAttribute('href'), base).pathname;
         let renders = 0;
-        for (const width of [360, 768, 1440]) {
+        for (const width of [320, 390, 768, 1440, 2048]) {
             for (const colorScheme of ['light', 'dark']) {
                 await run.page.setViewportSize({ width, height: 900 });
                 await run.page.emulateMedia({ colorScheme, reducedMotion: 'reduce' });
+                let sharedFrame;
                 for (const path of ['/admin', '/admin/targets', '/admin/targets/create?connector_type=ssh_direct',
-                    '/admin/oauth-clients', '/admin/operations']) {
+                    '/admin/users/create', accountPath, '/admin/target-groups/create', '/admin/oauth-clients', '/admin/operations']) {
                     await run.page.goto(base + path);
                     await run.page.locator('#main-content h1').waitFor();
-                    await assertCenteredFrame(run.page, path);
+                    const frame = await assertCenteredFrame(run.page, path);
+                    if (sharedFrame) {
+                        assert.ok(Math.abs(frame.mainLeft - sharedFrame.mainLeft) <= 1
+                            && Math.abs(frame.mainWidth - sharedFrame.mainWidth) <= 1,
+                        'Same-viewport Admin pages must share one outer canvas: ' + JSON.stringify({ width, path, sharedFrame, frame }));
+                    } else sharedFrame = frame;
+                    if (path === '/admin/oauth-clients') await assertLifecycleRows(run.page);
                     if (await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) console.log('OVERFLOW', JSON.stringify(await run.page.evaluate(() => [...document.querySelectorAll('.admin-shell,.admin-workspace,main,.panel,.table-wrap')].map(e=>({tag:e.tagName,cls:e.className,right:Math.round(e.getBoundingClientRect().right),width:Math.round(e.getBoundingClientRect().width),scroll:e.scrollWidth,overflow:getComputedStyle(e).overflowX,min:getComputedStyle(e).minWidth,cols:getComputedStyle(e).gridTemplateColumns})))));;
                     assert.equal(await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
                         false, 'Page overflow at ' + width + ' ' + path);
                     assert.equal(await run.page.locator('.admin-nav [aria-current="page"]').count(), 1);
+                    if (artifactDirectory) {
+                        const name = path === accountPath ? 'user-edit' : path.replace(/[^a-z0-9]+/gi, '-');
+                        await run.page.screenshot({ path: join(artifactDirectory, width + '-' + colorScheme + '-' + name + '.png') });
+                        if (path === '/admin/oauth-clients') await run.page
+                            .getByRole('complementary', { name: 'Client profile lifecycle notes', exact: true })
+                            .screenshot({ path: join(artifactDirectory, width + '-' + colorScheme + '-lifecycle-rows.png') });
+                    }
                     renders++;
                 }
+                // Diagnostic/error surfaces do not carry panel-wide. Their
+                // generic authenticated panel must still fill this same canvas.
+                const panel = run.page.locator('#main-content > .panel').first();
+                const classes = await panel.getAttribute('class');
+                await panel.evaluate(element => element.classList.remove('panel-wide'));
+                await assertCenteredFrame(run.page, 'generic panel default');
+                await panel.evaluate((element, original) => element.setAttribute('class', original), classes);
             }
         }
         assert.deepEqual(run.errors, []);
         assert.deepEqual(run.external, []);
-        pass(renders + ' real styled Admin viewport/theme renders; centered header/content frames; local assets; scoped summary and five-row review bound');
+        pass(renders + ' real styled Admin viewport/theme renders; one cross-page canvas and full-width panels; labelled lifecycle rows; local assets; scoped summary and five-row review bound');
     } finally {
         await run.context.close();
     }
@@ -244,7 +317,17 @@ async function mobileAndNative(browser) {
             }
             await nav(run.page, 'Targets', 'Gateway Targets');
             assert.equal(await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-            pass('360px dark keyboard/disclosure and native navigation with JavaScript ' + (javaScriptEnabled ? 'on' : 'off'));
+            let sharedFrame;
+            for (const path of ['/admin/users/create', '/admin/operations', '/admin/oauth-clients']) {
+                await run.page.goto(base + path);
+                const frame = await assertCenteredFrame(run.page, path);
+                if (sharedFrame) assert.ok(Math.abs(frame.mainWidth - sharedFrame.mainWidth) <= 1,
+                    'Native/mobile pages selected different outer widths.');
+                else sharedFrame = frame;
+                await assertReflow(run.page, 'native/mobile ' + path);
+                if (path === '/admin/oauth-clients') await assertLifecycleRows(run.page);
+            }
+            pass('360px dark keyboard/disclosure, native navigation and shared canvas/lifecycle rows with JavaScript ' + (javaScriptEnabled ? 'on' : 'off'));
         } finally {
             await run.context.close();
         }
@@ -346,6 +429,24 @@ async function adaptation(browser) {
         assert.equal(await page.getByRole('button', { name: 'Save operational settings', exact: true }).isVisible(), true);
         assert.equal(await page.locator('label[for="setting_wp_response_kib"]').count(), 1);
 
+        for (const path of ['/admin/users/create', '/admin/oauth-clients']) {
+            await page.goto(base + path);
+            const sizes = await page.evaluate(() => ({
+                root: parseFloat(getComputedStyle(document.documentElement).fontSize),
+                main: parseFloat(getComputedStyle(document.querySelector('main')).fontSize),
+                note: document.querySelector('.explanation-list dd')
+                    ? parseFloat(getComputedStyle(document.querySelector('.explanation-list dd')).fontSize) : null,
+            }));
+            await page.addStyleTag({ content: 'html { font-size: ' + sizes.root * 2 + 'px !important; }' });
+            await page.waitForFunction(({ main, note }) =>
+                parseFloat(getComputedStyle(document.querySelector('main')).fontSize) === main * 2
+                && (note === null || parseFloat(getComputedStyle(document.querySelector('.explanation-list dd')).fontSize) === note * 2),
+            sizes, { timeout: 2000 });
+            await assertCenteredFrame(page, '200% text ' + path);
+            await assertReflow(page, '200% text ' + path);
+            if (path === '/admin/oauth-clients') await assertLifecycleRows(page);
+        }
+
         await page.setViewportSize({ width: 320, height: 900 });
         await page.goto(base + '/admin/targets');
         // Change only fixture content/direction in an actual rendered inventory.
@@ -380,7 +481,7 @@ async function adaptation(browser) {
         await assertReflow(page, 'RTL Dashboard with isolated technical identifier');
         assert.deepEqual(run.errors, []);
         assert.deepEqual(run.external, []);
-        pass('320 CSS px reflow; measured 200% form text; RTL mixed-script long names and isolated technical IDs');
+        pass('320 CSS px reflow; measured 200% settings/User/lifecycle text; RTL mixed-script long names and isolated technical IDs');
     } finally {
         await run.context.close();
     }

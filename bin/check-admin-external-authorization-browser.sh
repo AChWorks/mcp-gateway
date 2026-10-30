@@ -4,8 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 mode="${1:-browser}"
-if [[ "$mode" != browser && "$mode" != concurrency-only && "$mode" != experience-only && "$mode" != groups-only ]]; then
-    echo 'Usage: check-admin-external-authorization-browser.sh [concurrency-only|experience-only|groups-only]' >&2
+if [[ "$mode" != browser && "$mode" != concurrency-only && "$mode" != experience-only && "$mode" != groups-only && "$mode" != user-state-only ]]; then
+    echo 'Usage: check-admin-external-authorization-browser.sh [concurrency-only|experience-only|groups-only|user-state-only]' >&2
     exit 2
 fi
 for tool in php curl python3; do
@@ -110,4 +110,7 @@ if [[ "$mode" == browser || "$mode" == experience-only ]]; then
 fi
 if [[ "$mode" == browser || "$mode" == groups-only ]]; then
     node tests/Browser/admin-group-workflows.cjs
+fi
+if [[ "$mode" == browser || "$mode" == user-state-only ]]; then
+    node tests/Browser/admin-user-state.cjs
 fi
