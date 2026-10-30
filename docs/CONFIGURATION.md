@@ -6,7 +6,7 @@ For fresh installs, the HTTPS web installer writes a production `.env` and gener
 
 ## The most common question: how long does a login last?
 
-`SESSION_LIFETIME=120` means **120 minutes of inactivity**, not two hours after login regardless of activity. The web `session` guard is shared by **Gateway administrator and ordinary Gateway user logins**; no separate administrator-only or per-user session TTL is implemented. An active user can remain signed in beyond that idle interval. Explicit logout and disabling a user can end a session earlier. The temporary browser updater reuses this authenticated administrator session but its **own continuation** has an additional fixed 30-minute deadline; `SESSION_LIFETIME` does not extend that deadline.
+`SESSION_LIFETIME=120` means **120 minutes of inactivity**, not two hours after login regardless of activity. The web `session` guard is shared by **Gateway administrator and ordinary Gateway user logins**; no separate administrator-only or per-user session TTL is implemented. An active user can remain signed in beyond that idle interval. Explicit logout and disabling a user can end a session earlier. The temporary browser updater reuses this web session but independently requires an enabled **Owner** for preflight and fresh Start; ordinary Dashboard access is insufficient. Its **own continuation** has an additional fixed 30-minute deadline; `SESSION_LIFETIME` does not extend that deadline.
 
 Example for an eight-hour idle timeout:
 

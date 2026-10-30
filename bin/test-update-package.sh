@@ -117,11 +117,48 @@ EOF_ENV
     require "vendor/autoload.php";
     $app = require "bootstrap/app.php";
     $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-    App\Models\User::query()->create([
+    $schema = Illuminate\Support\Facades\Schema::class;
+    $roleAware = $schema::hasColumn("users", "role") && $schema::hasColumn("users", "access_enabled");
+    $accessMatrix = $roleAware && trim((string) file_get_contents("VERSION")) === "2.4.1";
+    if ($accessMatrix) {
+      // First seed a Viewer so the actual Owner is not identified by ID/order.
+      App\Models\User::query()->create([
+        "name" => "Update access Viewer", "email" => "update-viewer@example.test",
+        "password" => "CorrectHorse!234", "role" => "viewer", "access_enabled" => true,
+      ]);
+    }
+    $owner = App\Models\User::query()->create([
       "name" => "Gateway Admin",
       "email" => "admin@example.test",
       "password" => "CorrectHorse!234",
     ]);
+    if ($roleAware) {
+      // This fixture represents a real installed Owner, not the Viewer default
+      // of a plain User::create after migrate:fresh.
+      $fields = ["role" => "owner", "access_enabled" => true];
+      if ($schema::hasColumn("users", "target_scope_mode")) {
+        $fields["target_scope_mode"] = "all";
+      } elseif ($schema::hasColumn("users", "site_scope_mode")) {
+        $fields["site_scope_mode"] = "all";
+      }
+      $owner->forceFill($fields)->save();
+    }
+    if ($accessMatrix) {
+      foreach (["administrator", "operator"] as $role) {
+        App\Models\User::query()->create([
+          "name" => "Update access ".$role, "email" => "update-".$role."@example.test",
+          "password" => "CorrectHorse!234", "role" => $role, "access_enabled" => true,
+        ]);
+      }
+      App\Models\User::query()->create([
+        "name" => "Deleted update Owner", "email" => "update-deleted@example.test",
+        "password" => "CorrectHorse!234", "role" => "owner", "access_enabled" => true,
+      ]);
+      App\Models\User::query()->create([
+        "name" => "Disabled update Owner", "email" => "update-disabled@example.test",
+        "password" => "CorrectHorse!234", "role" => "owner", "access_enabled" => false,
+      ]);
+    }
   '
   printf '{"installed":true}\n' > storage/app/private/installed
   printf 'persistent-private-state\n' > storage/app/private/update-preserve-sentinel.txt
@@ -779,6 +816,146 @@ guest_code="$(curl -sS -c "$jar" -b "$jar" -o "$tmp/guest-update.html" -D "$tmp/
 grep -i '^Location: .*/admin/login' "$tmp/guest-update.headers" >/dev/null || { echo "Guest updater redirect did not target admin login." >&2; exit 1; }
 grep -i '^Set-Cookie:' "$tmp/guest-update.headers" >/dev/null || { echo "Guest updater redirect did not preserve the intended update session." >&2; exit 1; }
 
+# Current role-aware baseline exercises the actual temporary public entrypoint.
+# Older baselines retain their full successful-upgrade/recovery cases; repeating
+# this identical matrix on all of them adds no authorization coverage.
+if [[ "$old_version" == "2.4.1" ]]; then
+  authorization_started="$(date +%s)"
+  managed_user_before="$(sha256sum "$target/app/Models/User.php" | awk '{print $1}')"
+  fixture_update_cookie="$(php -r 'echo str_repeat("c", 64);')"
+
+  assert_update_not_started() {
+    [[ ! -e "$target/storage/app/private/update-state.json" \
+      && ! -e "$target/storage/framework/down" \
+      && ! -d "$target/storage/app/private/update-backups" ]] \
+      || { echo "Denied updater request created update/backup/maintenance state." >&2; exit 1; }
+    [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" \
+      && "$(sha256sum "$target/app/Models/User.php" | awk '{print $1}')" == "$managed_user_before" ]] \
+      || { echo "Denied updater request changed managed application files." >&2; exit 1; }
+  }
+
+  fixture_cookie_header() {
+    awk '
+      BEGIN { first=1 }
+      /^#/ && $0 !~ /^#HttpOnly_/ { next }
+      NF >= 7 {
+        if (!first) printf "; ";
+        printf "%s=%s", $6, $7;
+        first=0
+      }
+      END { printf "\n" }
+    ' "$1"
+  }
+
+  fixture_login() {
+    local email="$1" cookie_jar="$2" login_token
+    curl -fsS -c "$cookie_jar" -b "$cookie_jar" -H "$https_header" "$base_url/admin/login" > "$tmp/access-login.html"
+    login_token="$(grep -o 'name="_token" value="[^"]*"' "$tmp/access-login.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
+    [[ -n "$login_token" ]] || { echo "Access fixture login CSRF missing." >&2; exit 1; }
+    curl -sS -c "$cookie_jar" -b "$cookie_jar" -H "$https_header" \
+      --data-urlencode "_token=$login_token" --data-urlencode "email=$email" \
+      --data-urlencode 'password=CorrectHorse!234' "$base_url/admin/login" \
+      -o "$tmp/access-login-result.html" -D "$tmp/access-login-result.headers"
+    grep -E '^HTTP/[^ ]+ 302' "$tmp/access-login-result.headers" >/dev/null \
+      || { echo "Access fixture login did not return its normal redirect." >&2; exit 1; }
+  }
+
+  assert_no_update_cookie() {
+    if grep -i '^Set-Cookie: mcp_gateway_update_session=' "$1" >/dev/null; then
+      echo "Denied request issued an updater capability cookie." >&2
+      exit 1
+    fi
+  }
+
+  for role in administrator operator viewer; do
+    role_jar="$tmp/access-$role.cookies"
+    fixture_login "update-$role@example.test" "$role_jar"
+    dashboard_code="$(curl -sS -c "$role_jar" -b "$role_jar" -H "$https_header" \
+      -o "$tmp/access-dashboard.html" -w '%{http_code}' "$base_url/admin")"
+    [[ "$dashboard_code" == "200" ]] || { echo "$role fixture did not reproduce Dashboard access." >&2; exit 1; }
+    role_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/access-dashboard.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
+    [[ -n "$role_csrf" ]] || { echo "Access fixture session CSRF missing." >&2; exit 1; }
+    denied_code="$(curl -sS -c "$role_jar" -b "$role_jar" -H "$https_header" \
+      -D "$tmp/access-denied.headers" -o "$tmp/access-denied.html" -w '%{http_code}' "$base_url/update/")"
+    [[ "$denied_code" == "403" ]] || { echo "$role was allowed to inspect the updater." >&2; exit 1; }
+    assert_no_update_cookie "$tmp/access-denied.headers"
+    if grep -F 'Installed:</strong>' "$tmp/access-denied.html" >/dev/null; then
+      echo "Denied updater page exposed its preflight payload." >&2; exit 1
+    fi
+    role_cookies="$(fixture_cookie_header "$role_jar")"
+    denied_code="$(curl -sS -H "$https_header" -H "Cookie: $role_cookies; mcp_gateway_update_session=$fixture_update_cookie" \
+      --data-urlencode "_token=$role_csrf" --data-urlencode 'action=start' \
+      -D "$tmp/access-denied.headers" -o "$tmp/access-denied-start.html" -w '%{http_code}' "$base_url/update/")"
+    [[ "$denied_code" == "403" ]] || { echo "$role was allowed to start the updater." >&2; exit 1; }
+    assert_no_update_cookie "$tmp/access-denied.headers"
+    assert_update_not_started
+  done
+
+  fixture_login "update-disabled@example.test" "$tmp/access-disabled.cookies"
+  disabled_code="$(curl -sS -c "$tmp/access-disabled.cookies" -b "$tmp/access-disabled.cookies" -H "$https_header" \
+    -D "$tmp/access-denied.headers" -o "$tmp/access-disabled.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$disabled_code" == "302" ]] || { echo "Disabled Owner acquired updater access." >&2; exit 1; }
+  assert_no_update_cookie "$tmp/access-denied.headers"
+  assert_update_not_started
+
+  for change in demote disable; do
+    owner_jar="$tmp/access-owner-$change.cookies"
+    fixture_login "admin@example.test" "$owner_jar"
+    owner_code="$(curl -sS -c "$owner_jar" -b "$owner_jar" -H "$https_header" \
+      -o "$tmp/access-owner.html" -w '%{http_code}' "$base_url/update/")"
+    [[ "$owner_code" == "200" ]] || { echo "Enabled non-first Owner was denied updater preflight." >&2; exit 1; }
+    owner_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/access-owner.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
+    owner_cookies="$(fixture_cookie_header "$owner_jar")"
+    (
+      cd "$target"
+      UPDATE_ACCESS_CHANGE="$change" php -r '
+        require "vendor/autoload.php";
+        $app=require "bootstrap/app.php";
+        $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+        $owner=Illuminate\Support\Facades\DB::table("users")->where("email","admin@example.test");
+        if ((int) $owner->value("id") <= 1) { throw new RuntimeException("Owner fixture must not be first."); }
+        $owner->update(getenv("UPDATE_ACCESS_CHANGE")==="demote" ? ["role"=>"operator"] : ["access_enabled"=>false]);
+      '
+    )
+    stale_code="$(curl -sS -H "$https_header" -H "Cookie: $owner_cookies" \
+      --data-urlencode "_token=$owner_csrf" --data-urlencode 'action=start' \
+      -D "$tmp/access-denied.headers" -o "$tmp/access-stale.html" -w '%{http_code}' "$base_url/update/")"
+    expected_code=403
+    [[ "$change" != "disable" ]] || expected_code=302
+    [[ "$stale_code" == "$expected_code" ]] || { echo "Stale $change Owner could start an update." >&2; exit 1; }
+    assert_no_update_cookie "$tmp/access-denied.headers"
+    assert_update_not_started
+    (
+      cd "$target"
+      php -r '
+        require "vendor/autoload.php";
+        $app=require "bootstrap/app.php";
+        $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+        Illuminate\Support\Facades\DB::table("users")->where("email","admin@example.test")
+          ->update(["role"=>"owner","access_enabled"=>true]);
+      '
+    )
+  done
+
+  fixture_login "update-deleted@example.test" "$tmp/access-deleted.cookies"
+  (
+    cd "$target"
+    php -r '
+      require "vendor/autoload.php";
+      $app=require "bootstrap/app.php";
+      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+      App\Models\User::query()->where("email","update-deleted@example.test")->delete();
+    '
+  )
+  deleted_code="$(curl -sS -c "$tmp/access-deleted.cookies" -b "$tmp/access-deleted.cookies" -H "$https_header" \
+    -D "$tmp/access-denied.headers" -o "$tmp/access-deleted.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$deleted_code" == "302" ]] || { echo "Deleted identity acquired updater access." >&2; exit 1; }
+  assert_no_update_cookie "$tmp/access-denied.headers"
+  assert_update_not_started
+  authorization_elapsed="$(( $(date +%s) - authorization_started ))"
+  echo "Current-baseline updater Owner/role/stale-identity HTTP boundary: PASS ($authorization_elapsed s)."
+fi
+
 curl -fsS -c "$jar" -b "$jar" -H "$https_header" "$base_url/admin/login" > "$tmp/login.html"
 login_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/login.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
 [[ -n "$login_csrf" ]] || { echo "Could not extract admin login CSRF token." >&2; exit 1; }
@@ -791,7 +968,14 @@ curl -fsS -L -D "$tmp/login-flow.headers" -c "$jar" -b "$jar" -H "$https_header"
   --data-urlencode 'email=admin@example.test' \
   --data-urlencode 'password=CorrectHorse!234' \
   "$base_url/admin/login" > "$tmp/update.html"
-grep -F "Installed:</strong> $old_version" "$tmp/update.html" >/dev/null || { cat "$tmp/update.html" >&2; echo "Administrator login did not return directly to the browser updater." >&2; exit 1; }
+if [[ "$old_version" == "2.4.1" ]]; then
+  # The installed2.4.1 login selector predates the exact updater intention fix.
+  # Its known Dashboard fallback requires one explicit GET, never another POST.
+  grep -F "Gateway overview" "$tmp/update.html" >/dev/null || { echo "Expected known2.4.1 Dashboard login fallback." >&2; exit 1; }
+  curl -fsS -D "$tmp/reopen-update.headers" -c "$jar" -b "$jar" -H "$https_header" "$base_url/update/" > "$tmp/update.html"
+  cat "$tmp/reopen-update.headers" >> "$tmp/login-flow.headers"
+fi
+grep -F "Installed:</strong> $old_version" "$tmp/update.html" >/dev/null || { cat "$tmp/update.html" >&2; echo "Owner login did not reach the browser updater." >&2; exit 1; }
 grep -F "Target:</strong> $new_version" "$tmp/update.html" >/dev/null || { echo "Browser updater did not show the target version after login." >&2; exit 1; }
 
 # Browser consent is a fresh operator action tied to the exact uploaded
@@ -828,6 +1012,14 @@ if [[ -n "$admin_cookie_header" ]]; then
   cookie_header="$admin_cookie_header; mcp_gateway_update_session=$update_cookie"
 else
   cookie_header="mcp_gateway_update_session=$update_cookie"
+fi
+
+if [[ "$old_version" == "2.4.1" ]]; then
+  invalid_csrf_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
+    --data-urlencode '_token=invalid-owner-csrf' --data-urlencode 'action=start' \
+    -o "$tmp/invalid-owner-csrf.html" -w '%{http_code}' "$base_url/update/")"
+  [[ "$invalid_csrf_code" == "419" ]] || { echo "Owner Start accepted invalid CSRF." >&2; exit 1; }
+  assert_update_not_started
 fi
 
 if [[ "$old_version" == "1.2.1" ]]; then

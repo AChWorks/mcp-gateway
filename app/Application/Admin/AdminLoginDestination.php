@@ -2,6 +2,7 @@
 
 namespace App\Application\Admin;
 
+use App\Domain\Access\GatewayRole;
 use App\Models\User;
 use Illuminate\Http\Request;
 
@@ -13,6 +14,12 @@ final readonly class AdminLoginDestination
     {
         // Consume once just like redirect()->intended(), without retaining stale destinations.
         $intended = $this->sameOriginIntended($request->session()->pull('url.intended'), $request);
+        $path = $intended === null ? null : parse_url($intended, PHP_URL_PATH);
+        if ($path === '/update/') {
+            return $user->access_enabled && $user->getAttribute('role') === GatewayRole::Owner
+                ? $request->getSchemeAndHttpHost().'/update/'
+                : $this->navigation->landingUrl($user);
+        }
         if ($intended !== null
             && ! $this->navigation->isDeniedIndexPath($user, (string) parse_url($intended, PHP_URL_PATH))) {
             return $intended;
@@ -49,6 +56,9 @@ final readonly class AdminLoginDestination
         }
 
         $path = $parts['path'] ?? '';
+        if ($path === '/update/') {
+            return ! isset($parts['query']) && ! isset($parts['fragment']) ? $intended : null;
+        }
         if ($path !== '/oauth/authorize'
             && ($path !== '/admin' && ! str_starts_with($path, '/admin/'))) {
             return null;
