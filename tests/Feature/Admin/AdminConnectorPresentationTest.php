@@ -103,6 +103,12 @@ final class AdminConnectorPresentationTest extends TestCase
         self::assertSame([], $queries);
         self::assertNull($rows['ssh-no-projection']['identity']);
         self::assertSame('Direct SSH', $rows['ssh-no-projection']['label']);
+
+        Http::preventStrayRequests();
+        $this->actingAs($this->owner())->get('/admin/targets')->assertOk()
+            ->assertSee('No recorded SSH connection verification')
+            ->assertDontSee('SSH connection verification recorded; not a live check');
+        Http::assertNothingSent();
     }
 
     public function test_a_third_synthetic_presentation_renders_the_shared_page_without_registering_a_connector(): void
