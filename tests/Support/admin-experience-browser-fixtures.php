@@ -5,10 +5,10 @@
  * loopback development router. No production route or remote operation.
  */
 use App\Application\Targets\SshTargetRegistration;
-use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -34,9 +34,22 @@ Route::middleware('web')->get('/__browser__/experience/{role}', static function 
     ]);
 
     if (! Target::query()->where('target_id', 'ui-wp-connected')->exists()) {
-        $wp = app(WpAiBridgeTargetRegistration::class);
-        $connected = $wp->register('ui-wp-connected', 'UI Editorial WordPress', 'https://provider.browser.test');
-        $connected->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $connected = Target::query()->create([
+            'target_id' => 'ui-wp-connected', 'display_name' => 'UI Editorial WordPress',
+            'connector_type' => 'wp_ai_bridge', 'connection_state' => TargetConnectionState::Connected,
+        ]);
+        // Synthetic local metadata uses its own endpoint identity. It does not
+        // discover/authenticate a provider or reuse the OAuth-race Target.
+        $origin = 'https://ui-provider.browser.test';
+        WpAiBridgeTargetConfig::query()->create([
+            'target_record_id' => $connected->getKey(), 'base_url' => $origin,
+            'base_url_hash' => hash('sha256', $origin),
+            'mcp_resource_url' => $origin.'/wp-json/wp-ai-bridge/v1/mcp',
+            'oauth_issuer_url' => $origin,
+            'oauth_authorization_url' => $origin.'/wp-ai-bridge/oauth/authorize',
+            'oauth_token_url' => $origin.'/wp-json/wp-ai-bridge/v1/oauth/token',
+            'oauth_revocation_url' => $origin.'/wp-json/wp-ai-bridge/v1/oauth/revoke',
+        ]);
         foreach ([
             ['ui-wp-pending', 'UI pending authorization', TargetConnectionState::Pending],
             ['ui-wp-disconnected', 'UI unconnected service', TargetConnectionState::Disconnected],
