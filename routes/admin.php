@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\ActivityController;
+use App\Http\Controllers\Admin\AdministrationAccessController;
 use App\Http\Controllers\Admin\AuthenticatedSessionController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\OAuthClientAuthorizationsController;
@@ -29,6 +30,7 @@ Route::post('/admin/login', [AuthenticatedSessionController::class, 'store'])
 
 Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-mutation'])->prefix('admin')->name('admin.')->group(function (): void {
     Route::get('/', DashboardController::class)->name('dashboard');
+    Route::get('/access', AdministrationAccessController::class)->name('access');
 
     Route::get('/targets', [TargetController::class, 'index'])->name('targets.index');
     Route::get('/targets/create', [TargetController::class, 'create'])->name('targets.create');

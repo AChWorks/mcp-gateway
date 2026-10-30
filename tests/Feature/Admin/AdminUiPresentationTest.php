@@ -340,16 +340,105 @@ final class AdminUiPresentationTest extends TestCase
         $css = file_get_contents(public_path('css/admin.css'));
         self::assertIsString($css);
         self::assertStringContainsString('--ui-panel-stack-gap: 1.25rem;', $css);
-        self::assertMatchesRegularExpression(
-            '/\.main-content\s*>\s*\.panel\s*\+\s*\.panel\s*\{\s*margin-block-start:\s*var\(--ui-panel-stack-gap\);\s*\}/',
+        self::assertStringContainsString(
+            '.main-content > :is(.panel, .content-grid, .content-stack) + :is(.panel, .content-grid, .content-stack)',
             $css,
         );
+        self::assertStringContainsString('margin-block-start: var(--ui-panel-stack-gap);', $css);
         self::assertStringNotContainsString('.ai-client-authorizations {', $css);
         self::assertStringContainsString('.client-grant-revoke-form {', $css);
 
         $targetEditor = file_get_contents(resource_path('views/admin/targets/edit.blade.php'));
         self::assertIsString($targetEditor);
         self::assertSame(2, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
+    }
+
+    public function test_form_focused_pages_share_one_width_for_heading_panels_and_forms(): void
+    {
+        $owner = $this->owner();
+        $managedUser = User::query()->create([
+            'name' => 'Form layout operator',
+            'email' => 'form-layout@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+            'access_enabled' => true,
+        ]);
+        $target = Target::query()->create([
+            'target_id' => 'form-layout-wp',
+            'display_name' => 'Form layout WordPress',
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+        $group = TargetGroup::query()->create(['name' => 'Form layout group']);
+        $group->users()->attach($managedUser);
+        $group->targets()->attach($target);
+        $this->actingAs($owner);
+
+        $destinations = [
+            route('admin.users.create'),
+            route('admin.users.edit', ['user' => $managedUser->id]),
+            route('admin.users.publishing.index', ['user' => $managedUser->id]),
+            route('admin.users.targets.edit', ['user' => $managedUser->id, 'target' => $target->target_id]),
+            route('admin.target-groups.create'),
+            route('admin.target-groups.edit', ['targetGroup' => $group->id]),
+            route('admin.target-groups.users.edit', ['targetGroup' => $group->id, 'user' => $managedUser->id]),
+            route('admin.target-groups.targets.edit', ['targetGroup' => $group->id, 'target' => $target->target_id]),
+            route('admin.targets.create', ['connector_type' => 'wp_ai_bridge']),
+            route('admin.targets.edit', ['target' => $target->target_id]),
+        ];
+        foreach ($destinations as $url) {
+            $html = $this->get($url)->assertOk()->getContent();
+            $document = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($document);
+            $main = '//main[contains(concat(" ", normalize-space(@class), " "), " form-page ")]';
+
+            self::assertSame(1, (int) $xpath->evaluate('count('.$main.')'), $url);
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count('.$main.'/div[contains(concat(" ", normalize-space(@class), " "), " page-heading ")])',
+            ), $url);
+            self::assertSame(0, (int) $xpath->evaluate(
+                'count('.$main.'//form[contains(concat(" ", normalize-space(@class), " "), " form-width ")])',
+            ), $url);
+            self::assertGreaterThan(0, (int) $xpath->evaluate(
+                'count('.$main.'//form[@method="post"]//input[@name="_token"])',
+            ), $url);
+        }
+
+        foreach (['/admin', '/admin/users', '/admin/target-groups', '/admin/targets', '/admin/oauth-clients'] as $url) {
+            $this->get($url)->assertOk()->assertDontSee('main-content form-page', false);
+        }
+
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertStringContainsString('.main-content.form-page {', $css);
+        self::assertStringContainsString('max-width: 64rem;', $css);
+        self::assertStringContainsString('.form-page .form-stack > .field {', $css);
+        self::assertStringNotContainsString('.form-width {', $css);
+        self::assertStringNotContainsString('max-width: 54rem;', $css);
+    }
+
+    public function test_shared_permission_badges_fill_available_width_and_table_notes_use_readable_flow(): void
+    {
+        $this->actingAs($this->owner())->get('/admin/users/create')
+            ->assertOk()
+            ->assertSee('Inspect WordPress abilities')
+            ->assertSee(GatewayPermission::WordpressAbilitiesExecuteReadonly->title());
+
+        $html = $this->get('/admin/oauth-clients')->assertOk()->getContent();
+        self::assertMatchesRegularExpression(
+            '/<p class="panel-note">Configured profiles always appear above\./',
+            $html,
+        );
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertMatchesRegularExpression('/\.permission-copy\s*\{\s*flex:\s*1 1 0;/s', $css);
+        self::assertMatchesRegularExpression('/\.permission-heading\s*\{[^}]*min-inline-size:\s*0;[^}]*flex-wrap:\s*wrap;/s', $css);
+        self::assertMatchesRegularExpression('/\.permission-scope\s*\{[^}]*margin-inline-start:\s*auto;[^}]*max-inline-size:\s*100%;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s', $css);
+        self::assertMatchesRegularExpression('/\.panel-note\s*\{[^}]*columns:\s*34ch 3;/s', $css);
     }
 
     public function test_shared_admin_headings_wrap_valid_long_target_names_and_tables_follow_direction(): void
@@ -813,6 +902,69 @@ final class AdminUiPresentationTest extends TestCase
         $filtered = $this->get('/admin/oauth-clients?profile=dcr_'.str_pad('0', 32, '0', STR_PAD_LEFT))
             ->assertOk();
         self::assertSame(1, substr_count($filtered->getContent(), '<code>dcr_client_secret_post</code>'));
+    }
+
+    public function test_access_recovery_pages_keep_the_shared_shell_and_native_sign_out(): void
+    {
+        $viewer = User::query()->create([
+            'name' => 'Restricted fixture', 'email' => 'restricted-presentation@example.test',
+            'password' => 'CorrectHorse!234', 'role' => GatewayRole::Viewer,
+            'target_scope_mode' => TargetScopeMode::All, 'access_enabled' => true,
+        ]);
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $viewer->id, 'permission' => GatewayPermission::DashboardView->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $denied = $this->actingAs($viewer)->get('/admin')->assertForbidden()->getContent();
+
+        foreach ([GatewayPermission::TargetsView, GatewayPermission::ActivityView, GatewayPermission::GatewayConnectionView] as $permission) {
+            DB::table('user_permission_denials')->insert([
+                'user_id' => $viewer->id, 'permission' => $permission->value,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+        $noAccess = $this->get('/admin/access')->assertOk()->getContent();
+
+        foreach ([[$denied, 'administration-denied-title'], [$noAccess, 'administration-access-title']] as [$html, $titleId]) {
+            $document = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($document);
+
+            self::assertSame(1, (int) $xpath->evaluate('count(//a[@class="skip-link"][@href="#main-content"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//main[@id="main-content"][@tabindex="-1"]//h1[@id="'.$titleId.'"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//main//section[@aria-labelledby="'.$titleId.'"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//main//form[@method="post"][@action="'.route('admin.logout').'"]//input[@name="_token"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//main//form[@action="'.route('admin.logout').'"]//button[@type="submit"])'));
+        }
+    }
+
+    public function test_permission_options_visibly_name_denial_and_user_creation_keeps_primary_fields_outside_advanced_restrictions(): void
+    {
+        $html = $this->actingAs($this->owner())->get('/admin/users/create')->assertOk()->getContent();
+        $dom = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($dom);
+        $options = $xpath->query('//label[contains(concat(" ", normalize-space(@class), " "), " permission-option ")]');
+        self::assertGreaterThan(10, $options->length);
+        foreach ($options as $option) {
+            $labels = $xpath->query('.//span[contains(concat(" ", normalize-space(@class), " "), " permission-label ")]', $option);
+            self::assertSame(1, $labels->length);
+            self::assertStringStartsWith('Deny ', trim($labels->item(0)->textContent));
+            $checkbox = $xpath->query('.//input[@name="denied_permissions[]"]', $option)->item(0);
+            self::assertStringStartsWith('Deny ', $checkbox->getAttribute('aria-label'));
+        }
+        foreach (['name', 'email', 'role', 'target_scope_mode'] as $field) {
+            self::assertSame(0, (int) $xpath->evaluate('count(//*[@id="'.$field.'"]/ancestor::details)'));
+        }
+        self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"]/ancestor::details/summary[contains(., "checked means blocked")])'));
+        self::assertSame(3, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"][@checked][starts-with(@value,"ssh.")])'));
+        self::assertSame(0, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"][@value="dashboard.view"][@checked])'));
     }
 
     private function owner(): User

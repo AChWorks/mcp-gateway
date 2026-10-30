@@ -74,6 +74,7 @@ final class TargetGroupController extends Controller
             'sshPermissionsEditable' => true,
             'deniedPermissions' => $denials,
             'denialRevision' => AuthorizationRevision::groupDenials($denials),
+            'sshAccessImpact' => $groups->hasSshAccessImpact($targetGroup),
         ]);
     }
 

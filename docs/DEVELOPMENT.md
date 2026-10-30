@@ -144,7 +144,10 @@ The administration panel uses one small server-rendered visual system in `public
 Use these shared conventions:
 
 - design values belong in the existing `--ui-*` tokens; avoid one-off colors, borders, radii, focus treatments, or control heights when an existing token fits;
-- top-level sibling `.panel` cards must be separated by `.main-content > .panel + .panel` using `--ui-panel-stack-gap`, including the Edit Target and AI clients pages; do not add per-page margin fixes to make adjacent cards appear separate;
+- adjacent top-level panels and content grids/stacks share `.main-content > :is(.panel, .content-grid, .content-stack) + :is(.panel, .content-grid, .content-stack)` and `--ui-panel-stack-gap`; this covers panel-to-grid transitions as well as panel-to-panel. Use `.content-stack` for intentionally stacked panel groups, without extra child margins;
+- form-focused pages declare `@section('form-page', '1')`. The layout applies `.form-page` to the shared main, bounding its heading/actions/cards together. Let the form fill that panel; bound standalone fields with the shared rule rather than capping an entire form inside a full-width panel. Add/Edit Target and access/grant forms use this same owner; wide inventory tables do not;
+- permission copy grows across the checkbox card, and scope badges use logical trailing alignment and safe wrapping regardless of title/help length. Keep the full label hit target and existing denial semantics;
+- use `.panel-note` for readable multi-column policy notes accompanying wide tables; it chooses up to three columns from available width while preserving native text order. Use ordinary `.reading-width` for standalone prose;
 - normal two-column form rows use `.form-grid`; `.content-grid` is reserved for intentionally asymmetric content/aside layouts;
 - text/select controls belong in `.field`; selects use the shared custom appearance and must not rely on the browser-default arrow/chrome;
 - boolean choices use the shared `.checkbox-option` treatment so the full label is the click target and checked/focus/disabled states remain consistent;

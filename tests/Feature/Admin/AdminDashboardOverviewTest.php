@@ -159,6 +159,52 @@ final class AdminDashboardOverviewTest extends TestCase
             ->assertDontSee('sample-operation')->assertDontSee('recent-activity-title', false);
     }
 
+    public function test_recent_activity_shows_the_ten_newest_permitted_entries_without_out_of_scope_rows_consuming_the_limit(): void
+    {
+        $viewer = $this->user(GatewayRole::Viewer);
+        $visible = $this->target('activity-visible', TargetConnectionState::Connected);
+        $hidden = $this->target('activity-hidden', TargetConnectionState::Connected);
+        $activityDenied = $this->target('activity-denied', TargetConnectionState::Connected);
+        $this->allow($viewer, $visible);
+        $this->allow($viewer, $activityDenied);
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $viewer->getKey(),
+            'target_record_id' => $activityDenied->getKey(),
+            'permission' => 'activity.view',
+        ]);
+
+        $recordedAt = now()->startOfSecond();
+        $recorder = app(ActivityRecorder::class);
+        for ($i = 0; $i < 13; $i++) {
+            $reference = (string) Str::uuid();
+            $recorder->recordRequired(
+                $reference,
+                sprintf('visible-activity-%02d', $i),
+                $i === 12 ? 'unknown' : 'success',
+                $visible,
+            );
+            DB::table('activity_events')->where('correlation_id', $reference)
+                ->update(['created_at' => $recordedAt->copy()->addSeconds($i)]);
+        }
+        foreach ([$hidden, $activityDenied] as $i => $target) {
+            $reference = (string) Str::uuid();
+            $recorder->recordRequired($reference, 'hidden-newer-activity-'.$i, 'success', $target);
+            DB::table('activity_events')->where('correlation_id', $reference)
+                ->update(['created_at' => $recordedAt->copy()->addMinutes($i + 1)]);
+        }
+
+        $response = $this->actingAs($viewer)->get('/admin')->assertOk();
+        $operations = array_column($response->viewData('recentActivity'), 'operation');
+        self::assertSame(array_map(
+            static fn (int $i): string => sprintf('visible-activity-%02d', $i),
+            range(12, 3),
+        ), $operations);
+        $response->assertSeeInOrder($operations)
+            ->assertDontSee('visible-activity-02')
+            ->assertDontSee('hidden-newer-activity')
+            ->assertSee('Outcome unknown');
+    }
+
     public function test_overview_has_constant_query_count_and_bounded_review_list_at_large_fleet_sizes(): void
     {
         Http::preventStrayRequests();

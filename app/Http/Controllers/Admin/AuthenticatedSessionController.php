@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Application\Admin\AdminLoginDestination;
 use App\Models\User;
 use App\Support\AdminLoginIdentity;
 use App\Support\CredentialAttemptLock;
@@ -20,7 +21,7 @@ final readonly class AuthenticatedSessionController
 
     private const IDENTITY_FAILURE_WINDOW_SECONDS = 900;
 
-    public function store(Request $request, CredentialAttemptLock $attemptLock, AdminLoginIdentity $loginIdentity): RedirectResponse
+    public function store(Request $request, CredentialAttemptLock $attemptLock, AdminLoginIdentity $loginIdentity, AdminLoginDestination $destination): RedirectResponse
     {
         if (is_string($request->input('email'))) {
             $request->merge(['email' => Str::lower(trim((string) $request->input('email')))]);
@@ -35,7 +36,7 @@ final readonly class AuthenticatedSessionController
         // equivalence class, whether or not that email belongs to a User.
         $failureKey = $loginIdentity->failureKey($credentials['email']);
 
-        return $attemptLock->run($failureKey, function () use ($credentials, $request, $failureKey): RedirectResponse {
+        return $attemptLock->run($failureKey, function () use ($credentials, $request, $failureKey, $destination): RedirectResponse {
             if (RateLimiter::tooManyAttempts($failureKey, self::IDENTITY_FAILURE_LIMIT)) {
                 throw $this->rateLimited(RateLimiter::availableIn($failureKey));
             }
@@ -57,7 +58,7 @@ final readonly class AuthenticatedSessionController
             $request->session()->regenerate();
             RateLimiter::clear($failureKey);
 
-            return redirect()->intended(route('admin.dashboard'));
+            return redirect()->to($destination->afterAuthentication($request, $user));
         });
     }
 

@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Add Target'))
+@section('form-page', '1')
 
 @section('content')
 @php

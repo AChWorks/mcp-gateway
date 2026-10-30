@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Add target group'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -13,7 +14,7 @@
 </div>
 
 <section class="panel panel-wide">
-    <form class="form-stack form-width" method="post" action="{{ route('admin.target-groups.store') }}">
+    <form class="form-stack" method="post" action="{{ route('admin.target-groups.store') }}">
         @csrf
 
         <div class="field">

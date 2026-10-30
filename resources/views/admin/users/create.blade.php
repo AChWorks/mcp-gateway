@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Add user'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -13,7 +14,7 @@
 </div>
 
 <section class="panel panel-wide">
-    <form class="form-stack form-width" method="post" action="{{ route('admin.users.store') }}">
+    <form class="form-stack" method="post" action="{{ route('admin.users.store') }}">
         @csrf
 
         <div class="form-grid">
@@ -83,6 +84,9 @@
             <p class="field-help">{{ __('This Gateway-wide connection gate is independent of the account role and human Admin/Target permissions. It never adds a Target or action permission. Disabling revokes existing AI client consents/tokens; re-enabling requires fresh client authorization. New users start with AI access disabled; existing users retain their prior state after upgrade.') }}</p>
         </fieldset>
 
+        <details class="permission-category-collapsible" @if ($errors->hasAny(['denied_permissions', 'confirm_ssh_permission_changes']) || old('denied_permissions') !== null) open @endif>
+            <summary>{{ __('Advanced permission restrictions — checked means blocked') }}</summary>
+            <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
             <p class="field-help">{{ __('Checked means DENY. New non-owner users start with all SSH tools blocked. Uncheck an SSH denial only to intentionally authorize that tool on explicitly Selected Targets, with Owner confirmation. This does not add Targets to the account; assign Targets or Target Groups after creation.') }}</p>
@@ -100,6 +104,10 @@
             <span>{{ __('Owner confirmation for SSH grants: I reviewed each SSH denial checkbox. Unchecking a denial may enable remote OS commands or file access on an explicitly Selected Target; it does not sandbox remote sudo/root.') }}</span>
         </label>
         @error('confirm_ssh_permission_changes')<p class="field-error" id="confirm_ssh_permission_changes-error" role="alert">{{ $message }}</p>@enderror
+
+            </div>
+        </details>
+        <p class="field-help">{{ __('Restriction checkboxes block the named capability. Leave them unchecked to keep the role ceiling; new accounts still start with SSH blocked unless explicitly reviewed.') }}</p>
 
         <div class="field">
             <label for="current_password">{{ __('Your current password') }}</label>

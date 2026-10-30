@@ -345,8 +345,39 @@ code {
     max-width: 70ch;
 }
 
-.form-width {
-    width: min(100%, 46rem);
+/* Wide table footnotes can use the panel without creating an unreadable
+   single line or a stranded narrow paragraph. Reading order stays native. */
+.panel-note {
+    margin-block: 1.25rem 0;
+    columns: 34ch 3;
+    column-gap: 2rem;
+    color: var(--ui-muted);
+    orphans: 2;
+    widows: 2;
+}
+
+/* Form-focused pages own the width of their heading, actions and panels.
+   Bound a standalone field without shrinking the entire form inside a card. */
+.main-content.form-page {
+    max-width: 64rem;
+    margin-inline: 0;
+}
+
+.form-page .form-stack > .field {
+    max-inline-size: 38rem;
+}
+
+.form-page .form-stack > .button {
+    justify-self: start;
+}
+
+.content-stack {
+    display: grid;
+    gap: var(--ui-panel-stack-gap);
+}
+
+.content-stack > .panel {
+    margin-block: 0;
 }
 
 .section-nav {
@@ -479,7 +510,7 @@ code {
 
 /* Independent top-level Admin panels need one shared vertical rhythm.
    Fix the layout contract here, not with page-specific card margins. */
-.main-content > .panel + .panel {
+.main-content > :is(.panel, .content-grid, .content-stack) + :is(.panel, .content-grid, .content-stack) {
     margin-block-start: var(--ui-panel-stack-gap);
 }
 
@@ -819,13 +850,16 @@ input[type="radio"]:checked::before {
 }
 
 .permission-copy {
+    flex: 1 1 0;
     display: grid;
     gap: 0.12rem;
     min-width: 0;
 }
 
 .permission-heading {
+    min-inline-size: 0;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 0.65rem;
@@ -833,10 +867,16 @@ input[type="radio"]:checked::before {
 
 .permission-label {
     font-weight: 700;
+    overflow-wrap: anywhere;
 }
 
-.permission-scope {
+.permission-option .permission-scope {
     flex: 0 0 auto;
+    margin-inline-start: auto;
+    max-inline-size: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: end;
     min-height: 1.45rem;
     padding: 0.12rem 0.45rem;
     font-size: 0.72rem;
@@ -856,6 +896,7 @@ input[type="radio"]:checked::before {
 }
 
 .permission-option {
+    min-inline-size: 0;
     align-items: flex-start;
 }
 
@@ -1239,10 +1280,6 @@ td input[type="checkbox"] {
 }
 
 /* Connector enrollment: one form, one active adapter, shared control styling. */
-.target-enrollment {
-    max-width: 54rem;
-}
-
 .target-form-section {
     display: grid;
     gap: 1rem;

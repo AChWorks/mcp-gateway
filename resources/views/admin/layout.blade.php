@@ -36,7 +36,7 @@
     @auth
         <aside class="admin-sidebar" aria-label="{{ __('Gateway administration') }}">
             <div class="sidebar-heading">
-                <a class="brand" href="{{ route('admin.dashboard') }}">
+                <a class="brand" href="{{ app(\App\Application\Admin\AdminNavigation::class)->landingUrl(auth()->user()) }}">
                     <span class="brand-mark" aria-hidden="true">M</span>
                     <span>{{ __('MCP Gateway') }}<small>{{ __('Administration') }}</small></span>
                 </a>
@@ -71,7 +71,7 @@
         </header>
 
         <p id="admin-navigation-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-        <main id="main-content" class="shell main-content" tabindex="-1">
+        <main id="main-content" @class(['shell', 'main-content', 'form-page' => $__env->hasSection('form-page')]) tabindex="-1">
             @if (session('status'))
                 <div class="alert alert-success" role="status">{{ session('status') }}</div>
             @endif

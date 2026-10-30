@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Edit target group'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -12,9 +13,9 @@
     <a href="{{ route('admin.target-groups.index') }}">{{ __('Back to target groups') }}</a>
 </div>
 
-<div class="content-grid">
+<div class="content-stack">
     <section class="panel panel-wide">
-        <form class="form-stack form-width" method="post" action="{{ route('admin.target-groups.update', ['targetGroup' => $targetGroup->id]) }}">
+        <form class="form-stack" method="post" action="{{ route('admin.target-groups.update', ['targetGroup' => $targetGroup->id]) }}">
             @csrf
             @method('PUT')
             @php
@@ -74,15 +75,20 @@
     <section class="panel panel-danger" aria-labelledby="delete-target-group-title">
         <div class="eyebrow">{{ __('Danger zone') }}</div>
         <h2 id="delete-target-group-title">{{ __('Delete target group') }}</h2>
-        <p>{{ __('Deleting this group removes only its group memberships and group denials. Users, targets, and direct per-target rules remain intact. Removing SSH group denials can restore previously authorized SSH commands and file access through other memberships.') }}</p>
-        <form class="form-stack form-width" method="post" action="{{ route('admin.target-groups.destroy', ['targetGroup' => $targetGroup->id]) }}">
+        <p>{{ __('Deleting this group removes only its group memberships and group denials. Users, targets, and direct per-target rules remain intact.') }}
+            @if ($sshAccessImpact)
+                {{ __('Removing SSH group denials can restore previously authorized SSH commands and file access through other memberships.') }}
+            @endif</p>
+        <form class="form-stack" method="post" action="{{ route('admin.target-groups.destroy', ['targetGroup' => $targetGroup->id]) }}">
             @csrf
             @method('DELETE')
-            <label class="checkbox-option" for="confirm_ssh_group_delete">
-                <input type="checkbox" id="confirm_ssh_group_delete" name="confirm_ssh_group_changes" value="1" @error('confirm_ssh_group_changes') aria-invalid="true" aria-describedby="confirm_ssh_group_delete-error" @enderror>
-                <span>{{ __('I confirm that deleting this group may remove SSH Target reachability or lift SSH denials for other already-authorized memberships.') }}</span>
-            </label>
-            @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_delete-error" role="alert">{{ $message }}</p>@enderror
+            @if ($sshAccessImpact)
+                <label class="checkbox-option" for="confirm_ssh_group_delete">
+                    <input type="checkbox" id="confirm_ssh_group_delete" name="confirm_ssh_group_changes" value="1" @error('confirm_ssh_group_changes') aria-invalid="true" aria-describedby="confirm_ssh_group_delete-error" @enderror>
+                    <span>{{ __('I confirm that deleting this group may remove SSH Target reachability or lift SSH denials for other already-authorized memberships.') }}</span>
+                </label>
+                @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_delete-error" role="alert">{{ $message }}</p>@enderror
+            @endif
             <div class="field">
                 <label for="delete_current_password">{{ __('Your current password') }}</label>
                 <input id="delete_current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="delete_current_password-error" @enderror>

@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __('Edit target access'))
+@section('form-page', '1')
 
 @section('content')
 <div class="page-heading">
@@ -16,7 +17,7 @@
     @if ($isOwner)
         <div class="alert alert-success" role="status">{{ __('Owners always retain unrestricted target access for recovery. Change the role first if this account should accept restrictions.') }}</div>
     @else
-        <form class="form-stack form-width" method="post" action="{{ route('admin.users.targets.update', ['user' => $managedUser->id, 'target' => $target->target_id]) }}">
+        <form class="form-stack" method="post" action="{{ route('admin.users.targets.update', ['user' => $managedUser->id, 'target' => $target->target_id]) }}">
             @csrf
             @method('PUT')
             @php

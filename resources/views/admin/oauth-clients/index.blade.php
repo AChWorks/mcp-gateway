@@ -49,7 +49,7 @@
     <nav class="pagination" aria-label="{{ __('DCR client profile pages') }}">
         {{ $dcrPage->links() }}
     </nav>
-    <p class="muted reading-width">{{ __('Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record. Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure. The administrator CLI can explicitly disable a DCR client and retire its unused registration after consent revocation. Retirement frees one slot without deleting identity history or restoring credentials; it cannot be reversed.') }}</p>
+    <p class="panel-note">{{ __('Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record. Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure. The administrator CLI can explicitly disable a DCR client and retire its unused registration after consent revocation. Retirement frees one slot without deleting identity history or restoring credentials; it cannot be reversed.') }}</p>
 </section>
 
 <section class="panel panel-wide ai-client-authorizations">
