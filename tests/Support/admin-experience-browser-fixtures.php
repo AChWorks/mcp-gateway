@@ -43,10 +43,12 @@ Route::middleware('web')->get('/__browser__/experience/{role}', static function 
             ['ui-wp-reconnect', 'UI WordPress reconnect', TargetConnectionState::ReconnectRequired],
             ['ui-wp-reassigning', 'UI WordPress reassigning', TargetConnectionState::Reassigning],
         ] as [$id, $name, $state]) {
-            $target = $wp->register($id, $name, 'https://provider.browser.test');
-            $target->forceFill(['connection_state' => $state])->save();
+            Target::query()->create([
+                'target_id' => $id, 'display_name' => $name,
+                'connector_type' => 'wp_ai_bridge', 'connection_state' => $state,
+            ]);
         }
-        $key = EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH');
+        $key = implode(' ', array_slice(preg_split('/\s+/', trim(EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH'))), 0, 2));
         $ssh = app(SshTargetRegistration::class)->register(
             'ui-ssh-connected', 'UI SSH build host', '1.1.1.1', 22,
             'fixture', $key, 'password', 'synthetic-ssh-password', null,

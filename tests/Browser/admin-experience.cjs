@@ -28,8 +28,9 @@ async function create(browser, options = {}) {
 }
 
 async function enter(page, role = 'owner') {
-    await page.goto(base + '/__browser__/experience/' + role);
-    await page.getByRole('heading', { name: 'Gateway overview', exact: true }).waitFor();
+    const response = await page.goto(base + '/__browser__/experience/' + role);
+    assert.equal(response.status(), 200, 'Synthetic fixture entry failed: '+response.status()+' '+new URL(page.url()).pathname+' '+(await page.locator('body').innerText()).slice(0,160));
+    await page.getByRole('heading', { name: 'Gateway overview', exact: true }).waitFor({ timeout: 5000 });
     if (await page.evaluate(() => typeof window.GatewayAdmin !== 'undefined')) {
         await page.waitForFunction(() => typeof window.Turbo !== 'undefined');
     }
@@ -76,6 +77,7 @@ async function matrix(browser) {
                     '/admin/oauth-clients', '/admin/operations']) {
                     await run.page.goto(base + path);
                     await run.page.locator('#main-content h1').waitFor();
+                    if (await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) console.log('OVERFLOW', JSON.stringify(await run.page.evaluate(() => [...document.querySelectorAll('body *')].map(e=>({tag:e.tagName,cls:e.className,right:Math.round(e.getBoundingClientRect().right),width:Math.round(e.getBoundingClientRect().width)})).filter(e=>e.right>innerWidth+1).slice(0,12))));
                     assert.equal(await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
                         false, 'Page overflow at ' + width + ' ' + path);
                     assert.equal(await run.page.locator('.admin-nav [aria-current="page"]').count(), 1);

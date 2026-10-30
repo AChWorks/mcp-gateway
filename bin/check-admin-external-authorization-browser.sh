@@ -37,7 +37,8 @@ cleanup() {
         done
         if [[ -f "$fixture_dir/storage/logs/laravel.log" ]]; then
             echo '--- disposable Laravel error log (last 35 lines) ---' >&2
-            tail -n 35 "$fixture_dir/storage/logs/laravel.log" >&2 2>/dev/null || true
+            rg 'local.ERROR' "$fixture_dir/storage/logs/laravel.log" | tail -n 3 >&2 || true
+            tail -n 8 "$fixture_dir/storage/logs/laravel.log" >&2 2>/dev/null || true
         fi
     fi
     for pid in "${fixture_pids[@]}"; do
@@ -58,6 +59,7 @@ export LARAVEL_STORAGE_PATH="$fixture_dir/storage"
 export GATEWAY_BROWSER_FIXTURE_RACE_DIR="$fixture_dir/races"
 export GATEWAY_BROWSER_RACE_GET_ONE_URL="http://127.0.0.1:$port_one"
 export GATEWAY_BROWSER_RACE_GET_TWO_URL="http://127.0.0.1:$port_two"
+export LOG_CHANNEL=single
 export APP_ENV=local APP_DEBUG=false APP_URL="http://127.0.0.1:$port"
 export APP_KEY='base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 export DB_CONNECTION=sqlite DB_DATABASE="$fixture_dir/gateway.sqlite"

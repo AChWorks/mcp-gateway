@@ -56,6 +56,14 @@ final class BrowserAuthorizationRaceBarrier
 }
 
 $app = require __DIR__.'/../../bootstrap/app.php';
+// PHP's CLI-server variable order may omit environment values from $_ENV and
+// $_SERVER. Bind only this explicit fixture's existing temporary storage root.
+$fixtureStorage = getenv('LARAVEL_STORAGE_PATH');
+if (getenv('GATEWAY_BROWSER_FIXTURE') === '1' && getenv('APP_ENV') === 'local'
+    && ($_SERVER['REMOTE_ADDR'] ?? '') === '127.0.0.1'
+    && is_string($fixtureStorage) && is_dir($fixtureStorage)) {
+    $app->useStoragePath($fixtureStorage);
+}
 $kernel = $app->make(Kernel::class);
 $kernel->bootstrap();
 
