@@ -2,10 +2,9 @@
 
 namespace App\Http\Controllers\Admin;
 
-use App\Application\Access\AccessControl;
+use App\Application\Admin\TargetConnectorAdmin;
+use App\Application\Admin\TargetDashboardOverview;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetConnectionState;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityFeed;
 use App\Models\User;
@@ -17,7 +16,8 @@ final class DashboardController extends Controller
 {
     public function __invoke(
         Request $request,
-        AccessControl $access,
+        TargetDashboardOverview $overview,
+        TargetConnectorAdmin $connectors,
         ActivityFeed $activity,
     ): View {
         Gate::authorize(GatewayPermission::DashboardView->value);
@@ -25,27 +25,9 @@ final class DashboardController extends Controller
         $user = $request->user();
         abort_unless($user instanceof User, 401);
 
-        $targets = $access->scopeTargets(
-            Target::query(),
-            $user,
-            GatewayPermission::TargetsView,
-        );
-
         return view('admin.dashboard', [
-            'targetCount' => (clone $targets)->count(),
-            'connectedCount' => (clone $targets)
-                ->where('connection_state', TargetConnectionState::Connected->value)
-                ->count(),
-            'attentionCount' => (clone $targets)
-                ->whereIn('connection_state', [
-                    TargetConnectionState::ReconnectRequired->value,
-                    TargetConnectionState::Error->value,
-                    TargetConnectionState::Reassigning->value,
-                ])
-                ->count(),
-            'configuredCount' => (clone $targets)
-                ->where('connection_state', TargetConnectionState::Disconnected->value)
-                ->count(),
+            ...$overview->forUser($user),
+            'connectorLabels' => $connectors,
             'recentActivity' => Gate::allows(GatewayPermission::ActivityView->value)
                 ? $activity->page($user, 1, 5)['items']
                 : [],
