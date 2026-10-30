@@ -125,9 +125,21 @@ async function layoutAdaptation(page, name) {
         const before = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
         if (variant === '200pct-text') {
             // Reuse the existing browser gate's synthetic text-size fixture, then measure it.
+            const textSizes = await page.evaluate(() => [
+                '#main-content', '#main-content .section-heading', '#main-content [data-access-selection]',
+            ].flatMap(selector => {
+                const element = document.querySelector(selector);
+                return element ? [{ selector, size: parseFloat(getComputedStyle(element).fontSize) }] : [];
+            }));
             await page.addStyleTag({ content: 'html { font-size: ' + before * 2 + 'px !important; }' });
-            await page.waitForFunction(expected => parseFloat(getComputedStyle(document.documentElement).fontSize) === expected,
-                before * 2, { timeout: 2000 });
+            // Chromium can expose the new root size before inherited text/rem layout updates.
+            // Await the measured descendants, not the spacing value the assertion must verify.
+            await page.waitForFunction(({ rootSize, textSizes }) =>
+                parseFloat(getComputedStyle(document.documentElement).fontSize) === rootSize
+                && textSizes.every(({ selector, size }) => {
+                    const element = document.querySelector(selector);
+                    return element && parseFloat(getComputedStyle(element).fontSize) === size * 2;
+                }), { rootSize: before * 2, textSizes }, { timeout: 2000 });
         }
         const metrics = await page.evaluate(({ scenario, before }) => {
             const root = document.documentElement;
