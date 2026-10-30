@@ -1,3 +1,17 @@
+# MCP Gateway v2.5.0
+
+**Stable v2.5.0 — member-first Target groups and bounded, reviewed multi-selection for group and user access.**
+
+This release implements the [group/access workflow redesign #136](https://github.com/AChWorks/mcp-gateway/issues/136). Operator details are in [Admin access workflows](docs/ADMIN-ACCESS-WORKFLOWS.md).
+
+- **Clear group and user journeys:** click a group to see its current Target members, with Users and Restrictions in the same context. Start with a group name and optional advanced restrictions, then add members. User pages provide direct Groups and Targets destinations.
+- **Explicit multi-selection:** searchable, filtered 50-row lists and a temporary server-side selection support up to 100 explicit identities per operation. Selections survive paging and filtering; View selected and Clear keep their scope visible. Select this page never includes unseen matches. Native forms and no-JavaScript page batches remain available.
+- **Review once, apply together:** an encrypted review expires after ten minutes and binds the actor, context, intent, identities and reviewed state. One current-password confirmation applies the entire batch or none of it; relevant SSH changes require acknowledgement. Stale, blocked or unavailable items require review again, and uncertain submissions are never automatically replayed.
+- **Preserved access semantics:** existing Owner-only administration, role/global ceilings, All/Selected scope and direct/group denials remain authoritative. Direct scope changes preserve each Target's capability restrictions; normal Allow does not silently replace an explicit Deny. Reviews explain relevant dynamic-group publishing consequences; removing a user's group membership removes its publishing grants, and reassignment does not restore them.
+- **Upgrade boundary:** no new database migration, environment key, mandatory service, frontend framework or permission model is introduced. Native CSRF-protected forms, required transactional Activity and existing credentials remain intact. Package workflows include the preceding v2.4.1 upgrade and backup-integrity baseline.
+
+Source preparation, publication and installation remain separate. Final release and installed-host acceptance require their respective verification.
+
 # MCP Gateway v2.4.1
 
 **Stable v2.4.1 — coherent shared Admin widths and spacing, aligned permission badges, and ten recent Activity entries.**
