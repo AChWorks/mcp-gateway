@@ -6,90 +6,91 @@
     <meta name="color-scheme" content="light dark">
     <title>@yield('title', __('Administration')) · {{ config('app.name') }}</title>
     @php
-        // A candidate may be replaced by a corrected build of the same
-        // VERSION. Fingerprint the actual CSS so browsers never retain stale
-        // administration form styles after an in-place package update.
+        // Fingerprint bytes as well as VERSION: corrected builds of the same
+        // release must not retain stale shared styles or behavior.
         $cssDigest = hash_file('sha256', public_path('css/admin.css'));
         $cssFingerprint = is_string($cssDigest) ? substr($cssDigest, 0, 12) : 'unavailable';
+        $jsDigest = hash_file('sha256', public_path('js/admin.js'));
+        $jsFingerprint = is_string($jsDigest) ? substr($jsDigest, 0, 12) : 'unavailable';
     @endphp
     <link rel="stylesheet" href="{{ asset('css/admin.css').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$cssFingerprint }}">
+    <script src="{{ asset('js/admin.js').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$jsFingerprint }}" defer></script>
     @yield('head')
 </head>
-<body>
-<header class="site-header">
-    <div class="shell header-inner">
-        <a class="brand" href="{{ auth()->check() ? route('admin.dashboard') : route('login') }}">
-            {{ __('MCP Gateway') }}
-        </a>
+<body @class(['admin-app' => auth()->check(), 'auth-page' => ! auth()->check()])>
+<a class="skip-link" href="#main-content">{{ __('Skip to main content') }}</a>
+<div @class(['admin-shell' => auth()->check(), 'guest-shell' => ! auth()->check()])>
+    @auth
+        <aside class="admin-sidebar" aria-label="{{ __('Gateway administration') }}">
+            <div class="sidebar-heading">
+                <a class="brand" href="{{ route('admin.dashboard') }}">
+                    <span class="brand-mark" aria-hidden="true">M</span>
+                    <span>{{ __('MCP Gateway') }}<small>{{ __('Administration') }}</small></span>
+                </a>
+                <button class="nav-toggle" type="button" aria-controls="admin-navigation" aria-expanded="true" data-admin-nav-toggle hidden>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    <span>{{ __('Navigation') }}</span>
+                </button>
+            </div>
+            <div id="admin-navigation" class="sidebar-content" data-admin-navigation>
+                @include('admin.partials.navigation')
+                <div class="sidebar-account">
+                    <span class="sidebar-account-name">{{ auth()->user()?->name }}</span>
+                    <span class="sidebar-account-role">{{ __(ucfirst((string) auth()->user()?->role->value)) }}</span>
+                    <form method="post" action="{{ route('admin.logout') }}">
+                        @csrf
+                        <button class="sidebar-sign-out" type="submit">{{ __('Sign out') }}</button>
+                    </form>
+                </div>
+            </div>
+        </aside>
+    @endauth
 
-        @auth
-            <nav class="admin-nav" aria-label="{{ __('Administration') }}">
-                @can('dashboard.view')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.dashboard')]) href="{{ route('admin.dashboard') }}">{{ __('Dashboard') }}</a>
-                @endcan
-                @can('targets.view')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.targets.*')]) href="{{ route('admin.targets.index') }}">{{ __('Targets') }}</a>
-                @endcan
-                @can('users.view')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.users.*')]) href="{{ route('admin.users.index') }}">{{ __('Users') }}</a>
-                @endcan
-                @can('users.manage')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.target-groups.*')]) href="{{ route('admin.target-groups.index') }}">{{ __('Target groups') }}</a>
-                @endcan
-                @can('security.manage')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.oauth-clients.*')]) href="{{ route('admin.oauth-clients.index') }}">{{ __('AI clients') }}</a>
-                @endcan
-                @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.operations.*')]) href="{{ route('admin.operations.index') }}">{{ __('Operations') }}</a>
-                @endif
-                @can('activity.view')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.activity')]) href="{{ route('admin.activity') }}">{{ __('Activity') }}</a>
-                @endcan
-                @can('gateway.connection.view')
-                    <a @class(['nav-link', 'is-active' => request()->routeIs('admin.connection')]) href="{{ route('admin.connection') }}">{{ __('Connection') }}</a>
-                @endcan
-            </nav>
+    <div class="admin-workspace">
+        <header class="site-header">
+            <div class="shell header-inner">
+                @auth
+                    <p class="workspace-context"><span>{{ __('Administration') }}</span><span aria-hidden="true">/</span><strong>@yield('title', __('Dashboard'))</strong></p>
+                @else
+                    <a class="brand" href="{{ route('login') }}">{{ __('MCP Gateway') }}</a>
+                @endauth
+            </div>
+        </header>
 
-            <form method="post" action="{{ route('admin.logout') }}">
-                @csrf
-                <button class="button button-secondary" type="submit">{{ __('Sign out') }}</button>
-            </form>
-        @endauth
-    </div>
-</header>
-
-<main class="shell main-content">
-    @if (session('status'))
-        <div class="alert alert-success" role="status">{{ session('status') }}</div>
-    @endif
-
-    @if ($errors->has('site'))
-        <div class="alert alert-error" role="alert">{{ $errors->first('site') }}</div>
-    @endif
-
-    @if (session('target_connection_failed'))
-        <div class="alert alert-error" role="alert">{{ __('WordPress Target authorization did not complete. Open your Target and try again.') }}</div>
-    @endif
-    @if ($errors->has('target'))
-        <div class="alert alert-error" role="alert">{{ $errors->first('target') }}</div>
-    @endif
-    @if (session('diagnostic_code'))
-        <section class="panel" aria-label="{{ __('Operation diagnostic') }}" role="status">
-            <p><strong>{{ __('Diagnostic category') }}:</strong>
-                <code>{{ session('diagnostic_code') }}</code>
-                @if (session('diagnostic_stage'))
-                    · <strong>{{ __('Failure stage') }}:</strong> <code>{{ session('diagnostic_stage') }}</code>
-                @endif
-            </p>
-            <p>{{ \App\Support\OperationDiagnostics::summary((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
-            <p><strong>{{ __('What to check') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
-            @if (session('diagnostic_reference'))
-                <p><strong>{{ __('Log reference') }}:</strong> <code>{{ session('diagnostic_reference') }}</code></p>
+        <main id="main-content" class="shell main-content" tabindex="-1">
+            @if (session('status'))
+                <div class="alert alert-success" role="status">{{ session('status') }}</div>
             @endif
-        </section>
-    @endif
 
-    @yield('content')
-</main>
+            @if ($errors->has('site'))
+                <div class="alert alert-error" role="alert">{{ $errors->first('site') }}</div>
+            @endif
+
+            @if (session('target_connection_failed'))
+                <div class="alert alert-error" role="alert">{{ __('WordPress Target authorization did not complete. Open your Target and try again.') }}</div>
+            @endif
+            @if ($errors->has('target'))
+                <div class="alert alert-error" role="alert">{{ $errors->first('target') }}</div>
+            @endif
+            @if (session('diagnostic_code'))
+                <section class="panel" aria-label="{{ __('Operation diagnostic') }}" role="status">
+                    <p><strong>{{ __('Diagnostic category') }}:</strong>
+                        <code>{{ session('diagnostic_code') }}</code>
+                        @if (session('diagnostic_stage'))
+                            · <strong>{{ __('Failure stage') }}:</strong> <code>{{ session('diagnostic_stage') }}</code>
+                        @endif
+                    </p>
+                    <p>{{ \App\Support\OperationDiagnostics::summary((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
+                    <p><strong>{{ __('What to check') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
+                    @if (session('diagnostic_reference'))
+                        <p><strong>{{ __('Log reference') }}:</strong> <code>{{ session('diagnostic_reference') }}</code></p>
+                    @endif
+                </section>
+            @endif
+
+            @yield('content')
+        </main>
+    </div>
+</div>
 </body>
 </html>
