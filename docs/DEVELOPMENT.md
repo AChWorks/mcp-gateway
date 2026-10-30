@@ -165,6 +165,12 @@ Prefer a small markup adjustment that lets multiple pages share an existing comp
 
 The optional initializer in the existing fingerprinted `admin.js` uses per-form WeakSet ownership to update counts and Select this page. It adds no new production asset, library or service and leaves native forms authoritative. Restriction labels must remain visibly negative (`Deny …`) while preserving the existing `denied_permissions[]` API and default SSH blocks.
 
+### User account restriction form state
+
+Fresh User edit GETs render current stored values; fresh create forms alone receive default SSH Deny checks. Once native form input has been flashed after an unsuccessful submission, an omitted `denied_permissions[]` means an explicitly empty submitted set. Never fall back to stored/default checks in that state. The view labels Saved/Unsaved/Defaults and counts current rendered controls without pretending to calculate effective role/group/Target authority. Existing request validation, SSH confirmation and application mutation rules remain authoritative.
+
+The default retained Browser command includes `admin-user-state.cjs`; `bash bin/check-admin-external-authorization-browser.sh user-state-only` runs its guarded native create/save/list/reopen and empty-error-draft cases with JavaScript on/off. It reuses the existing isolated loopback grouping fixture and introduces no production route or runtime dependency.
+
 ### Admin shell and progressive navigation
 
 The shared Blade shell owns permission-filtered Workspace/Access/System navigation, reading versus workspace widths, a keyboard skip target and the no-JavaScript-visible mobile navigation. Shared behavior is byte/release-fingerprinted and self-hosted. Production still needs only the existing PHP application; no Node process, CDN or client telemetry is introduced.
