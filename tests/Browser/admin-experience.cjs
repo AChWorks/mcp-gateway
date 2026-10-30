@@ -668,11 +668,134 @@ async function coherentAssetRefresh(browser) {
     }
 }
 
+async function attachmentUnload(browser) {
+    const run = await create(browser);
+    const page = run.page;
+    try {
+        await enter(page);
+        await page.goto(base + '/admin/targets/ui-ssh-connected');
+        // Resume is an actual local-only inventory mutation; no connector call.
+        await page.getByRole('button', { name: 'Resume Target operations', exact: true }).click();
+        await page.locator('#ssh_download_path').waitFor();
+        const upload = page.locator('form').filter({ has: page.locator('#ssh_upload_file') });
+        const downloadForm = page.locator('form').filter({ has: page.locator('#ssh_download_path') });
+        const forget = page.locator('form').filter({ has: page.locator('#forget_target_id') });
+        const downloadAction = await downloadForm.getAttribute('action');
+        const token = await downloadForm.locator('input[name="_token"]').inputValue();
+        const posts = [];
+        const forbidden = [];
+        for (const form of [upload, forget]) {
+            await page.route(await form.getAttribute('action'), async route => {
+                forbidden.push(route.request().method());
+                await route.abort('blockedbyclient');
+            });
+        }
+        await page.route(downloadAction, async route => {
+            const request = route.request();
+            const data = new URLSearchParams(request.postData());
+            posts.push({ method: request.method(), native: request.isNavigationRequest(),
+                type: request.resourceType(), keys: [...data.keys()].sort(),
+                csrf: data.get('_token') === token, path: data.get('path') });
+            // Never forward this request: no PHP file controller or SSH executes.
+            await route.fulfill({ status: 200, contentType: 'application/octet-stream',
+                headers: { 'Content-Disposition': 'attachment; filename="browser-attachment-fixture.txt"',
+                    'X-Content-Type-Options': 'nosniff' }, body: 'Harmless isolated browser attachment.\n' });
+        });
+        await page.locator('#ssh_upload_file').setInputFiles({ name: 'unsaved-upload.txt',
+            mimeType: 'text/plain', buffer: Buffer.from('Unsaved synthetic upload.\n') });
+        await page.locator('#ssh_upload_destination').fill('/fixture/unsaved-upload.txt');
+        await page.locator('#ssh_upload_staging').fill('/fixture/private-staging');
+        await page.locator('#forget_target_id').fill('keep-this-local-draft');
+        await page.locator('#ssh_download_path').fill('/fixture/read-only.txt');
+        await page.evaluate(() => { window.__attachmentDocument = 'original-target'; });
+        const first = deferred();
+        const dialogs = [];
+        const dismiss = async dialog => {
+            dialogs.push(dialog.type()); await dialog.dismiss(); first.resolve('cancelled');
+        };
+        const downloaded = () => first.resolve('attachment');
+        page.once('dialog', dismiss);
+        page.once('download', downloaded);
+        await downloadForm.getByRole('button', { name: 'Download verified file', exact: true }).click();
+        const result = await deadline(first.promise, 'native download cancellation or attachment');
+        page.off('dialog', dismiss);
+        page.off('download', downloaded);
+        let failureState;
+        if (result === 'attachment') {
+            await page.reload();
+            failureState = { dialogs, posts: posts.length,
+                sentinel: await page.evaluate(() => window.__attachmentDocument || null),
+                forgottenDraft: await page.locator('#forget_target_id').inputValue(),
+                uploadDraft: await page.locator('#ssh_upload_destination').inputValue() };
+        }
+        assert.equal(result, 'cancelled', 'Native download bypassed other drafts; reload state: ' + JSON.stringify(failureState));
+        assert.deepEqual(dialogs, ['beforeunload']);
+        assert.deepEqual(posts, [], 'Cancelled departure dispatched the native POST.');
+        assert.equal(await downloadForm.getAttribute('data-admin-dirty'), 'true', 'Cancelled unload falsely marked the submitted draft saved.');
+        assert.equal(await page.locator('#ssh_download_path').inputValue(), '/fixture/read-only.txt');
+        assert.equal(await page.locator('#forget_target_id').inputValue(), 'keep-this-local-draft');
+        assert.equal(await page.locator('#ssh_upload_destination').inputValue(), '/fixture/unsaved-upload.txt');
+        assert.equal(await page.locator('#ssh_upload_file').evaluate(element => element.files[0]?.name), 'unsaved-upload.txt');
+        const attachment = page.waitForEvent('download');
+        const accepted = deferred();
+        page.once('dialog', async dialog => {
+            dialogs.push(dialog.type()); await dialog.accept(); accepted.resolve();
+        });
+        await downloadForm.getByRole('button', { name: 'Download verified file', exact: true }).click();
+        await deadline(accepted.promise, 'accepted native attachment departure');
+        const file = await attachment;
+        assert.equal(file.suggestedFilename(), 'browser-attachment-fixture.txt');
+        assert.equal(await file.failure(), null);
+        const chunks = [];
+        for await (const chunk of await file.createReadStream()) chunks.push(chunk);
+        assert.equal(Buffer.concat(chunks).toString('utf8'), 'Harmless isolated browser attachment.\n');
+        assert.deepEqual(posts, [{ method: 'POST', native: true, type: 'document',
+            keys: ['_token', 'path'], csrf: true, path: '/fixture/read-only.txt' }]);
+        assert.deepEqual(dialogs, ['beforeunload', 'beforeunload']);
+        const assertRetained = async () => {
+            assert.equal(await page.evaluate(() => window.__attachmentDocument), 'original-target');
+            assert.match(page.url(), /\/admin\/targets\/ui-ssh-connected$/);
+            assert.equal(await page.locator('#forget_target_id').inputValue(), 'keep-this-local-draft');
+            assert.equal(await page.locator('#ssh_upload_destination').inputValue(), '/fixture/unsaved-upload.txt');
+            assert.equal(await page.locator('#ssh_upload_staging').inputValue(), '/fixture/private-staging');
+            assert.equal(await page.locator('#ssh_upload_file').evaluate(element => element.files[0]?.name), 'unsaved-upload.txt');
+            assert.equal(await upload.getAttribute('data-admin-dirty'), 'true');
+            assert.equal(await forget.getAttribute('data-admin-dirty'), 'true');
+        };
+        await assertRetained();
+        const reloadCancelled = deferred();
+        page.once('dialog', async dialog => {
+            dialogs.push(dialog.type()); await dialog.dismiss(); reloadCancelled.resolve();
+        });
+        // A cancelled reload has no commit for Playwright's navigation waiter.
+        await page.evaluate(() => { location.reload(); });
+        await deadline(reloadCancelled.promise, 'retained attachment document reload guard');
+        await assertRetained();
+        const closeCancelled = deferred();
+        page.once('dialog', async dialog => {
+            dialogs.push(dialog.type()); await dialog.dismiss(); closeCancelled.resolve();
+        });
+        const close = page.close({ runBeforeUnload: true });
+        await deadline(closeCancelled.promise, 'retained attachment document close guard');
+        await close;
+        assert.equal(page.isClosed(), false);
+        await assertRetained();
+        assert.deepEqual(dialogs, Array(4).fill('beforeunload'));
+        assert.equal(posts.length, 1, 'Attachment or cancelled departures replayed the native POST.');
+        assert.deepEqual(forbidden, []);
+        assert.deepEqual(run.errors, []);
+        assert.deepEqual(run.external, []);
+        pass('native SSH attachment cancellation sends no POST; accepted one-shot download retains other drafts and reload/close guards');
+    } finally {
+        await run.context.close();
+    }
+}
+
 (async () => {
     const browser = await chromium.launch({ headless: true });
     try {
         const group = process.env.GATEWAY_UI_TEST_GROUP || 'all';
-        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets'].includes(group), 'Unknown UI test group.');
+        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets', 'attachments'].includes(group), 'Unknown UI test group.');
         if (group === 'all' || group === 'matrix') await matrix(browser);
         if (group === 'all' || group === 'navigation') await navigation(browser);
         if (group === 'all' || group === 'mobile') await mobileAndNative(browser);
@@ -680,6 +803,7 @@ async function coherentAssetRefresh(browser) {
         if (group === 'all' || group === 'adaptation') await adaptation(browser);
         if (group === 'all' || group === 'fragments') await fragmentHistory(browser);
         if (group === 'all' || group === 'assets') await coherentAssetRefresh(browser);
+        if (group === 'all' || group === 'attachments') await attachmentUnload(browser);
         if (group === 'all' || group === 'resilience') {
             await resilience(browser);
             await networkFailure(browser);

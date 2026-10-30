@@ -23,6 +23,10 @@ if (! app()->environment('local') || getenv('GATEWAY_BROWSER_FIXTURE') !== '1'
     throw new RuntimeException('The Admin experience fixture requires an explicit isolated loopback environment.');
 }
 
+// Render real SSH file forms only in this already guarded disposable fixture.
+// Browser tests intercept transfer actions before any application execution.
+config()->set('ssh.file_transfer.enabled', true);
+
 Route::middleware('web')->get('/__browser__/experience/{role}', static function (string $role) {
     abort_unless(in_array($role, ['owner', 'administrator', 'operator', 'viewer'], true), 404);
     $user = User::query()->firstOrCreate(['email' => 'ui-'.$role.'@example.test'], [
