@@ -1,6 +1,6 @@
-# MCP Gateway v2.4.0-rc.1
+# MCP Gateway v2.4.0-rc.2
 
-**Source candidate `2.4.0-rc.1` — NOT PUBLISHED.**
+**Source candidate `2.4.0-rc.2` — NOT PUBLISHED.**
 
 Compared with official v2.3.12, this owner-test candidate prepares the [Admin experience redesign #136](https://github.com/AChWorks/mcp-gateway/issues/136):
 

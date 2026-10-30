@@ -60,6 +60,28 @@
         });
     }
 
+    // Section/skip links stay within this document's history entry. Native
+    // fragment entries do not have Turbo indices and can bypass the dirty-form
+    // restoration guard. Preserve the current state when updating the fragment.
+    document.addEventListener('click', event => {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
+            || event.shiftKey || event.altKey) return;
+        const link = event.target.closest('a[href]');
+        if (!link || link.target || link.hasAttribute('download')) return;
+        const url = new URL(link.href, location.href);
+        if (!url.hash || url.origin !== location.origin || url.pathname !== location.pathname
+            || url.search !== location.search) return;
+        let destination;
+        try { destination = document.getElementById(decodeURIComponent(url.hash.slice(1))); }
+        catch { return; }
+        if (!destination) return;
+        event.preventDefault();
+        history.replaceState(history.state, '', url.href);
+        destination.scrollIntoView();
+        if (!destination.hasAttribute('tabindex')) destination.setAttribute('tabindex', '-1');
+        destination.focus({ preventScroll: true });
+    });
+
     document.addEventListener('input', markDirty);
     document.addEventListener('change', markDirty);
 
