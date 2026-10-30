@@ -6,6 +6,10 @@ on:
       - main
     paths:
       - 'app/Application/Targets/**'
+      - 'app/Application/Admin/**'
+      - 'app/Http/Controllers/Admin/DashboardController.php'
+      - 'app/Http/Controllers/Admin/TargetController.php'
+      - 'app/Support/TargetRecoveryPresentation.php'
       - 'app/Http/Controllers/Admin/TargetConnectionController.php'
       - 'app/Http/Middleware/SecureAdminResponses.php'
       - 'app/Infrastructure/Connectors/WpAiBridge/**'
@@ -29,6 +33,10 @@ on:
       - ready_for_review
     paths:
       - 'app/Application/Targets/**'
+      - 'app/Application/Admin/**'
+      - 'app/Http/Controllers/Admin/DashboardController.php'
+      - 'app/Http/Controllers/Admin/TargetController.php'
+      - 'app/Support/TargetRecoveryPresentation.php'
       - 'app/Http/Controllers/Admin/TargetConnectionController.php'
       - 'app/Http/Middleware/SecureAdminResponses.php'
       - 'app/Infrastructure/Connectors/WpAiBridge/**'
