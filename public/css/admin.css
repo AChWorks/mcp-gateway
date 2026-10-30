@@ -415,6 +415,14 @@ code {
     gap: 1rem;
 }
 
+/* Grid items must be allowed to shrink around bounded tables/long evidence.
+   Preserve internal scrolling instead of expanding sibling panels past main. */
+.content-grid > *,
+.form-grid > *,
+.stats-grid > * {
+    min-width: 0;
+}
+
 .content-grid {
     grid-template-columns: minmax(0, 2fr) minmax(16rem, 1fr);
     align-items: start;
@@ -1178,12 +1186,12 @@ td input[type="checkbox"] {
     .content-grid,
     .form-grid,
     .checkbox-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .filter-grid {
         display: grid;
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .filter-actions,
