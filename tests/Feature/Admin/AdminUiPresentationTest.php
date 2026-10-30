@@ -453,7 +453,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringNotContainsString('max-width: 54rem;', $css);
     }
 
-    public function test_shared_permission_badges_fill_available_width_and_table_notes_use_readable_flow(): void
+    public function test_shared_permission_badges_and_ai_client_lifecycle_cards_preserve_content_and_hierarchy(): void
     {
         $this->actingAs($this->owner())->get('/admin/users/create')
             ->assertOk()
@@ -468,17 +468,23 @@ final class AdminUiPresentationTest extends TestCase
         libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($document);
         $note = '//main/aside[contains(concat(" ",normalize-space(@class)," ")," panel-note ")]';
+        $cards = $note.'/div[contains(concat(" ",normalize-space(@class)," ")," lifecycle-cards ")]/article[contains(concat(" ",normalize-space(@class)," ")," lifecycle-card ")]';
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.')'));
-        self::assertSame(3, (int) $xpath->evaluate('count('.$note.'/dl/div/dt)'));
-        self::assertSame(3, (int) $xpath->evaluate('count('.$note.'/dl/div/dd/p)'));
-        self::assertSame(0, (int) $xpath->evaluate('count('.$note.'[contains(concat(" ",normalize-space(@class)," ")," reading-width ")])'));
+        self::assertSame('client-lifecycle-title', $xpath->evaluate('string('.$note.'/@aria-labelledby)'));
+        self::assertSame('Client profile management', trim($xpath->evaluate('string('.$note.'/h2[@id="client-lifecycle-title"])')));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/p[contains(@class,"field-help")])'));
+        self::assertSame(3, (int) $xpath->evaluate('count('.$cards.')'));
         self::assertSame(['Finding profiles', 'Automatic retirement', 'Administrator actions'], array_map(
             static fn (\DOMNode $node): string => trim($node->textContent),
-            iterator_to_array($xpath->query($note.'/dl/div/dt')),
+            iterator_to_array($xpath->query($cards.'/div[contains(@class,"lifecycle-card-heading")]/h3')),
         ));
+        foreach ($xpath->query($cards) as $card) {
+            self::assertSame(1, (int) $xpath->evaluate('count(.//span[@aria-hidden="true"]/svg[@focusable="false"])', $card));
+            self::assertSame(1, (int) $xpath->evaluate('count(./p)', $card));
+        }
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/preceding-sibling::*[1][self::section[contains(concat(" ",normalize-space(@class)," ")," panel ")]])'));
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/following-sibling::*[1][self::section[contains(concat(" ",normalize-space(@class)," ")," ai-client-authorizations ")]])'));
-        $paragraphs = array_map(static fn (\DOMNode $node): string => trim($node->textContent), iterator_to_array($xpath->query($note.'/dl/div/dd/p')));
+        $paragraphs = array_map(static fn (\DOMNode $node): string => trim($node->textContent), iterator_to_array($xpath->query($cards.'/p')));
         self::assertSame([
             'Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record.',
             'Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure.',
@@ -493,7 +499,11 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('margin-block: var(--ui-panel-stack-gap);', $noteRule[1]);
         self::assertStringNotContainsString('column', $noteRule[1]);
         self::assertSame(1, preg_match('/\.reading-width\s*\{[^}]*max-width:\s*70ch;/s', $css));
-        self::assertMatchesRegularExpression('/\.explanation-list dd\s*\{[^}]*max-inline-size:\s*95ch;[^}]*justify-self:\s*end;/s', $css);
+        self::assertStringContainsString('.lifecycle-cards {', $css);
+        self::assertStringContainsString('grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));', $css);
+        self::assertStringContainsString('.lifecycle-card-heading {', $css);
+        self::assertStringContainsString('.lifecycle-icon svg {', $css);
+        self::assertStringNotContainsString('.explanation-list', $css);
     }
 
     public function test_shared_admin_headings_wrap_valid_long_target_names_and_tables_follow_direction(): void
