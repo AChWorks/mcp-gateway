@@ -158,6 +158,8 @@ final class AdminAbuseProtectionTest extends TestCase
         $page->assertHeader('X-Frame-Options', 'DENY');
         self::assertStringContainsString('no-store', (string) $page->headers->get('Cache-Control'));
 
+        $this->get('/')->assertRedirect('/admin')->assertHeaderMissing('X-Frame-Options');
+        $this->post('/admin/logout')->assertRedirect('/admin/login');
         $this->get('/')->assertOk()->assertHeaderMissing('X-Frame-Options');
     }
 
