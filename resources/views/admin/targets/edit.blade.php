@@ -19,23 +19,22 @@
         @method('PUT')
         <div class="field">
             <label for="target_id">{{ __('Stable Target ID') }}</label>
-            <input id="target_id" type="text" value="{{ $target->target_id }}" readonly aria-readonly="true">
-            <p class="field-help">{{ __('Target ID and connector type do not change. Existing users, groups and client references keep pointing at this Target.') }}</p>
+            <input id="target_id" type="text" value="{{ $target->target_id }}" readonly aria-readonly="true" aria-describedby="target_id-help">
+            <p class="field-help" id="target_id-help">{{ __('Target ID and connector type do not change. Existing users, groups and client references keep pointing at this Target.') }}</p>
         </div>
         <div class="field">
             <label for="display_name">{{ __('Display name') }}</label>
             <input id="display_name" name="display_name" type="text" required maxlength="160"
-                value="{{ old('display_name', $target->display_name) }}">
-            @error('display_name')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+                value="{{ old('display_name', $target->display_name) }}" @error('display_name') aria-invalid="true" aria-describedby="display_name-error" @enderror>
+            @error('display_name')<p class="form-error" role="alert" id="display_name-error">{{ $message }}</p>@enderror
         </div>
         <div class="field">
             <label for="ai_guidance">{{ __('AI guidance (optional)') }}</label>
             <textarea id="ai_guidance" name="ai_guidance" rows="3"
-                maxlength="{{ \App\Domain\Targets\Target::AI_GUIDANCE_MAX_LENGTH }}"
-                aria-describedby="ai_guidance_help" autocomplete="off"
-                placeholder="{{ __('Example: This is a production server. Explain risks and ask before making changes.') }}">{{ old('ai_guidance', $target->ai_guidance) }}</textarea>
+                maxlength="{{ \App\Domain\Targets\Target::AI_GUIDANCE_MAX_LENGTH }}" autocomplete="off"
+                placeholder="{{ __('Example: This is a production server. Explain risks and ask before making changes.') }}" @error('ai_guidance') aria-invalid="true" @enderror aria-describedby="ai_guidance_help{{ $errors->has('ai_guidance') ? ' ai_guidance-error' : '' }}">{{ old('ai_guidance', $target->ai_guidance) }}</textarea>
             <p id="ai_guidance_help" class="field-help">{{ __('Shown to authorized AI clients as Target-specific context. This is advice, not enforced approval. Never include credentials or secrets.') }}</p>
-            @error('ai_guidance')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+            @error('ai_guidance')<p class="field-error" role="alert" id="ai_guidance-error">{{ $message }}</p>@enderror
         </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Save Target details') }}</button>

@@ -23,14 +23,14 @@
         @csrf
         <div class="field">
             <label for="connector_type">{{ __('1. Connector type') }}</label>
-            <select id="connector_type" name="connector_type" required aria-describedby="connector_type_help">
+            <select id="connector_type" name="connector_type" required @error('connector_type') aria-invalid="true" @enderror aria-describedby="connector_type_help{{ $errors->has('connector_type') ? ' connector_type-error' : '' }}">
                 <option value="">{{ __('Choose a connector') }}</option>
                 @foreach ($connectorOptions as $type => $label)
                     <option value="{{ $type }}" @selected($selected === $type)>{{ $label }}</option>
                 @endforeach
             </select>
             <p id="connector_type_help" class="field-help">{{ __('The next fields change with your selection. Only implemented connectors can be enrolled.') }}</p>
-            @error('connector_type')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+            @error('connector_type')<p class="field-error" role="alert" id="connector_type-error">{{ $message }}</p>@enderror
             <noscript>
                 <p class="field-help">{{ __('JavaScript is disabled. Choose a connector below to open its server-rendered form:') }}</p>
                 @foreach ($connectorOptions as $type => $label)
@@ -46,24 +46,23 @@
                 <div class="field">
                     <label for="target_id">{{ __('Stable Target ID') }}</label>
                     <input type="text" id="target_id" name="target_id" maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" required
-                        autocomplete="off" spellcheck="false" placeholder="my-target" value="{{ old('target_id') }}">
-                    <p class="field-help">{{ __('Lowercase letters, numbers and hyphens.') }}</p>
-                    @error('target_id')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                        autocomplete="off" spellcheck="false" placeholder="my-target" value="{{ old('target_id') }}" @error('target_id') aria-invalid="true" @enderror aria-describedby="target_id-help{{ $errors->has('target_id') ? ' target_id-error' : '' }}">
+                    <p class="field-help" id="target_id-help">{{ __('Lowercase letters, numbers and hyphens.') }}</p>
+                    @error('target_id')<p class="field-error" role="alert" id="target_id-error">{{ $message }}</p>@enderror
                 </div>
                 <div class="field">
                     <label for="display_name">{{ __('Display name') }}</label>
                     <input type="text" id="display_name" name="display_name" maxlength="160" required
-                        placeholder="{{ __('Production blog or staging server') }}" value="{{ old('display_name') }}">
-                    @error('display_name')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                        placeholder="{{ __('Production blog or staging server') }}" value="{{ old('display_name') }}" @error('display_name') aria-invalid="true" aria-describedby="display_name-error" @enderror>
+                    @error('display_name')<p class="field-error" role="alert" id="display_name-error">{{ $message }}</p>@enderror
                 </div>
                 <div class="field target-span-all">
                     <label for="ai_guidance">{{ __('AI guidance (optional)') }}</label>
                     <textarea id="ai_guidance" name="ai_guidance" rows="3"
-                        maxlength="{{ \App\Domain\Targets\Target::AI_GUIDANCE_MAX_LENGTH }}"
-                        aria-describedby="ai_guidance_help" autocomplete="off"
-                        placeholder="{{ __('Example: This is a production server. Explain risks and ask before making changes.') }}">{{ old('ai_guidance') }}</textarea>
+                        maxlength="{{ \App\Domain\Targets\Target::AI_GUIDANCE_MAX_LENGTH }}" autocomplete="off"
+                        placeholder="{{ __('Example: This is a production server. Explain risks and ask before making changes.') }}" @error('ai_guidance') aria-invalid="true" @enderror aria-describedby="ai_guidance_help{{ $errors->has('ai_guidance') ? ' ai_guidance-error' : '' }}">{{ old('ai_guidance') }}</textarea>
                     <p id="ai_guidance_help" class="field-help">{{ __('Shown to authorized AI clients as Target-specific context. This is advice, not enforced approval. Never include credentials or secrets.') }}</p>
-                    @error('ai_guidance')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                    @error('ai_guidance')<p class="field-error" role="alert" id="ai_guidance-error">{{ $message }}</p>@enderror
                 </div>
             </div>
         </fieldset>
@@ -78,7 +77,7 @@
                 formaction="{{ route('admin.targets.preflight') }}" formnovalidate>
                 {{ __('Check endpoint from Gateway (no registration)') }}
             </button>
-            <p class="field-help">{{ __('Credentials are encrypted and never restored into this form after validation errors.') }}</p>
+            <p class="field-help" id="target-credential-help">{{ __('Credentials are encrypted and never restored into this form after validation errors.') }}</p>
         </div>
         @if (session('target_endpoint_preflight'))
             @php($preflight = (array) session('target_endpoint_preflight'))
