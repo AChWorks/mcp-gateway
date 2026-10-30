@@ -10,6 +10,9 @@ on:
       - 'app/Http/Middleware/SecureAdminResponses.php'
       - 'app/Infrastructure/Connectors/WpAiBridge/**'
       - 'resources/views/admin/**'
+      - 'public/css/**'
+      - 'public/js/**'
+      - 'tests/Support/admin-experience-browser-fixtures.php'
       - 'routes/admin.php'
       - 'tests/Browser/**'
       - 'tests/Support/external-authorization-browser-router.php'
@@ -30,6 +33,9 @@ on:
       - 'app/Http/Middleware/SecureAdminResponses.php'
       - 'app/Infrastructure/Connectors/WpAiBridge/**'
       - 'resources/views/admin/**'
+      - 'public/css/**'
+      - 'public/js/**'
+      - 'tests/Support/admin-experience-browser-fixtures.php'
       - 'routes/admin.php'
       - 'tests/Browser/**'
       - 'tests/Support/external-authorization-browser-router.php'
@@ -72,5 +78,5 @@ jobs:
           npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.61.1
           npx playwright install --with-deps chromium
 
-      - name: Verify real Chromium authorization and CSP restrictions
+      - name: Verify real Chromium Admin experience, authorization and CSP restrictions
         run: bash bin/check-admin-external-authorization-browser.sh

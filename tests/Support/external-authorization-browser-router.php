@@ -65,6 +65,19 @@ if (! $app->environment('local') || getenv('GATEWAY_BROWSER_FIXTURE') !== '1'
     exit;
 }
 
+// Let PHP's loopback-only server deliver real reviewed CSS/JS assets. The
+// realpath boundary rejects traversal and symlink escapes from public/.
+$assetPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+if (is_string($assetPath) && preg_match('#^/(?:css|js)/[a-zA-Z0-9._/-]+\.(?:css|js)$#D', $assetPath) === 1) {
+    $publicRoot = realpath(public_path());
+    $candidate = public_path(ltrim($assetPath, '/'));
+    $asset = realpath($candidate);
+    if (is_string($publicRoot) && is_string($asset) && is_file($asset)
+        && ! is_link($candidate) && str_starts_with($asset, $publicRoot.DIRECTORY_SEPARATOR)) {
+        return false;
+    }
+}
+
 // The provider requires public HTTPS client metadata even though this fixture
 // is intentionally served on loopback HTTP.
 config()->set('bridge.client.id', 'https://gateway.example.test/oauth/client.json');
@@ -169,5 +182,9 @@ Route::middleware(['web', 'auth'])->get('/__browser__/handoff-present/{handoff}'
         'stale_entry_present' => is_array($pending) && array_key_exists($handoff, $pending),
     ]);
 })->where('handoff', '[a-f0-9]{32}');
+
+if (getenv('GATEWAY_ADMIN_EXPERIENCE_FIXTURE') === '1') {
+    require __DIR__.'/admin-experience-browser-fixtures.php';
+}
 
 $app->handleRequest(Request::capture());
