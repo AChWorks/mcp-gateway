@@ -24,11 +24,13 @@
         </label>
         @error('assigned')<p class="field-error" id="assigned-error" role="alert">{{ $message }}</p>@enderror
         <p class="field-help">{{ __('For selected-scope users, group membership can make this target reachable. A direct target deny still blocks it.') }}</p>
-        <label class="checkbox-option" for="confirm_ssh_group_changes">
-            <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1" @error('confirm_ssh_group_changes') aria-invalid="true" aria-describedby="confirm_ssh_group_changes-error" @enderror>
-            <span>{{ __('Confirm SSH Target group membership changes. Adding this SSH Target may enable an already approved capability; removing it may lift this group’s SSH denials when other Target memberships remain.') }}</span>
-        </label>
-        @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_changes-error" role="alert">{{ $message }}</p>@enderror
+        @if ($target->connector_type === 'ssh_direct')
+            <label class="checkbox-option" for="confirm_ssh_group_changes">
+                <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1" @error('confirm_ssh_group_changes') aria-invalid="true" aria-describedby="confirm_ssh_group_changes-error" @enderror>
+                <span>{{ __('Confirm SSH Target group membership changes. Adding this SSH Target may enable an already approved capability; removing it may lift this group’s SSH denials when other Target memberships remain.') }}</span>
+            </label>
+            @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_changes-error" role="alert">{{ $message }}</p>@enderror
+        @endif
 
         <div class="field">
             <label for="current_password">{{ __('Your current password') }}</label>

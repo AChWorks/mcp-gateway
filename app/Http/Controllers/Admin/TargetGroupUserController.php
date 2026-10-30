@@ -63,6 +63,7 @@ final class TargetGroupUserController extends Controller
             'managedUser' => $user,
             'assigned' => $groups->userIsAssigned($targetGroup, $user),
             'isOwner' => $this->role($user) === GatewayRole::Owner,
+            'sshAccessImpact' => $groups->hasSshAccessImpact($targetGroup),
         ]);
     }
 

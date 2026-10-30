@@ -245,6 +245,12 @@ final readonly class TargetGroupManager
         return $ssh;
     }
 
+    /** Read-only UI snapshot; mutation paths independently recheck under the group lock. */
+    public function hasSshAccessImpact(TargetGroup $group): bool
+    {
+        return $this->hasSshTargets($group) || $this->hasSshDenials($group);
+    }
+
     private function hasSshTargets(TargetGroup $group): bool
     {
         return DB::table('target_group_targets')

@@ -27,11 +27,13 @@
             </label>
             @error('assigned')<p class="field-error" id="assigned-error" role="alert">{{ $message }}</p>@enderror
             <p class="field-help">{{ __('The group can add selected-target reachability and can narrow target capabilities, but can never grant a permission missing from the user role or global permission ceiling.') }}</p>
-            <label class="checkbox-option" for="confirm_ssh_group_changes">
-                <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1" @error('confirm_ssh_group_changes') aria-invalid="true" aria-describedby="confirm_ssh_group_changes-error" @enderror>
-                <span>{{ __('Confirm SSH membership changes. Adding a user may enable already-approved SSH capabilities on this group’s Targets; removing a user may lift a group SSH denial if another group still supplies reachability.') }}</span>
-            </label>
-            @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_changes-error" role="alert">{{ $message }}</p>@enderror
+            @if ($sshAccessImpact)
+                <label class="checkbox-option" for="confirm_ssh_group_changes">
+                    <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1" @error('confirm_ssh_group_changes') aria-invalid="true" aria-describedby="confirm_ssh_group_changes-error" @enderror>
+                    <span>{{ __('Confirm SSH membership changes. Adding a user may enable already-approved SSH capabilities on this group’s Targets; removing a user may lift a group SSH denial if another group still supplies reachability.') }}</span>
+                </label>
+                @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_changes-error" role="alert">{{ $message }}</p>@enderror
+            @endif
 
             <div class="field">
                 <label for="current_password">{{ __('Your current password') }}</label>
