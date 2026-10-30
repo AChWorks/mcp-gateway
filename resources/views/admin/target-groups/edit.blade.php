@@ -13,6 +13,8 @@
     <a href="{{ route('admin.target-groups.index') }}">{{ __('Back to target groups') }}</a>
 </div>
 
+@include('admin.access-batches.context-nav', ['context' => 'group-restrictions', 'subject' => ['id' => (string) $targetGroup->getKey()]])
+
 <div class="content-stack">
     <section class="panel panel-wide">
         <form class="form-stack" method="post" action="{{ route('admin.target-groups.update', ['targetGroup' => $targetGroup->id]) }}">
@@ -66,8 +68,6 @@
 
             <div class="action-row">
                 <button class="button button-primary" type="submit">{{ __('Save target group') }}</button>
-                <a class="button button-secondary" href="{{ route('admin.target-groups.targets.index', ['targetGroup' => $targetGroup->id]) }}">{{ __('Manage targets') }}</a>
-                <a class="button button-secondary" href="{{ route('admin.target-groups.users.index', ['targetGroup' => $targetGroup->id]) }}">{{ __('Manage users') }}</a>
             </div>
         </form>
     </section>

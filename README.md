@@ -104,6 +104,8 @@ The Dashboard highlights Targets that **need review**, separates paused Targets 
 
 Successful sign-in opens an Administration section available to the account. If no section is available, the account receives a clear access message and can sign out; a forbidden Admin page keeps its 403 status with permitted navigation and recovery. This does not grant denied permissions. SSH acknowledgements appear only for the access operation that can require them. Permission restriction checkboxes explicitly say **Deny**: checked means blocked. Ordinary role defaults remain available without opening the advanced restriction list.
 
+Target groups open on their member Targets, with Users and Restrictions beside them. User pages provide direct Groups and Targets entry points. Search and select explicit items across 50-row pages, review up to 100 changes, then apply the batch with one current-password confirmation. See [group and Target assignment workflows](docs/ADMIN-ACCESS-WORKFLOWS.md) for selection, review, SSH and access-rule details.
+
 Only grant permissions appropriate to the actual WordPress user or SSH account; Gateway permissions do not turn root SSH into a sandbox.
 
 When a tool fails, use its `diagnostic_reference` with **Admin → Activity** (`/admin/activity`) or `operation-diagnostics-read`. Diagnostics preserve the *observed* error and its stage with sensitive values removed; if a downstream system omitted the original cause, Gateway cannot reconstruct it. Never blindly retry a mutation with an unknown result.

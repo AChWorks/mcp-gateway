@@ -4,8 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 mode="${1:-browser}"
-if [[ "$mode" != browser && "$mode" != concurrency-only && "$mode" != experience-only ]]; then
-    echo 'Usage: check-admin-external-authorization-browser.sh [concurrency-only|experience-only]' >&2
+if [[ "$mode" != browser && "$mode" != concurrency-only && "$mode" != experience-only && "$mode" != groups-only ]]; then
+    echo 'Usage: check-admin-external-authorization-browser.sh [concurrency-only|experience-only|groups-only]' >&2
     exit 2
 fi
 for tool in php curl python3; do
@@ -99,12 +99,15 @@ for url in "$APP_URL" "$GATEWAY_BROWSER_RACE_GET_ONE_URL" "$GATEWAY_BROWSER_RACE
     fi
 done
 
-if [[ "$mode" != experience-only ]]; then
+if [[ "$mode" == browser || "$mode" == concurrency-only ]]; then
     python3 tests/Support/external_authorization_concurrency.py
 fi
 if [[ "$mode" == browser ]]; then
     node tests/Browser/external-authorization.cjs
 fi
-if [[ "$mode" != concurrency-only ]]; then
+if [[ "$mode" == browser || "$mode" == experience-only ]]; then
     node tests/Browser/admin-experience.cjs
+fi
+if [[ "$mode" == browser || "$mode" == groups-only ]]; then
+    node tests/Browser/admin-group-workflows.cjs
 fi

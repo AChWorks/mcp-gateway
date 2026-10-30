@@ -12,6 +12,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\MessageBag;
 use Illuminate\Support\ViewErrorBag;
 use Tests\TestCase;
 
@@ -989,6 +990,140 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"]/ancestor::details/summary[contains(., "checked means blocked")])'));
         self::assertSame(3, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"][@checked][starts-with(@value,"ssh.")])'));
         self::assertSame(0, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"][@value="dashboard.view"][@checked])'));
+    }
+
+    public function test_access_collections_share_native_selection_controls_and_context_navigation(): void
+    {
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'UI group']);
+        $user = User::query()->create([
+            'name' => 'UI selected user', 'email' => 'ui-access@example.test', 'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Viewer, 'target_scope_mode' => TargetScopeMode::Selected,
+            'access_enabled' => true,
+        ]);
+        foreach ([
+            ['/admin/target-groups/'.$group->id.'/targets', 'group-targets', (string) $group->id],
+            ['/admin/users/'.$user->id.'/groups', 'user-groups', (string) $user->id],
+        ] as [$url, $context, $subject]) {
+            $html = $this->get($url)->assertOk()->getContent();
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+            self::assertSame(1, (int) $xpath->evaluate('count(//form[@data-access-selection][@method="post"])'));
+            self::assertSame(route('admin.access-batches.selection', ['context' => $context, 'subject' => $subject]), $xpath->evaluate('string(//form[@data-access-selection]/@action)'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//form[@data-access-selection]/input[@name="_token"])'));
+            self::assertSame(0, (int) $xpath->evaluate('count(//form[@data-access-selection]//input[@type="password"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//button[@data-select-page][@type="submit"][@name="action"][@value="select-page"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//nav[contains(concat(" ",normalize-space(@class)," ")," section-nav ")]/a[@aria-current="page"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//*[@data-selection-count][@role="status"][@aria-live="polite"])'));
+        }
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        self::assertStringContainsString('.selection-toolbar {', $css);
+        self::assertStringContainsString('.access-item-identity {', $css);
+    }
+
+    public function test_access_selection_and_review_keep_readable_identities_inside_named_keyboard_scroll_regions(): void
+    {
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'Production member group']);
+        $user = User::query()->create([
+            'name' => 'Fixture member', 'email' => 'fixture-member@example.test', 'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Viewer, 'target_scope_mode' => TargetScopeMode::Selected,
+            'access_enabled' => true,
+        ]);
+        $target = Target::query()->create([
+            'target_id' => 'fixture-member-'.str_repeat('a', 49),
+            'display_name' => 'Fixture member Target', 'connector_type' => 'wp_ai_bridge',
+        ]);
+        foreach ([
+            ['group-targets', (string) $group->id, (string) $target->id, '/admin/target-groups/'.$group->id.'/targets', $target->display_name],
+            ['group-users', (string) $group->id, (string) $user->id, '/admin/target-groups/'.$group->id.'/users', $user->name],
+            ['user-groups', (string) $user->id, (string) $group->id, '/admin/users/'.$user->id.'/groups', $group->name],
+            ['user-targets', (string) $user->id, (string) $target->id, '/admin/users/'.$user->id.'/targets', $target->display_name],
+        ] as [$context, $subject, $item, $url, $label]) {
+            $intent = $context === 'user-targets' ? 'allow' : 'add';
+            $collection = $this->get($url.'?membership=available&intent='.$intent)->assertOk()->getContent();
+            $review = $this->post(route('admin.access-batches.selection', compact('context', 'subject')), [
+                'page_ids' => [$item], 'selected_ids' => [$item], 'selectable_ids' => [$item],
+                'membership' => 'available', 'shown_membership' => 'available',
+                'intent' => $intent, 'shown_intent' => $intent, 'action' => 'review',
+            ])->assertRedirect()->assertSessionHasNoErrors();
+            $reviewHtml = $this->get($review->headers->get('Location'))->assertOk()->getContent();
+            foreach ([$collection, $reviewHtml] as $html) {
+                $dom = new \DOMDocument;
+                $previous = libxml_use_internal_errors(true);
+                $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+                libxml_clear_errors();
+                libxml_use_internal_errors($previous);
+                $xpath = new \DOMXPath($dom);
+                $region = '//div[contains(concat(" ",normalize-space(@class)," ")," table-wrap ")][@tabindex="0"][@role="region"][@aria-describedby="access-table-scroll-help"]';
+                self::assertSame(1, (int) $xpath->evaluate('count('.$region.'[string-length(@aria-label)>0]/table[not(@role)])'));
+                self::assertGreaterThanOrEqual(3, (int) $xpath->evaluate('count('.$region.'/table/thead/tr/th[@scope="col"])'));
+                self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="access-table-scroll-help"][contains(.,"Scroll horizontally")])'));
+                self::assertSame(1, (int) $xpath->evaluate('count('.$region.'/preceding-sibling::*[1][self::p[@id="access-table-scroll-help"]])'));
+                self::assertSame(0, (int) $xpath->evaluate('count('.$region.'/parent::*[contains(concat(" ",normalize-space(@class)," ")," form-stack ") or contains(concat(" ",normalize-space(@class)," ")," form-grid ")])'));
+                self::assertSame(1, (int) $xpath->evaluate('count('.$region.'//td[@class="access-item-identity"]/strong[text()="'.$label.'"])'));
+                self::assertSame(0, (int) $xpath->evaluate('count('.$region.'/table//*[@role])'));
+            }
+        }
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        self::assertSame(1, preg_match('/\.access-item-identity\s*\{([^}]+)\}/s', $css, $identity));
+        self::assertStringContainsString('min-inline-size: 12rem;', $identity[1]);
+        self::assertStringContainsString('overflow-wrap: anywhere;', $identity[1]);
+        self::assertSame(1, preg_match('/\.table-wrap\s*\{([^}]+)\}/s', $css, $wrapper));
+        self::assertStringContainsString('overflow-x: auto;', $wrapper[1]);
+        self::assertSame(1, preg_match('/\.field-help \+ \.table-wrap\[tabindex="0"\]\s*\{([^}]+)\}/s', $css, $helperGap));
+        self::assertStringContainsString('margin-block-start: 0.75rem;', $helperGap[1]);
+        self::assertSame(1, preg_match('/\.table-wrap\[tabindex="0"\]:focus-visible\s*\{([^}]+)\}/s', $css, $focus));
+        self::assertStringContainsString('outline: 3px solid var(--ui-focus);', $focus[1]);
+    }
+
+    public function test_section_heading_spacing_contract_covers_native_forms_feedback_and_shared_siblings(): void
+    {
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        self::assertSame(1, preg_match('/\\.section-heading \\+ :is\\(form, \\.alert\\),\\s*\\.section-heading \\+ \\.alert \\+ form\\s*\\{([^}]+)\\}/s', $css, $rule));
+        self::assertStringContainsString('margin-block-start: var(--ui-panel-stack-gap);', $rule[1]);
+        $xpathFor = static function (string $html): \DOMXPath {
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+
+            return new \DOMXPath($dom);
+        };
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'Heading form spacing']);
+        $user = User::query()->create([
+            'name' => 'Heading sibling', 'email' => 'heading-sibling@example.test', 'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Viewer, 'target_scope_mode' => TargetScopeMode::Selected,
+        ]);
+        foreach ([
+            '/admin/target-groups/'.$group->id.'/targets?membership=available&intent=add',
+            '/admin/users/'.$user->id.'/targets?membership=available&intent=allow',
+        ] as $url) {
+            $response = $this->get($url)->assertOk();
+            if (str_starts_with($url, '/admin/users/')) {
+                $response->assertSee('Existing role, global, group and individual restrictions remain in effect.');
+            }
+            $xpath = $xpathFor($response->getContent());
+            self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="access-members-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][self::form])'));
+        }
+        $errors = (new ViewErrorBag)->put('default', new MessageBag(['selection' => 'Review the changed selection.']));
+        $groupPage = $this->get('/admin/target-groups/'.$group->id.'/targets?membership=available&intent=add')->assertOk();
+        $xpath = $xpathFor(view('admin.access-batches.index', [
+            ...$groupPage->original->getData(), 'errors' => $errors,
+        ])->render());
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="access-members-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][self::p[contains(concat(" ",normalize-space(@class)," ")," alert ")]]/following-sibling::*[1][self::form])'));
+        Target::query()->create([
+            'target_id' => 'heading-table-sibling', 'display_name' => 'Heading table sibling',
+            'connector_type' => 'wp_ai_bridge', 'connection_state' => 'error',
+        ]);
+        $xpath = $xpathFor($this->withSession(['errors' => new ViewErrorBag])->get('/admin')->assertOk()->getContent());
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="needs-review-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][contains(concat(" ",normalize-space(@class)," ")," table-wrap ")])'));
     }
 
     private function owner(): User

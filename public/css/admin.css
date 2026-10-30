@@ -442,6 +442,13 @@ code {
     min-width: 0;
 }
 
+/* A heading and its next native form/feedback need the same breathing room.
+   This sets one margin, including existing .form-stack consumers. */
+.section-heading + :is(form, .alert),
+.section-heading + .alert + form {
+    margin-block-start: var(--ui-panel-stack-gap);
+}
+
 .content-grid,
 .form-grid,
 .stats-grid {
@@ -1007,6 +1014,12 @@ a:focus-visible {
     border-radius: 0.7rem;
 }
 
+.alert-info {
+    border-color: var(--ui-border);
+    background: var(--ui-surface-subtle);
+    color: var(--ui-ink);
+}
+
 .alert-success {
     border-color: var(--ui-success-border);
     background: var(--ui-success-bg);
@@ -1038,6 +1051,16 @@ a:focus-visible {
     border: 1px solid var(--ui-border);
     border-radius: 0.8rem;
     background: var(--ui-surface);
+}
+
+/* Leave room between associated helper text and the scroll region's focus ring. */
+.field-help + .table-wrap[tabindex="0"] {
+    margin-block-start: 0.75rem;
+}
+
+.table-wrap[tabindex="0"]:focus-visible {
+    outline: 3px solid var(--ui-focus);
+    outline-offset: 2px;
 }
 
 table {
@@ -1099,6 +1122,52 @@ td input[type="checkbox"] {
 .selection-control:has(input:disabled) {
     cursor: not-allowed;
     opacity: 0.65;
+}
+
+/* One explicit-selection pattern serves group and user access collections. */
+.selection-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-block: 1.25rem 0.5rem;
+}
+
+.selection-toolbar > p,
+.selection-toolbar .action-row {
+    margin-block: 0;
+}
+
+.access-selection-help {
+    margin-block-end: 1rem;
+}
+
+.access-intent {
+    max-inline-size: 38rem;
+}
+
+/* Preserve readable names in both selection and review; extra width scrolls
+   within the table wrapper instead of squeezing ordinary words into fragments. */
+.access-item-identity {
+    min-inline-size: 12rem;
+    overflow-wrap: anywhere;
+}
+
+.access-item-identity > strong,
+.access-item-identity > span,
+.access-item-identity > code {
+    display: block;
+}
+
+.access-selection-table th:first-child,
+.access-selection-table td:first-child {
+    inline-size: 3rem;
+    padding-inline: 0.4rem;
+}
+
+.access-unavailable {
+    margin-block-start: 1rem;
 }
 
 .table-action {

@@ -18,15 +18,20 @@ use Illuminate\View\View;
 
 final class TargetGroupController extends Controller
 {
-    public function index(): View
+    public function index(Request $request): View
     {
         Gate::authorize(GatewayPermission::UsersManage->value);
+
+        $fields = $request->validate(['search' => ['nullable', 'string', 'max:160']]);
+        $search = trim((string) ($fields['search'] ?? ''));
 
         return view('admin.target-groups.index', [
             'groups' => TargetGroup::query()
                 ->withCount(['targets', 'users'])
-                ->orderBy('name')
-                ->simplePaginate(50),
+                ->when($search !== '', static fn ($query) => $query->where('name', 'like', '%'.$search.'%'))
+                ->orderBy('name')->orderBy('id')
+                ->simplePaginate(50)->withQueryString(),
+            'search' => $search,
         ]);
     }
 
@@ -56,7 +61,7 @@ final class TargetGroupController extends Controller
         );
 
         return redirect()
-            ->route('admin.target-groups.edit', ['targetGroup' => $group->id])
+            ->route('admin.target-groups.targets.index', ['targetGroup' => $group->id])
             ->with('status', __('Target group created.'));
     }
 

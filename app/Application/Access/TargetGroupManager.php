@@ -137,6 +137,131 @@ final readonly class TargetGroupManager
         });
     }
 
+    /**
+     * Apply one bounded relationship delta, never replace a paginated collection.
+     * The workflow holds its review snapshot locks before calling this method;
+     * direct callers still receive fresh actor, identity, Owner and SSH checks.
+     *
+     * @param  list<string>  $ids
+     */
+    public function updateMemberships(
+        User $actor,
+        AccessBatchContext $context,
+        string $subjectId,
+        array $ids,
+        bool $assigned,
+        bool $sshReviewed,
+        string $correlationId,
+    ): int {
+        if ($context === AccessBatchContext::UserTargets) {
+            throw new DomainException('batch_invalid_context');
+        }
+        $subjectId = $context->subjectId($subjectId);
+        $ids = $context->selection($ids);
+        $actor = AccessBatchGuard::actor($actor);
+
+        return DB::transaction(function () use ($actor, $context, $subjectId, $ids, $assigned, $sshReviewed, $correlationId): int {
+            $groupIds = $context->subjectIsGroup() ? [$subjectId] : $ids;
+            $groups = TargetGroup::query()->whereIn('id', $groupIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            if ($groups->count() !== count($groupIds)) {
+                throw new DomainException('batch_selection_unavailable');
+            }
+            $userIds = match ($context) {
+                AccessBatchContext::GroupUsers => $ids,
+                AccessBatchContext::UserGroups => [$subjectId],
+                default => [],
+            };
+            $lockUsers = array_values(array_unique([(string) $actor->getKey(), ...$userIds]));
+            sort($lockUsers, SORT_STRING);
+            $users = AccessBatchGuard::lockUsers($lockUsers);
+            if ($users->count() !== count($lockUsers)) {
+                throw new DomainException('batch_selection_unavailable');
+            }
+            $actor = AccessBatchGuard::actor($users->get($actor->getKey()) ?? $actor);
+            foreach ($userIds as $id) {
+                if (($selectedUser = $users->get($id)) instanceof User && AccessBatchGuard::isOwner($selectedUser)) {
+                    throw new DomainException('owner_unrestricted');
+                }
+            }
+            $targets = Target::query()->whereIn('id', $context === AccessBatchContext::GroupTargets ? $ids : [])
+                ->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            if ($context === AccessBatchContext::GroupTargets && $targets->count() !== count($ids)) {
+                throw new DomainException('batch_selection_unavailable');
+            }
+            $table = $context === AccessBatchContext::GroupTargets ? 'target_group_targets' : 'target_group_users';
+            $key = match ($context) {
+                AccessBatchContext::GroupTargets => 'target_record_id',
+                AccessBatchContext::GroupUsers => 'user_id',
+                default => 'target_group_id',
+            };
+            $query = DB::table($table)->where(
+                $context->subjectIsGroup() ? 'target_group_id' : 'user_id', $subjectId,
+            )->whereIn($key, $ids);
+            $existing = $query->pluck($key)->map(static fn ($id): string => (string) $id)->all();
+            $changed = array_values(array_filter($ids, static fn (string $id): bool => in_array($id, $existing, true) !== $assigned));
+            if ($changed === []) {
+                return 0;
+            }
+            $impact = match ($context) {
+                AccessBatchContext::GroupTargets => $targets->only($changed)->contains(
+                    static fn (Target $target): bool => $target->connector_type === 'ssh_direct'),
+                AccessBatchContext::GroupUsers => $this->hasSshAccessImpact($groups->get($subjectId) ?? throw new DomainException('batch_selection_unavailable')),
+                default => $this->sshImpactGroupIds($changed) !== [],
+            };
+            AccessBatchGuard::ssh($actor, $impact, $sshReviewed);
+            if ($assigned) {
+                $rows = [];
+                foreach ($changed as $id) {
+                    $rows[] = [
+                        'target_group_id' => $context->subjectIsGroup() ? $subjectId : $id,
+                        $context === AccessBatchContext::GroupTargets ? 'target_record_id' : 'user_id' => $context->subjectIsGroup() ? $id : $subjectId,
+                        'created_at' => now(), 'updated_at' => now(),
+                    ];
+                }
+                DB::table($table)->insert($rows);
+            } else {
+                DB::table($table)->where(
+                    $context->subjectIsGroup() ? 'target_group_id' : 'user_id', $subjectId,
+                )->whereIn($key, $changed)->delete();
+                if ($context !== AccessBatchContext::GroupTargets) {
+                    // Both directions of the UI use the existing revocation rule.
+                    DB::table('wordpress_publish_group_grants')->where(
+                        $context->subjectIsGroup() ? 'target_group_id' : 'user_id', $subjectId,
+                    )->whereIn($key, $changed)->delete();
+                }
+            }
+            foreach ($changed as $id) {
+                if ($context === AccessBatchContext::GroupTargets) {
+                    $this->activity->recordRequired($correlationId, 'target-group-target-update:'.$subjectId, 'success', $targets->get($id));
+                } else {
+                    $groupId = $context->subjectIsGroup() ? $subjectId : $id;
+                    $userId = $context->subjectIsGroup() ? $id : $subjectId;
+                    $this->activity->recordRequired($correlationId, 'target-group-user-update:'.$groupId.':'.$userId, 'success');
+                }
+            }
+
+            return count($changed);
+        });
+    }
+
+    /** @param list<string> $ids
+     * @return list<string>
+     */
+    public function sshImpactGroupIds(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+        $targets = DB::table('target_group_targets as memberships')
+            ->join('targets', 'targets.id', '=', 'memberships.target_record_id')
+            ->whereIn('memberships.target_group_id', $ids)->where('targets.connector_type', 'ssh_direct')
+            ->distinct()->pluck('memberships.target_group_id')->all();
+        $denials = DB::table('target_group_permission_denials')->whereIn('target_group_id', $ids)
+            ->where('permission', 'like', 'ssh.%')->distinct()->pluck('target_group_id')->all();
+
+        return array_values(array_unique([...$targets, ...$denials]));
+    }
+
     /** Optimistic revision bound to the full sorted denial set shown to the Owner. */
     public function denialRevision(TargetGroup $group): string
     {

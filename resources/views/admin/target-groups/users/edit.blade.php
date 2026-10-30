@@ -13,6 +13,8 @@
     <a href="{{ route('admin.target-groups.users.index', ['targetGroup' => $targetGroup->id]) }}">{{ __('Back to group users') }}</a>
 </div>
 
+@include('admin.access-batches.context-nav', ['context' => 'group-users', 'subject' => ['id' => (string) $targetGroup->getKey()]])
+
 <section class="panel panel-wide">
     @if ($isOwner)
         <div class="alert alert-success" role="status">{{ __('Owners remain unrestricted for recovery and cannot be assigned to a narrowing target group.') }}</div>

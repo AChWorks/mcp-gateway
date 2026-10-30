@@ -200,6 +200,7 @@ Route::middleware(['web', 'auth'])->get('/__browser__/handoff-present/{handoff}'
 
 if (getenv('GATEWAY_ADMIN_EXPERIENCE_FIXTURE') === '1') {
     require __DIR__.'/admin-experience-browser-fixtures.php';
+    require __DIR__.'/admin-group-browser-fixtures.php';
 }
 
 $app->handleRequest(Request::capture());
