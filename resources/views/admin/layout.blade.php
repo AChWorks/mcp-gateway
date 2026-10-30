@@ -36,7 +36,7 @@
     @auth
         <aside class="admin-sidebar" aria-label="{{ __('Gateway administration') }}">
             <div class="sidebar-heading">
-                <a class="brand" href="{{ route('admin.dashboard') }}">
+                <a class="brand" href="{{ app(\App\Application\Admin\AdminNavigation::class)->landingUrl(auth()->user()) }}">
                     <span class="brand-mark" aria-hidden="true">M</span>
                     <span>{{ __('MCP Gateway') }}<small>{{ __('Administration') }}</small></span>
                 </a>

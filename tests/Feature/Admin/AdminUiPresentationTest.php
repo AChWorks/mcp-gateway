@@ -904,6 +904,43 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, substr_count($filtered->getContent(), '<code>dcr_client_secret_post</code>'));
     }
 
+    public function test_access_recovery_pages_keep_the_shared_shell_and_native_sign_out(): void
+    {
+        $viewer = User::query()->create([
+            'name' => 'Restricted fixture', 'email' => 'restricted-presentation@example.test',
+            'password' => 'CorrectHorse!234', 'role' => GatewayRole::Viewer,
+            'target_scope_mode' => TargetScopeMode::All, 'access_enabled' => true,
+        ]);
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $viewer->id, 'permission' => GatewayPermission::DashboardView->value,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $denied = $this->actingAs($viewer)->get('/admin')->assertForbidden()->getContent();
+
+        foreach ([GatewayPermission::TargetsView, GatewayPermission::ActivityView, GatewayPermission::GatewayConnectionView] as $permission) {
+            DB::table('user_permission_denials')->insert([
+                'user_id' => $viewer->id, 'permission' => $permission->value,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+        $noAccess = $this->get('/admin/access')->assertOk()->getContent();
+
+        foreach ([[$denied, 'administration-denied-title'], [$noAccess, 'administration-access-title']] as [$html, $titleId]) {
+            $document = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($document);
+
+            self::assertSame(1, (int) $xpath->evaluate('count(//a[@class="skip-link"][@href="#main-content"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//main[@id="main-content"][@tabindex="-1"]//h1[@id="'.$titleId.'"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//main//section[@aria-labelledby="'.$titleId.'"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//main//form[@method="post"][@action="'.route('admin.logout').'"]//input[@name="_token"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//main//form[@action="'.route('admin.logout').'"]//button[@type="submit"])'));
+        }
+    }
+
     private function owner(): User
     {
         return User::query()->create([
