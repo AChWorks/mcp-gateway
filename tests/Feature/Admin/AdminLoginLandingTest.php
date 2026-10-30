@@ -150,6 +150,46 @@ final class AdminLoginLandingTest extends TestCase
         $this->assertGuest();
     }
 
+    #[DataProvider('roles')]
+    public function test_exact_update_intention_requires_an_enabled_owner(string $role): void
+    {
+        $user = $this->user(GatewayRole::from($role));
+
+        $this->withSession(['url.intended' => url('/').'/update/'])
+            ->post('/admin/login', ['email' => $user->email, 'password' => 'CorrectHorse!234'])
+            ->assertRedirect($role === GatewayRole::Owner->value ? url('/').'/update/' : '/admin')
+            ->assertSessionMissing('url.intended');
+    }
+
+    public function test_authenticated_owner_keeps_the_exact_relative_update_intention(): void
+    {
+        $this->actingAs($this->user(GatewayRole::Owner))
+            ->withSession(['url.intended' => '/update/'])->get('/admin/login')
+            ->assertRedirect(url('/').'/update/')->assertSessionMissing('url.intended');
+    }
+
+    #[DataProvider('invalidUpdateIntentions')]
+    public function test_update_intention_does_not_accept_other_origins_paths_or_parameters(string $intended): void
+    {
+        $user = $this->user(GatewayRole::Owner);
+
+        $this->withSession(['url.intended' => $intended])
+            ->post('/admin/login', ['email' => $user->email, 'password' => 'CorrectHorse!234'])
+            ->assertRedirect('/admin')->assertSessionMissing('url.intended');
+    }
+
+    public static function invalidUpdateIntentions(): array
+    {
+        return [
+            ['https://other.example.test/update/'],
+            ['//other.example.test/update/'],
+            ['/update'],
+            ['/update/?action=finish'],
+            ['/update/#continue'],
+            ['/update/other'],
+        ];
+    }
+
     #[DataProvider('unsafeIntentions')]
     public function test_unsafe_or_unrelated_intention_does_not_replace_the_authorized_landing(string $intended): void
     {
