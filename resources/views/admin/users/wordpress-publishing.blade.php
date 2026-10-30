@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Access control') }}</div>
         <h1>{{ __('WordPress publisher grants') }}</h1>
-        <p class="muted">{{ $managedUser->name }} · {{ $managedUser->email }}</p>
+        <p class="muted reading-width">{{ $managedUser->name }} · {{ $managedUser->email }}</p>
     </div>
     <a href="{{ route('admin.users.edit', ['user' => $managedUser->id]) }}">{{ __('Back to user') }}</a>
 </div>
@@ -38,7 +38,9 @@
                                     @method('DELETE')
                                     <div class="field">
                                         <label for="revoke-password-{{ $grant->id }}">{{ __('Current Owner password') }}</label>
-                                        <input id="revoke-password-{{ $grant->id }}" name="current_password" type="password" required maxlength="255" autocomplete="current-password">
+                                        <input id="revoke-password-{{ $grant->id }}" name="current_password" type="password" required maxlength="255" autocomplete="current-password"
+                                            @error('current_password') aria-invalid="true" aria-describedby="revoke-password-{{ $grant->id }}-error" @enderror>
+                                        @error('current_password')<p class="field-error" id="revoke-password-{{ $grant->id }}-error" role="alert">{{ $message }}</p>@enderror
                                     </div>
                                     <button class="button button-danger" type="submit">{{ __('Revoke grant') }}</button>
                                 </form>
@@ -56,23 +58,23 @@
     @if (!$canPublish || $groups->isEmpty())
         <p class="empty-state">{{ __('An enabled Administrator or Operator assigned to a WordPress Target Group is required. Configure the User and Target Group first.') }}</p>
     @else
-        <form class="form-stack" method="post" action="{{ route('admin.users.publishing.store', ['user' => $managedUser->id]) }}">
+        <form class="form-stack form-width" method="post" action="{{ route('admin.users.publishing.store', ['user' => $managedUser->id]) }}">
             @csrf
             <div class="form-grid">
                 <div class="field">
                     <label for="group_id">{{ __('Authorized Target Group') }}</label>
-                    <select id="group_id" name="group_id" required>
+                    <select id="group_id" name="group_id" required @error('group_id') aria-invalid="true" aria-describedby="group_id-error" @enderror>
                         @foreach ($groups as $group)
                             <option value="{{ $group->getKey() }}" @selected(old('group_id') === $group->getKey())>{{ $group->name }}</option>
                         @endforeach
                     </select>
-                    @error('group_id')<p class="field-error">{{ $message }}</p>@enderror
+                    @error('group_id')<p class="field-error" id="group_id-error" role="alert">{{ $message }}</p>@enderror
                 </div>
             </div>
             <div class="field">
                 <label for="current_password">{{ __('Current Owner password') }}</label>
-                <input id="current_password" type="password" name="current_password" maxlength="255" required autocomplete="current-password">
-                @error('current_password')<p class="field-error">{{ $message }}</p>@enderror
+                <input id="current_password" type="password" name="current_password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="current_password-error" @enderror>
+                @error('current_password')<p class="field-error" id="current_password-error" role="alert">{{ $message }}</p>@enderror
             </div>
             <button class="button button-primary" type="submit">{{ __('Grant scoped publication') }}</button>
         </form>

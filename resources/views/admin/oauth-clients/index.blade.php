@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Security') }}</div>
         <h1>{{ __('Approved AI client applications') }}</h1>
-        <p class="muted">{{ __('Profiles identify authenticated MCP applications, not individual AI accounts. Client labels never grant Target permissions.') }}</p>
+        <p class="muted reading-width">{{ __('Profiles identify authenticated MCP applications, not individual AI accounts. Client labels never grant Target permissions.') }}</p>
     </div>
 </div>
 
@@ -36,7 +36,7 @@
                         <strong>{{ $profile['display_name'] }}</strong>
                         <code>{{ $profile['key'] }}</code>
                     </td>
-                    <td><code class="small-code">{{ $profile['client_id'] }}</code></td>
+                    <td><code dir="ltr" class="small-code">{{ $profile['client_id'] }}</code></td>
                     <td><code>{{ $profile['strategy'] }}</code></td>
                     <td>
                         <span class="badge badge-{{ $isActive ? 'success' : 'danger' }}">{{ $isRetired ? __('Retired (permanent)') : ($isActive ? __('Enabled') : __('Disabled / unregistered')) }}</span>
@@ -49,7 +49,7 @@
     <nav class="pagination" aria-label="{{ __('DCR client profile pages') }}">
         {{ $dcrPage->links() }}
     </nav>
-    <p class="muted">{{ __('Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record. Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure. The administrator CLI can explicitly disable a DCR client and retire its unused registration after consent revocation. Retirement frees one slot without deleting identity history or restoring credentials; it cannot be reversed.') }}</p>
+    <p class="muted reading-width">{{ __('Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record. Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure. The administrator CLI can explicitly disable a DCR client and retire its unused registration after consent revocation. Retirement frees one slot without deleting identity history or restoring credentials; it cannot be reversed.') }}</p>
 </section>
 
 <section class="panel panel-wide ai-client-authorizations">
@@ -57,8 +57,9 @@
     <form class="filter-grid" method="get" action="{{ route('admin.oauth-clients.index') }}">
         <div class="field">
             <label for="profile">{{ __('Exact profile key') }}</label>
-            <input id="profile" name="profile" type="text" maxlength="48" value="{{ $profileFilter ?? '' }}">
-        </div>
+            <input id="profile" name="profile" type="text" maxlength="48" value="{{ $profileFilter ?? '' }}" @error('profile') aria-invalid="true" aria-describedby="profile-error" @enderror>
+                @error('profile')<p class="field-error" id="profile-error" role="alert">{{ $message }}</p>@enderror
+            </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Filter') }}</button>
             <a class="button button-secondary" href="{{ route('admin.oauth-clients.index') }}">{{ __('Clear') }}</a>
@@ -82,10 +83,10 @@
                     <tr>
                         <td>
                             <code>{{ $grant->client_profile_key ?? 'unknown' }}</code>
-                            <small><code class="small-code">{{ $grant->client_id }}</code></small>
+                            <small><code dir="ltr" class="small-code">{{ $grant->client_id }}</code></small>
                         </td>
                         <td>{{ $grant->user_email }}</td>
-                        <td><code class="small-code">{{ $grant->resource }}</code></td>
+                        <td><code dir="ltr" class="small-code">{{ $grant->resource }}</code></td>
                         <td>
                             <span class="badge badge-{{ $grant->revoked_at === null ? 'success' : 'danger' }}">
                                 {{ $grant->revoked_at === null ? __('Not revoked') : __('Revoked') }}
@@ -98,8 +99,10 @@
                                     @csrf
                                     @method('DELETE')
                                     <label for="password-{{ $grant->id }}">{{ __('Current Owner password') }}</label>
-                                    <input id="password-{{ $grant->id }}" name="current_password" type="password" autocomplete="current-password" required maxlength="255">
-                                    <button class="button button-secondary" type="submit">{{ __('Revoke this grant') }}</button>
+                                    <input id="password-{{ $grant->id }}" name="current_password" type="password" autocomplete="current-password" required maxlength="255"
+                                        @error('current_password') aria-invalid="true" aria-describedby="password-{{ $grant->id }}-error" @enderror>
+                                    @error('current_password')<p class="field-error" id="password-{{ $grant->id }}-error" role="alert">{{ $message }}</p>@enderror
+                                    <button class="button button-danger" type="submit">{{ __('Revoke this grant') }}</button>
                                 </form>
                             @else
                                 <span class="muted">{{ __('Already revoked') }}</span>

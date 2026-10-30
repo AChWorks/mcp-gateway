@@ -7,8 +7,8 @@
     <div>
         <div class="eyebrow">{{ __('Activity') }}</div>
         <h1>{{ __('Operator activity view') }}</h1>
-        <p class="muted">{{ __('Only bounded metadata is shown. Raw MCP payloads and credentials are not stored in this feed.') }}</p>
-        <p class="muted">{{ __('Filter by an exact diagnostic reference, then expand the failure for recorded evidence and suggested checks. Older events may have only the error code; detailed stages are never inferred.') }}</p>
+        <p class="muted reading-width">{{ __('Only bounded metadata is shown. Raw MCP payloads and credentials are not stored in this feed.') }}</p>
+        <p class="muted reading-width">{{ __('Filter by an exact diagnostic reference, then expand the failure for recorded evidence and suggested checks. Older events may have only the error code; detailed stages are never inferred.') }}</p>
     </div>
 </div>
 
@@ -16,16 +16,19 @@
     <form class="filter-grid" method="get" action="{{ route('admin.activity') }}">
         <div class="field">
             <label for="target_id">{{ __('Target ID') }}</label>
-            <input id="target_id" name="target_id" type="text" maxlength="64" value="{{ $filters['target_id'] ?? '' }}">
-        </div>
+            <input id="target_id" name="target_id" type="text" maxlength="64" value="{{ $filters['target_id'] ?? '' }}" @error('target_id') aria-invalid="true" aria-describedby="target_id-error" @enderror>
+                @error('target_id')<p class="field-error" id="target_id-error" role="alert">{{ $message }}</p>@enderror
+            </div>
         <div class="field">
             <label for="operation">{{ __('Operation') }}</label>
-            <input id="operation" name="operation" type="text" maxlength="128" value="{{ $filters['operation'] ?? '' }}">
-        </div>
+            <input id="operation" name="operation" type="text" maxlength="128" value="{{ $filters['operation'] ?? '' }}" @error('operation') aria-invalid="true" aria-describedby="operation-error" @enderror>
+                @error('operation')<p class="field-error" id="operation-error" role="alert">{{ $message }}</p>@enderror
+            </div>
         <div class="field">
             <label for="diagnostic_reference">{{ __('Diagnostic reference') }}</label>
-            <input id="diagnostic_reference" name="diagnostic_reference" type="text" maxlength="36" spellcheck="false" value="{{ $filters['diagnostic_reference'] ?? '' }}" placeholder="00000000-0000-0000-0000-000000000000">
-        </div>
+            <input id="diagnostic_reference" name="diagnostic_reference" type="text" maxlength="36" spellcheck="false" value="{{ $filters['diagnostic_reference'] ?? '' }}" placeholder="00000000-0000-0000-0000-000000000000" @error('diagnostic_reference') aria-invalid="true" aria-describedby="diagnostic_reference-error" @enderror>
+                @error('diagnostic_reference')<p class="field-error" id="diagnostic_reference-error" role="alert">{{ $message }}</p>@enderror
+            </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Filter') }}</button>
             <a class="button button-secondary" href="{{ route('admin.activity') }}">{{ __('Clear') }}</a>
@@ -52,12 +55,30 @@
                 @foreach ($feed['items'] as $item)
                     <tr>
                         <td><time datetime="{{ $item['created_at'] }}">{{ $item['created_at'] }}</time></td>
-                        <td><code>{{ $item['target_id'] ?? '—' }}</code></td>
-                        <td><code>{{ $item['client_profile_key'] ?? '—' }}</code></td>
+                        <td><code dir="ltr">{{ $item['target_id'] ?? '—' }}</code></td>
+                        <td><code dir="ltr">{{ $item['client_profile_key'] ?? '—' }}</code></td>
                         <td>{{ $item['operation'] }}</td>
-                        <td><span class="badge badge-{{ $item['outcome'] === 'success' ? 'success' : 'danger' }}">{{ $item['outcome'] }}</span></td>
                         <td>
-                            <code>{{ $item['error_code'] ?? '—' }}</code>
+                            @php
+                                $outcomeTone = match ($item['outcome']) {
+                                    'success' => 'success',
+                                    'failure' => 'danger',
+                                    default => 'warning',
+                                };
+                                $outcomeLabel = match ($item['outcome']) {
+                                    'success' => __('Succeeded'),
+                                    'failure' => __('Failed'),
+                                    'unknown' => __('Unknown outcome'),
+                                    default => $item['outcome'],
+                                };
+                            @endphp
+                            <span class="badge badge-{{ $outcomeTone }}">{{ $outcomeLabel }}</span>
+                            @if ($item['outcome'] === 'unknown')
+                                <p class="field-help">{{ __('The effect could not be confirmed. Check the recorded evidence before retrying.') }}</p>
+                            @endif
+                        </td>
+                        <td>
+                            <code dir="ltr">{{ $item['error_code'] ?? '—' }}</code>
                             @if ($item['error_code'] !== null)
                                 <details>
                                     <summary>{{ __('Explain error') }}</summary>
@@ -65,15 +86,18 @@
                                     <p><strong>{{ __('Suggested checks') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep($item['error_code']) }}</p>
                                     @if ($item['diagnostics'] !== [])
                                         @foreach ($item['diagnostics'] as $field => $value)
-                                            <p><strong>{{ __(ucwords(str_replace('_', ' ', $field))) }}:</strong> <code style="white-space: pre-wrap; overflow-wrap: anywhere;">{{ is_bool($value) ? ($value ? 'true' : 'false') : (is_array($value) ? json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) : $value) }}</code></p>
+                                            <div>
+                                                <p><strong>{{ __(ucwords(str_replace('_', ' ', $field))) }}:</strong></p>
+                                                <pre class="operation-result-preview" dir="ltr"><code>{{ is_bool($value) ? ($value ? 'true' : 'false') : (is_array($value) ? json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) : $value) }}</code></pre>
+                                            </div>
                                         @endforeach
                                     @else
-                                        <p class="muted">{{ __('Structured stage details were not retained for this event; do not infer a provider cause.') }}</p>
+                                        <p class="muted reading-width">{{ __('Structured stage details were not retained for this event; do not infer a provider cause.') }}</p>
                                     @endif
                                 </details>
                             @endif
                         </td>
-                        <td><code class="small-code">{{ $item['correlation_id'] }}</code></td>
+                        <td><code dir="ltr" class="small-code">{{ $item['correlation_id'] }}</code></td>
                     </tr>
                 @endforeach
                 </tbody>

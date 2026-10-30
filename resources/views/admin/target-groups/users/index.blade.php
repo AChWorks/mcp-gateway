@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Target group users') }}</div>
         <h1>{{ $targetGroup->name }}</h1>
-        <p class="muted">{{ __('User assignments are paginated and never change the role/global permission ceiling.') }}</p>
+        <p class="muted reading-width">{{ __('User assignments are paginated and never change the role/global permission ceiling.') }}</p>
     </div>
     <a href="{{ route('admin.target-groups.edit', ['targetGroup' => $targetGroup->id]) }}">{{ __('Back to group') }}</a>
 </div>
@@ -16,8 +16,9 @@
     <form class="filter-grid" method="get" action="{{ route('admin.target-groups.users.index', ['targetGroup' => $targetGroup->id]) }}">
         <div class="field">
             <label for="search">{{ __('Search') }}</label>
-            <input id="search" name="search" type="search" maxlength="160" value="{{ $search ?? '' }}" placeholder="{{ __('Name or email') }}">
-        </div>
+            <input id="search" name="search" type="search" maxlength="160" value="{{ $search ?? '' }}" placeholder="{{ __('Name or email') }}" @error('search') aria-invalid="true" aria-describedby="search-error" @enderror>
+                @error('search')<p class="field-error" id="search-error" role="alert">{{ $message }}</p>@enderror
+            </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Filter') }}</button>
             <a class="button button-secondary" href="{{ route('admin.target-groups.users.index', ['targetGroup' => $targetGroup->id]) }}">{{ __('Clear') }}</a>
@@ -42,7 +43,7 @@
                                 <span class="badge badge-{{ $assignments[(int) $user->id] ? 'success' : 'neutral' }}">{{ $assignments[(int) $user->id] ? __('Assigned') : __('Not assigned') }}</span>
                             @endif
                         </td>
-                        <td class="table-action"><a href="{{ route('admin.target-groups.users.edit', ['targetGroup' => $targetGroup->id, 'user' => $user->id]) }}">{{ __('Edit assignment') }}</a></td>
+                        <td class="table-action"><a aria-label="{{ __('Edit assignment for :name', ['name' => $user->name]) }}" href="{{ route('admin.target-groups.users.edit', ['targetGroup' => $targetGroup->id, 'user' => $user->id]) }}">{{ __('Edit assignment') }}</a></td>
                     </tr>
                 @endforeach
                 </tbody>

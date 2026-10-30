@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Access control') }}</div>
         <h1>{{ __('Local users') }}</h1>
-        <p class="muted">{{ __('Roles define the permission ceiling. Global, group, and direct per-target rules can only narrow that authority.') }}</p>
+        <p class="muted reading-width">{{ __('Roles define the permission ceiling. Global, group, and direct per-target rules can only narrow that authority.') }}</p>
     </div>
     @can('users.manage')
         <a class="button button-primary" href="{{ route('admin.users.create') }}">{{ __('Add user') }}</a>
@@ -45,7 +45,7 @@
                         </td>
                         <td class="table-action">
                             @can('users.manage')
-                                <a href="{{ route('admin.users.edit', ['user' => $user->id]) }}">{{ __('Manage') }}</a>
+                                <a aria-label="{{ __('Manage :name', ['name' => $user->name]) }}" href="{{ route('admin.users.edit', ['user' => $user->id]) }}">{{ __('Manage') }}</a>
                             @endcan
                         </td>
                     </tr>

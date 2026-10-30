@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('Access control') }}</div>
         <h1>{{ __('Target groups') }}</h1>
-        <p class="muted">{{ __('Groups add reusable target membership and denial-only capability restrictions without replacing direct target rules.') }}</p>
+        <p class="muted reading-width">{{ __('Groups add reusable target membership and denial-only capability restrictions without replacing direct target rules.') }}</p>
     </div>
     <a class="button button-primary" href="{{ route('admin.target-groups.create') }}">{{ __('Add target group') }}</a>
 </div>
@@ -32,7 +32,7 @@
                         <td><strong>{{ $group->name }}</strong></td>
                         <td>{{ $group->targets_count }}</td>
                         <td>{{ $group->users_count }}</td>
-                        <td class="table-action"><a href="{{ route('admin.target-groups.edit', ['targetGroup' => $group->id]) }}">{{ __('Manage') }}</a></td>
+                        <td class="table-action"><a aria-label="{{ __('Manage :name', ['name' => $group->name]) }}" href="{{ route('admin.target-groups.edit', ['targetGroup' => $group->id]) }}">{{ __('Manage') }}</a></td>
                     </tr>
                 @endforeach
                 </tbody>

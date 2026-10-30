@@ -7,7 +7,7 @@
     <div>
         <div class="eyebrow">{{ __('User target access') }}</div>
         <h1>{{ $managedUser->name }}</h1>
-        <p class="muted">{{ __('Browse the fleet in bounded pages and configure only the target that needs an exception.') }}</p>
+        <p class="muted reading-width">{{ __('Browse the fleet in bounded pages and configure only the target that needs an exception.') }}</p>
     </div>
     <a href="{{ route('admin.users.edit', ['user' => $managedUser->id]) }}">{{ __('Back to user') }}</a>
 </div>
@@ -20,17 +20,19 @@
     <form class="filter-grid" method="get" action="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">
         <div class="field">
             <label for="search">{{ __('Search') }}</label>
-            <input id="search" name="search" type="search" maxlength="160" value="{{ $filters['search'] ?? '' }}" placeholder="{{ __('Name or target ID') }}">
-        </div>
+            <input id="search" name="search" type="search" maxlength="160" value="{{ $filters['search'] ?? '' }}" placeholder="{{ __('Name or target ID') }}" @error('search') aria-invalid="true" aria-describedby="search-error" @enderror>
+                @error('search')<p class="field-error" id="search-error" role="alert">{{ $message }}</p>@enderror
+            </div>
         <div class="field">
             <label for="connection_state">{{ __('Connection state') }}</label>
-            <select id="connection_state" name="connection_state">
+            <select id="connection_state" name="connection_state" @error('connection_state') aria-invalid="true" aria-describedby="connection_state-error" @enderror>
                 <option value="">{{ __('All states') }}</option>
                 @foreach ($connectionStates as $state)
                     <option value="{{ $state->value }}" @selected(($filters['connection_state'] ?? null) === $state->value)>{{ \Illuminate\Support\Str::headline(str_replace('_', ' ', $state->value)) }}</option>
                 @endforeach
             </select>
-        </div>
+                @error('connection_state')<p class="field-error" id="connection_state-error" role="alert">{{ $message }}</p>@enderror
+            </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Filter') }}</button>
             <a class="button button-secondary" href="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">{{ __('Clear') }}</a>
@@ -56,13 +58,13 @@
                     <tr>
                         <td>
                             <strong>{{ $target->display_name }}</strong><br>
-                            <code class="small-code">{{ $target->target_id }}</code>
+                            <code dir="ltr" class="small-code">{{ $target->target_id }}</code>
                         </td>
                         <td><span class="badge badge-{{ $rule['access_rule'] === 'allow' ? 'success' : ($rule['access_rule'] === 'deny' ? 'danger' : 'neutral') }}">{{ \Illuminate\Support\Str::headline($rule['access_rule']) }}</span></td>
                         <td>{{ $rule['denied_count'] }}</td>
                         <td class="table-action">
                             @unless ($isOwner)
-                                <a href="{{ route('admin.users.targets.edit', ['user' => $managedUser->id, 'target' => $target->target_id]) }}">{{ __('Edit rule') }}</a>
+                                <a aria-label="{{ __('Edit rule for :target', ['target' => $target->display_name]) }}" href="{{ route('admin.users.targets.edit', ['user' => $managedUser->id, 'target' => $target->target_id]) }}">{{ __('Edit rule') }}</a>
                             @endunless
                         </td>
                     </tr>
