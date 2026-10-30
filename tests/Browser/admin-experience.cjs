@@ -163,7 +163,7 @@ async function matrix(browser) {
                 await run.page.emulateMedia({ colorScheme, reducedMotion: 'reduce' });
                 let sharedFrame;
                 for (const path of ['/admin', '/admin/targets', '/admin/targets/create?connector_type=ssh_direct',
-                    '/admin/users/create', accountPath, '/admin/target-groups/create', '/admin/oauth-clients', '/admin/operations']) {
+                    '/admin/targets/ui-ssh-connected/edit', '/admin/users/create', accountPath, '/admin/target-groups/create', '/admin/oauth-clients', '/admin/operations']) {
                     await run.page.goto(base + path);
                     await run.page.locator('#main-content h1').waitFor();
                     const frame = await assertCenteredFrame(run.page, path);
@@ -173,6 +173,39 @@ async function matrix(browser) {
                         'Same-viewport Admin pages must share one outer canvas: ' + JSON.stringify({ width, path, sharedFrame, frame }));
                     } else sharedFrame = frame;
                     if (path === '/admin/oauth-clients') await assertLifecycleRows(run.page);
+                    if (path === '/admin/targets/ui-ssh-connected/edit') {
+                        const geometry = await run.page.evaluate(() => {
+                            const grid = document.querySelector('section[aria-label="Target identity"] .target-field-grid');
+                            if (!grid || grid.children.length !== 3) return null;
+                            const rect = el => {
+                                const box = el.getBoundingClientRect();
+                                return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+                            };
+                            const [target, name, guidance] = grid.children;
+                            return {
+                                columns: getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).length,
+                                grid: rect(grid), target: rect(target), name: rect(name), guidance: rect(guidance),
+                            };
+                        });
+                        assert.ok(geometry, 'Edit Target must use the three-field shared identity grid.');
+                        const near = (a, b) => Math.abs(a - b) <= 2;
+                        assert.ok(near(geometry.guidance.left, geometry.grid.left) &&
+                            near(geometry.guidance.right, geometry.grid.right),
+                        'AI guidance must span both columns: ' + JSON.stringify(geometry));
+                        if (geometry.columns === 2) {
+                            assert.ok(near(geometry.target.top, geometry.name.top) &&
+                                near(geometry.target.left, geometry.guidance.left) &&
+                                near(geometry.name.right, geometry.guidance.right) &&
+                                geometry.target.right < geometry.name.left &&
+                                geometry.guidance.top >= Math.max(geometry.target.bottom, geometry.name.bottom),
+                            'Edit Target identity must fill two balanced desktop columns: ' + JSON.stringify(geometry));
+                        } else {
+                            assert.equal(geometry.columns, 1);
+                            assert.ok(geometry.name.top >= geometry.target.bottom &&
+                                geometry.guidance.top >= geometry.name.bottom,
+                            'Mobile Edit Target identity must stack in source order.');
+                        }
+                    }
                     if (await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) console.log('OVERFLOW', JSON.stringify(await run.page.evaluate(() => [...document.querySelectorAll('.admin-shell,.admin-workspace,main,.panel,.table-wrap')].map(e=>({tag:e.tagName,cls:e.className,right:Math.round(e.getBoundingClientRect().right),width:Math.round(e.getBoundingClientRect().width),scroll:e.scrollWidth,overflow:getComputedStyle(e).overflowX,min:getComputedStyle(e).minWidth,cols:getComputedStyle(e).gridTemplateColumns})))));;
                     assert.equal(await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
                         false, 'Page overflow at ' + width + ' ' + path);
