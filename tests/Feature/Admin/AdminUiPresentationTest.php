@@ -1063,6 +1063,8 @@ final class AdminUiPresentationTest extends TestCase
                 self::assertSame(1, (int) $xpath->evaluate('count('.$region.'[string-length(@aria-label)>0]/table[not(@role)])'));
                 self::assertGreaterThanOrEqual(3, (int) $xpath->evaluate('count('.$region.'/table/thead/tr/th[@scope="col"])'));
                 self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="access-table-scroll-help"][contains(.,"Scroll horizontally")])'));
+                self::assertSame(1, (int) $xpath->evaluate('count('.$region.'/preceding-sibling::*[1][self::p[@id="access-table-scroll-help"]])'));
+                self::assertSame(0, (int) $xpath->evaluate('count('.$region.'/parent::*[contains(concat(" ",normalize-space(@class)," ")," form-stack ") or contains(concat(" ",normalize-space(@class)," ")," form-grid ")])'));
                 self::assertSame(1, (int) $xpath->evaluate('count('.$region.'//td[@class="access-item-identity"]/strong[text()="'.$label.'"])'));
                 self::assertSame(0, (int) $xpath->evaluate('count('.$region.'/table//*[@role])'));
             }
@@ -1073,6 +1075,8 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('overflow-wrap: anywhere;', $identity[1]);
         self::assertSame(1, preg_match('/\.table-wrap\s*\{([^}]+)\}/s', $css, $wrapper));
         self::assertStringContainsString('overflow-x: auto;', $wrapper[1]);
+        self::assertSame(1, preg_match('/\.field-help \+ \.table-wrap\[tabindex="0"\]\s*\{([^}]+)\}/s', $css, $helperGap));
+        self::assertStringContainsString('margin-block-start: 0.75rem;', $helperGap[1]);
         self::assertSame(1, preg_match('/\.table-wrap\[tabindex="0"\]:focus-visible\s*\{([^}]+)\}/s', $css, $focus));
         self::assertStringContainsString('outline: 3px solid var(--ui-focus);', $focus[1]);
     }

@@ -1053,6 +1053,11 @@ a:focus-visible {
     background: var(--ui-surface);
 }
 
+/* Leave room between associated helper text and the scroll region's focus ring. */
+.field-help + .table-wrap[tabindex="0"] {
+    margin-block-start: 0.75rem;
+}
+
 .table-wrap[tabindex="0"]:focus-visible {
     outline: 3px solid var(--ui-focus);
     outline-offset: 2px;
