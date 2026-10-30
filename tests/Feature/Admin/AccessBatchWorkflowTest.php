@@ -327,6 +327,28 @@ final class AccessBatchWorkflowTest extends TestCase
         self::assertSame(1, DB::table('wordpress_publish_group_grants')->count());
     }
 
+    public function test_all_scope_operator_remains_restrictable_without_scope_or_global_permission_changes(): void
+    {
+        $user = $this->user();
+        $user->forceFill(['target_scope_mode' => 'all'])->save();
+        $target = $this->target();
+        $group = $this->group();
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $user->id, 'permission' => 'ssh.command.run', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $page = $this->workflow->page($this->owner, 'user-targets', (string) $user->id);
+        self::assertFalse($page['subject']['unrestricted']);
+        self::assertSame('all', $page['subject']['scope_mode']);
+        self::assertTrue($page['items'][0]['eligible']);
+        $direct = $this->workflow->review($this->owner, 'user-targets', (string) $user->id, 'deny', [$target->id]);
+        $this->workflow->apply($this->owner, 'user-targets', (string) $user->id, $direct['token']);
+        $membership = $this->workflow->review($this->owner, 'user-groups', (string) $user->id, 'add', [$group->id]);
+        $this->workflow->apply($this->owner, 'user-groups', (string) $user->id, $membership['token']);
+        self::assertSame('all', $user->refresh()->getRawOriginal('target_scope_mode'));
+        $this->assertDatabaseHas('user_target_access', ['user_id' => $user->id, 'target_record_id' => $target->id, 'allowed' => false]);
+        $this->assertDatabaseHas('user_permission_denials', ['user_id' => $user->id, 'permission' => 'ssh.command.run']);
+    }
+
     public function test_actor_must_match_request_attribution_and_withdrawn_actor_access_cannot_apply_old_review(): void
     {
         $group = $this->group();
