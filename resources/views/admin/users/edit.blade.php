@@ -93,8 +93,9 @@
             <p class="field-help">{{ __('This Gateway-wide connection gate is independent of the account role and human Admin/Target permissions. It never adds a Target or action permission. Disabling revokes existing AI client consents/tokens; re-enabling requires fresh client authorization. New users start with AI access disabled; existing users retain their prior state after upgrade.') }}</p>
         </fieldset>
 
-        <details id="user-permission-restrictions" class="permission-category-collapsible" @if ($hasSubmittedRestrictions || $checkedRestrictionCount > 0 || $errors->hasAny(['denied_permissions', 'confirm_ssh_permission_changes'])) open @endif>
-            <summary>{{ __('Advanced permission restrictions — checked means blocked') }} ({{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Saved: :count checked', ['count' => $checkedRestrictionCount]) }})</summary>
+        <p class="field-help" id="user-global-denials-help">{{ __('These are this account\'s global Deny choices, not the complete effective permissions. Every checked box blocks that capability at this level. An unchecked box does not override the role, Target scope, Group, or Target-specific restrictions. Use the Targets and Groups sections above to review those rules.') }}</p>
+        <details id="user-permission-restrictions" class="permission-category-collapsible" aria-describedby="user-global-denials-help" open>
+            <summary>{{ __('User global restrictions — checked means blocked') }} ({{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Saved: :count checked', ['count' => $checkedRestrictionCount]) }})</summary>
             <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
@@ -105,6 +106,7 @@
                 'selectedDenials' => $selectedDenials,
                 'sshPermissionsEditable' => $sshPermissionsEditable,
                 'sshPermissionContext' => 'user',
+                'displayChoiceStatus' => true,
             ])
         </fieldset>
 

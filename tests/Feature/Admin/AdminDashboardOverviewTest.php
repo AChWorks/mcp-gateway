@@ -159,7 +159,7 @@ final class AdminDashboardOverviewTest extends TestCase
             ->assertDontSee('sample-operation')->assertDontSee('recent-activity-title', false);
     }
 
-    public function test_recent_activity_shows_the_ten_newest_permitted_entries_without_out_of_scope_rows_consuming_the_limit(): void
+    public function test_recent_activity_shows_the_fifteen_newest_permitted_entries_without_out_of_scope_rows_consuming_the_limit(): void
     {
         $viewer = $this->user(GatewayRole::Viewer);
         $visible = $this->target('activity-visible', TargetConnectionState::Connected);
@@ -175,12 +175,12 @@ final class AdminDashboardOverviewTest extends TestCase
 
         $recordedAt = now()->startOfSecond();
         $recorder = app(ActivityRecorder::class);
-        for ($i = 0; $i < 13; $i++) {
+        for ($i = 0; $i < 18; $i++) {
             $reference = (string) Str::uuid();
             $recorder->recordRequired(
                 $reference,
                 sprintf('visible-activity-%02d', $i),
-                $i === 12 ? 'unknown' : 'success',
+                $i === 17 ? 'unknown' : 'success',
                 $visible,
             );
             DB::table('activity_events')->where('correlation_id', $reference)
@@ -197,7 +197,7 @@ final class AdminDashboardOverviewTest extends TestCase
         $operations = array_column($response->viewData('recentActivity'), 'operation');
         self::assertSame(array_map(
             static fn (int $i): string => sprintf('visible-activity-%02d', $i),
-            range(12, 3),
+            range(17, 3),
         ), $operations);
         $response->assertSeeInOrder($operations)
             ->assertDontSee('visible-activity-02')

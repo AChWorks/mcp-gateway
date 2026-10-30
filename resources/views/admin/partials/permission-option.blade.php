@@ -15,5 +15,8 @@
         </span>
         <code class="permission-key" id="{{ $permissionId }}-key" dir="ltr">{{ $permission->value }}</code>
         <span class="permission-help" id="{{ $permissionId }}-help">{{ $permission->description() }}</span>
+        @if ($displayChoiceStatus ?? false)
+            <span class="permission-help" data-global-deny-state="{{ $checked ? 'denied' : 'not-denied-here' }}">{{ $checked ? __('Denied globally') : __('No global Deny — other restrictions may apply') }}</span>
+        @endif
     </span>
 </label>

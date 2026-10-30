@@ -59,6 +59,26 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('overflow-wrap: anywhere;', $css);
     }
 
+    public function test_target_edit_reuses_shared_enrollment_grid_for_identity_and_full_width_guidance(): void
+    {
+        $owner = $this->owner();
+        $target = Target::query()->create([
+            'target_id' => 'layout-target',
+            'display_name' => 'Layout Target',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $html = $this->actingAs($owner)->get(route('admin.targets.edit', [
+            'target' => $target->target_id,
+        ]))->assertOk()->getContent();
+        $dom = new \DOMDocument;
+        $dom->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($dom);
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(concat(" ",normalize-space(@class)," ")," target-field-grid ")])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(@class,"target-field-grid")]/div[@class="field"]/input[@id="target_id"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(@class,"target-field-grid")]/div[@class="field"]/input[@id="display_name"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(@class,"target-field-grid")]/div[contains(@class,"target-span-all")]/textarea[@id="ai_guidance"])'));
+    }
+
     public function test_endpoint_preflight_is_in_shared_enrollment_actions_for_both_connectors(): void
     {
         $this->actingAs($this->owner());

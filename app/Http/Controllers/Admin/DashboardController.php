@@ -29,7 +29,7 @@ final class DashboardController extends Controller
             ...$overview->forUser($user),
             'connectorLabels' => $connectors,
             'recentActivity' => Gate::allows(GatewayPermission::ActivityView->value)
-                ? $activity->page($user, 1, 10)['items']
+                ? $activity->page($user, 1, 15)['items']
                 : [],
         ]);
     }
