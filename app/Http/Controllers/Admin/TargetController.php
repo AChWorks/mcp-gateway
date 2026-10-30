@@ -34,7 +34,7 @@ use RuntimeException;
 
 final class TargetController extends Controller
 {
-    public function index(Request $request, TargetInventory $inventory, TargetConnectorAdmin $connectorAdmin): View
+    public function index(Request $request, TargetInventory $inventory, TargetConnectorAdmin $connectorAdmin, TargetConnectorRegistry $connectors): View
     {
         Gate::authorize(GatewayPermission::TargetsView->value);
         $user = $request->user();
@@ -44,23 +44,33 @@ final class TargetController extends Controller
             'search' => ['nullable', 'string', 'max:160'],
             'connection_state' => ['nullable', 'string', Rule::enum(TargetConnectionState::class)],
             'page' => ['nullable', 'integer', 'min:1'],
+            'connector_type' => ['nullable', 'string', Rule::in($connectors->types())],
+            'needs_review' => ['nullable', 'boolean'],
         ]);
 
         $page = (int) ($validated['page'] ?? 1);
         $search = $this->trimmed($validated['search'] ?? null);
         $state = $this->trimmed($validated['connection_state'] ?? null);
+        $connectorType = $this->trimmed($validated['connector_type'] ?? null);
+        $needsReview = $request->boolean('needs_review');
 
-        $pageData = $inventory->adminPage($user, $page, $search, $state);
+        $pageData = $inventory->adminPage($user, $page, $search, $state, $connectorType, needsReview: $needsReview);
         $presentations = $connectorAdmin->inventory($pageData['items']);
 
         return view('admin.targets.index', [
             'inventory' => $pageData,
             'presentations' => $presentations,
-            'filters' => ['search' => $search, 'connection_state' => $state],
+            'filters' => [
+                'search' => $search, 'connection_state' => $state,
+                'connector_type' => $connectorType, 'needs_review' => $needsReview,
+            ],
+            'connectorOptions' => array_combine($connectors->types(), array_map($connectorAdmin->label(...), $connectors->types())),
             'connectionStates' => TargetConnectionState::cases(),
             'baseQuery' => array_filter([
                 'search' => $search,
                 'connection_state' => $state,
+                'connector_type' => $connectorType,
+                'needs_review' => $needsReview ? '1' : null,
             ], static fn (?string $value): bool => $value !== null),
         ]);
     }

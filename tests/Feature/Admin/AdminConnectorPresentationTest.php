@@ -171,6 +171,41 @@ final class AdminConnectorPresentationTest extends TestCase
         return [$result, $queries];
     }
 
+    public function test_review_and_connector_filters_intersect_and_survive_pagination(): void
+    {
+        Http::preventStrayRequests();
+        for ($i = 1; $i <= 51; $i++) {
+            $this->target(sprintf('filter-wp-%03d', $i), 'wp_ai_bridge', TargetConnectionState::Error);
+        }
+        $this->target('filter-ssh', 'ssh_direct', TargetConnectionState::Error);
+        $this->target('filter-connected', 'wp_ai_bridge', TargetConnectionState::Connected);
+        $query = [
+            'search' => 'filter', 'connection_state' => 'error',
+            'connector_type' => 'wp_ai_bridge', 'needs_review' => '1',
+        ];
+        $response = $this->actingAs($this->owner())->get('/admin/targets?'.http_build_query($query))
+            ->assertOk()->assertSee('filter-wp-001')->assertDontSee('filter-ssh')
+            ->assertDontSee('filter-connected')->assertSee('Needs review');
+        $html = html_entity_decode((string) $response->getContent(), ENT_QUOTES | ENT_HTML5);
+        preg_match('~href="([^"]*page=2[^"]*)"~', $html, $matches);
+        self::assertNotEmpty($matches);
+        parse_str((string) parse_url($matches[1], PHP_URL_QUERY), $nextQuery);
+        foreach ($query as $key => $value) {
+            self::assertSame($value, $nextQuery[$key] ?? null);
+        }
+        $this->get($matches[1])->assertOk()->assertSee('filter-wp-051')->assertDontSee('filter-wp-001');
+        Http::assertNothingSent();
+    }
+
+    public function test_inventory_rejects_unimplemented_connector_and_invalid_review_filter(): void
+    {
+        $this->actingAs($this->owner());
+        $this->get('/admin/targets?connector_type=synthetic_protocol')
+            ->assertRedirect()->assertSessionHasErrors('connector_type');
+        $this->get('/admin/targets?needs_review=anything')
+            ->assertRedirect()->assertSessionHasErrors('needs_review');
+    }
+
     private function owner(): User
     {
         return User::query()->create([
@@ -180,11 +215,11 @@ final class AdminConnectorPresentationTest extends TestCase
         ]);
     }
 
-    private function target(string $id, string $connector): Target
+    private function target(string $id, string $connector, TargetConnectionState $state = TargetConnectionState::Disconnected): Target
     {
         return Target::query()->create([
             'target_id' => $id, 'display_name' => $id, 'connector_type' => $connector,
-            'connection_state' => TargetConnectionState::Disconnected,
+            'connection_state' => $state,
         ]);
     }
 }

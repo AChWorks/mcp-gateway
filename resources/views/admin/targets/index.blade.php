@@ -30,6 +30,21 @@
                 @endforeach
             </select>
         </div>
+        <div class="field">
+            <label for="connector_type">{{ __('Connector') }}</label>
+            <select id="connector_type" name="connector_type">
+                <option value="">{{ __('Any connector') }}</option>
+                @foreach ($connectorOptions as $type => $label)
+                    <option value="{{ $type }}" @selected(($filters['connector_type'] ?? null) === $type)>{{ $label }}</option>
+                @endforeach
+            </select>
+        </div>
+        <div class="field">
+            <label class="checkbox-option" for="needs_review">
+                <input id="needs_review" name="needs_review" type="checkbox" value="1" @checked($filters['needs_review'] ?? false)>
+                <span>{{ __('Needs review') }}</span>
+            </label>
+        </div>
         <div class="filter-actions">
             <button class="button button-primary" type="submit">{{ __('Filter') }}</button>
             <a class="button button-secondary" href="{{ route('admin.targets.index') }}">{{ __('Clear') }}</a>
