@@ -77,7 +77,7 @@ async function matrix(browser) {
                     '/admin/oauth-clients', '/admin/operations']) {
                     await run.page.goto(base + path);
                     await run.page.locator('#main-content h1').waitFor();
-                    if (await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) console.log('OVERFLOW', JSON.stringify(await run.page.evaluate(() => [...document.querySelectorAll('body *')].map(e=>({tag:e.tagName,cls:e.className,right:Math.round(e.getBoundingClientRect().right),width:Math.round(e.getBoundingClientRect().width)})).filter(e=>e.right>innerWidth+1).slice(0,12))));
+                    if (await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) console.log('OVERFLOW', JSON.stringify(await run.page.evaluate(() => [...document.querySelectorAll('.admin-shell,.admin-workspace,main,.panel,.table-wrap')].map(e=>({tag:e.tagName,cls:e.className,right:Math.round(e.getBoundingClientRect().right),width:Math.round(e.getBoundingClientRect().width),scroll:e.scrollWidth,overflow:getComputedStyle(e).overflowX,min:getComputedStyle(e).minWidth,cols:getComputedStyle(e).gridTemplateColumns})))));;
                     assert.equal(await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
                         false, 'Page overflow at ' + width + ' ' + path);
                     assert.equal(await run.page.locator('.admin-nav [aria-current="page"]').count(), 1);
@@ -99,6 +99,21 @@ async function navigation(browser) {
     try {
         await enter(page);
         await page.evaluate(() => window.__adminExperienceSentinel = 'same-document');
+        let speculativeRequests = 0;
+        page.on('request', request => {
+            if (new URL(request.url()).pathname.includes('/external-authorization/')) speculativeRequests++;
+        });
+        await page.evaluate(() => {
+            const link = document.createElement('a');
+            link.id = 'fixture-no-prefetch';
+            link.href = '/admin/targets/ui-wp-connected/external-authorization/' + '0'.repeat(32);
+            link.textContent = 'Synthetic one-use path';
+            document.querySelector('main').appendChild(link);
+        });
+        await page.locator('#fixture-no-prefetch').hover();
+        await page.waitForTimeout(250);
+        assert.equal(speculativeRequests, 0, 'Hover prefetched a stateful handoff path.');
+        await page.locator('#fixture-no-prefetch').evaluate(element => element.remove());
         await nav(page, 'Targets', 'Gateway Targets');
         assert.equal(await page.evaluate(() => window.__adminExperienceSentinel), 'same-document');
         assert.match(await page.title(), /Targets/);
@@ -221,6 +236,15 @@ async function nativeFormsAndScope(browser) {
         assert.deepEqual(posts, ['document'], 'Settings submission was intercepted or replayed.');
         assert.equal(await page.locator('input[name="values[wp_response_kib]"]').inputValue(), '80');
 
+        await page.locator('input[name="values[wp_response_kib]"]').fill('999999999');
+        await page.locator('input[name="current_password"]').fill('isolated-browser-password');
+        await page.locator('form[action$="/admin/operations"]').evaluate(form => form.noValidate = true);
+        await page.getByRole('button', { name: 'Save operational settings', exact: true }).click();
+        await page.locator('input[name="values[wp_response_kib]"][aria-invalid="true"]').waitFor();
+        assert.equal(await page.locator('input[name="values[wp_response_kib]"]').inputValue(), '999999999');
+        assert.equal(await page.locator('input[name="current_password"]').inputValue(), '', 'The password was restored after invalid input.');
+        assert.deepEqual(posts, ['document', 'document']);
+
         // A denied CSRF request cannot expire a legitimate test session.
         const denied = await page.request.post(base + '/__browser__/experience-expire');
         assert.equal(denied.status(), 419);
@@ -230,6 +254,9 @@ async function nativeFormsAndScope(browser) {
         assert.equal(await page.locator('.admin-nav').getByRole('link', { name: 'Users', exact: true }).count(), 0);
         assert.equal(await page.locator('main').getByText('UI SSH build host', { exact: true }).count(), 0);
         assert.equal(await page.locator('main').getByText('UI Editorial WordPress', { exact: true }).count(), 1);
+        const forbidden = await page.goto(base + '/admin/operations');
+        assert.equal(forbidden.status(), 403);
+        await enter(page, 'viewer');
         const token = await page.locator('form[action$="/admin/logout"] input[name="_token"]').inputValue();
         const expired = await page.request.post(base + '/__browser__/experience-expire', { form: { _token: token } });
         assert.equal(expired.status(), 204);
@@ -246,10 +273,12 @@ async function nativeFormsAndScope(browser) {
 (async () => {
     const browser = await chromium.launch({ headless: true });
     try {
-        await matrix(browser);
-        await navigation(browser);
-        await mobileAndNative(browser);
-        await nativeFormsAndScope(browser);
+        const group = process.env.GATEWAY_UI_TEST_GROUP || 'all';
+        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms'].includes(group), 'Unknown UI test group.');
+        if (group === 'all' || group === 'matrix') await matrix(browser);
+        if (group === 'all' || group === 'navigation') await navigation(browser);
+        if (group === 'all' || group === 'mobile') await mobileAndNative(browser);
+        if (group === 'all' || group === 'forms') await nativeFormsAndScope(browser);
     } finally {
         await browser.close();
     }
