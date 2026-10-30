@@ -141,7 +141,7 @@ final readonly class AccessBatchWorkflow
             default => [],
         };
         $userIds = array_values(array_unique([(string) $actor->getKey(), ...$selectedUsers]));
-        $users = User::query()->whereIn('id', $userIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+        $users = AccessBatchGuard::lockUsers($userIds);
         if ($users->count() !== count($userIds)) {
             throw new DomainException('batch_selection_unavailable');
         }

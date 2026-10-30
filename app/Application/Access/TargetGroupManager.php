@@ -173,7 +173,7 @@ final readonly class TargetGroupManager
             };
             $lockUsers = array_values(array_unique([(string) $actor->getKey(), ...$userIds]));
             sort($lockUsers, SORT_STRING);
-            $users = User::query()->whereIn('id', $lockUsers)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $users = AccessBatchGuard::lockUsers($lockUsers);
             if ($users->count() !== count($lockUsers)) {
                 throw new DomainException('batch_selection_unavailable');
             }

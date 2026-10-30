@@ -7,6 +7,7 @@ use App\Domain\Access\GatewayRole;
 use App\Models\User;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Gate;
 
@@ -25,6 +26,21 @@ final class AccessBatchGuard
         Gate::forUser($fresh)->authorize(GatewayPermission::UsersManage->value);
 
         return $fresh;
+    }
+
+    /**
+     * Existing account updates lock enabled Owners before the managed User.
+     * Keep that shared order even when an acting Owner has a larger ID.
+     *
+     * @param  list<string>  $ids
+     * @return Collection<int|string,User>
+     */
+    public static function lockUsers(array $ids): Collection
+    {
+        User::query()->where('role', GatewayRole::Owner->value)->where('access_enabled', true)
+            ->orderBy('id')->lockForUpdate()->get(['id']);
+
+        return User::query()->whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
     }
 
     public static function isOwner(User $user): bool

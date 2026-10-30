@@ -280,7 +280,7 @@ final readonly class UserAccessManager
 
         return DB::transaction(function () use ($actor, $user, $targetIds, $rule, $expectedRevisions, $sshReviewed, $correlationId): int {
             $userIds = array_values(array_unique([(string) $actor->getKey(), (string) $user->getKey()]));
-            $users = User::query()->whereIn('id', $userIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $users = AccessBatchGuard::lockUsers($userIds);
             $actor = AccessBatchGuard::actor($users->get($actor->getKey()) ?? $actor);
             $user = $users->get($user->getKey()) ?? throw new DomainException('batch_selection_unavailable');
             if ($this->role($user) === GatewayRole::Owner) {
