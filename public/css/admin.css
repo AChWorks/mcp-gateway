@@ -279,6 +279,11 @@ code {
     min-width: 0;
 }
 
+/* Header and main share one centered shell, including readable form pages. */
+.admin-workspace.form-workspace {
+    --ui-workspace-max: 64rem;
+}
+
 .site-header {
     border-block-end: 1px solid var(--ui-border);
     background: var(--ui-surface);
@@ -345,24 +350,22 @@ code {
     max-width: 70ch;
 }
 
-/* Wide table footnotes can use the panel without creating an unreadable
-   single line or a stranded narrow paragraph. Reading order stays native. */
+/* Explanatory prose stays in ordinary reading order, outside wide table cards. */
 .panel-note {
-    margin-block: 1.25rem 0;
-    columns: 34ch 3;
-    column-gap: 2rem;
+    margin-block: var(--ui-panel-stack-gap);
     color: var(--ui-muted);
-    orphans: 2;
-    widows: 2;
 }
 
-/* Form-focused pages own the width of their heading, actions and panels.
-   Bound a standalone field without shrinking the entire form inside a card. */
-.main-content.form-page {
-    max-width: 64rem;
-    margin-inline: 0;
+.panel-note > :first-child {
+    margin-block-start: 0;
 }
 
+.panel-note > :last-child {
+    margin-block-end: 0;
+}
+
+/* Bound standalone fields without shrinking the whole form inside its card.
+   Workspace shells own page width and centering for header and main together. */
 .form-page .form-stack > .field {
     max-inline-size: 38rem;
 }

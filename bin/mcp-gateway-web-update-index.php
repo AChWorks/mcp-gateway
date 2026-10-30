@@ -2,9 +2,11 @@
 
 declare(strict_types=1);
 
+use App\Models\User;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use McpGatewayUpdate\UpdateBusyException;
 use McpGatewayUpdate\WebUpdater;
 use Symfony\Component\HttpFoundation\RedirectResponse;
@@ -436,6 +438,24 @@ try {
     if ($authResponse->getStatusCode() !== 200 || ! $authRequest->hasSession()) {
         $httpKernel->terminate($authRequest, $authResponse);
         updaterRender('MCP Gateway Update', '<p class="error">Administrator authentication could not be verified.</p>', 403);
+    }
+
+    // Dashboard permission is not installation-management authority. Reload
+    // the real row on every preflight/Start, before issuing a browser capability
+    // or inspecting package/version details. Model casts differ across baselines.
+    $principal = $authRequest->user();
+    $account = $principal instanceof User
+        ? DB::table($principal->getTable())
+            ->where($principal->getAuthIdentifierName(), $principal->getAuthIdentifier())
+            ->first()
+        : null;
+    $installedVersion = @file_get_contents($basePath.'/VERSION');
+    if (! WebUpdater::accountMayStart(
+        $account === null ? null : (array) $account,
+        is_string($installedVersion) ? trim($installedVersion) : '',
+    )) {
+        $httpKernel->terminate($authRequest, $authResponse);
+        updaterRender('MCP Gateway Update', '<p class="error">Only an enabled Owner can view or start an update.</p>', 403);
     }
 
     $csrf = (string) $authRequest->session()->token();

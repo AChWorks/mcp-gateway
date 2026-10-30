@@ -48,6 +48,39 @@ async function nav(page, name, heading) {
     await page.getByRole('heading', { name: heading, exact: true }).waitFor();
 }
 
+async function assertCenteredFrame(page, path) {
+    const frame = await page.evaluate(() => {
+        const main = document.getElementById('main-content');
+        const workspace = main.closest('.admin-workspace');
+        const header = workspace.querySelector('.header-inner');
+        const rect = element => element.getBoundingClientRect();
+        const mainBox = rect(main), workspaceBox = rect(workspace), headerBox = rect(header);
+        const style = getComputedStyle(main), rtl = style.direction === 'rtl';
+        const start = element => rtl ? rect(element).right : rect(element).left;
+        const heading = main.querySelector('.page-heading');
+        const breadcrumb = header.querySelector('.workspace-context');
+        return {
+            mainCenter: mainBox.left + mainBox.width / 2,
+            workspaceCenter: workspaceBox.left + workspaceBox.width / 2,
+            mainLeft: mainBox.left, mainWidth: mainBox.width,
+            headerVisible: header.getClientRects().length > 0,
+            headerLeft: headerBox.left, headerWidth: headerBox.width,
+            contentStart: rtl ? mainBox.right - parseFloat(style.paddingRight) : mainBox.left + parseFloat(style.paddingLeft),
+            breadcrumbStart: breadcrumb ? start(breadcrumb) : null,
+            headingStart: heading ? start(heading) : null,
+        };
+    });
+    const close = (actual, expected, message) => assert.ok(Math.abs(actual - expected) <= 1,
+        'Admin frame ' + path + ': ' + message + ' ' + JSON.stringify(frame));
+    close(frame.mainCenter, frame.workspaceCenter, 'main must center in its available workspace');
+    if (frame.headerVisible) {
+        close(frame.headerLeft, frame.mainLeft, 'header and main must share their frame');
+        close(frame.headerWidth, frame.mainWidth, 'header and main widths must agree');
+        if (frame.breadcrumbStart !== null) close(frame.breadcrumbStart, frame.contentStart, 'breadcrumb must align with content');
+    }
+    if (frame.headingStart !== null) close(frame.headingStart, frame.contentStart, 'page heading must align with content');
+}
+
 async function matrix(browser) {
     const run = await create(browser);
     try {
@@ -80,6 +113,7 @@ async function matrix(browser) {
                     '/admin/oauth-clients', '/admin/operations']) {
                     await run.page.goto(base + path);
                     await run.page.locator('#main-content h1').waitFor();
+                    await assertCenteredFrame(run.page, path);
                     if (await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) console.log('OVERFLOW', JSON.stringify(await run.page.evaluate(() => [...document.querySelectorAll('.admin-shell,.admin-workspace,main,.panel,.table-wrap')].map(e=>({tag:e.tagName,cls:e.className,right:Math.round(e.getBoundingClientRect().right),width:Math.round(e.getBoundingClientRect().width),scroll:e.scrollWidth,overflow:getComputedStyle(e).overflowX,min:getComputedStyle(e).minWidth,cols:getComputedStyle(e).gridTemplateColumns})))));;
                     assert.equal(await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
                         false, 'Page overflow at ' + width + ' ' + path);
@@ -90,7 +124,7 @@ async function matrix(browser) {
         }
         assert.deepEqual(run.errors, []);
         assert.deepEqual(run.external, []);
-        pass(renders + ' real styled Admin viewport/theme renders; local assets; scoped summary and five-row review bound');
+        pass(renders + ' real styled Admin viewport/theme renders; centered header/content frames; local assets; scoped summary and five-row review bound');
     } finally {
         await run.context.close();
     }

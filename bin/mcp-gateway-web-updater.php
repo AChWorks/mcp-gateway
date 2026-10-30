@@ -54,6 +54,35 @@ final class WebUpdater
         private readonly ?\Closure $recoveryLedgerReader = null,
     ) {}
 
+    /**
+     * The entrypoint supplies the complete, freshly loaded local users row
+     * after authenticating its session. This does not authenticate client input.
+     *
+     * @param  array<string,mixed>|null  $account
+     */
+    public static function accountMayStart(?array $account, string $installedVersion): bool
+    {
+        if ($account === null || ! isset($account['id'])
+            || (! is_int($account['id']) && ! is_string($account['id']))
+            || ! ctype_digit((string) $account['id']) || (int) $account['id'] < 1) {
+            return false;
+        }
+
+        // A partial schema or malformed modern role must never become a
+        // role-less compatibility grant.
+        if (array_key_exists('role', $account) || array_key_exists('access_enabled', $account)) {
+            return ($account['role'] ?? null) === 'owner'
+                && in_array($account['access_enabled'] ?? null, [true, 1, '1'], true);
+        }
+
+        // These supported releases predate the access-control schema; every
+        // authenticated local account was an administrator. v1.2.1 and newer
+        // must have explicit Owner/enabled fields, even on a damaged schema.
+        return preg_match('/\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z/D', $installedVersion) === 1
+            && version_compare($installedVersion, '1.1.2', '>=')
+            && version_compare($installedVersion, '1.1.10', '<=');
+    }
+
     /** @return array{installed:string,target:string,checks:array<string,bool>} */
     public function inspect(): array
     {

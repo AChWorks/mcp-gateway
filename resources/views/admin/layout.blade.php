@@ -59,7 +59,7 @@
         </aside>
     @endauth
 
-    <div class="admin-workspace">
+    <div @class(['admin-workspace', 'form-workspace' => $__env->hasSection('form-page')])>
         <header class="site-header">
             <div class="shell header-inner">
                 @auth

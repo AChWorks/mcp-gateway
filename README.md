@@ -116,8 +116,10 @@ Keep `.env`, application encryption and OAuth signing keys, database backups, cr
 
 1. Read the selected [Release notes](RELEASE_NOTES.md), preserve the existing `.env`, `APP_KEY`, OAuth/Bridge signing keys, application code and private `storage/`, and take a **consistent database backup whose restore can be verified**.
 2. Download the matching **`mcp-gateway-update-vX.Y.Z.zip`** and its `.sha256` from the published Release; **do not** use the fresh-install ZIP or GitHub's generic source archive.
-3. Extract the update ZIP into the **existing application root** (alongside `artisan`, `.env`, `public/` and `storage/`). Open **`https://gateway.example.com/update/`**, sign in as an existing administrator and follow the version/checksum/preflight checks.
+3. Extract the update ZIP into the **existing application root** (alongside `artisan`, `.env`, `public/` and `storage/`). Open **`https://gateway.example.com/update/`**, sign in with an enabled Gateway **Owner** account and follow the version/checksum/preflight checks. Dashboard access alone does not authorize updates.
 4. Complete the browser updater **once**, then verify the installed version, `/up`, Admin sign-in, OAuth connection and authorized WordPress/SSH Targets. Successful cleanup removes the temporary updater endpoint.
+
+Legacy releases v1.1.2–v1.1.10 predate roles and retain their existing administrator authentication. When upgrading from v2.4.1, sign-in may open Dashboard; return to `/update/` once to view preflight before starting.
 
 For **v2.3.10** upgrades, verify installed `users.email`/connection collation agreement, shared lock-capable cache, a consistent PHP worker version and the durable DCR consent-history migration before enabling public registration; follow the [version-specific migration and recovery gate](docs/DEPLOYMENT.md#releases-supported-host-profile-and-migration-safety).
 

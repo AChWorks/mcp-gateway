@@ -81,6 +81,37 @@ namespace {
     };
 
     try {
+        $accounts = [
+            'enabled Owner' => [['id' => 9, 'role' => 'owner', 'access_enabled' => true], '2.4.1', true],
+            'PDO enabled Owner' => [['id' => '9', 'role' => 'owner', 'access_enabled' => '1'], '2.4.1', true],
+            'Administrator' => [['id' => 9, 'role' => 'administrator', 'access_enabled' => 1], '2.4.1', false],
+            'Operator' => [['id' => 9, 'role' => 'operator', 'access_enabled' => 1], '2.4.1', false],
+            'Viewer' => [['id' => 9, 'role' => 'viewer', 'access_enabled' => 1], '2.4.1', false],
+            'disabled Owner' => [['id' => 9, 'role' => 'owner', 'access_enabled' => 0], '2.4.1', false],
+            'null role' => [['id' => 9, 'role' => null, 'access_enabled' => 1], '2.4.1', false],
+            'unknown role' => [['id' => 9, 'role' => 'unknown', 'access_enabled' => 1], '2.4.1', false],
+            'noncanonical Owner' => [['id' => 9, 'role' => 'Owner', 'access_enabled' => 1], '2.4.1', false],
+            'malformed enabled flag' => [['id' => 9, 'role' => 'owner', 'access_enabled' => 'true'], '2.4.1', false],
+            'missing enabled column' => [['id' => 9, 'role' => 'owner'], '1.1.10', false],
+            'missing role column' => [['id' => 9, 'access_enabled' => 1], '1.1.10', false],
+            'absent modern columns' => [['id' => 9], '2.4.1', false],
+            'absent v1.2.1 columns' => [['id' => 9], '1.2.1', false],
+            'absent identity' => [[], '1.1.2', false],
+            'missing account' => [null, '1.1.2', false],
+            'invalid identity' => [['id' => 'invalid'], '1.1.2', false],
+            'supported v1.1.2 administrator' => [['id' => 9, 'email' => 'legacy@example.test'], '1.1.2', true],
+            'supported v1.1.10 administrator' => [['id' => 9, 'email' => 'legacy@example.test'], '1.1.10', true],
+            'unsupported earlier legacy version' => [['id' => 9], '1.0.0', false],
+            'unknown later legacy version' => [['id' => 9], '1.1.11', false],
+            'legacy prerelease' => [['id' => 9], '1.1.10-rc.1', false],
+            'malformed legacy version' => [['id' => 9], 'unknown', false],
+            'noncanonical legacy version' => [['id' => 9], '1.01.10', false],
+            'legacy version with explicit Viewer role' => [['id' => 9, 'role' => 'viewer', 'access_enabled' => 1], '1.1.10', false],
+        ];
+        foreach ($accounts as $description => [$account, $version, $expected]) {
+            $assert(WebUpdater::accountMayStart($account, $version) === $expected, 'Updater account boundary: '.$description);
+        }
+
         $cases = [
             'removed' => null,
             'string' => (string) ($now + 240),

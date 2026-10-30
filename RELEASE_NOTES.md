@@ -12,6 +12,18 @@ This release implements the [group/access workflow redesign #136](https://github
 
 Source preparation, publication and installation remain separate. Final release and installed-host acceptance require their respective verification.
 
+# MCP Gateway v2.4.2
+
+**Stable v2.4.2 — Owner-only updater and consistent Admin layout.**
+
+The temporary browser updater now requires an enabled Owner in role-aware installations before displaying update preflight or accepting Start. Access to the shared dashboard does not confer update authority. Supported older installations without roles retain their existing authenticated administrator upgrade path. Existing browser-bound continuation and operator recovery safeguards remain in place.
+
+Owner sign-in can return directly to the exact local `/update/` entrypoint. Ordinary users and unsafe redirect destinations do not gain access through this return path. There is no new configuration, service or database migration.
+
+Admin forms and collection pages now use one workspace centering rule. The breadcrumb, heading and main content share the same page frame, while existing readable form widths and responsive spacing are preserved. Client lifecycle notes use ordinary readable paragraphs outside the wide profile table card.
+
+The official release gates include all 25 configured published deployment baselines through v2.4.1, complete browser updates and backup-integrity fail-safe verification. This release does not deploy itself to installed hosts; stage only the matching official update ZIP and checksum for an approved update.
+
 # MCP Gateway v2.4.1
 
 **Stable v2.4.1 — coherent shared Admin widths and spacing, aligned permission badges, and ten recent Activity entries.**
