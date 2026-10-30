@@ -102,6 +102,7 @@ async function sectionSpacing(page, probeFormStack = false) {
         assert.ok(Math.abs(gap - spacing.expected) <= 1,
             'Collection heading/form spacing must be exactly one shared token: ' + JSON.stringify(spacing));
     }
+    return spacing;
 }
 async function capture(page, name, fullPage = false) {
     await sectionSpacing(page);
@@ -111,6 +112,37 @@ async function capture(page, name, fullPage = false) {
         await page.mouse.move(1, 1);
         await page.screenshot({ path: join(artifactDirectory, name + '.png'), fullPage });
     }
+}
+// These are bounded layout exercises, not translations or assistive-technology certification.
+// Reload actual server HTML between cases; display-only mutations never enter a submitted form.
+async function layoutAdaptation(page, name) {
+    const url = page.url();
+    const viewport = page.viewportSize();
+    for (const variant of ['320px', '200pct-text', 'synthetic-persian-latin-rtl']) {
+        await page.setViewportSize({ width: variant === '320px' ? 320 : variant === '200pct-text' ? 768 : 390, height: 1000 });
+        await page.emulateMedia({ colorScheme: variant.includes('rtl') ? 'dark' : 'light' });
+        await page.goto(url);
+        const metrics = await page.evaluate((scenario) => {
+            const root = document.documentElement;
+            const before = parseFloat(getComputedStyle(root).fontSize);
+            if (scenario === '200pct-text') root.style.setProperty('font-size', (before * 2) + 'px', 'important');
+            if (scenario.includes('rtl')) {
+                root.dir = 'rtl'; root.lang = 'fa';
+                const label = 'گروه دسترسی آزمایشی برای مدیریت چند تارگت — Connector-' + 'long-identifier-'.repeat(8);
+                document.querySelector('#main-content h1').textContent = label;
+                document.querySelectorAll('.access-item-identity strong').forEach((node) => { node.textContent = label; });
+            }
+            return { scenario, width: innerWidth, before, after: parseFloat(getComputedStyle(root).fontSize), direction: root.dir || 'ltr' };
+        }, variant);
+        if (variant === '200pct-text') assert.equal(metrics.after, metrics.before * 2);
+        if (variant.includes('rtl')) assert.equal(metrics.direction, 'rtl');
+        await capture(page, name + '-' + variant, true);
+        metrics.spacing = await sectionSpacing(page);
+        console.log('LAYOUT ONLY: ' + name + ' ' + JSON.stringify(metrics));
+    }
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(url);
 }
 function finish(run) {
     assert.deepEqual(run.errors, []);
@@ -241,6 +273,7 @@ async function groupTasks(browser) {
         await choose(page, fixture.groups.denial.label);
         await review(page);
         assert.equal(await page.locator('#confirm_ssh_changes').count(), 1, 'SSH-denial group lost its applicable review.');
+        assert.equal(await page.locator('#confirm_ssh_changes').isChecked(), false);
         assert.match(await page.locator('label[for="confirm_ssh_changes"]').innerText(), /memberships/i);
         const sshReviewId = await page.locator('input[name="review_id"]').inputValue();
         await page.getByLabel('Your current password', { exact: true }).fill(password);
@@ -277,6 +310,7 @@ async function groupTasks(browser) {
         await choose(page, fixture.special.ssh.label);
         await review(page);
         assert.equal(await page.locator('#confirm_ssh_changes').count(), 1);
+        assert.equal(await page.locator('#confirm_ssh_changes').isChecked(), false);
         const directSshCopy = await page.locator('label[for="confirm_ssh_changes"]').innerText();
         assert.match(directSshCopy, /direct Target scope changes/i);
         assert.match(directSshCopy, /Allow or Deny/);
@@ -286,6 +320,7 @@ async function groupTasks(browser) {
         await page.setViewportSize({ width: 390, height: 1000 });
         await page.emulateMedia({ colorScheme: 'dark' });
         await capture(page, 'direct-ssh-review-390-dark', true);
+        await layoutAdaptation(page, 'direct-ssh-review-layout');
 
         let renders = 0;
         for (const width of [390, 768, 1440]) for (const theme of ['light', 'dark']) {
@@ -305,6 +340,7 @@ async function groupTasks(browser) {
                 renders++;
             }
         }
+        await layoutAdaptation(page, 'user-targets-collection-layout');
         finish(run);
         pass('group creation/member-first navigation; explicit cross-page/search basket; native exact review/apply and removal; password/SSH review recovery; user-centric access; '+renders+' viewport/theme renders');
     } finally { await run.context.close(); }
@@ -328,7 +364,7 @@ async function nativeAndDenied(browser) {
         assert.equal(await counter(page).innerText(), 'Saved selection: 0');
         await post(page, page.getByRole('button', { name: 'Review selection', exact: true }));
         await page.getByText('Select at least one item to review.', { exact: true }).waitFor();
-        await sectionSpacing(page, true);
+        console.log('LAYOUT: native feedback with form-stack probe ' + JSON.stringify(await sectionSpacing(page, true)));
         await capture(page, 'empty-selection-error-mobile-dark');
         await page.getByRole('link', { name: 'View current members', exact: true }).click();
         await page.getByRole('link', { name: 'Add Targets', exact: true }).click();
