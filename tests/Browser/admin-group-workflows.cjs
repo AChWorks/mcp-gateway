@@ -122,10 +122,15 @@ async function layoutAdaptation(page, name) {
         await page.setViewportSize({ width: variant === '320px' ? 320 : variant === '200pct-text' ? 768 : 390, height: 1000 });
         await page.emulateMedia({ colorScheme: variant.includes('rtl') ? 'dark' : 'light' });
         await page.goto(url);
-        const metrics = await page.evaluate((scenario) => {
+        const before = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+        if (variant === '200pct-text') {
+            // Reuse the existing browser gate's synthetic text-size fixture, then measure it.
+            await page.addStyleTag({ content: 'html { font-size: ' + before * 2 + 'px !important; }' });
+            await page.waitForFunction(expected => parseFloat(getComputedStyle(document.documentElement).fontSize) === expected,
+                before * 2, { timeout: 2000 });
+        }
+        const metrics = await page.evaluate(({ scenario, before }) => {
             const root = document.documentElement;
-            const before = parseFloat(getComputedStyle(root).fontSize);
-            if (scenario === '200pct-text') root.style.setProperty('font-size', (before * 2) + 'px', 'important');
             if (scenario.includes('rtl')) {
                 root.dir = 'rtl'; root.lang = 'fa';
                 const label = 'گروه دسترسی آزمایشی برای مدیریت چند تارگت — Connector-' + 'long-identifier-'.repeat(8);
@@ -133,7 +138,7 @@ async function layoutAdaptation(page, name) {
                 document.querySelectorAll('.access-item-identity strong').forEach((node) => { node.textContent = label; });
             }
             return { scenario, width: innerWidth, before, after: parseFloat(getComputedStyle(root).fontSize), direction: root.dir || 'ltr' };
-        }, variant);
+        }, { scenario: variant, before });
         if (variant === '200pct-text') assert.equal(metrics.after, metrics.before * 2);
         if (variant.includes('rtl')) assert.equal(metrics.direction, 'rtl');
         await capture(page, name + '-' + variant, true);
