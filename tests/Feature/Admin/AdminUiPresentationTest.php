@@ -353,7 +353,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(2, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
     }
 
-    public function test_form_focused_pages_share_one_width_for_heading_panels_and_forms(): void
+    public function test_form_focused_pages_share_one_centered_frame_for_header_heading_panels_and_forms(): void
     {
         $owner = $this->owner();
         $managedUser = User::query()->create([
@@ -397,6 +397,9 @@ final class AdminUiPresentationTest extends TestCase
             $main = '//main[contains(concat(" ", normalize-space(@class), " "), " form-page ")]';
 
             self::assertSame(1, (int) $xpath->evaluate('count('.$main.')'), $url);
+            $workspace = '//div[contains(concat(" ",normalize-space(@class)," ")," admin-workspace ")][contains(concat(" ",normalize-space(@class)," ")," form-workspace ")]';
+            self::assertSame(1, (int) $xpath->evaluate('count('.$workspace.'/header/div[contains(concat(" ",normalize-space(@class)," ")," shell ")])'), $url);
+            self::assertSame(1, (int) $xpath->evaluate('count('.$workspace.'/main[@id="main-content"][contains(concat(" ",normalize-space(@class)," ")," shell ")])'), $url);
             self::assertSame(1, (int) $xpath->evaluate(
                 'count('.$main.'/div[contains(concat(" ", normalize-space(@class), " "), " page-heading ")])',
             ), $url);
@@ -409,13 +412,18 @@ final class AdminUiPresentationTest extends TestCase
         }
 
         foreach (['/admin', '/admin/users', '/admin/target-groups', '/admin/targets', '/admin/oauth-clients'] as $url) {
-            $this->get($url)->assertOk()->assertDontSee('main-content form-page', false);
+            $this->get($url)->assertOk()->assertDontSee('main-content form-page', false)
+                ->assertDontSee('admin-workspace form-workspace', false);
         }
 
         $css = file_get_contents(public_path('css/admin.css'));
         self::assertIsString($css);
-        self::assertStringContainsString('.main-content.form-page {', $css);
-        self::assertStringContainsString('max-width: 64rem;', $css);
+        self::assertStringContainsString('.admin-workspace.form-workspace {', $css);
+        self::assertStringContainsString('--ui-workspace-max: 64rem;', $css);
+        self::assertStringNotContainsString('.main-content.form-page {', $css);
+        self::assertSame(1, preg_match('/\\.shell\\s*\\{([^}]+)\\}/s', $css, $shell));
+        self::assertStringContainsString('max-width: var(--ui-workspace-max);', $shell[1]);
+        self::assertStringContainsString('margin-inline: auto;', $shell[1]);
         self::assertStringContainsString('.form-page .form-stack > .field {', $css);
         self::assertStringNotContainsString('.form-width {', $css);
         self::assertStringNotContainsString('max-width: 54rem;', $css);

@@ -279,6 +279,11 @@ code {
     min-width: 0;
 }
 
+/* Header and main share one centered shell, including readable form pages. */
+.admin-workspace.form-workspace {
+    --ui-workspace-max: 64rem;
+}
+
 .site-header {
     border-block-end: 1px solid var(--ui-border);
     background: var(--ui-surface);
@@ -356,13 +361,8 @@ code {
     widows: 2;
 }
 
-/* Form-focused pages own the width of their heading, actions and panels.
-   Bound a standalone field without shrinking the entire form inside a card. */
-.main-content.form-page {
-    max-width: 64rem;
-    margin-inline: 0;
-}
-
+/* Bound standalone fields without shrinking the whole form inside its card.
+   Workspace shells own page width and centering for header and main together. */
 .form-page .form-stack > .field {
     max-inline-size: 38rem;
 }
