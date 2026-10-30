@@ -437,16 +437,32 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee(GatewayPermission::WordpressAbilitiesExecuteReadonly->title());
 
         $html = $this->get('/admin/oauth-clients')->assertOk()->getContent();
-        self::assertMatchesRegularExpression(
-            '/<p class="panel-note">Configured profiles always appear above\./',
-            $html,
-        );
+        $document = new \DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new \DOMXPath($document);
+        $note = '//main/aside[contains(concat(" ",normalize-space(@class)," ")," panel-note ")][contains(concat(" ",normalize-space(@class)," ")," reading-width ")]';
+        self::assertSame(1, (int) $xpath->evaluate('count('.$note.')'));
+        self::assertSame(3, (int) $xpath->evaluate('count('.$note.'/p)'));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/preceding-sibling::*[1][self::section[contains(concat(" ",normalize-space(@class)," ")," panel ")]])'));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/following-sibling::*[1][self::section[contains(concat(" ",normalize-space(@class)," ")," ai-client-authorizations ")]])'));
+        $paragraphs = array_map(static fn (\DOMNode $node): string => trim($node->textContent), iterator_to_array($xpath->query($note.'/p')));
+        self::assertSame([
+            'Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record.',
+            'Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure.',
+            'The administrator CLI can explicitly disable a DCR client and retire its unused registration after consent revocation. Retirement frees one slot without deleting identity history or restoring credentials; it cannot be reversed.',
+        ], $paragraphs);
         $css = file_get_contents(public_path('css/admin.css'));
         self::assertIsString($css);
         self::assertMatchesRegularExpression('/\.permission-copy\s*\{\s*flex:\s*1 1 0;/s', $css);
         self::assertMatchesRegularExpression('/\.permission-heading\s*\{[^}]*min-inline-size:\s*0;[^}]*flex-wrap:\s*wrap;/s', $css);
         self::assertMatchesRegularExpression('/\.permission-scope\s*\{[^}]*margin-inline-start:\s*auto;[^}]*max-inline-size:\s*100%;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s', $css);
-        self::assertMatchesRegularExpression('/\.panel-note\s*\{[^}]*columns:\s*34ch 3;/s', $css);
+        self::assertSame(1, preg_match('/\.panel-note\s*\{([^}]+)\}/s', $css, $noteRule));
+        self::assertStringContainsString('margin-block: var(--ui-panel-stack-gap);', $noteRule[1]);
+        self::assertStringNotContainsString('column', $noteRule[1]);
+        self::assertSame(1, preg_match('/\.reading-width\s*\{[^}]*max-width:\s*70ch;/s', $css));
     }
 
     public function test_shared_admin_headings_wrap_valid_long_target_names_and_tables_follow_direction(): void

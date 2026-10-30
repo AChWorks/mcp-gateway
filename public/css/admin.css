@@ -350,15 +350,18 @@ code {
     max-width: 70ch;
 }
 
-/* Wide table footnotes can use the panel without creating an unreadable
-   single line or a stranded narrow paragraph. Reading order stays native. */
+/* Explanatory prose stays in ordinary reading order, outside wide table cards. */
 .panel-note {
-    margin-block: 1.25rem 0;
-    columns: 34ch 3;
-    column-gap: 2rem;
+    margin-block: var(--ui-panel-stack-gap);
     color: var(--ui-muted);
-    orphans: 2;
-    widows: 2;
+}
+
+.panel-note > :first-child {
+    margin-block-start: 0;
+}
+
+.panel-note > :last-child {
+    margin-block-end: 0;
 }
 
 /* Bound standalone fields without shrinking the whole form inside its card.
