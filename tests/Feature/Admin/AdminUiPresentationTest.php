@@ -354,7 +354,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(2, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
     }
 
-    public function test_form_focused_pages_share_one_centered_frame_for_header_heading_panels_and_forms(): void
+    public function test_forms_share_the_same_inherited_admin_frame_without_an_outer_width_variant(): void
     {
         $owner = $this->owner();
         $managedUser = User::query()->create([
@@ -398,7 +398,7 @@ final class AdminUiPresentationTest extends TestCase
             $main = '//main[contains(concat(" ", normalize-space(@class), " "), " form-page ")]';
 
             self::assertSame(1, (int) $xpath->evaluate('count('.$main.')'), $url);
-            $workspace = '//div[contains(concat(" ",normalize-space(@class)," ")," admin-workspace ")][contains(concat(" ",normalize-space(@class)," ")," form-workspace ")]';
+            $workspace = '//div[contains(concat(" ",normalize-space(@class)," ")," admin-workspace ")]';
             self::assertSame(1, (int) $xpath->evaluate('count('.$workspace.'/header/div[contains(concat(" ",normalize-space(@class)," ")," shell ")])'), $url);
             self::assertSame(1, (int) $xpath->evaluate('count('.$workspace.'/main[@id="main-content"][contains(concat(" ",normalize-space(@class)," ")," shell ")])'), $url);
             self::assertSame(1, (int) $xpath->evaluate(
@@ -419,8 +419,11 @@ final class AdminUiPresentationTest extends TestCase
 
         $css = file_get_contents(public_path('css/admin.css'));
         self::assertIsString($css);
-        self::assertStringContainsString('.admin-workspace.form-workspace {', $css);
-        self::assertStringContainsString('--ui-workspace-max: 64rem;', $css);
+        self::assertStringNotContainsString('form-workspace', (string) file_get_contents(resource_path('views/admin/layout.blade.php')));
+        self::assertStringNotContainsString('--ui-workspace-max: 64rem;', $css);
+        self::assertStringNotContainsString('max-width: 68rem;', $css);
+        self::assertMatchesRegularExpression('/\.admin-shell\s+\.panel\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;/s', $css);
+        self::assertStringContainsString('--ui-workspace-max: 106rem;', $css);
         self::assertStringNotContainsString('.main-content.form-page {', $css);
         self::assertSame(1, preg_match('/\\.shell\\s*\\{([^}]+)\\}/s', $css, $shell));
         self::assertStringContainsString('max-width: var(--ui-workspace-max);', $shell[1]);
@@ -444,12 +447,18 @@ final class AdminUiPresentationTest extends TestCase
         libxml_clear_errors();
         libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($document);
-        $note = '//main/aside[contains(concat(" ",normalize-space(@class)," ")," panel-note ")][contains(concat(" ",normalize-space(@class)," ")," reading-width ")]';
+        $note = '//main/aside[contains(concat(" ",normalize-space(@class)," ")," panel-note ")]';
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.')'));
-        self::assertSame(3, (int) $xpath->evaluate('count('.$note.'/p)'));
+        self::assertSame(3, (int) $xpath->evaluate('count('.$note.'/dl/div/dt)'));
+        self::assertSame(3, (int) $xpath->evaluate('count('.$note.'/dl/div/dd/p)'));
+        self::assertSame(0, (int) $xpath->evaluate('count('.$note.'[contains(concat(" ",normalize-space(@class)," ")," reading-width ")])'));
+        self::assertSame(['Finding profiles', 'Automatic retirement', 'Administrator actions'], array_map(
+            static fn (\DOMNode $node): string => trim($node->textContent),
+            iterator_to_array($xpath->query($note.'/dl/div/dt')),
+        ));
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/preceding-sibling::*[1][self::section[contains(concat(" ",normalize-space(@class)," ")," panel ")]])'));
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/following-sibling::*[1][self::section[contains(concat(" ",normalize-space(@class)," ")," ai-client-authorizations ")]])'));
-        $paragraphs = array_map(static fn (\DOMNode $node): string => trim($node->textContent), iterator_to_array($xpath->query($note.'/p')));
+        $paragraphs = array_map(static fn (\DOMNode $node): string => trim($node->textContent), iterator_to_array($xpath->query($note.'/dl/div/dd/p')));
         self::assertSame([
             'Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record.',
             'Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure.',
@@ -464,6 +473,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('margin-block: var(--ui-panel-stack-gap);', $noteRule[1]);
         self::assertStringNotContainsString('column', $noteRule[1]);
         self::assertSame(1, preg_match('/\.reading-width\s*\{[^}]*max-width:\s*70ch;/s', $css));
+        self::assertMatchesRegularExpression('/\.explanation-list dd\s*\{[^}]*max-inline-size:\s*95ch;[^}]*justify-self:\s*end;/s', $css);
     }
 
     public function test_shared_admin_headings_wrap_valid_long_target_names_and_tables_follow_direction(): void

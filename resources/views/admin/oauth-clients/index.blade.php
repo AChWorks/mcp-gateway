@@ -51,10 +51,21 @@
     </nav>
 </section>
 
-<aside class="panel-note reading-width" aria-label="{{ __('Client profile lifecycle notes') }}">
-    <p>{{ __('Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record.') }}</p>
-    <p>{{ __('Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure.') }}</p>
-    <p>{{ __('The administrator CLI can explicitly disable a DCR client and retire its unused registration after consent revocation. Retirement frees one slot without deleting identity history or restoring credentials; it cannot be reversed.') }}</p>
+<aside class="panel-note" aria-label="{{ __('Client profile lifecycle notes') }}">
+    <dl class="explanation-list">
+        <div>
+            <dt>{{ __('Finding profiles') }}</dt>
+            <dd><p>{{ __('Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record.') }}</p></dd>
+        </div>
+        <div>
+            <dt>{{ __('Automatic retirement') }}</dt>
+            <dd><p>{{ __('Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure.') }}</p></dd>
+        </div>
+        <div>
+            <dt>{{ __('Administrator actions') }}</dt>
+            <dd><p>{{ __('The administrator CLI can explicitly disable a DCR client and retire its unused registration after consent revocation. Retirement frees one slot without deleting identity history or restoring credentials; it cannot be reversed.') }}</p></dd>
+        </div>
+    </dl>
 </aside>
 
 <section class="panel panel-wide ai-client-authorizations">
