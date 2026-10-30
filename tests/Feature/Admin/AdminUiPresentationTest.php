@@ -1001,6 +1001,58 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('.access-item-identity {', $css);
     }
 
+    public function test_access_selection_and_review_keep_readable_identities_inside_named_keyboard_scroll_regions(): void
+    {
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'Production member group']);
+        $user = User::query()->create([
+            'name' => 'Fixture member', 'email' => 'fixture-member@example.test', 'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Viewer, 'target_scope_mode' => TargetScopeMode::Selected,
+            'access_enabled' => true,
+        ]);
+        $target = Target::query()->create([
+            'target_id' => 'fixture-member-'.str_repeat('a', 49),
+            'display_name' => 'Fixture member Target', 'connector_type' => 'wp_ai_bridge',
+        ]);
+        foreach ([
+            ['group-targets', (string) $group->id, (string) $target->id, '/admin/target-groups/'.$group->id.'/targets', $target->display_name],
+            ['group-users', (string) $group->id, (string) $user->id, '/admin/target-groups/'.$group->id.'/users', $user->name],
+            ['user-groups', (string) $user->id, (string) $group->id, '/admin/users/'.$user->id.'/groups', $group->name],
+            ['user-targets', (string) $user->id, (string) $target->id, '/admin/users/'.$user->id.'/targets', $target->display_name],
+        ] as [$context, $subject, $item, $url, $label]) {
+            $intent = $context === 'user-targets' ? 'allow' : 'add';
+            $collection = $this->get($url.'?membership=available&intent='.$intent)->assertOk()->getContent();
+            $review = $this->post(route('admin.access-batches.selection', compact('context', 'subject')), [
+                'page_ids' => [$item], 'selected_ids' => [$item], 'selectable_ids' => [$item],
+                'membership' => 'available', 'shown_membership' => 'available',
+                'intent' => $intent, 'shown_intent' => $intent, 'action' => 'review',
+            ])->assertRedirect()->assertSessionHasNoErrors();
+            $reviewHtml = $this->get($review->headers->get('Location'))->assertOk()->getContent();
+            foreach ([$collection, $reviewHtml] as $html) {
+                $dom = new \DOMDocument;
+                $previous = libxml_use_internal_errors(true);
+                $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+                libxml_clear_errors();
+                libxml_use_internal_errors($previous);
+                $xpath = new \DOMXPath($dom);
+                $region = '//div[contains(concat(" ",normalize-space(@class)," ")," table-wrap ")][@tabindex="0"][@role="region"][@aria-describedby="access-table-scroll-help"]';
+                self::assertSame(1, (int) $xpath->evaluate('count('.$region.'[string-length(@aria-label)>0]/table[not(@role)])'));
+                self::assertGreaterThanOrEqual(3, (int) $xpath->evaluate('count('.$region.'/table/thead/tr/th[@scope="col"])'));
+                self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="access-table-scroll-help"][contains(.,"Scroll horizontally")])'));
+                self::assertSame(1, (int) $xpath->evaluate('count('.$region.'//td[@class="access-item-identity"]/strong[text()="'.$label.'"])'));
+                self::assertSame(0, (int) $xpath->evaluate('count('.$region.'/table//*[@role])'));
+            }
+        }
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        self::assertSame(1, preg_match('/\.access-item-identity\s*\{([^}]+)\}/s', $css, $identity));
+        self::assertStringContainsString('min-inline-size: 12rem;', $identity[1]);
+        self::assertStringContainsString('overflow-wrap: anywhere;', $identity[1]);
+        self::assertSame(1, preg_match('/\.table-wrap\s*\{([^}]+)\}/s', $css, $wrapper));
+        self::assertStringContainsString('overflow-x: auto;', $wrapper[1]);
+        self::assertSame(1, preg_match('/\.table-wrap\[tabindex="0"\]:focus-visible\s*\{([^}]+)\}/s', $css, $focus));
+        self::assertStringContainsString('outline: 3px solid var(--ui-focus);', $focus[1]);
+    }
+
     public function test_section_heading_spacing_contract_covers_native_forms_feedback_and_shared_siblings(): void
     {
         $css = (string) file_get_contents(public_path('css/admin.css'));

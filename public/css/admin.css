@@ -1050,6 +1050,11 @@ a:focus-visible {
     background: var(--ui-surface);
 }
 
+.table-wrap[tabindex="0"]:focus-visible {
+    outline: 3px solid var(--ui-focus);
+    outline-offset: 2px;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;
@@ -1134,7 +1139,10 @@ td input[type="checkbox"] {
     max-inline-size: 38rem;
 }
 
+/* Preserve readable names in both selection and review; extra width scrolls
+   within the table wrapper instead of squeezing ordinary words into fragments. */
 .access-item-identity {
+    min-inline-size: 12rem;
     overflow-wrap: anywhere;
 }
 

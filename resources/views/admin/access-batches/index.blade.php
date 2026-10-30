@@ -120,7 +120,8 @@
                 @endif
             </p>
         @else
-            <div class="table-wrap">
+            <p id="access-table-scroll-help" class="field-help">{{ __('Scroll horizontally to view all columns on smaller screens.') }}</p>
+            <div class="table-wrap" tabindex="0" role="region" aria-label="{{ __(':items for :name', ['items' => __($labels['noun']), 'name' => $data['subject']['name']]) }}" aria-describedby="access-table-scroll-help">
                 <table class="access-selection-table">
                     <thead>
                     <tr>

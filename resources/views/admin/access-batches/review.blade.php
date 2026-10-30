@@ -23,7 +23,8 @@
         <p class="alert alert-info">{{ $warning }}</p>
     @endforeach
 
-    <div class="table-wrap">
+    <p id="access-table-scroll-help" class="field-help">{{ __('Scroll horizontally to view all columns on smaller screens.') }}</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="{{ __('Reviewed changes for :name', ['name' => $preview['subject']['name']]) }}" aria-describedby="access-table-scroll-help">
         <table>
             <thead>
             <tr>

@@ -34,6 +34,7 @@
 
 - Group pages open on current members, with available-member pickers and persistent Group/User context. Use one native explicit-selection pattern across group Targets, group Users, user Groups and direct user Targets; keep search, 50-row pages and bounded 100-item review usable without JavaScript.
 - A visible permission restriction must say **Deny** and explain that checked means blocked. Keep name/role/scope controls primary and advanced restriction matrices separate; never invert the existing denied-permission request contract or clear default SSH blocks for presentation.
+- Selection and review tables share a readable identity-cell minimum width. Keep any extra width inside the labelled, keyboard-focusable `.table-wrap`, with a visible horizontal-scroll hint and shared focus styling; preserve native table semantics and do not widen the document.
 - Keep exact selected identities across search and paging. The progressive count includes current-page checks and saved off-page choices; native fallback identifies the server-saved count. A different operation/intent cannot silently inherit hidden selections.
 - The review must show concrete current/requested states, changed/unchanged counts and applicable consequences. Preserve the reviewed snapshot after password errors, require a new review after stale state, and never treat an old tab as approval of a newer selection. Follow [the access workflow contract](ADMIN-ACCESS-WORKFLOWS.md).
 
