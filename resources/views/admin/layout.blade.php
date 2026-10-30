@@ -19,7 +19,7 @@
     <link data-turbo-track="reload" rel="stylesheet" href="{{ asset('css/admin.css').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$cssFingerprint }}">
     <script src="{{ asset('js/admin.js').'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$jsFingerprint }}" data-turbo-track="reload" defer></script>
     @auth
-        @foreach (['vendor/turbo-8.0.23.js', 'admin-forms.js', 'admin-navigation.js'] as $adminScript)
+        @foreach (['admin-navigation.js', 'vendor/turbo-8.0.23.js', 'admin-forms.js'] as $adminScript)
             @php($scriptFingerprint = substr((string) hash_file('sha256', public_path('js/'.$adminScript)), 0, 12))
             <script src="{{ asset('js/'.$adminScript).'?v='.rawurlencode((string) config('app.release_version', 'dev')).'-'.$scriptFingerprint }}" data-turbo-track="reload" defer></script>
         @endforeach

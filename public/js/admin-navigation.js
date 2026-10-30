@@ -1,12 +1,13 @@
 (() => {
     'use strict';
 
-    const turbo = window.Turbo;
-    if (!turbo) return;
-
-    // Every form and every undeclared destination retains native semantics.
-    turbo.session.drive = false;
-    turbo.config.forms.mode = 'off';
+    // This file is loaded before Turbo so the unsaved-history guard owns the
+    // first popstate listener. Initial HTML opts out until setup completes.
+    function configureTurbo() {
+        if (!window.Turbo) return;
+        window.Turbo.session.drive = false;
+        window.Turbo.config.forms.mode = 'off';
+    }
 
     let navigating = false;
     let allowUnload = false;
@@ -50,6 +51,7 @@
     }
 
     function enhanceLinks() {
+        configureTurbo();
         document.querySelectorAll('.admin-nav a[href], main a[href]').forEach(link => {
             if (link.hasAttribute('download') || link.target
                 || link.getAttribute('data-turbo') === 'false'
