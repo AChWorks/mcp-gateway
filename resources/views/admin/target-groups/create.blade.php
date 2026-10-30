@@ -23,6 +23,9 @@
             @error('name')<p class="field-error" id="name-error" role="alert">{{ $message }}</p>@enderror
         </div>
 
+        <details class="permission-category-collapsible" @if ($errors->has('confirm_ssh_group_changes') || $errors->has('denied_permissions') || old('denied_permissions', []) !== []) open @endif>
+            <summary>{{ __('Advanced restrictions (optional)') }}</summary>
+            <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Group capability restrictions') }}</legend>
             <p class="field-help">{{ __('Checked permissions are denied on matching Targets for assigned users. Groups can add Target reachability but never grant capabilities beyond the user role or global restrictions.') }}</p>
@@ -39,6 +42,10 @@
             <span>{{ __('Confirm SSH group permission changes. Groups only DENY access, but removing an existing denial can expand access for authorized users.') }}</span>
         </label>
         @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_changes-error" role="alert">{{ $message }}</p>@enderror
+            </div>
+        </details>
+        <p class="field-help">{{ __('Create the group first, then select its Targets and users together in the membership lists.') }}</p>
+
         <div class="field">
             <label for="current_password">{{ __('Your current password') }}</label>
             <input id="current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" @enderror aria-describedby="current_password-help{{ $errors->has('current_password') ? ' current_password-error' : '' }}">

@@ -67,8 +67,52 @@
         };
     }
 
+    const selectionForms = new WeakSet();
+
+    function initializeSelections(root) {
+        const forms = Array.from(root.querySelectorAll('[data-access-selection]'));
+        if (root instanceof HTMLElement && root.matches('[data-access-selection]')) {
+            forms.unshift(root);
+        }
+        forms.forEach((form) => {
+            if (selectionForms.has(form)) {
+                return;
+            }
+            selectionForms.add(form);
+            const counter = form.querySelector('[data-selection-count]');
+            const intent = form.querySelector('[name="intent"]');
+            const shownIntent = form.querySelector('[name="shown_intent"]');
+            const checkboxes = () => Array.from(form.querySelectorAll('input[name="selected_ids[]"]'));
+            const update = () => {
+                if (!counter) {
+                    return;
+                }
+                const sameIntent = !intent || !shownIntent || intent.value === shownIntent.value;
+                const savedElsewhere = sameIntent ? Number(form.dataset.offPageCount || 0) : 0;
+                const count = savedElsewhere + checkboxes().filter((input) => input.checked).length;
+                counter.textContent = (form.dataset.selectionCountLabel || ':count selected').replace(':count', String(count));
+                counter.classList.toggle('field-error', count > 100);
+                form.querySelectorAll('button[name="action"][value="review"]')
+                    .forEach((review) => { review.disabled = count === 0 || count > 100; });
+            };
+            form.addEventListener('change', update);
+            const selectPage = form.querySelector('[data-select-page]');
+            if (selectPage) {
+                selectPage.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    checkboxes().filter((input) => input.hasAttribute('data-selectable') && !input.disabled)
+                        .forEach((input) => { input.checked = true; });
+                    // The native POST remains authoritative and saves these choices.
+                    form.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+            }
+            update();
+        });
+    }
+
     function init(root = document) {
         initializeNavigation(root);
+        initializeSelections(root);
         document.dispatchEvent(new CustomEvent('gateway:admin-ready', { detail: { root } }));
     }
 

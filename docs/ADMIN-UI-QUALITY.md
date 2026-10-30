@@ -29,6 +29,13 @@
 - Put Connection/recovery before general operations on Target details. Keep uncertainty visible and retain useful authorized diagnostic codes, messages, paths/context and correlation; redact actual secrets precisely.
 - Preserve native forms and one-use/file/auth routes during enhanced GET navigation. Explicitly disable application snapshot caches/prefetch, refresh server-authorized navigation, and check direct URLs, Back/Forward, unsaved forms, session/permission changes, focus/title, repeated widget initialization and coherent asset updates. Native/no-JS navigation remains usable.
 
+## Access collection consistency
+
+- Group pages open on current members, with available-member pickers and persistent Group/User context. Use one native explicit-selection pattern across group Targets, group Users, user Groups and direct user Targets; keep search, 50-row pages and bounded 100-item review usable without JavaScript.
+- A visible permission restriction must say **Deny** and explain that checked means blocked. Keep name/role/scope controls primary and advanced restriction matrices separate; never invert the existing denied-permission request contract or clear default SSH blocks for presentation.
+- Keep exact selected identities across search and paging. The progressive count includes current-page checks and saved off-page choices; native fallback identifies the server-saved count. A different operation/intent cannot silently inherit hidden selections.
+- The review must show concrete current/requested states, changed/unchanged counts and applicable consequences. Preserve the reviewed snapshot after password errors, require a new review after stale state, and never treat an old tab as approval of a newer selection. Follow [the access workflow contract](ADMIN-ACCESS-WORKFLOWS.md).
+
 ## Acceptance and durable regression discipline
 
 1. Identify which shared layout class/token owns a visible problem. **Fix that one shared rule**; review every view using it for side effects. Do not bury a repeated issue with a special class on the latest page.

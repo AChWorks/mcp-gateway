@@ -13,6 +13,8 @@
     <a href="{{ route('admin.target-groups.targets.index', ['targetGroup' => $targetGroup->id]) }}">{{ __('Back to group targets') }}</a>
 </div>
 
+@include('admin.access-batches.context-nav', ['context' => 'group-targets', 'subject' => ['id' => (string) $targetGroup->getKey()]])
+
 <section class="panel panel-wide">
     <form class="form-stack" method="post" action="{{ route('admin.target-groups.targets.update', ['targetGroup' => $targetGroup->id, 'target' => $target->target_id]) }}">
         @csrf

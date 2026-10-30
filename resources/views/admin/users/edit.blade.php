@@ -11,7 +11,6 @@
         <p class="muted reading-width">{{ $managedUser->email }}</p>
     </div>
     <div class="action-row">
-        <a class="button button-secondary" href="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">{{ __('Target access') }}</a>
         @can('security.manage')
             @if (in_array($managedUser->role, [\App\Domain\Access\GatewayRole::Administrator, \App\Domain\Access\GatewayRole::Operator], true))
                 <a class="button button-secondary" href="{{ route('admin.users.publishing.index', ['user' => $managedUser->id]) }}">{{ __('Publishing grants') }}</a>
@@ -20,6 +19,8 @@
         <a href="{{ route('admin.users.index') }}">{{ __('Back to users') }}</a>
     </div>
 </div>
+
+@include('admin.access-batches.context-nav', ['context' => 'user-account', 'subject' => ['id' => (string) $managedUser->getKey()]])
 
 <section class="panel panel-wide">
     @if ($managedUser->role->value === 'owner')
@@ -84,6 +85,9 @@
             <p class="field-help">{{ __('This Gateway-wide connection gate is independent of the account role and human Admin/Target permissions. It never adds a Target or action permission. Disabling revokes existing AI client consents/tokens; re-enabling requires fresh client authorization. New users start with AI access disabled; existing users retain their prior state after upgrade.') }}</p>
         </fieldset>
 
+        <details class="permission-category-collapsible" @if ($errors->hasAny(['denied_permissions', 'confirm_ssh_permission_changes']) || old('denied_permissions') !== null) open @endif>
+            <summary>{{ __('Advanced permission restrictions — checked means blocked') }}</summary>
+            <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
             <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. Target-scoped denials apply across every Target in the user\'s scope. SSH can be authorized only on Selected Targets with explicit Owner confirmation. Owner restrictions are intentionally ignored and cleared.') }}</p>
@@ -104,6 +108,10 @@
             </label>
             @error('confirm_ssh_permission_changes')<p class="field-error" id="confirm_ssh_permission_changes-error" role="alert">{{ $message }}</p>@enderror
         @endif
+
+            </div>
+        </details>
+        <p class="field-help">{{ __('Restriction checkboxes block the named capability. Leave them unchecked to keep the role ceiling; new accounts still start with SSH blocked unless explicitly reviewed.') }}</p>
 
         <div class="form-grid">
             <div class="field">

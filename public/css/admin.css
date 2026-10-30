@@ -1004,6 +1004,12 @@ a:focus-visible {
     border-radius: 0.7rem;
 }
 
+.alert-info {
+    border-color: var(--ui-border);
+    background: var(--ui-surface-subtle);
+    color: var(--ui-ink);
+}
+
 .alert-success {
     border-color: var(--ui-success-border);
     background: var(--ui-success-bg);
@@ -1096,6 +1102,49 @@ td input[type="checkbox"] {
 .selection-control:has(input:disabled) {
     cursor: not-allowed;
     opacity: 0.65;
+}
+
+/* One explicit-selection pattern serves group and user access collections. */
+.selection-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-block: 1.25rem 0.5rem;
+}
+
+.selection-toolbar > p,
+.selection-toolbar .action-row {
+    margin-block: 0;
+}
+
+.access-selection-help {
+    margin-block-end: 1rem;
+}
+
+.access-intent {
+    max-inline-size: 38rem;
+}
+
+.access-item-identity {
+    overflow-wrap: anywhere;
+}
+
+.access-item-identity > strong,
+.access-item-identity > span,
+.access-item-identity > code {
+    display: block;
+}
+
+.access-selection-table th:first-child,
+.access-selection-table td:first-child {
+    inline-size: 3rem;
+    padding-inline: 0.4rem;
+}
+
+.access-unavailable {
+    margin-block-start: 1rem;
 }
 
 .table-action {

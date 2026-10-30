@@ -13,6 +13,8 @@
     <a href="{{ route('admin.users.targets.index', ['user' => $managedUser->id]) }}">{{ __('Back to target access') }}</a>
 </div>
 
+@include('admin.access-batches.context-nav', ['context' => 'user-targets', 'subject' => ['id' => (string) $managedUser->getKey()]])
+
 <section class="panel panel-wide">
     @if ($isOwner)
         <div class="alert alert-success" role="status">{{ __('Owners always retain unrestricted target access for recovery. Change the role first if this account should accept restrictions.') }}</div>

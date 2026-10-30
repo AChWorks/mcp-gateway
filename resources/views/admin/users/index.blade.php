@@ -33,7 +33,11 @@
                 @foreach ($users as $user)
                     <tr>
                         <td>
-                            <strong>{{ $user->name }}</strong><br>
+                            @can('users.manage')
+                                <strong><a href="{{ route('admin.users.targets.index', ['user' => $user->id]) }}">{{ $user->name }}</a></strong>
+                            @else
+                                <strong>{{ $user->name }}</strong>
+                            @endcan<br>
                             <span class="muted">{{ $user->email }}</span>
                         </td>
                         <td><span class="badge badge-neutral">{{ \Illuminate\Support\Str::headline($user->role->value) }}</span></td>
@@ -45,7 +49,8 @@
                         </td>
                         <td class="table-action">
                             @can('users.manage')
-                                <a aria-label="{{ __('Manage :name', ['name' => $user->name]) }}" href="{{ route('admin.users.edit', ['user' => $user->id]) }}">{{ __('Manage') }}</a>
+                                <a aria-label="{{ __('Manage :name', ['name' => $user->name]) }}" href="{{ route('admin.users.edit', ['user' => $user->id]) }}">{{ __('Account') }}</a>
+                                <a href="{{ route('admin.users.groups.index', ['user' => $user->id]) }}">{{ __('Groups') }}</a>
                             @endcan
                         </td>
                     </tr>

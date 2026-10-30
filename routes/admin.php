@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\AccessBatchController;
 use App\Http\Controllers\Admin\ActivityController;
 use App\Http\Controllers\Admin\AdministrationAccessController;
 use App\Http\Controllers\Admin\AuthenticatedSessionController;
@@ -72,7 +73,8 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
     Route::get('/users/{user}/publishing', [UserWordpressPublishGrantController::class, 'index'])->name('users.publishing.index');
     Route::post('/users/{user}/publishing', [UserWordpressPublishGrantController::class, 'store'])->name('users.publishing.store');
     Route::delete('/users/{user}/publishing/{grant}', [UserWordpressPublishGrantController::class, 'destroy'])->name('users.publishing.destroy');
-    Route::get('/users/{user}/targets', [UserTargetAccessController::class, 'index'])->name('users.targets.index');
+    Route::get('/users/{user}/groups', [AccessBatchController::class, 'userGroups'])->name('users.groups.index');
+    Route::get('/users/{user}/targets', [AccessBatchController::class, 'userTargets'])->name('users.targets.index');
     Route::get('/users/{user}/targets/{target:target_id}/edit', [UserTargetAccessController::class, 'edit'])
         ->withoutScopedBindings()
         ->name('users.targets.edit');
@@ -87,7 +89,7 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
     Route::put('/target-groups/{targetGroup}', [TargetGroupController::class, 'update'])->name('target-groups.update');
     Route::delete('/target-groups/{targetGroup}', [TargetGroupController::class, 'destroy'])->name('target-groups.destroy');
 
-    Route::get('/target-groups/{targetGroup}/targets', [TargetGroupTargetController::class, 'index'])->name('target-groups.targets.index');
+    Route::get('/target-groups/{targetGroup}/targets', [AccessBatchController::class, 'groupTargets'])->name('target-groups.targets.index');
     Route::get('/target-groups/{targetGroup}/targets/{target:target_id}/edit', [TargetGroupTargetController::class, 'edit'])
         ->withoutScopedBindings()
         ->name('target-groups.targets.edit');
@@ -95,9 +97,19 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
         ->withoutScopedBindings()
         ->name('target-groups.targets.update');
 
-    Route::get('/target-groups/{targetGroup}/users', [TargetGroupUserController::class, 'index'])->name('target-groups.users.index');
+    Route::get('/target-groups/{targetGroup}/users', [AccessBatchController::class, 'groupUsers'])->name('target-groups.users.index');
     Route::get('/target-groups/{targetGroup}/users/{user}/edit', [TargetGroupUserController::class, 'edit'])->name('target-groups.users.edit');
     Route::put('/target-groups/{targetGroup}/users/{user}', [TargetGroupUserController::class, 'update'])->name('target-groups.users.update');
+
+    // Contexts are finite; draft selection never changes permissions or memberships.
+    Route::prefix('access-changes/{context}/{subject}')
+        ->where(['context' => 'group-targets|group-users|user-groups|user-targets', 'subject' => '[A-Za-z0-9]{1,26}'])
+        ->name('access-batches.')->group(function (): void {
+            Route::post('/selection', [AccessBatchController::class, 'selection'])->name('selection');
+            Route::get('/review/{review}', [AccessBatchController::class, 'review'])
+                ->where('review', '[a-f0-9-]{36}')->name('review');
+            Route::post('/apply', [AccessBatchController::class, 'apply'])->name('apply');
+        });
 
     Route::get('/oauth-clients', [OAuthClientAuthorizationsController::class, 'index'])
         ->name('oauth-clients.index');

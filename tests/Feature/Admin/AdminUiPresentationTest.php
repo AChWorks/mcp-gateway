@@ -967,6 +967,39 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(0, (int) $xpath->evaluate('count(//input[@name="denied_permissions[]"][@value="dashboard.view"][@checked])'));
     }
 
+    public function test_access_collections_share_native_selection_controls_and_context_navigation(): void
+    {
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'UI group']);
+        $user = User::query()->create([
+            'name' => 'UI selected user', 'email' => 'ui-access@example.test', 'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Viewer, 'target_scope_mode' => TargetScopeMode::Selected,
+            'access_enabled' => true,
+        ]);
+        foreach ([
+            ['/admin/target-groups/'.$group->id.'/targets', 'group-targets', (string) $group->id],
+            ['/admin/users/'.$user->id.'/groups', 'user-groups', (string) $user->id],
+        ] as [$url, $context, $subject]) {
+            $html = $this->get($url)->assertOk()->getContent();
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($dom);
+            self::assertSame(1, (int) $xpath->evaluate('count(//form[@data-access-selection][@method="post"])'));
+            self::assertSame(route('admin.access-batches.selection', ['context' => $context, 'subject' => $subject]), $xpath->evaluate('string(//form[@data-access-selection]/@action)'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//form[@data-access-selection]/input[@name="_token"])'));
+            self::assertSame(0, (int) $xpath->evaluate('count(//form[@data-access-selection]//input[@type="password"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//button[@data-select-page][@type="submit"][@name="action"][@value="select-page"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//nav[contains(concat(" ",normalize-space(@class)," ")," section-nav ")]/a[@aria-current="page"])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//*[@data-selection-count][@role="status"][@aria-live="polite"])'));
+        }
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        self::assertStringContainsString('.selection-toolbar {', $css);
+        self::assertStringContainsString('.access-item-identity {', $css);
+    }
+
     private function owner(): User
     {
         return User::query()->create([

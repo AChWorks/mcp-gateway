@@ -159,6 +159,12 @@ Use these shared conventions:
 
 Prefer a small markup adjustment that lets multiple pages share an existing component over adding view-specific CSS. A new reusable Admin interaction should extend this section and the shared stylesheet/partial at the same time.
 
+### Group and user access collections
+
+[Admin access workflows](ADMIN-ACCESS-WORKFLOWS.md) describes the member-first navigation, explicit selection and review contract. The four finite access contexts reuse a native POST collection form: save current-page choices before filtering/paging, keep actor/context/subject/intent-scoped draft baskets, then show a nonce-bound stored review. GET rendering and password-error recovery must never issue a fresh review token for old choices. Application services retain authority and atomic mutation ownership; session/UI state cannot grant access.
+
+The optional initializer in the existing fingerprinted `admin.js` uses per-form WeakSet ownership to update counts and Select this page. It adds no new production asset, library or service and leaves native forms authoritative. Restriction labels must remain visibly negative (`Deny …`) while preserving the existing `denied_permissions[]` API and default SSH blocks.
+
 ### Admin shell and progressive navigation
 
 The shared Blade shell owns permission-filtered Workspace/Access/System navigation, reading versus workspace widths, a keyboard skip target and the no-JavaScript-visible mobile navigation. Shared behavior is byte/release-fingerprinted and self-hosted. Production still needs only the existing PHP application; no Node process, CDN or client telemetry is introduced.
