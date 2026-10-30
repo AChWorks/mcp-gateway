@@ -7,14 +7,14 @@
     <div>
         <div class="eyebrow">{{ __('Target group') }}</div>
         <h1>{{ $targetGroup->name }}</h1>
-        <p class="muted">{{ __('Group membership broadens selected-target reachability only within the existing role/global ceiling; every configured denial narrows it.') }}</p>
+        <p class="muted reading-width">{{ __('Group membership broadens selected-target reachability only within the existing role/global ceiling; every configured denial narrows it.') }}</p>
     </div>
     <a href="{{ route('admin.target-groups.index') }}">{{ __('Back to target groups') }}</a>
 </div>
 
 <div class="content-grid">
     <section class="panel panel-wide">
-        <form class="form-stack" method="post" action="{{ route('admin.target-groups.update', ['targetGroup' => $targetGroup->id]) }}">
+        <form class="form-stack form-width" method="post" action="{{ route('admin.target-groups.update', ['targetGroup' => $targetGroup->id]) }}">
             @csrf
             @method('PUT')
             @php
@@ -37,8 +37,8 @@
 
             <div class="field">
                 <label for="name">{{ __('Group name') }}</label>
-                <input id="name" name="name" type="text" maxlength="160" required value="{{ old('name', $targetGroup->name) }}">
-                @error('name')<p class="field-error">{{ $message }}</p>@enderror
+                <input id="name" name="name" type="text" maxlength="160" required value="{{ old('name', $targetGroup->name) }}" @error('name') aria-invalid="true" aria-describedby="name-error" @enderror>
+                @error('name')<p class="field-error" id="name-error" role="alert">{{ $message }}</p>@enderror
             </div>
 
             <fieldset class="permission-fieldset">
@@ -53,14 +53,14 @@
             </fieldset>
 
             <label class="checkbox-option" for="confirm_ssh_group_changes">
-                <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1">
+                <input type="checkbox" id="confirm_ssh_group_changes" name="confirm_ssh_group_changes" value="1" @error('confirm_ssh_group_changes') aria-invalid="true" aria-describedby="confirm_ssh_group_changes-error" @enderror>
                 <span>{{ __('Confirm SSH group permission changes. Groups only DENY access, but removing an existing denial can expand access for authorized users.') }}</span>
             </label>
-            @error('confirm_ssh_group_changes')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+            @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_changes-error" role="alert">{{ $message }}</p>@enderror
             <div class="field">
                 <label for="current_password">{{ __('Your current password') }}</label>
-                <input id="current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password">
-                @error('current_password')<p class="field-error">{{ $message }}</p>@enderror
+                <input id="current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="current_password-error" @enderror>
+                @error('current_password')<p class="field-error" id="current_password-error" role="alert">{{ $message }}</p>@enderror
             </div>
 
             <div class="action-row">
@@ -75,17 +75,18 @@
         <div class="eyebrow">{{ __('Danger zone') }}</div>
         <h2 id="delete-target-group-title">{{ __('Delete target group') }}</h2>
         <p>{{ __('Deleting this group removes only its group memberships and group denials. Users, targets, and direct per-target rules remain intact. Removing SSH group denials can restore previously authorized SSH commands and file access through other memberships.') }}</p>
-        <form class="form-stack" method="post" action="{{ route('admin.target-groups.destroy', ['targetGroup' => $targetGroup->id]) }}">
+        <form class="form-stack form-width" method="post" action="{{ route('admin.target-groups.destroy', ['targetGroup' => $targetGroup->id]) }}">
             @csrf
             @method('DELETE')
             <label class="checkbox-option" for="confirm_ssh_group_delete">
-                <input type="checkbox" id="confirm_ssh_group_delete" name="confirm_ssh_group_changes" value="1">
+                <input type="checkbox" id="confirm_ssh_group_delete" name="confirm_ssh_group_changes" value="1" @error('confirm_ssh_group_changes') aria-invalid="true" aria-describedby="confirm_ssh_group_delete-error" @enderror>
                 <span>{{ __('I confirm that deleting this group may remove SSH Target reachability or lift SSH denials for other already-authorized memberships.') }}</span>
             </label>
-            @error('confirm_ssh_group_changes')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+            @error('confirm_ssh_group_changes')<p class="field-error" id="confirm_ssh_group_delete-error" role="alert">{{ $message }}</p>@enderror
             <div class="field">
                 <label for="delete_current_password">{{ __('Your current password') }}</label>
-                <input id="delete_current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password">
+                <input id="delete_current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="delete_current_password-error" @enderror>
+                @error('current_password')<p class="field-error" id="delete_current_password-error" role="alert">{{ $message }}</p>@enderror
             </div>
             <button class="button button-danger" type="submit">{{ __('Delete target group') }}</button>
         </form>

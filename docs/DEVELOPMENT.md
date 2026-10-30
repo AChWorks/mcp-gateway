@@ -156,6 +156,18 @@ Use these shared conventions:
 
 Prefer a small markup adjustment that lets multiple pages share an existing component over adding view-specific CSS. A new reusable Admin interaction should extend this section and the shared stylesheet/partial at the same time.
 
+### Admin shell and progressive navigation
+
+The shared Blade shell owns permission-filtered Workspace/Access/System navigation, reading versus workspace widths, a keyboard skip target and the no-JavaScript-visible mobile navigation. Shared behavior is byte/release-fingerprinted and self-hosted. Production still needs only the existing PHP application; no Node process, CDN or client telemetry is introduced.
+
+`admin.js` exposes idempotent `GatewayAdmin.init(root)` and emits `gateway:admin-ready`. `admin-forms.js` uses per-element WeakMap guards for the existing enrollment/preflight, SSH credential/host-key and operational reset widgets. Initialize new local widgets for both document load and this event, and clean up any persistent listeners when their shell is replaced.
+
+`admin-navigation.js` enables pinned Turbo Drive only for reviewed internal Admin navigation destinations and Target read pages. The initial HTML opts out before JavaScript loads. Every form remains native (`Turbo.config.forms.mode = 'off'`); login/logout, external one-use OAuth handoffs, file transfers and undeclared routes are not intercepted. Do not turn the entire application or a grant-sensitive sidebar into a permanently retained frame.
+
+Admin pages explicitly disable Turbo snapshots and prefetch in addition to existing HTTP `private, no-store`. Back/Forward must fetch current server-authorized markup. Same-document history guards preserve unsaved native forms; declared local section/skip links replace the current fragment without adding untracked history entries. Modified clicks and no-JavaScript anchors retain native behavior. Native submissions clear only their own dirty marker; unrelated drafts retain unload protection even when an attachment keeps the document alive, and cancelled departures preserve the submitted draft. Browser-restored privileged pages revalidate the session. Keep URL/title/focus/current-link, error/loading status, no-JS fallback, asset-change reload and session/grant transitions under real-browser regression. A smooth transition is not evidence of faster server work or reduced bytes.
+
+Turbo's vendored version, exact source/integrity and MIT notice are recorded in `public/js/vendor/README.md`. Review asset upgrades and keep every shipped public file in `bin/update-managed-public-paths.txt`; packaging must carry matching markup/assets atomically.
+
 ## Proportional validation and review cadence
 
 Optimize for finished, verified changes rather than repeated ceremony.

@@ -70,7 +70,9 @@ jobs:
         run: bash bin/test-version-policy.sh
 
       - name: Verify published-release upgrade coverage is consistent
-        run: python3 bin/test-released-baseline-parity.py
+        run: |
+          python3 bin/test-released-baseline-parity.py
+          python3 bin/test_released_baseline_parity.py
 
       - name: Verify fail-closed manual publication guards
         run: python3 bin/test_release_publication_guard.py

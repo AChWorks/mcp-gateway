@@ -8,33 +8,37 @@ trap 'rm -rf "$temp"' EXIT
 renderer="$repo_root/bin/render-github-release-notes.sh"
 version="$(tr -d '[:space:]' < "$repo_root/VERSION")"
 
-# The current candidate/stable identity must agree with tracked VERSION,
-# not merely the public stable H1 boundary.
+# The first changelog heading must identify the exact package bytes, including
+# an rc.N suffix. A source candidate must never masquerade as stable notes.
+bash "$repo_root/bin/validate-version.sh" package "$version"
+[[ "$(head -n 1 "$repo_root/RELEASE_NOTES.md")" == "# MCP Gateway v$version" ]] || {
+  echo "Current release notes heading differs from VERSION $version." >&2
+  exit 1
+}
 headline="$(sed -n '3p' "$repo_root/RELEASE_NOTES.md")"
 if [[ "$version" == *-rc.* ]]; then
-  printf -v expected '**Corrective source candidate `%s` — NOT PUBLISHED.**' "$version"
+  printf -v expected '**Source candidate `%s` — NOT PUBLISHED.**' "$version"
   [[ "$headline" == "$expected" ]] || {
-    echo "Current release notes identity differs from VERSION $version." >&2
+    echo "Current candidate notes must identify VERSION $version as NOT PUBLISHED." >&2
     exit 1
   }
+  # The public renderer stays stable-only; even its future stable name cannot
+  # select candidate-headed notes. Promotion requires an intentional notes edit.
+  if bash "$renderer" "${version%%-rc.*}" "$repo_root/RELEASE_NOTES.md" "$temp/invalid-current.md" >/dev/null 2>&1; then
+    echo "Public renderer accepted candidate notes under a stable name." >&2
+    exit 1
+  fi
 else
   [[ "$headline" == "**Stable v$version"* && "$headline" != *"source candidate"* ]] || {
     echo "Stable release notes must identify v$version, not an RC." >&2
     exit 1
   }
-fi
-
-# The tracked VERSION can be a candidate, but GitHub's public Release
-# renderer is explicitly stable-only. Validate planned stable notes now
-# without turning this prerelease into a public Release identity.
-bash "$repo_root/bin/validate-version.sh" package "$version"
-stable_version="${version%%-rc.*}"
-bash "$repo_root/bin/validate-version.sh" release "$stable_version"
-bash "$renderer" "$stable_version" "$repo_root/RELEASE_NOTES.md" "$temp/current.md"
-[[ -s "$temp/current.md" ]]
-if grep -q '^# ' "$temp/current.md"; then
-  echo "Rendered release body contains an H1/version heading." >&2
-  exit 1
+  bash "$renderer" "$version" "$repo_root/RELEASE_NOTES.md" "$temp/current.md"
+  [[ -s "$temp/current.md" ]]
+  if grep -q '^# ' "$temp/current.md"; then
+    echo "Rendered release body contains an H1/version heading." >&2
+    exit 1
+  fi
 fi
 
 cat > "$temp/fixture.md" <<'EOF_NOTES'
@@ -61,6 +65,19 @@ fi
 # Never render prerelease candidate notes as a public stable Release.
 if bash "$renderer" 9.9.9-rc.1 "$temp/fixture.md" "$temp/invalid-rc.md" >/dev/null 2>&1; then
   echo "Renderer accepted a prerelease identity as a public stable Release." >&2
+  exit 1
+fi
+
+cat > "$temp/candidate.md" <<'EOF_CANDIDATE'
+# MCP Gateway v9.9.9-rc.1
+
+**Source candidate `9.9.9-rc.1` — NOT PUBLISHED.**
+
+# MCP Gateway v9.9.8
+Historical release.
+EOF_CANDIDATE
+if bash "$renderer" 9.9.9 "$temp/candidate.md" "$temp/invalid-stable.md" >/dev/null 2>&1; then
+  echo "Renderer accepted candidate-headed notes as a stable Release." >&2
   exit 1
 fi
 

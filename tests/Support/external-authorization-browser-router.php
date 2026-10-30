@@ -56,6 +56,14 @@ final class BrowserAuthorizationRaceBarrier
 }
 
 $app = require __DIR__.'/../../bootstrap/app.php';
+// PHP's CLI-server variable order may omit environment values from $_ENV and
+// $_SERVER. Bind only this explicit fixture's existing temporary storage root.
+$fixtureStorage = getenv('LARAVEL_STORAGE_PATH');
+if (getenv('GATEWAY_BROWSER_FIXTURE') === '1' && getenv('APP_ENV') === 'local'
+    && ($_SERVER['REMOTE_ADDR'] ?? '') === '127.0.0.1'
+    && is_string($fixtureStorage) && is_dir($fixtureStorage)) {
+    $app->useStoragePath($fixtureStorage);
+}
 $kernel = $app->make(Kernel::class);
 $kernel->bootstrap();
 
@@ -63,6 +71,19 @@ if (! $app->environment('local') || getenv('GATEWAY_BROWSER_FIXTURE') !== '1'
     || ($_SERVER['REMOTE_ADDR'] ?? '') !== '127.0.0.1') {
     http_response_code(403);
     exit;
+}
+
+// Let PHP's loopback-only server deliver real reviewed CSS/JS assets. The
+// realpath boundary rejects traversal and symlink escapes from public/.
+$assetPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+if (is_string($assetPath) && preg_match('#^/(?:css|js)/[a-zA-Z0-9._/-]+\.(?:css|js)$#D', $assetPath) === 1) {
+    $publicRoot = realpath(public_path());
+    $candidate = public_path(ltrim($assetPath, '/'));
+    $asset = realpath($candidate);
+    if (is_string($publicRoot) && is_string($asset) && is_file($asset)
+        && ! is_link($candidate) && str_starts_with($asset, $publicRoot.DIRECTORY_SEPARATOR)) {
+        return false;
+    }
 }
 
 // The provider requires public HTTPS client metadata even though this fixture
@@ -155,7 +176,14 @@ Route::middleware(['web', 'auth'])->get('/__browser__/race-release/{race}', stat
     abort_unless(preg_match('/\A[a-f0-9]{16}\z/D', $race), 400);
     $directory = getenv('GATEWAY_BROWSER_FIXTURE_RACE_DIR');
     abort_unless(is_string($directory) && is_dir($directory), 500);
-    abort_unless(file_put_contents($directory.'/'.$race.'.release', 'release') !== false, 500);
+    // Release only after this request has saved its own session. Otherwise its
+    // newer session snapshot can race with and overwrite the stale writer the
+    // fixture deliberately needs to preserve for its replay assertion.
+    app()->terminating(static function () use ($directory, $race): void {
+        if (file_put_contents($directory.'/'.$race.'.release', 'release') === false) {
+            throw new RuntimeException('Could not release the test-only stale session writer.');
+        }
+    });
 
     return response('', 204);
 });
@@ -169,5 +197,9 @@ Route::middleware(['web', 'auth'])->get('/__browser__/handoff-present/{handoff}'
         'stale_entry_present' => is_array($pending) && array_key_exists($handoff, $pending),
     ]);
 })->where('handoff', '[a-f0-9]{32}');
+
+if (getenv('GATEWAY_ADMIN_EXPERIENCE_FIXTURE') === '1') {
+    require __DIR__.'/admin-experience-browser-fixtures.php';
+}
 
 $app->handleRequest(Request::capture());

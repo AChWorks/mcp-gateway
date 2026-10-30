@@ -45,6 +45,20 @@ The Gateway must not promise automatic bridging of a completely new transport, p
 5. State the connector's remote discovery, protocol negotiation, authentication and test semantics. Add credential maintenance only when the connector truly supports renewable credentials; never require an OAuth issuer/refresh URL for an SSH or named-token Target.
 6. Provide source-level, independent review/CI, exact released-artifact and installed-environment evidence independently before advertising feature availability.
 
+### Admin presentation companion
+
+A reviewed connector may supply a code-owned `TargetConnectorAdminPresenter` and `TargetConnectorAdminDefinition` through `TargetConnectorAdmin`. Eligibility is always intersected with the existing runtime `TargetConnectorRegistry`; a UI companion does not make a connector executable. Labels and view references are local reviewed code, never provider HTML, arbitrary class names or database-configured view paths.
+
+Reuse shared shell/tokens, form fields/help/errors, status/evidence, diagnostics, result and confirmation patterns. Local partial slots cover enrollment, configuration, inventory identity/status, detail rows/actions, recovery, operations and genuinely necessary extra sections. Existing adapters/controllers still own validation, safe old input, credentials, configuration revisions, effective permissions and dispatch. A presentation availability flag never grants authority.
+
+Inventory companions receive only the already authorized paginated Target set. Enrich in bounded local batches by connector type; do not call remote systems or `adminDetails()` per row. Keep stored lifecycle, Gateway Pause, authentication evidence, remote observations and unresolved operation outcomes separate. Unsupported historical types retain neutral unavailable/unknown presentation; never infer SSH, OAuth or a live healthy connection from an unfamiliar connector type.
+
+The Dashboard and inventory share `TargetReview`. Its canonical attention lifecycle set is `error`, `reconnect_required`, `reassigning`. An actual adapter may implement optional `TargetReviewContributor` for connector-owned persisted recovery blockers. The WordPress implementation uses local refresh/revocation intents; those observations are unresolved recovery evidence, not proof of a confirmed remote failure. Ordinary Pending enrollment and Pause alone are not attention. Use correlated EXISTS-style contributions so multiple reasons do not duplicate Targets, and retain effective visibility before counts/list/pagination. A future contributor needs its own bounded query and positive/negative tests; do not add a Dashboard type switch or a second permission engine.
+
+New widgets must initialize safely on both native document load and `gateway:admin-ready`; do not rely only on `DOMContentLoaded` or accumulate document-level listeners on each visit. Current repeat-safe form behavior lives in fingerprinted `public/js/admin-forms.js`. Unusual real connector behavior can add a reviewed local asset when needed; no universal JSON form engine or runtime UI loader is implied.
+
+The synthetic third-style presentation test proves shared-page neutrality and escaping while asserting the fixture is absent from production registration. It does not establish a new real connector, authentication protocol or enrollment/execution compatibility.
+
 ## 4. Connection lifetime, authentication and Stale health
 
 A connection is a stored, authorized relationship, not a permanently open socket. These facts are independent:

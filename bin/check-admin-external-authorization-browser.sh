@@ -4,8 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 mode="${1:-browser}"
-if [[ "$mode" != browser && "$mode" != concurrency-only ]]; then
-    echo 'Usage: check-admin-external-authorization-browser.sh [concurrency-only]' >&2
+if [[ "$mode" != browser && "$mode" != concurrency-only && "$mode" != experience-only ]]; then
+    echo 'Usage: check-admin-external-authorization-browser.sh [concurrency-only|experience-only]' >&2
     exit 2
 fi
 for tool in php curl python3; do
@@ -18,7 +18,7 @@ if [[ ! -f vendor/autoload.php ]]; then
     echo 'ERROR: install Composer dependencies first.' >&2
     exit 1
 fi
-if [[ "$mode" == browser ]]; then
+if [[ "$mode" != concurrency-only ]]; then
     if ! command -v node >/dev/null 2>&1 || [[ ! -f node_modules/playwright/package.json ]]; then
         echo 'ERROR: full browser mode requires Node and installed Playwright.' >&2
         exit 1
@@ -36,8 +36,9 @@ cleanup() {
             tail -n 24 "$log_file" >&2 2>/dev/null || true
         done
         if [[ -f "$fixture_dir/storage/logs/laravel.log" ]]; then
-            echo '--- disposable Laravel error log (last 35 lines) ---' >&2
-            tail -n 35 "$fixture_dir/storage/logs/laravel.log" >&2 2>/dev/null || true
+            echo '--- disposable Laravel error summary ---' >&2
+            rg 'local.ERROR' "$fixture_dir/storage/logs/laravel.log" | tail -n 3 >&2 || true
+            tail -n 8 "$fixture_dir/storage/logs/laravel.log" >&2 2>/dev/null || true
         fi
     fi
     for pid in "${fixture_pids[@]}"; do
@@ -58,6 +59,7 @@ export LARAVEL_STORAGE_PATH="$fixture_dir/storage"
 export GATEWAY_BROWSER_FIXTURE_RACE_DIR="$fixture_dir/races"
 export GATEWAY_BROWSER_RACE_GET_ONE_URL="http://127.0.0.1:$port_one"
 export GATEWAY_BROWSER_RACE_GET_TWO_URL="http://127.0.0.1:$port_two"
+export LOG_CHANNEL=single
 export APP_ENV=local APP_DEBUG=false APP_URL="http://127.0.0.1:$port"
 export APP_KEY='base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 export DB_CONNECTION=sqlite DB_DATABASE="$fixture_dir/gateway.sqlite"
@@ -65,6 +67,7 @@ export SESSION_DRIVER=file SESSION_ENCRYPT=true SESSION_SECURE_COOKIE=false CACH
 export BRIDGE_CLIENT_PRIVATE_KEY_PATH="$fixture_dir/bridge-client/private.key"
 export BRIDGE_CLIENT_PUBLIC_KEY_PATH="$fixture_dir/bridge-client/public.key"
 export GATEWAY_BROWSER_FIXTURE=1
+export GATEWAY_ADMIN_EXPERIENCE_FIXTURE=1
 export GATEWAY_BROWSER_BASE_URL="$APP_URL"
 
 php artisan migrate --force --no-interaction --quiet
@@ -96,7 +99,12 @@ for url in "$APP_URL" "$GATEWAY_BROWSER_RACE_GET_ONE_URL" "$GATEWAY_BROWSER_RACE
     fi
 done
 
-python3 tests/Support/external_authorization_concurrency.py
+if [[ "$mode" != experience-only ]]; then
+    python3 tests/Support/external_authorization_concurrency.py
+fi
 if [[ "$mode" == browser ]]; then
     node tests/Browser/external-authorization.cjs
+fi
+if [[ "$mode" != concurrency-only ]]; then
+    node tests/Browser/admin-experience.cjs
 fi

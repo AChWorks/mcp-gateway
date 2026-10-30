@@ -6,7 +6,7 @@
 <section class="auth-card" aria-labelledby="sign-in-title">
     <div class="eyebrow">{{ __('Administration') }}</div>
     <h1 id="sign-in-title">{{ __('Sign in') }}</h1>
-    <p class="muted">{{ __('Use the administrator account created on the Gateway server.') }}</p>
+    <p class="muted reading-width">{{ __('Use your local Gateway account to sign in.') }}</p>
 
     <form method="post" action="{{ route('admin.login.store') }}" class="form-stack">
         @csrf

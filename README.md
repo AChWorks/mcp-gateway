@@ -98,7 +98,11 @@ WordPress plugin Abilities are discovered dynamically; a newly available Ability
 
 ## Administration and safety
 
-From the Admin dashboard (`/admin`) you can manage **Targets**, **Target Groups**, **Users**, **AI clients**, **Operational Settings**, **Activity** and **Connection**. Only grant permissions appropriate to the actual WordPress user or SSH account; Gateway permissions do not turn root SSH into a sandbox.
+From the Admin dashboard (`/admin`) use the permission-filtered sidebar to open **Targets**, **Target Groups**, **Users**, **AI clients**, **Operational Settings**, **Activity** and **Connection**. On smaller screens, **Navigation** exposes the same destinations. Eligible internal links update the page without a full document reload; direct URLs and no-JavaScript navigation still work. Forms, authorization handoffs and file transfers keep their native browser paths.
+
+The Dashboard highlights Targets that **need review**, separates paused Targets from connection lifecycle state, and links to connector-filtered inventories and recent Activity. Counts and rows follow your effective Target scope. They summarize stored observations; opening the Dashboard does not test remote connections or guarantee current credential validity. **Operational Settings** uses section links within one form; review all changes before the final password-confirmed save.
+
+Only grant permissions appropriate to the actual WordPress user or SSH account; Gateway permissions do not turn root SSH into a sandbox.
 
 When a tool fails, use its `diagnostic_reference` with **Admin → Activity** (`/admin/activity`) or `operation-diagnostics-read`. Diagnostics preserve the *observed* error and its stage with sensitive values removed; if a downstream system omitted the original cause, Gateway cannot reconstruct it. Never blindly retry a mutation with an unknown result.
 

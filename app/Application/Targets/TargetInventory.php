@@ -16,6 +16,7 @@ final class TargetInventory
     public function __construct(
         private readonly AccessControl $access,
         private readonly TargetConnectorRegistry $connectors,
+        private readonly TargetReview $review,
     ) {}
 
     public const ADMIN_PAGE_SIZE = 50;
@@ -43,6 +44,7 @@ final class TargetInventory
         ?string $search = null,
         ?string $connectionState = null,
         ?string $connectorType = null,
+        bool $needsReview = false,
     ): array {
         $page = max(1, $page);
         $search = $this->search($search);
@@ -60,6 +62,9 @@ final class TargetInventory
         );
 
         $this->applyFilters($query, $search, $connectionState, $connectorType);
+        if ($needsReview) {
+            $this->review->apply($query);
+        }
 
         $rows = $query
             ->orderBy('display_name')

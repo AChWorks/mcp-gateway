@@ -8,6 +8,7 @@ use App\Application\Targets\TargetConnectorResult;
 use App\Application\Targets\TargetEndpointPreflight;
 use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetPreflightResult;
+use App\Application\Targets\TargetReviewContributor;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetReconfiguration;
@@ -18,17 +19,24 @@ use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Support\OperationDiagnostics;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 /** WordPress-specific work stays behind the common Target lifecycle boundary. */
-final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, TargetEnrollmentPreflight
+final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, TargetEnrollmentPreflight, TargetReviewContributor
 {
     public function __construct(private Container $container) {}
 
     public function type(): string
     {
         return 'wp_ai_bridge';
+    }
+
+    /** @param Builder<Target> $query */
+    public function constrainReview(Builder $query): void
+    {
+        $this->container->make(WpAiBridgeTargetReview::class)->constrain($query);
     }
 
     public function registrationRules(): array

@@ -8,26 +8,31 @@
     // version fence, password check and audit remain in OperationalSettings.
     $groups = [
         [
+            'id' => 'wordpress-responses',
             'title' => __('WordPress responses'),
             'description' => __('Set decoded response budgets for WordPress Bridge calls. These are per-message limits, not whole-file transfer quotas.'),
             'keys' => ['wp_response_kib', 'wp_readonly_response_kib'],
         ],
         [
+            'id' => 'wordpress-deadlines',
             'title' => __('WordPress connection deadlines'),
             'description' => __('Bound connection establishment and total request time. The total deadline includes DNS lookup and response processing.'),
             'keys' => ['wp_connect_timeout_seconds', 'wp_request_timeout_seconds'],
         ],
         [
+            'id' => 'ssh-transfers',
             'title' => __('SSH whole-file transfer'),
             'description' => __('Limits for the optional authenticated binary transfer plane only. An extended timeout requires suitable PHP, proxy and client deadlines; it does not extend the signed-file download deadline.'),
             'keys' => ['ssh_transfer_max_kib', 'ssh_transfer_max_seconds'],
         ],
         [
+            'id' => 'ssh-commands',
             'title' => __('SSH commands'),
             'description' => __('Bound each synchronous SSH command separately from whole-file transfer. Use retained SSH Jobs for longer operations. Timeout includes the remote exec phase, not setup; transport, PHP and proxy limits may be lower.'),
             'keys' => ['ssh_command_timeout_seconds', 'ssh_command_max_kib', 'ssh_command_stdout_kib', 'ssh_command_stderr_kib'],
         ],
         [
+            'id' => 'ssh-jobs',
             'title' => __('Detached SSH Jobs'),
             'description' => __('Owner-configurable script input (16-512 KiB), bounded output-read windows, concurrent admission, runtime, retention and recovery. Existing retained stdout/stderr spools stay at 1 MiB per stream.'),
             'keys' => [
@@ -37,6 +42,7 @@
             ],
         ],
         [
+            'id' => 'ssh-inline',
             'title' => __('SSH SFTP inline windows'),
             'description' => __('Per-call file read/write decoded-byte limits and directory-name aggregate. These do not change SSH whole-file transfer budgets or internal streaming block sizes.'),
             'keys' => ['ssh_file_read_window_kib', 'ssh_file_write_window_kib', 'ssh_file_list_name_kib'],
@@ -69,13 +75,21 @@
     <div>
         <div class="eyebrow">{{ __('Gateway operations') }}</div>
         <h1>{{ __('Operational settings') }}</h1>
-        <p class="muted">{{ __('Adjust bounded Gateway behavior without editing environment files. Changes apply to new requests and require Owner password confirmation.') }}</p>
+        <p class="muted reading-width">{{ __('Adjust bounded Gateway behavior without editing environment files. Changes apply to new requests and require Owner password confirmation.') }}</p>
     </div>
 </div>
 
+<nav class="section-nav" aria-label="{{ __('Operational settings sections') }}">
+    <a href="#outbound-dns-preflight-title">{{ __('Host readiness') }}</a>
+    @foreach ($groups as $group)
+        <a href="#settings-{{ $group['id'] }}">{{ $group['title'] }}</a>
+    @endforeach
+    <a href="#settings-confirmation">{{ __('Confirm changes') }}</a>
+</nav>
+
 <section class="panel panel-wide" aria-labelledby="outbound-dns-preflight-title">
     <div class="section-heading">
-        <h2 id="outbound-dns-preflight-title">{{ __('Outbound DNS compatibility preflight') }}</h2>
+        <h2 id="outbound-dns-preflight-title" tabindex="-1">{{ __('Outbound DNS compatibility preflight') }}</h2>
         @if ($dnsCompatibility['applicable'])
             <span class="badge badge-{{ $dnsCompatibility['ready'] ? 'success' : 'neutral' }}">{{ $dnsCompatibility['ready'] ? __('PHP files accessible') : __('Check PHP file access') }}</span>
         @endif
@@ -125,9 +139,9 @@
         <input type="hidden" name="version" value="{{ $state['version'] }}">
 
         @foreach ($groups as $group)
-            <fieldset class="operations-group">
+            <fieldset class="operations-group" tabindex="-1" id="settings-{{ $group['id'] }}">
                 <legend>{{ $group['title'] }}</legend>
-                <p class="field-help operations-group-intro">{{ $group['description'] }}</p>
+                <p class="field-help operations-group-intro reading-width">{{ $group['description'] }}</p>
                 <div class="operations-field-grid">
                     @foreach ($group['keys'] as $key)
                         @php
@@ -159,7 +173,8 @@
                                     step="1"
                                     placeholder="{{ $defaults[$key] }}"
                                     value="{{ old('values.'.$key, $state['overrides'][$key] ?? '') }}"
-                                    aria-describedby="{{ $fieldId }}_info"
+                                    aria-describedby="{{ $fieldId }}_info{{ $errors->has('values.'.$key) ? ' '.$fieldId.'_error' : '' }}"
+                                    @error('values.'.$key) aria-invalid="true" @enderror
                                 >
                                 <span class="operations-unit">{{ $unit }}</span>
                                 <button type="button" class="operations-reset button button-secondary"
@@ -177,26 +192,27 @@
                                 ]) }}</p>
                             </div>
                             @error('values.'.$key)
-                                <p class="form-error" role="alert">{{ $message }}</p>
+                                <p class="form-error" id="{{ $fieldId }}_error" role="alert">{{ $message }}</p>
                             @enderror
                         </div>
                     @endforeach
                 </div>
             </fieldset>
         @endforeach
-
         @error('values')<p class="form-error" role="alert">{{ $message }}</p>@enderror
         @error('version')<p class="form-error" role="alert">{{ $message }}</p>@enderror
 
-        <fieldset class="operations-group operations-confirmation">
+        <fieldset class="operations-group operations-confirmation" tabindex="-1" id="settings-confirmation">
             <legend>{{ __('Confirm changes') }}</legend>
             <p class="field-help">{{ __('Editing these limits does not grant any new Target permission, unlock binary transfer, or replace an external server setting. Changes are version-checked and audited.') }}</p>
             <div class="field">
                 <label for="current_password">{{ __('Current Owner password') }}</label>
                 <input id="current_password" type="password" name="current_password" required
-                    autocomplete="current-password" maxlength="255">
-                <p class="field-help">{{ __('Required to authorize any settings change. The password is never stored as an override or logged.') }}</p>
-                @error('current_password')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+                    autocomplete="current-password" maxlength="255"
+                    aria-describedby="current-password-help{{ $errors->has('current_password') ? ' current-password-error' : '' }}"
+                    @error('current_password') aria-invalid="true" @enderror>
+                <p class="field-help" id="current-password-help">{{ __('Required to authorize any settings change. The password is never stored as an override or logged.') }}</p>
+                @error('current_password')<p class="form-error" id="current-password-error" role="alert">{{ $message }}</p>@enderror
             </div>
             <div class="operations-save-row">
                 <button class="button button-primary" type="submit">{{ __('Save operational settings') }}</button>
@@ -206,18 +222,5 @@
     </form>
 </section>
 
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('[data-clear-setting]').forEach(button => {
-        const input = document.getElementById(button.dataset.clearSetting);
-        if (!input) return;
-        button.hidden = false;
-        button.addEventListener('click', () => {
-            input.value = '';
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.focus();
-        });
-    });
-});
-</script>
+
 @endsection

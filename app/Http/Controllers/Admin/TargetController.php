@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Admin\TargetConnectorAdmin;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
@@ -33,7 +34,7 @@ use RuntimeException;
 
 final class TargetController extends Controller
 {
-    public function index(Request $request, TargetInventory $inventory): View
+    public function index(Request $request, TargetInventory $inventory, TargetConnectorAdmin $connectorAdmin, TargetConnectorRegistry $connectors): View
     {
         Gate::authorize(GatewayPermission::TargetsView->value);
         $user = $request->user();
@@ -43,70 +44,52 @@ final class TargetController extends Controller
             'search' => ['nullable', 'string', 'max:160'],
             'connection_state' => ['nullable', 'string', Rule::enum(TargetConnectionState::class)],
             'page' => ['nullable', 'integer', 'min:1'],
+            'connector_type' => ['nullable', 'string', Rule::in($connectors->types())],
+            'needs_review' => ['nullable', 'boolean'],
         ]);
 
         $page = (int) ($validated['page'] ?? 1);
         $search = $this->trimmed($validated['search'] ?? null);
         $state = $this->trimmed($validated['connection_state'] ?? null);
+        $connectorType = $this->trimmed($validated['connector_type'] ?? null);
+        $needsReview = $request->boolean('needs_review');
 
-        $pageData = $inventory->adminPage($user, $page, $search, $state);
-        $wpIds = array_map(static fn (Target $target): string => (string) $target->getKey(),
-            array_filter($pageData['items'], static fn (Target $target): bool => $target->connector_type === 'wp_ai_bridge'));
-        $revokeById = $wpIds === [] ? collect() : DB::table('wp_ai_bridge_revocation_intents')
-            ->whereIn('target_record_id', $wpIds)->get()->keyBy('target_record_id');
-        $refreshIds = $wpIds === [] ? [] : DB::table('wp_ai_bridge_refresh_intents')
-            ->whereIn('target_record_id', $wpIds)->pluck('target_record_id')->all();
-        $configById = $wpIds === [] ? collect() : DB::table('wp_ai_bridge_target_configs')
-            ->whereIn('target_record_id', $wpIds)
-            ->get(['target_record_id', 'metadata_checked_at', 'metadata_reachable'])
-            ->keyBy('target_record_id');
-        // Only inspect credential presence for Targets on this authorized page.
-        // Stored OAuth authorization is not proof of a live remote token.
-        $credentialIds = $wpIds === [] ? [] : TargetCredential::query()
-            ->whereIn('target_record_id', $wpIds)
-            ->where('connector_type', 'wp_ai_bridge')
-            ->where('purpose', 'wordpress_oauth')
-            ->pluck('target_record_id')->all();
-        $recoveries = [];
-        foreach ($pageData['items'] as $item) {
-            $hasCredential = in_array((string) $item->getKey(), $credentialIds, true);
-            $recoveries[$item->target_id] = TargetRecoveryPresentation::describe(
-                $item, $revokeById->get($item->getKey()),
-                in_array($item->getKey(), $refreshIds, true),
-                $hasCredential,
-                $configById->get($item->getKey()),
-            );
-            $recoveries[$item->target_id]['credential_present'] = $hasCredential;
-        }
+        $pageData = $inventory->adminPage($user, $page, $search, $state, $connectorType, needsReview: $needsReview);
+        $presentations = $connectorAdmin->inventory($pageData['items']);
 
         return view('admin.targets.index', [
             'inventory' => $pageData,
-            'recoveries' => $recoveries,
-            'filters' => ['search' => $search, 'connection_state' => $state],
+            'presentations' => $presentations,
+            'filters' => [
+                'search' => $search, 'connection_state' => $state,
+                'connector_type' => $connectorType, 'needs_review' => $needsReview,
+            ],
+            'connectorOptions' => array_combine($connectors->types(), array_map($connectorAdmin->label(...), $connectors->types())),
             'connectionStates' => TargetConnectionState::cases(),
             'baseQuery' => array_filter([
                 'search' => $search,
                 'connection_state' => $state,
+                'connector_type' => $connectorType,
+                'needs_review' => $needsReview ? '1' : null,
             ], static fn (?string $value): bool => $value !== null),
         ]);
     }
 
-    public function create(Request $request, TargetConnectorRegistry $connectors): View
+    public function create(Request $request, TargetConnectorAdmin $connectorAdmin): View
     {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
-        // Never offer a paused/historical connector for enrollment. A new
-        // adapter must also have a reviewed connector-specific form panel.
-        $labels = [
-            'wp_ai_bridge' => __('WordPress (WP AI Bridge)'),
-            'ssh_direct' => __('Direct SSH'),
-        ];
-        $options = array_intersect_key($labels, array_flip($connectors->types()));
+        $options = $connectorAdmin->options();
+        $definitions = [];
+        foreach (array_keys($options) as $type) {
+            $definitions[] = $connectorAdmin->forType($type)?->definition();
+        }
         $requested = $request->query('connector_type');
         $selected = is_string($requested) && array_key_exists($requested, $options) ? $requested : '';
 
         return view('admin.targets.create', [
             'connectorOptions' => $options,
+            'connectorDefinitions' => $definitions,
             'selectedConnector' => $selected,
         ]);
     }
@@ -241,7 +224,7 @@ final class TargetController extends Controller
             ->with('status', $adapter->registrationStatus());
     }
 
-    public function show(Target $target, TargetConnectorRegistry $connectors): View
+    public function show(Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin): View
     {
         Gate::authorize(GatewayPermission::TargetsView->value, $target);
 
@@ -256,34 +239,20 @@ final class TargetController extends Controller
                 TargetConnectionState::Reassigning,
             ], true);
 
-        // Keep the current WordPress/SSH Blade keys without leaking connector
-        // credentials or teaching this controller their storage protocols.
+        $presenter = $connectorAdmin->forType($target->connector_type);
+        $details = $adapter?->adminDetails($target) ?? [];
+
         return view('admin.targets.show', [
             'target' => $target,
-            'wpConfig' => null,
-            'sshConfig' => null,
-            'sshFingerprint' => null,
-            'sshHasCredential' => false,
-            'hasCredential' => false,
-            'revocationPending' => false,
-            'revocationIntent' => null,
-            'refreshIntent' => null,
-            'refreshPending' => false,
+            'connectorUi' => $presenter?->definition(),
             'canRemoveSafely' => $canRemoveSafely,
-            ...($details = $adapter?->adminDetails($target) ?? []),
-            'recovery' => TargetRecoveryPresentation::describe(
-                $target,
-                $details['revocationIntent'] ?? null,
-                $details['refreshPending'] ?? false,
-                $details['hasCredential'] ?? false,
-                $details['wpConfig'] ?? null,
-                $details['credentialMetadata'] ?? null,
-                $details['oauthFlowPending'] ?? false,
-            ),
+            ...$details,
+            'recovery' => $presenter?->recovery($target, $details)
+                ?? TargetRecoveryPresentation::describe($target),
         ]);
     }
 
-    public function edit(Target $target, TargetConnectorRegistry $connectors): View
+    public function edit(Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin): View
     {
         Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
 
@@ -291,11 +260,13 @@ final class TargetController extends Controller
             ? $connectors->availableForTarget($target) : null;
 
         $details = $adapter?->adminDetails($target) ?? [];
-        $hasConfig = ($details['sshConfig'] ?? null) !== null || ($details['wpConfig'] ?? null) !== null;
+        $presenter = $connectorAdmin->forType($target->connector_type);
+        $hasConfig = $presenter?->hasConfiguration($details) ?? false;
 
         return view('admin.targets.edit', [
             'target' => $target,
             'configurationRevision' => $hasConfig ? $adapter?->configurationRevision($target) : null,
+            'connectorUi' => $presenter?->definition(),
             ...$details,
         ]);
     }
