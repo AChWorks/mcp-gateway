@@ -1,5 +1,7 @@
 # MCP Gateway v2.4.2
 
+**Stable v2.4.2 — Owner-only updater and consistent Admin layout.**
+
 The temporary browser updater now requires an enabled Owner in role-aware installations before displaying update preflight or accepting Start. Access to the shared dashboard does not confer update authority. Supported older installations without roles retain their existing authenticated administrator upgrade path. Existing browser-bound continuation and operator recovery safeguards remain in place.
 
 Owner sign-in can return directly to the exact local `/update/` entrypoint. Ordinary users and unsafe redirect destinations do not gain access through this return path. There is no new configuration, service or database migration.
