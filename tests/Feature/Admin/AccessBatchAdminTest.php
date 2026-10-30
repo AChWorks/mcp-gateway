@@ -343,6 +343,29 @@ final class AccessBatchAdminTest extends TestCase
         return session('admin_access_batch_review');
     }
 
+    public function test_review_keeps_exactly_one_current_global_group_or_user_destination(): void
+    {
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'Navigation context']);
+        $target = $this->target('navigation-context');
+        $user = $this->person();
+        foreach ([
+            ['group-targets', (string) $group->id, (string) $target->id, route('admin.target-groups.index')],
+            ['user-groups', (string) $user->id, (string) $group->id, route('admin.users.index')],
+        ] as [$context, $subject, $item, $destination]) {
+            $saved = $this->review($context, $subject, [$item]);
+            $html = $this->get($this->reviewUrl($saved))->assertOk()->getContent();
+            $document = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $links = (new \DOMXPath($document))->query('//nav[@class="admin-nav"]//a[@aria-current="page"]');
+            self::assertCount(1, $links);
+            self::assertSame($destination, $links->item(0)->getAttribute('href'));
+        }
+    }
+
     private function owner(): User
     {
         return User::query()->create([

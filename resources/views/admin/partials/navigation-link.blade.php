@@ -1,4 +1,10 @@
-@php($current = request()->routeIs($activePattern))
+@php
+    // Finite local workflow aliases keep review pages in their existing section.
+    $navigationRoute = request()->attributes->get('admin.navigation.route');
+    $current = request()->routeIs($activePattern)
+        || (in_array($navigationRoute, ['admin.target-groups.targets.index', 'admin.users.targets.index'], true)
+            && \Illuminate\Support\Str::is($activePattern, $navigationRoute));
+@endphp
 <a @class(['nav-link', 'is-active' => $current]) href="{{ route($destination) }}" @if ($current) aria-current="page" @endif>
     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
         @switch($icon)
