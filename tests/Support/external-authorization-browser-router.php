@@ -176,7 +176,14 @@ Route::middleware(['web', 'auth'])->get('/__browser__/race-release/{race}', stat
     abort_unless(preg_match('/\A[a-f0-9]{16}\z/D', $race), 400);
     $directory = getenv('GATEWAY_BROWSER_FIXTURE_RACE_DIR');
     abort_unless(is_string($directory) && is_dir($directory), 500);
-    abort_unless(file_put_contents($directory.'/'.$race.'.release', 'release') !== false, 500);
+    // Release only after this request has saved its own session. Otherwise its
+    // newer session snapshot can race with and overwrite the stale writer the
+    // fixture deliberately needs to preserve for its replay assertion.
+    app()->terminating(static function () use ($directory, $race): void {
+        if (file_put_contents($directory.'/'.$race.'.release', 'release') === false) {
+            throw new RuntimeException('Could not release the test-only stale session writer.');
+        }
+    });
 
     return response('', 204);
 });
