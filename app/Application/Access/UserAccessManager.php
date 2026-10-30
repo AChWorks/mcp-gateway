@@ -257,6 +257,85 @@ final readonly class UserAccessManager
         });
     }
 
+    /**
+     * Change only the direct reachability rule; every active and historical
+     * per-Target denial remains untouched. The workflow supplies a fresh
+     * review-bound revision for each selected immutable Target.
+     *
+     * @param  list<string>  $targetIds
+     * @param  array<string,string>  $expectedRevisions
+     */
+    public function updateTargetRules(
+        User $actor,
+        User $user,
+        array $targetIds,
+        string $rule,
+        array $expectedRevisions,
+        bool $sshReviewed,
+        string $correlationId,
+    ): int {
+        $targetIds = AccessBatchContext::UserTargets->selection($targetIds);
+        AccessBatchContext::UserTargets->intent($rule);
+        $actor = AccessBatchGuard::actor($actor);
+
+        return DB::transaction(function () use ($actor, $user, $targetIds, $rule, $expectedRevisions, $sshReviewed, $correlationId): int {
+            $userIds = array_values(array_unique([(string) $actor->getKey(), (string) $user->getKey()]));
+            $users = User::query()->whereIn('id', $userIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $actor = AccessBatchGuard::actor($users->get($actor->getKey()) ?? $actor);
+            $user = $users->get($user->getKey()) ?? throw new DomainException('batch_selection_unavailable');
+            if ($this->role($user) === GatewayRole::Owner) {
+                throw new DomainException('owner_unrestricted');
+            }
+            $targets = Target::query()->whereIn('id', $targetIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            if ($targets->count() !== count($targetIds)) {
+                throw new DomainException('batch_selection_unavailable');
+            }
+            $rules = DB::table('user_target_access')->where('user_id', $user->getKey())
+                ->whereIn('target_record_id', $targetIds)->pluck('allowed', 'target_record_id');
+            $denials = DB::table('user_target_permission_denials')->where('user_id', $user->getKey())
+                ->whereIn('target_record_id', $targetIds)->orderBy('permission')->get()->groupBy('target_record_id');
+            $changed = [];
+            foreach ($targetIds as $id) {
+                $allowed = $rules->get($id);
+                $before = $allowed === null ? 'inherit' : ((bool) $allowed ? 'allow' : 'deny');
+                $revision = AuthorizationRevision::targetRule([
+                    'access_rule' => $before,
+                    'denied_permissions' => $denials->get($id, collect())->pluck('permission')->all(),
+                ]);
+                if (! isset($expectedRevisions[$id]) || ! hash_equals($revision, $expectedRevisions[$id])) {
+                    throw new DomainException('batch_review_stale');
+                }
+                if ($rule === 'allow' && $before === 'deny') {
+                    throw new DomainException('batch_blocked');
+                }
+                if ($before !== $rule) {
+                    $changed[] = $id;
+                }
+            }
+            if ($changed === []) {
+                return 0;
+            }
+            AccessBatchGuard::ssh($actor, $targets->only($changed)->contains(
+                static fn (Target $target): bool => $target->connector_type === 'ssh_direct'), $sshReviewed);
+            if ($rule === 'inherit') {
+                DB::table('user_target_access')->where('user_id', $user->getKey())->whereIn('target_record_id', $changed)->delete();
+            } else {
+                $rows = array_map(static fn (string $id): array => [
+                    'user_id' => $user->getKey(), 'target_record_id' => $id,
+                    'allowed' => $rule === 'allow', 'created_at' => now(), 'updated_at' => now(),
+                ], $changed);
+                DB::table('user_target_access')->upsert($rows, ['user_id', 'target_record_id'], ['allowed', 'updated_at']);
+            }
+            foreach ($changed as $id) {
+                $this->activity->recordRequired($correlationId, sprintf(
+                    'user-target-access-update:%d:%s', $user->id, $targets->get($id)?->target_id,
+                ), 'success');
+            }
+
+            return count($changed);
+        });
+    }
+
     /** @return list<string> */
     public function globalDenials(User $user): array
     {
