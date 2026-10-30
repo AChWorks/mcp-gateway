@@ -288,6 +288,88 @@ final class AccessBatchAdminTest extends TestCase
         self::assertSame(0, $group->targets()->count());
     }
 
+    public function test_view_selected_clears_search_connector_and_page_after_saving_current_page_choices(): void
+    {
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'Visible saved basket']);
+        $this->target('a-ssh-selected', 'ssh_direct');
+        for ($i = 0; $i < 54; $i++) {
+            $this->target(sprintf('basket-%03d', $i));
+        }
+        $firstPage = $this->get($this->collection('group-targets', $group->id, ['membership' => 'available', 'intent' => 'add']))->assertOk();
+        $firstPage->assertSee('name="shown_membership" value="available"', false);
+        $first = $firstPage->viewData('data');
+        $firstIds = array_column($first['items'], 'id');
+        $savedIds = array_slice($firstIds, 0, 2);
+        $next = $this->post($this->selection('group-targets', $group->id), [
+            'page_ids' => $firstIds, 'selected_ids' => $savedIds,
+            'intent' => 'add', 'shown_intent' => 'add', 'shown_membership' => 'available',
+            'membership' => 'available', 'page' => 1, 'action' => 'next',
+        ])->assertRedirect();
+        $second = $this->get($next->headers->get('Location'))->assertOk()->viewData('data');
+        $newlyChecked = $second['items'][0]['id'];
+        $response = $this->post($this->selection('group-targets', $group->id), [
+            'page_ids' => array_column($second['items'], 'id'), 'selected_ids' => [$newlyChecked],
+            'intent' => 'add', 'shown_intent' => 'add', 'shown_membership' => 'available',
+            'membership' => 'available', 'page' => 2, 'search' => 'no-matching-name',
+            'connector_type' => 'wp_ai_bridge', 'action' => 'selected',
+        ])->assertRedirect();
+        $selected = $this->get($response->headers->get('Location'))->assertOk();
+        self::assertSame('', $selected->viewData('filters')['search']);
+        self::assertSame('', $selected->viewData('filters')['connector_type']);
+        self::assertSame(1, $selected->viewData('data')['page']);
+        self::assertSame('add', $selected->viewData('intent'));
+        self::assertEqualsCanonicalizing([...$savedIds, $newlyChecked], array_column($selected->viewData('data')['items'], 'id'));
+        self::assertSame(3, $selected->viewData('data')['selected_count']);
+        self::assertSame(0, $group->targets()->count());
+    }
+
+    public function test_membership_filters_keep_the_explicit_basket_and_only_deliberate_members_or_available_transitions_change_intent(): void
+    {
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'Intent-preserving views']);
+        $target = $this->target('saved-add-choice');
+        $this->target('other-choice');
+        $this->post($this->selection('group-targets', $group->id), [
+            'page_ids' => [$target->id], 'selected_ids' => [$target->id],
+            'membership' => 'available', 'shown_membership' => 'available',
+            'intent' => 'add', 'shown_intent' => 'add', 'action' => 'save',
+        ])->assertRedirect()->assertSessionHasNoErrors();
+        $toSelected = $this->post($this->selection('group-targets', $group->id), [
+            'membership' => 'selected', 'shown_membership' => 'available',
+            'intent' => 'add', 'shown_intent' => 'add', 'search' => 'no-matching-name',
+            'connector_type' => 'ssh_direct', 'action' => 'filter',
+        ])->assertRedirect();
+        $selected = $this->get($toSelected->headers->get('Location'))->assertOk();
+        self::assertSame('add', $selected->viewData('intent'));
+        self::assertSame([$target->id], array_column($selected->viewData('data')['items'], 'id'));
+        self::assertSame('', $selected->viewData('filters')['search']);
+        self::assertSame('', $selected->viewData('filters')['connector_type']);
+
+        $withinSelected = $this->post($this->selection('group-targets', $group->id), [
+            'page_ids' => [$target->id], 'selected_ids' => [$target->id],
+            'membership' => 'selected', 'shown_membership' => 'selected',
+            'intent' => 'add', 'shown_intent' => 'add', 'search' => 'intentional-no-match', 'action' => 'filter',
+        ])->assertRedirect();
+        $filtered = $this->get($withinSelected->headers->get('Location'))->assertOk();
+        self::assertSame('add', $filtered->viewData('intent'));
+        self::assertSame('intentional-no-match', $filtered->viewData('filters')['search']);
+        self::assertSame([], $filtered->viewData('data')['items']);
+        self::assertSame(1, $filtered->viewData('data')['selected_count']);
+
+        foreach ([['all', 'selected', 'add', 1], ['members', 'all', 'remove', 0], ['available', 'members', 'add', 1]] as [$view, $shown, $nextIntent, $count]) {
+            $currentIntent = $shown === 'members' ? 'remove' : 'add';
+            $response = $this->post($this->selection('group-targets', $group->id), [
+                'membership' => $view, 'shown_membership' => $shown,
+                'intent' => $currentIntent, 'shown_intent' => $currentIntent, 'action' => 'filter',
+            ])->assertRedirect();
+            $page = $this->get($response->headers->get('Location'))->assertOk();
+            self::assertSame($nextIntent, $page->viewData('intent'));
+            self::assertSame($count, $page->viewData('data')['selected_count']);
+        }
+        self::assertSame(0, $group->targets()->count());
+    }
+
     /** @param array<string,mixed> $query */
     private function collection(string $context, string $subject, array $query = []): string
     {

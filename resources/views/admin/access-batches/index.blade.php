@@ -45,6 +45,7 @@
         @csrf
         <input type="hidden" name="page" value="{{ $data['page'] }}">
         <input type="hidden" name="shown_intent" value="{{ $intent }}">
+        <input type="hidden" name="shown_membership" value="{{ $filters['membership'] }}">
         <div class="filter-grid">
             <div class="field">
                 <label for="access-search">{{ __('Search') }}</label>

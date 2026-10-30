@@ -70,6 +70,7 @@ final class AccessBatchController extends Controller
             'unavailable_ids.*' => ['string', 'max:64', 'regex:/\\A[a-zA-Z0-9]+\\z/D'],
             'selected_ids.*' => ['string', 'max:64', 'regex:/\\A[a-zA-Z0-9]+\\z/D'],
             'shown_intent' => ['nullable', 'string', 'max:16'],
+            'shown_membership' => ['nullable', Rule::in(['members', 'available', 'all', 'selected'])],
             'action' => ['required', Rule::in(['save', 'filter', 'previous', 'next', 'selected', 'members', 'clear', 'select-page', 'review'])],
         ]);
         $pageIds = array_values(array_unique($fields['page_ids'] ?? []));
@@ -81,6 +82,7 @@ final class AccessBatchController extends Controller
         }
 
         $action = (string) $fields['action'];
+        $shownMembership = (string) ($fields['shown_membership'] ?? $filters['membership']);
         $existing = ($fields['shown_intent'] ?? $intent) === $intent
             ? $this->selectionIds($request, $actor, $context, $subject, $intent) : [];
         $ids = $action === 'clear' ? [] : array_values(array_unique([
@@ -135,8 +137,20 @@ final class AccessBatchController extends Controller
             $filters['membership'] = 'members';
         }
 
-        $nextIntent = $action === 'filter' && $context !== 'user-targets'
-            ? ($filters['membership'] === 'available' ? 'add' : 'remove') : $intent;
+        // Opening the basket reveals all saved identities, regardless of the
+        // search/connector fields that happened to be on the previous page.
+        if ($action === 'selected' || ($action === 'filter'
+            && $filters['membership'] === 'selected' && $shownMembership !== 'selected')) {
+            $filters['search'] = '';
+            $filters['connector_type'] = '';
+        }
+
+        $nextIntent = $intent;
+        if ($context !== 'user-targets' && ($action === 'members'
+            || ($action === 'filter' && $filters['membership'] !== $shownMembership
+                && in_array($filters['membership'], ['members', 'available'], true)))) {
+            $nextIntent = $filters['membership'] === 'available' ? 'add' : 'remove';
+        }
 
         return redirect($this->collectionUrl($context, $subject, [...$filters, 'intent' => $nextIntent]));
     }
