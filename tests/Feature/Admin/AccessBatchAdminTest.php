@@ -228,7 +228,9 @@ final class AccessBatchAdminTest extends TestCase
         $target = $this->target('ssh-reviewed', 'ssh_direct');
         $saved = $this->review('group-targets', $group->id, [$target->id]);
         self::assertTrue($saved['preview']['requires_ssh_confirmation']);
-        $this->get($this->reviewUrl($saved))->assertOk()->assertSee('confirm_ssh_changes', false);
+        $this->get($this->reviewUrl($saved))->assertOk()->assertSee('confirm_ssh_changes', false)
+            ->assertSee('Adding or removing memberships can change SSH reachability')
+            ->assertDontSee('direct Target scope changes');
         $this->post($this->applyUrl('group-targets', $group->id), [
             'review_id' => $saved['id'], 'current_password' => 'CorrectHorse!234',
         ])->assertSessionHasErrors('confirm_ssh_changes');
@@ -368,6 +370,33 @@ final class AccessBatchAdminTest extends TestCase
             self::assertSame($count, $page->viewData('data')['selected_count']);
         }
         self::assertSame(0, $group->targets()->count());
+    }
+
+    public function test_direct_ssh_scope_review_explains_inheritance_without_membership_wording_or_new_acknowledgement_defaults(): void
+    {
+        $this->actingAs($this->owner());
+        $user = $this->person();
+        $target = $this->target('ssh-direct-scope-copy', 'ssh_direct');
+        DB::table('user_target_access')->insert([
+            'user_id' => $user->id, 'target_record_id' => $target->id, 'allowed' => true,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $saved = $this->review('user-targets', (string) $user->id, [$target->id], [
+            'membership' => 'members', 'intent' => 'inherit', 'shown_intent' => 'inherit',
+        ]);
+        self::assertTrue($saved['preview']['requires_ssh_confirmation']);
+        $response = $this->get($this->reviewUrl($saved))->assertOk()
+            ->assertSee('direct Target scope changes')
+            ->assertSee('Inherit may restore another already-approved access path.')
+            ->assertDontSee('Adding or removing memberships can change SSH reachability');
+        self::assertSame($saved['preview']['token'], session('admin_access_batch_review')['preview']['token']);
+        self::assertSame(1, preg_match('/<input[^>]+id="confirm_ssh_changes"[^>]*>/', $response->getContent(), $input));
+        self::assertStringNotContainsString('checked', $input[0]);
+        $this->post($this->applyUrl('user-targets', (string) $user->id), [
+            'review_id' => $saved['id'], 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_changes');
+        self::assertTrue((bool) DB::table('user_target_access')->where('user_id', $user->id)->value('allowed'));
+        self::assertSame($saved['preview']['token'], session('admin_access_batch_review')['preview']['token']);
     }
 
     /** @param array<string,mixed> $query */

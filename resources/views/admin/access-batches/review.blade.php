@@ -65,7 +65,13 @@
         @if ($preview['requires_ssh_confirmation'])
             <label class="checkbox-option" for="confirm_ssh_changes">
                 <input id="confirm_ssh_changes" name="confirm_ssh_changes" value="1" type="checkbox" @error('confirm_ssh_changes') aria-invalid="true" aria-describedby="confirm_ssh_changes-error" @enderror>
-                <span>{{ __('I reviewed the SSH impact of these exact changes. Adding or removing memberships can change SSH reachability or lift a group restriction through another access path.') }}</span>
+                <span>
+                    @if ($context === 'user-targets')
+                        {{ __('I reviewed the SSH impact of these direct Target scope changes. Allow or Deny changes the direct reachability rule; Inherit may restore another already-approved access path. Existing capability restrictions still apply.') }}
+                    @else
+                        {{ __('I reviewed the SSH impact of these exact changes. Adding or removing memberships can change SSH reachability or lift a group restriction through another access path.') }}
+                    @endif
+                </span>
             </label>
             @error('confirm_ssh_changes')<p id="confirm_ssh_changes-error" class="field-error" role="alert">{{ $message }}</p>@enderror
         @endif

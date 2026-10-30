@@ -439,6 +439,13 @@ code {
     min-width: 0;
 }
 
+/* A heading and its next native form/feedback need the same breathing room.
+   This sets one margin, including existing .form-stack consumers. */
+.section-heading + :is(form, .alert),
+.section-heading + .alert + form {
+    margin-block-start: var(--ui-panel-stack-gap);
+}
+
 .content-grid,
 .form-grid,
 .stats-grid {

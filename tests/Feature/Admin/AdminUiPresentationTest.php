@@ -12,6 +12,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\MessageBag;
 use Illuminate\Support\ViewErrorBag;
 use Tests\TestCase;
 
@@ -998,6 +999,51 @@ final class AdminUiPresentationTest extends TestCase
         $css = (string) file_get_contents(public_path('css/admin.css'));
         self::assertStringContainsString('.selection-toolbar {', $css);
         self::assertStringContainsString('.access-item-identity {', $css);
+    }
+
+    public function test_section_heading_spacing_contract_covers_native_forms_feedback_and_shared_siblings(): void
+    {
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        self::assertSame(1, preg_match('/\\.section-heading \\+ :is\\(form, \\.alert\\),\\s*\\.section-heading \\+ \\.alert \\+ form\\s*\\{([^}]+)\\}/s', $css, $rule));
+        self::assertStringContainsString('margin-block-start: var(--ui-panel-stack-gap);', $rule[1]);
+        $xpathFor = static function (string $html): \DOMXPath {
+            $dom = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $dom->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+
+            return new \DOMXPath($dom);
+        };
+        $this->actingAs($this->owner());
+        $group = TargetGroup::query()->create(['name' => 'Heading form spacing']);
+        $user = User::query()->create([
+            'name' => 'Heading sibling', 'email' => 'heading-sibling@example.test', 'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Viewer, 'target_scope_mode' => TargetScopeMode::Selected,
+        ]);
+        foreach ([
+            '/admin/target-groups/'.$group->id.'/targets?membership=available&intent=add',
+            '/admin/users/'.$user->id.'/targets?membership=available&intent=allow',
+        ] as $url) {
+            $response = $this->get($url)->assertOk();
+            if (str_starts_with($url, '/admin/users/')) {
+                $response->assertSee('Existing role, global, group and individual restrictions remain in effect.');
+            }
+            $xpath = $xpathFor($response->getContent());
+            self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="access-members-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][self::form])'));
+        }
+        $errors = (new ViewErrorBag)->put('default', new MessageBag(['selection' => 'Review the changed selection.']));
+        $groupPage = $this->get('/admin/target-groups/'.$group->id.'/targets?membership=available&intent=add')->assertOk();
+        $xpath = $xpathFor(view('admin.access-batches.index', [
+            ...$groupPage->original->getData(), 'errors' => $errors,
+        ])->render());
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="access-members-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][self::p[contains(concat(" ",normalize-space(@class)," ")," alert ")]]/following-sibling::*[1][self::form])'));
+        Target::query()->create([
+            'target_id' => 'heading-table-sibling', 'display_name' => 'Heading table sibling',
+            'connector_type' => 'wp_ai_bridge', 'connection_state' => 'error',
+        ]);
+        $xpath = $xpathFor($this->withSession(['errors' => new ViewErrorBag])->get('/admin')->assertOk()->getContent());
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="needs-review-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][contains(concat(" ",normalize-space(@class)," ")," table-wrap ")])'));
     }
 
     private function owner(): User

@@ -27,7 +27,7 @@
     <div class="section-heading">
         <div>
             <h2 id="access-members-title">{{ $filters['membership'] === 'available' ? __($labels['add']) : ($filters['membership'] === 'selected' ? __('Selected items') : __($labels['noun'])) }}</h2>
-            <p class="muted reading-width">{{ $context === 'user-targets' ? __('Scope source describes reachability, not a grant of capabilities. Existing role, global and individual restrictions remain in effect.') : __('Manage explicit memberships. Removing a membership does not guarantee that every other access path is removed.') }}</p>
+            <p class="muted reading-width">{{ $context === 'user-targets' ? __('Scope source describes reachability, not a grant of capabilities. Existing role, global, group and individual restrictions remain in effect.') : __('Manage explicit memberships. Removing a membership does not guarantee that every other access path is removed.') }}</p>
         </div>
         @unless ($data['subject']['unrestricted'] ?? false)
             @if ($filters['membership'] !== 'available')
