@@ -11,6 +11,7 @@
 
     let navigating = false;
     let allowUnload = false;
+    let submittedDirtyForm = null;
     let restoringCancelledHistory = false;
     let currentHistoryIndex = history.state?.turbo?.restorationIndex ?? 0;
 
@@ -93,13 +94,18 @@
     // Native validation runs before submit. Never intercept or replay the form.
     document.addEventListener('submit', event => {
         if (!event.defaultPrevented) {
+            submittedDirtyForm = event.target.dataset.adminDirty === 'true' ? event.target : null;
             event.target.removeAttribute('data-admin-dirty');
-            allowUnload = true;
+            // Native attachments may keep this document alive. Other drafts
+            // must retain their unload guard after any submitted form.
         }
     });
 
     window.addEventListener('beforeunload', event => {
         if (!allowUnload && dirtyForms()) {
+            // A cancelled departure must also retain the submitted draft.
+            if (submittedDirtyForm?.isConnected) submittedDirtyForm.dataset.adminDirty = 'true';
+            submittedDirtyForm = null;
             event.preventDefault();
             event.returnValue = '';
         }
