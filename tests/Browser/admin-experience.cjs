@@ -4,6 +4,9 @@
 // No production accounts, real downstream request, payload or credential logging.
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
+const { readFileSync } = require('node:fs');
+const { createHash } = require('node:crypto');
+const { join } = require('node:path');
 const base = process.env.GATEWAY_BROWSER_BASE_URL;
 if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
     throw new Error('A local-only GATEWAY_BROWSER_BASE_URL is required.');
@@ -503,16 +506,180 @@ async function networkFailure(browser) {
     }
 }
 
+async function fragmentHistory(browser) {
+    const run = await create(browser);
+    const page = run.page;
+    try {
+        await enter(page);
+        await nav(page, 'Targets', 'Gateway Targets');
+        await nav(page, 'Operational settings', 'Operational settings');
+        await enhancedTargetsReady(page);
+        const field = page.locator('input[name="values[wp_response_kib]"]');
+        const initialValue = await field.inputValue();
+        await field.fill('79');
+        await page.evaluate(() => { window.__fragmentDocument = 'dirty-settings'; });
+        const initial = await page.evaluate(() => ({ length: history.length, state: history.state, title: document.title }));
+        const reads = [];
+        page.on('request', request => {
+            if (new URL(request.url()).pathname === '/admin/operations') reads.push(request.method());
+        });
+        for (const [name, id] of [['WordPress responses', 'settings-wordpress-responses'],
+            ['SSH commands', 'settings-ssh-commands'], ['Confirm changes', 'settings-confirmation']]) {
+            await page.locator('.section-nav').getByRole('link', { name, exact: true }).click();
+            assert.equal(new URL(page.url()).hash, '#' + id);
+            assert.equal(await field.inputValue(), '79');
+            assert.equal(await page.locator('#' + id).evaluate(element => document.activeElement === element), true);
+            assert.equal(await page.evaluate(() => history.length), initial.length, 'A section link added an unindexed history entry.');
+            assert.deepEqual(await page.evaluate(() => history.state), initial.state);
+            assert.equal(await page.title(), initial.title);
+            assert.equal(await page.locator('.admin-nav [aria-current="page"]').innerText(), 'Operational settings');
+        }
+        const sectionLocation = page.url();
+        const cancelled = deferred();
+        page.once('dialog', async dialog => { await dialog.dismiss(); cancelled.resolve(); });
+        await page.evaluate(() => history.back());
+        await deadline(cancelled.promise, 'dirty section Back confirmation');
+        await page.waitForURL(sectionLocation);
+        assert.equal(await field.inputValue(), '79', 'Cancelled section Back erased the dirty setting.');
+        assert.equal(await page.evaluate(() => window.__fragmentDocument), 'dirty-settings');
+        assert.equal(await page.locator('#settings-confirmation').evaluate(element => document.activeElement === element), true);
+        assert.deepEqual(reads, [], 'Section links or cancelled Back issued an unnecessary read.');
+        page.once('dialog', dialog => dialog.accept());
+        await page.evaluate(() => history.back());
+        await page.getByRole('heading', { name: 'Gateway Targets', exact: true }).waitFor();
+        await page.goForward();
+        await page.getByRole('heading', { name: 'Operational settings', exact: true }).waitFor();
+        await enhancedTargetsReady(page);
+        assert.equal(await field.inputValue(), initialValue, 'Forward restored a discarded section edit.');
+        assert.equal(new URL(page.url()).hash, '#settings-confirmation');
+
+        // The actual keyboard skip link shares fragment handling and must not
+        // introduce a second history model or clear the native form dirty flag.
+        await field.fill('83');
+        const beforeSkip = await page.evaluate(() => ({ length: history.length, state: history.state }));
+        await page.locator('.skip-link').focus();
+        await page.keyboard.press('Enter');
+        assert.equal(new URL(page.url()).hash, '#main-content');
+        assert.equal(await page.evaluate(() => document.activeElement.id), 'main-content');
+        assert.equal(await page.evaluate(() => history.length), beforeSkip.length);
+        assert.deepEqual(await page.evaluate(() => history.state), beforeSkip.state);
+        assert.equal(await field.inputValue(), '83');
+        assert.equal(await page.title(), initial.title);
+        assert.equal(await page.locator('.admin-nav [aria-current="page"]').innerText(), 'Operational settings');
+        const skipLocation = page.url();
+        const skipCancelled = deferred();
+        page.once('dialog', async dialog => { await dialog.dismiss(); skipCancelled.resolve(); });
+        await page.evaluate(() => history.back());
+        await deadline(skipCancelled.promise, 'dirty skip-link Back confirmation');
+        await page.waitForURL(skipLocation);
+        assert.equal(await field.inputValue(), '83');
+        page.once('dialog', dialog => dialog.accept());
+        await page.evaluate(() => history.back());
+        await page.getByRole('heading', { name: 'Gateway Targets', exact: true }).waitFor();
+        await page.goForward();
+        await page.getByRole('heading', { name: 'Operational settings', exact: true }).waitFor();
+        assert.equal(await field.inputValue(), initialValue, 'Forward restored a discarded skip-link edit.');
+        assert.equal(new URL(page.url()).hash, '#main-content');
+        assert.deepEqual(run.errors, []);
+        assert.deepEqual(run.external, []);
+        pass('declared section and keyboard skip links preserve Turbo history, focus and dirty Back/Forward guards');
+    } finally {
+        await run.context.close();
+    }
+
+    const native = await create(browser, { javaScriptEnabled: false });
+    try {
+        await enter(native.page);
+        await native.page.goto(base + '/admin/operations');
+        const initialLength = await native.page.evaluate(() => history.length);
+        await native.page.locator('.section-nav').getByRole('link', { name: 'WordPress responses', exact: true }).click();
+        assert.equal(new URL(native.page.url()).hash, '#settings-wordpress-responses');
+        assert.equal(await native.page.evaluate(() => history.length), initialLength + 1);
+        await native.page.locator('.skip-link').focus();
+        await native.page.keyboard.press('Enter');
+        assert.equal(new URL(native.page.url()).hash, '#main-content');
+        assert.equal(await native.page.evaluate(() => document.activeElement.id), 'main-content');
+        assert.deepEqual(native.external, []);
+        pass('JavaScript-off declared section and keyboard skip links retain native fragment behavior');
+    } finally {
+        await native.context.close();
+    }
+}
+
+async function coherentAssetRefresh(browser) {
+    const run = await create(browser);
+    const page = run.page;
+    try {
+        await enter(page);
+        await enhancedTargetsReady(page);
+        const originalCss = readFileSync(join(__dirname, '../../public/css/admin.css'), 'utf8');
+        const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+        const marker = 'coherent-review-136';
+        const changedCss = originalCss + '\n:root { --admin-browser-asset-refresh: ' + marker + '; }\n';
+        const changedDigest = sha256(changedCss);
+        const originalHref = await page.locator('link[rel="stylesheet"][data-turbo-track="reload"]').getAttribute('href');
+        const changedUrl = new URL(originalHref);
+        const originalVersion = changedUrl.searchParams.get('v');
+        assert.ok(originalVersion.endsWith('-' + sha256(originalCss).slice(0, 12)), 'Original stylesheet URL did not fingerprint its real bytes.');
+        changedUrl.searchParams.set('v', originalVersion.slice(0, -12) + changedDigest.slice(0, 12));
+        const changedHref = changedUrl.href;
+        assert.notEqual(changedHref, originalHref);
+        assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement)
+            .getPropertyValue('--admin-browser-asset-refresh').trim()), '');
+        await page.evaluate(() => { window.__assetRefreshDocument = 'old-document'; });
+        const reads = [];
+        const mutations = [];
+        page.on('request', request => { if (request.method() !== 'GET') mutations.push(request.method()); });
+        await page.route(changedHref, route => route.fulfill({
+            status: 200, contentType: 'text/css', headers: { 'Cache-Control': 'no-store' }, body: changedCss,
+        }));
+        await page.route(base + '/admin/targets', async route => {
+            // Every response remains real Laravel HTML. Apply the identical
+            // coherent tracked-asset head to enhanced and native fallback GETs.
+            const response = await route.fetch();
+            assert.equal(response.status(), 200);
+            const html = await response.text();
+            assert.ok(html.includes(originalHref), 'Real server HTML lacked its original tracked stylesheet.');
+            reads.push(route.request().isNavigationRequest() ? 'native' : 'enhanced');
+            await route.fulfill({ response, body: html.replaceAll(originalHref, changedHref) });
+        });
+        const cssResponse = page.waitForResponse(changedHref);
+        const nativeRequest = page.waitForRequest(request => request.url() === base + '/admin/targets'
+            && request.isNavigationRequest());
+        await page.locator('.admin-nav').getByRole('link', { name: 'Targets', exact: true }).click();
+        await nativeRequest;
+        await page.getByRole('heading', { name: 'Gateway Targets', exact: true }).waitFor();
+        await page.waitForFunction(expected => getComputedStyle(document.documentElement)
+            .getPropertyValue('--admin-browser-asset-refresh').trim() === expected, marker);
+        const deliveredCss = await (await cssResponse).body();
+        assert.equal(sha256(deliveredCss), changedDigest, 'New fingerprint did not serve the expected modified real CSS bytes.');
+        assert.equal(await page.locator('link[rel="stylesheet"][data-turbo-track="reload"]').getAttribute('href'), changedHref);
+        assert.equal(await page.evaluate(() => window.__assetRefreshDocument), undefined, 'Tracked asset change retained the old document.');
+        assert.match(page.url(), /\/admin\/targets$/);
+        assert.match(await page.title(), /Targets/);
+        assert.equal(await page.locator('.admin-nav [aria-current="page"]').innerText(), 'Targets');
+        assert.deepEqual(reads, ['enhanced', 'native']);
+        assert.deepEqual(mutations, []);
+        assert.deepEqual(run.errors, []);
+        assert.deepEqual(run.external, []);
+        pass('coherent intercepted asset update reloads document and uses new SHA256-fingerprinted real CSS bytes');
+    } finally {
+        await run.context.close();
+    }
+}
+
 (async () => {
     const browser = await chromium.launch({ headless: true });
     try {
         const group = process.env.GATEWAY_UI_TEST_GROUP || 'all';
-        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience'].includes(group), 'Unknown UI test group.');
+        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets'].includes(group), 'Unknown UI test group.');
         if (group === 'all' || group === 'matrix') await matrix(browser);
         if (group === 'all' || group === 'navigation') await navigation(browser);
         if (group === 'all' || group === 'mobile') await mobileAndNative(browser);
         if (group === 'all' || group === 'forms') await nativeFormsAndScope(browser);
         if (group === 'all' || group === 'adaptation') await adaptation(browser);
+        if (group === 'all' || group === 'fragments') await fragmentHistory(browser);
+        if (group === 'all' || group === 'assets') await coherentAssetRefresh(browser);
         if (group === 'all' || group === 'resilience') {
             await resilience(browser);
             await networkFailure(browser);
