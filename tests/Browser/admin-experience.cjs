@@ -169,6 +169,7 @@ async function navigation(browser) {
         assert.equal(await page.locator('#ssh_password').isDisabled(), false);
         assert.equal(await page.locator('#ssh_private_key').isDisabled(), true);
         await page.locator('#ssh_host_key').fill('invalid fixture key');
+        await page.locator('.target-help-details').filter({ has: page.locator('#show_host_fingerprint') }).locator('summary').click();
         await page.locator('#show_host_fingerprint').click();
         assert.match(await page.locator('#host_fingerprint').innerText(), /Paste one supported public host key/);
         await page.locator('#connector_type').selectOption('wp_ai_bridge');
