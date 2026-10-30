@@ -301,7 +301,16 @@ async function groupTasks(browser) {
         await review(page);
         assert.equal(await page.getByRole('button', { name: 'Apply reviewed changes', exact: true }).isDisabled(), true);
         await page.getByText('An explicit direct Deny must be reviewed in the individual Target editor.', { exact: true }).waitFor();
-        await page.goto(base + userPath(fixture.users.member.id) + '/targets');
+        const exactEditor = base + userPath(fixture.users.member.id) + '/targets/group-browser-blocked/edit';
+        const blockedEditorLink = page.getByRole('link', { name: 'Open individual Target rules', exact: true });
+        assert.equal(await blockedEditorLink.getAttribute('href'), exactEditor);
+        await blockedEditorLink.click();
+        await page.waitForURL(exactEditor);
+        assert.equal(await page.locator('.page-heading code').innerText(), 'group-browser-blocked');
+        assert.equal(await page.getByLabel('Explicit scope rule', { exact: true }).inputValue(), 'deny');
+        assert.equal(await page.evaluate(() => document.activeElement.tagName), 'H1');
+        await page.getByRole('link', { name: 'Back to target access', exact: true }).click();
+        await page.waitForURL(base + userPath(fixture.users.member.id) + '/targets');
         await row(page, fixture.special.blocked.label).getByText('Deny', { exact: true }).waitFor();
 
         await page.getByRole('link', { name: 'Add Targets', exact: true }).click();
