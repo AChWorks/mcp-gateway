@@ -1,15 +1,15 @@
-# MCP Gateway v2.4.0-rc.3
+# MCP Gateway v2.4.0
 
-**Source candidate `2.4.0-rc.3` — NOT PUBLISHED.**
+**Stable v2.4.0 — connector-neutral Dashboard and shared Admin experience, preserving existing access, native forms, OAuth and file-transfer boundaries.**
 
-Compared with official v2.3.12, this owner-test candidate prepares the [Admin experience redesign #136](https://github.com/AChWorks/mcp-gateway/issues/136):
+Compared with official v2.3.12, this release delivers the [Admin experience redesign #136](https://github.com/AChWorks/mcp-gateway/issues/136):
 
 - **Shared Admin workspace:** permission-filtered desktop sidebar, keyboard-operable mobile navigation, practical content width, coherent light/dark surfaces and reusable form, table and feedback patterns. Eligible internal links use enhanced GET navigation while direct URLs, native form submissions and no-JavaScript access remain available. Authentication handoffs and file transfers retain native navigation; speculative prefetch and application snapshots are disabled.
 - **Actionable Dashboard:** scoped needs-review rows, separate paused and lifecycle summaries, connector breakdown and recent Activity direct operators to the relevant Target or evidence. Stored connection state and recorded observations are not presented as proof of live remote health; opening the Dashboard does not probe the fleet.
 - **Connector-owned presentation:** code-registered connector components own their enrollment, configuration and recovery presentation. Shared Target pages use registered presentation companions and a neutral unsupported fallback rather than assuming every Target is WordPress or SSH. Presentation never grants new operations or credentials.
 - **Consistent decisions and recovery:** access forms associate field errors with their controls, permission choices say what is denied, operational settings provide local section links within one version-fenced native form, and Activity distinguishes failed from unknown outcomes while preserving readable recorded diagnostics.
 - **Upgrade boundary:** no new database migration, environment key, credential rotation, OAuth client identity change or mandatory runtime service is introduced by this UI work. The package workflows include official v2.3.12 alongside the existing stable upgrade and backup-integrity baselines.
-- **Candidate status:** this source identity is a prerelease for separately authorized owner testing. It is not an official stable Release, an installation, or proof of installed-host acceptance. Public publication remains stable-only and requires the existing exact-source review, checks and Owner approval.
+- **Verification and rollout:** author-separated review and source/browser checks cover scoped rendering, native/no-JavaScript paths, section-history and attachment draft preservation, and coherent asset changes. The richer Dashboard adds measured read/render work compared with the previous summary; fixed query counts do not imply constant runtime or a server speedup. Public publication does not install the release. Installed-host UX/performance, complete assistive-technology/localization acceptance and real downstream file operations remain separate.
 
 # MCP Gateway v2.3.12
 
