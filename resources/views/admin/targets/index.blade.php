@@ -59,9 +59,10 @@
                 </thead>
                 <tbody>
                     @foreach ($inventory['items'] as $target)
-                        @php($recovery = $recoveries[$target->target_id] ?? null)
-                        @php($sshIdentity = $target->connector_type === 'ssh_direct' && $target->sshConfig !== null
-                            ? \App\Infrastructure\Connectors\SshDirect\SshTargetIdentity::safeMetadata($target) : null)
+                        @php($presentation = $presentations[$target->target_id])
+                        @php($connectorUi = $presentation['definition'])
+                        @php($recovery = $presentation['recovery'])
+                        @php($identity = $presentation['identity'] ?? null)
                         @php($connectionTone = match ($target->connection_state->value) {
                             'connected' => 'success',
                             'error' => 'danger',
@@ -74,16 +75,15 @@
                                 <div class="target-cell target-cell-identity">
                                     <strong class="target-display-name">{{ $target->display_name }}</strong>
                                     <code class="small-code">{{ $target->target_id }}</code>
-                                    @if ($sshIdentity !== null)
-                                        <code class="small-code target-meta">{{ $sshIdentity['destination_label'] }}</code>
-                                        <span class="target-meta">{{ __('SSH IP status') }}: {{ str_replace('_', ' ', $sshIdentity['ip_status']) }}</span>
+                                    @if ($connectorUi?->inventoryIdentityView !== null)
+                                        @include($connectorUi->inventoryIdentityView)
                                     @endif
                                 </div>
                             </td>
                             <td>
                                 <span class="targets-mobile-label" aria-hidden="true">{{ __('Connector') }}</span>
                                 <div class="target-cell">
-                                    <strong>{{ match ($target->connector_type) { 'wp_ai_bridge' => __('WordPress'), 'ssh_direct' => __('Direct SSH'), default => __('Unsupported connector') } }}</strong>
+                                    <strong>{{ $presentation['label'] }}</strong>
                                     <code class="small-code">{{ $target->connector_type }}</code>
                                 </div>
                             </td>
@@ -91,18 +91,10 @@
                                 <span class="targets-mobile-label" aria-hidden="true">{{ __('Connection') }}</span>
                                 <div class="target-cell target-cell-status">
                                     <span><span class="badge badge-{{ $connectionTone }}">{{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}</span></span>
-                                    @if ($target->connector_type === 'wp_ai_bridge' && $recovery !== null)
-                                        <span class="target-meta target-auth-status {{ $recovery['tone'] === 'caution' || ! $recovery['credential_present'] ? 'target-status-attention' : '' }}">
-                                            <strong>{{ __('OAuth') }}:</strong> {{ $recovery['title'] }}
-                                        </span>
-                                        @if ($recovery['canFinish'])
-                                            <span class="target-meta">{{ __('Safe completion available — inspect Target') }}</span>
-                                        @endif
-                                    @elseif ($sshIdentity !== null)
-                                        <span class="target-meta">{{ __('SSH connection last verified; not a live check') }}</span>
-                                        @if (! empty($sshIdentity['observed_at']))
-                                            <time class="target-meta" datetime="{{ $sshIdentity['observed_at'] }}">{{ $sshIdentity['observed_at'] }}</time>
-                                        @endif
+                                    @if ($connectorUi?->inventoryStatusView !== null)
+                                        @include($connectorUi->inventoryStatusView)
+                                    @else
+                                        <span class="target-meta">{{ $recovery['title'] }}</span>
                                     @endif
                                 </div>
                             </td>

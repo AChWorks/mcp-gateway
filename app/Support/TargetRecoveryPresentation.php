@@ -23,6 +23,19 @@ final class TargetRecoveryPresentation
         ?object $credentialMetadata = null,
         bool $oauthFlowPending = false,
     ): array {
+        if (! in_array($target->connector_type, ['wp_ai_bridge', 'ssh_direct'], true)) {
+            return [
+                'title' => __('Connector unavailable'),
+                'description' => __('This stored connector is not implemented. Its authentication, reachability and recovery requirements have not been evaluated.'),
+                'reachability' => __('No supported connector evidence is available.'),
+                'authorization' => __('Not evaluated: the connector implementation is unavailable.'),
+                'operation' => __('Connector operations are unavailable.'),
+                'history' => $target->last_error_code === null ? null
+                    : __('Recorded diagnostic: :code', ['code' => $target->last_error_code]),
+                'tone' => 'caution',
+                'canFinish' => false, 'canCancel' => false, 'needsExternalProof' => false,
+            ];
+        }
         $checkedAt = $wpConfig === null ? null : ($wpConfig->metadata_checked_at ?? null);
         $metadataReachable = $wpConfig === null ? null : ($wpConfig->metadata_reachable ?? null);
         $timestamp = $checkedAt === null ? null : strtotime((string) $checkedAt);
