@@ -33,8 +33,12 @@ final readonly class RequestOnlyMcpClient
     {
         $result = $this->request($target, $bound, 'server/discover', [], false, $correlationId);
         $versions = $result['supportedVersions'] ?? null;
-        if (! is_array($versions) || ! in_array(self::PROTOCOL_VERSION, $versions, true)
+        if (! self::validCacheableResult($result) || ! is_array($versions) || ! array_is_list($versions)
+            || $versions === [] || count(array_filter($versions, 'is_string')) !== count($versions)
             || ! is_array($result['capabilities'] ?? null)) {
+            throw $this->failure('invalid_discovery', 'discovery', false, true);
+        }
+        if (! in_array(self::PROTOCOL_VERSION, $versions, true)) {
             throw $this->failure('unsupported_protocol', 'discovery', false, true);
         }
 
@@ -57,6 +61,9 @@ final readonly class RequestOnlyMcpClient
             $params['cursor'] = $cursor;
         }
         $result = $this->request($target, $bound, 'tools/list', $params, false, $correlationId);
+        if (! self::validCacheableResult($result)) {
+            throw $this->failure('invalid_catalog', 'catalog', false, true);
+        }
         $tools = $result['tools'] ?? null;
         if (! is_array($tools) || ! array_is_list($tools) || count($tools) > self::MAX_CATALOG_PAGE_TOOLS) {
             throw $this->failure('invalid_catalog', 'catalog', false, true);
@@ -107,13 +114,22 @@ final readonly class RequestOnlyMcpClient
             'arguments' => $arguments === [] ? (object) [] : $arguments,
         ], $mutationRisk, $correlationId, $toolName);
 
+        if (($result['resultType'] ?? null) !== 'complete') {
+            // Request-only clients cannot complete an input_required roundtrip.
+            throw $this->failure('unsupported_result_type', 'response', $mutationRisk, true);
+        }
+        if (! is_array($result['content'] ?? null) || ! array_is_list($result['content'])
+            || (array_key_exists('isError', $result) && ! is_bool($result['isError']))) {
+            throw $this->failure('invalid_tool_result', 'response', $mutationRisk, true);
+        }
+        foreach ($result['content'] as $block) {
+            if (! self::validContentBlock($block)) {
+                throw $this->failure('invalid_tool_result', 'response', $mutationRisk, true);
+            }
+        }
+        // structuredContent can be any JSON value, including null and scalars.
         if (($result['isError'] ?? false) === true) {
             throw $this->toolFailure($result, $mutationRisk, $bound->authorizationHeader());
-        }
-        if (isset($result['isError']) && $result['isError'] !== false
-            || isset($result['content']) && (! is_array($result['content']) || ! array_is_list($result['content']))
-            || isset($result['structuredContent']) && ! is_array($result['structuredContent'])) {
-            throw $this->failure('invalid_tool_result', 'response', $mutationRisk, true);
         }
 
         return $result;
@@ -208,7 +224,7 @@ final readonly class RequestOnlyMcpClient
                 'unknown', 'http',
                 'Downstream MCP rejected the request; no automatic replay occurred.',
                 ['http_status' => $response->status],
-                null, $this->safeId($response->header('X-Request-ID')),
+                null, $this->safeId($response->header('X-Request-ID'), 128, $bound->authorizationHeader()),
             );
         }
         if ($response->header('Mcp-Session-Id') !== null
@@ -236,7 +252,7 @@ final readonly class RequestOnlyMcpClient
                 'downstream_rpc_error', 'unknown', 'protocol',
                 'Downstream MCP returned a JSON-RPC error.',
                 is_int($code) ? ['rpc_code' => $code] : [],
-                null, $this->safeId($response->header('X-Request-ID')),
+                null, $this->safeId($response->header('X-Request-ID'), 128, $bound->authorizationHeader()),
             );
         }
         if (! is_array($wire['result'])) {
@@ -274,8 +290,8 @@ final readonly class RequestOnlyMcpClient
             'downstream_tool_error', $outcome, 'operation',
             'Downstream MCP reported an application tool failure.',
             $details,
-            $this->safeId($fault['reference'] ?? null, 256),
-            $this->safeId($fault['request_id'] ?? null),
+            $this->safeId($fault['reference'] ?? null, 256, $authorization),
+            $this->safeId($fault['request_id'] ?? null, 128, $authorization),
         );
     }
 
@@ -287,6 +303,31 @@ final readonly class RequestOnlyMcpClient
         );
     }
 
+    /** @param array<string, mixed> $result */
+    private static function validCacheableResult(array $result): bool
+    {
+        return ($result['resultType'] ?? null) === 'complete'
+            && in_array($result['cacheScope'] ?? null, ['private', 'public'], true)
+            && is_int($result['ttlMs'] ?? null) && $result['ttlMs'] >= 0;
+    }
+
+    private static function validContentBlock(mixed $block): bool
+    {
+        if (! is_array($block)) {
+            return false;
+        }
+
+        return match ($block['type'] ?? null) {
+            'text' => is_string($block['text'] ?? null),
+            'image', 'audio' => is_string($block['data'] ?? null) && is_string($block['mimeType'] ?? null),
+            'resource_link' => is_string($block['name'] ?? null) && is_string($block['uri'] ?? null),
+            'resource' => is_array($block['resource'] ?? null)
+                && is_string($block['resource']['uri'] ?? null)
+                && (is_string($block['resource']['text'] ?? null) || is_string($block['resource']['blob'] ?? null)),
+            default => false,
+        };
+    }
+
     private static function validToolName(mixed $name): bool
     {
         // Modern header mirroring requires a safe plain-ASCII tool name.
@@ -296,9 +337,12 @@ final readonly class RequestOnlyMcpClient
             && preg_match('~^[A-Za-z0-9_.:/-]{1,128}$~D', $name) === 1;
     }
 
-    private function safeId(mixed $value, int $maxBytes = 128): ?string
+    private function safeId(mixed $value, int $maxBytes = 128, string $authorization = ''): ?string
     {
+        $token = str_starts_with($authorization, 'Bearer ') ? substr($authorization, 7) : '';
+
         return is_string($value) && $value !== '' && strlen($value) <= $maxBytes
-            && preg_match('/[\x00-\x1f\x7f]/', $value) !== 1 ? $value : null;
+            && preg_match('/[\x00-\x1f\x7f]/', $value) !== 1
+            && ($token === '' || ! str_contains($value, $token)) ? $value : null;
     }
 }

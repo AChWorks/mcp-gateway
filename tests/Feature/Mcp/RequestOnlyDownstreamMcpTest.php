@@ -60,15 +60,17 @@ final class RequestOnlyDownstreamMcpTest extends TestCase
             $result = match ($method) {
                 'server/discover' => [
                     'resultType' => 'complete',
+                    'cacheScope' => 'private',
+                    'ttlMs' => 0,
                     'supportedVersions' => ['2025-11-25', '2026-07-28'],
                     'capabilities' => ['tools' => []],
                 ],
-                'tools/list' => ['tools' => [[
+                'tools/list' => ['resultType' => 'complete', 'cacheScope' => 'private', 'ttlMs' => 0, 'tools' => [[
                     'name' => 'notes.unfamiliar_new_operation',
                     'inputSchema' => ['type' => 'object', 'properties' => ['text' => ['type' => 'string']]],
                     'annotations' => ['readOnlyHint' => false],
                 ]]],
-                'tools/call' => ['content' => [], 'structuredContent' => [
+                'tools/call' => ['resultType' => 'complete', 'content' => [], 'structuredContent' => [
                     'text' => $json['params']['arguments']['text'] ?? null,
                     'subject' => 'product-user-one',
                 ]],
@@ -361,6 +363,161 @@ final class RequestOnlyDownstreamMcpTest extends TestCase
         }
     }
 
+    public function test_modern_discovery_and_catalog_require_complete_cache_metadata(): void
+    {
+        $target = $this->target('bridge-one');
+        $cases = [
+            ['server/discover', ['supportedVersions' => ['2026-07-28'], 'capabilities' => []], 'invalid_discovery'],
+            ['server/discover', [
+                'resultType' => 'input_required', 'cacheScope' => 'private', 'ttlMs' => 0,
+                'supportedVersions' => ['2026-07-28'], 'capabilities' => [],
+            ], 'invalid_discovery'],
+            ['server/discover', [
+                'resultType' => 'complete', 'cacheScope' => 'private', 'ttlMs' => -1,
+                'supportedVersions' => ['2026-07-28'], 'capabilities' => [],
+            ], 'invalid_discovery'],
+            ['tools/list', ['resultType' => 'complete', 'tools' => []], 'invalid_catalog'],
+            ['tools/list', [
+                'resultType' => 'input_required', 'cacheScope' => 'private', 'ttlMs' => 0, 'tools' => [],
+            ], 'invalid_catalog'],
+        ];
+
+        foreach ($cases as [$method, $result, $reason]) {
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(fn (Request $request) => $this->rpc($request, $result, [], true));
+            try {
+                $client = app(RequestOnlyMcpClient::class);
+                if ($method === 'server/discover') {
+                    $client->discover($target, $this->bound($target), 'corr-one');
+                } else {
+                    $client->listTools($target, $this->bound($target), 'corr-one');
+                }
+                self::fail('An incomplete or incompatible modern profile was accepted.');
+            } catch (OutboundMcpFailure $exception) {
+                self::assertSame($reason, $exception->reason);
+                self::assertSame('unknown', $exception->outcome);
+            }
+            Http::assertSentCount(1);
+        }
+    }
+
+    public function test_modern_tool_result_cannot_report_incomplete_write_as_success(): void
+    {
+        $target = $this->target('bridge-one');
+        $cases = [
+            [['content' => []], 'unsupported_result_type'],
+            [['resultType' => 'complete'], 'invalid_tool_result'],
+            [['resultType' => 'input_required', 'inputRequests' => []], 'unsupported_result_type'],
+            [['resultType' => 'complete', 'content' => 'not-a-list'], 'invalid_tool_result'],
+            [['resultType' => 'complete', 'content' => [['type' => 'text', 'text' => false]]], 'invalid_tool_result'],
+            [['resultType' => 'complete', 'content' => [], 'isError' => 'false'], 'invalid_tool_result'],
+        ];
+
+        foreach ($cases as [$result, $reason]) {
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(fn (Request $request) => $this->rpc($request, $result, [], true));
+            try {
+                app(RequestOnlyMcpClient::class)->callTool(
+                    $target, $this->bound($target), 'notes.write', ['text' => 'once'], true, 'corr-one',
+                );
+                self::fail('Malformed or input-required write response was accepted.');
+            } catch (OutboundMcpFailure $exception) {
+                self::assertSame($reason, $exception->reason);
+                self::assertSame('unknown', $exception->outcome);
+            }
+            Http::assertSentCount(1);
+        }
+    }
+
+    public function test_modern_structured_content_accepts_any_valid_json_value(): void
+    {
+        $target = $this->target('bridge-one');
+        foreach ([null, false, 7, 'plain text', ['one', 'two'], ['key' => 'value']] as $value) {
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(fn (Request $request) => $this->rpc($request, ['structuredContent' => $value]));
+            $result = app(RequestOnlyMcpClient::class)->callTool(
+                $target, $this->bound($target), 'notes.read', [], false, 'corr-one',
+            );
+            self::assertArrayHasKey('structuredContent', $result);
+            self::assertSame($value, $result['structuredContent']);
+            Http::assertSentCount(1);
+        }
+    }
+
+    public function test_remote_identifiers_cannot_echo_bearer_into_diagnostics(): void
+    {
+        $target = $this->target('bridge-one');
+        $token = 'scoped-product-user-one';
+        foreach (['http', 'rpc', 'tool'] as $kind) {
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(function (Request $request) use ($kind, $token) {
+                if ($kind === 'http') {
+                    return Http::response(['code' => 'invalid_token'], 401, ['X-Request-ID' => $token]);
+                }
+                if ($kind === 'rpc') {
+                    return Http::response([
+                        'jsonrpc' => '2.0',
+                        'id' => $request->data()['id'],
+                        'error' => ['code' => -32000, 'message' => 'remote rejected'],
+                    ], 200, ['Content-Type' => 'application/json', 'X-Request-ID' => $token]);
+                }
+
+                return $this->rpc($request, [
+                    'isError' => true,
+                    'content' => [[
+                        'type' => 'text',
+                        'text' => json_encode([
+                            'code' => 'failed',
+                            'message' => 'Token echoed: '.$token,
+                            'action' => 'Do not reuse '.$token,
+                            'outcome' => 'unknown',
+                            'reference' => 'note-'.$token,
+                            'request_id' => $token,
+                        ], JSON_THROW_ON_ERROR),
+                    ]],
+                ], ['X-Request-ID' => $token]);
+            });
+
+            try {
+                app(RequestOnlyMcpClient::class)->callTool(
+                    $target, $this->bound($target), 'notes.write', ['text' => 'once'], true, 'corr-one',
+                );
+                self::fail('An upstream failure was accepted.');
+            } catch (OutboundMcpFailure $exception) {
+                self::assertNull($exception->reference);
+                self::assertNull($exception->upstreamRequestId);
+                self::assertStringNotContainsString($token, json_encode([
+                    'reason' => $exception->reason,
+                    'outcome' => $exception->outcome,
+                    'phase' => $exception->phase,
+                    'message' => $exception->getMessage(),
+                    'details' => $exception->details,
+                    'reference' => $exception->reference,
+                    'request_id' => $exception->upstreamRequestId,
+                ], JSON_THROW_ON_ERROR));
+            }
+            Http::assertSentCount(1);
+        }
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => Http::response(
+            ['code' => 'invalid_token'], 401, ['X-Request-ID' => 'safe-upstream-42'],
+        ));
+        try {
+            app(RequestOnlyMcpClient::class)->callTool(
+                $target, $this->bound($target), 'notes.write', [], true, 'corr-one',
+            );
+            self::fail('Remote rejection was accepted.');
+        } catch (OutboundMcpFailure $exception) {
+            self::assertSame('safe-upstream-42', $exception->upstreamRequestId);
+        }
+    }
+
     private function target(string $slug): Target
     {
         return Target::query()->create([
@@ -381,12 +538,18 @@ final class RequestOnlyDownstreamMcpTest extends TestCase
     /** @param array<string, mixed> $result
      * @param  array<string, string>  $headers
      */
-    private function rpc(Request $request, array $result, array $headers = []): PromiseInterface
+    private function rpc(Request $request, array $result, array $headers = [], bool $raw = false): PromiseInterface
     {
+        $profile = match ($request->data()['method'] ?? null) {
+            'server/discover', 'tools/list' => ['resultType' => 'complete', 'cacheScope' => 'private', 'ttlMs' => 0],
+            'tools/call' => ['resultType' => 'complete', 'content' => []],
+            default => throw new \LogicException('Unexpected MCP method'),
+        };
+
         return Http::response([
             'jsonrpc' => '2.0',
             'id' => $request->data()['id'],
-            'result' => $result,
+            'result' => $raw ? $result : [...$profile, ...$result],
         ], 200, ['Content-Type' => 'application/json', ...$headers]);
     }
 }
