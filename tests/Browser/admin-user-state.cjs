@@ -81,7 +81,47 @@ async function run(browser, javaScriptEnabled) {
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
         await reopen(page, name);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
-        await assertGlobalDenyChoice(page, 'activity.view', true);
+        // A role-ineligible checked Deny was previously silently discarded by
+        // the application and could masquerade as a successful save.
+        await page.locator('input[name="denied_permissions[]"][value="users.manage"]').check();
+        await page.locator('#current_password').fill(ownerPassword);
+        await post(page, 'Save user access');
+        assert.equal(await page.locator('[data-user-save-failed]').count(), 1);
+        assert.match(await page.locator('[data-user-save-failed]').innerText(), /users\.manage/);
+        assert.ok((await checked(page)).includes('users.manage'), 'rejected draft retains unsaved choice');
+        // Real rendered shared error banner must remain legible at mobile,
+        // tablet and desktop widths in both supported color schemes.
+        const originalViewport = page.viewportSize();
+        for (const width of [390, 768, 1366]) {
+            for (const theme of ['light', 'dark']) {
+                await page.setViewportSize({ width, height: 950 });
+                await page.emulateMedia({ colorScheme: theme });
+                const geometry = await page.evaluate(() => ({
+                    viewport: document.documentElement.clientWidth,
+                    document: document.documentElement.scrollWidth,
+                    alert: document.querySelector('[data-user-save-failed]').getBoundingClientRect().toJSON(),
+                }));
+                assert.ok(geometry.document <= geometry.viewport,
+                    'No document overflow for rejected account save at ' + width + ' ' + theme);
+                assert.ok(geometry.alert.width > 180 && geometry.alert.x >= -1,
+                    'Error banner stays legible and in flow at ' + width + ' ' + theme);
+            }
+        }
+        await page.setViewportSize(originalViewport);
+        await page.emulateMedia({ colorScheme: 'light' });
+        await reopen(page, name);
+        await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
+
+        // Unchecking a saved SSH Deny without the explicit confirmation also
+        // returns a draft; a later list -> Account visit must show only saved
+        // restrictions, never an apparent temporary grant.
+        await page.locator('input[name="denied_permissions[]"][value="ssh.file.read"]').uncheck();
+        await page.locator('#current_password').fill(ownerPassword);
+        await post(page, 'Save user access');
+        assert.equal(await page.locator('[data-user-save-failed]').count(), 1);
+        assert.deepEqual(await checked(page), saved.filter(value => value !== 'ssh.file.read').sort());
+        await reopen(page, name);
+        await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
         await page.locator('input[name="denied_permissions[]"][value="activity.view"]').uncheck();
         await assertGlobalDenyChoice(page, 'activity.view', false);
         await page.locator('input[name="denied_permissions[]"][value="activity.view"]').check();
@@ -141,7 +181,7 @@ async function run(browser, javaScriptEnabled) {
         await assertGlobalDenyChoice(page, 'activity.view', false);
         assert.deepEqual(errors, []);
         assert.deepEqual(external, []);
-        console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, empty error drafts, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);
+        console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, explicit rejected-role/SSH unsaved drafts, empty error drafts, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);
     } finally { await context.close(); }
 }
 (async () => {

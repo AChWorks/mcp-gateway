@@ -32,6 +32,8 @@ If the browser cannot confirm completion, reopen the member list and inspect sav
 
 The User Account form loads the saved role, Target scope, human/AI access flags and global Deny checks. Its restriction summary distinguishes **Saved**, **Unsaved** and fresh-create **Defaults**, including zero checked controls; existing checked restrictions are visible when reopening the account. Counts describe the current rendered restriction controls, not hidden historical keys or effective permission grants.
 
+An unsuccessful User create/edit save displays a prominent **not saved** alert above the form with the actual errors; the checked choices below are a draft, not proof of persistence. On an existing account, newly checking a Deny key outside the selected role (or a new Deny for Owner) is rejected visibly rather than quietly discarded by role normalization. Uncheck impossible new Deny choices or adjust the role before saving; unchanged saved checks do not block a role downgrade or Owner promotion. A successful edit redirects to the saved account, whose saved checks are loaded afresh from the database.
+
 After a password or validation error, the displayed choices are an unsaved draft. An entirely unchecked list remains empty rather than restoring saved restrictions or fresh-create SSH defaults. Reopen the account to inspect saved state. Checked still means Deny; unchecked controls cannot bypass role ceilings, group/direct Target restrictions, scope or the required Owner SSH confirmation.
 
 ## Interpret access correctly

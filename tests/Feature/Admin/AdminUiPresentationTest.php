@@ -1166,6 +1166,38 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="needs-review-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][contains(concat(" ",normalize-space(@class)," ")," table-wrap ")])'));
     }
 
+    public function test_user_create_and_edit_rejections_expose_shared_unsaved_alert(): void
+    {
+        $owner = $this->owner();
+        $this->actingAs($owner);
+
+        session()->flashInput(['name' => 'Unsaved creation']);
+        $create = $this->get('/admin/users/create')->assertOk()
+            ->assertSee('User was not created.')
+            ->assertSee('data-user-save-failed', false)
+            ->getContent();
+
+        session()->flashInput(['name' => 'Unsaved modification']);
+        $edit = $this->get('/admin/users/'.$owner->id.'/edit')->assertOk()
+            ->assertSee('User changes were not saved.')
+            ->assertSee('data-user-save-failed', false)
+            ->getContent();
+
+        foreach ([$create, $edit] as $html) {
+            $dom = new \DOMDocument;
+            $dom->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+            $xpath = new \DOMXPath($dom);
+            self::assertSame(1, $xpath->query('//*[@data-user-save-failed and @role="alert"]')->length);
+            self::assertSame(1, $xpath->query('//*[@data-user-save-failed]/following-sibling::section[1]/form')->length);
+        }
+
+        // Manually flashed input does not expire in the same way as a
+        // post/redirect request in this test harness.
+        session()->forget('_old_input');
+        $fresh = $this->get('/admin/users/'.$owner->id.'/edit')->assertOk()->getContent();
+        self::assertStringNotContainsString('data-user-save-failed', $fresh);
+    }
+
     public function test_user_edit_deny_choice_copy_is_draft_scoped_and_accessibly_linked(): void
     {
         $owner = $this->owner();

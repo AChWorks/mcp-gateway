@@ -30,6 +30,8 @@
 
 @include('admin.access-batches.context-nav', ['context' => 'user-account', 'subject' => ['id' => (string) $managedUser->getKey()]])
 
+@include('admin.partials.user-form-errors', ['editingUser' => true])
+
 <section class="panel panel-wide">
     @if ($managedUser->role->value === 'owner')
         <div class="alert alert-success" role="status">{{ __('Owners retain unrestricted all-target authority for recovery. Global/per-target denials and target-group assignments are cleared for this role.') }}</div>
@@ -93,6 +95,7 @@
             <p class="field-help">{{ __('This Gateway-wide connection gate is independent of the account role and human Admin/Target permissions. It never adds a Target or action permission. Disabling revokes existing AI client consents/tokens; re-enabling requires fresh client authorization. New users start with AI access disabled; existing users retain their prior state after upgrade.') }}</p>
         </fieldset>
 
+        <p class="field-help">{{ __('Only Deny choices within the selected role can be saved. Owner accounts cannot retain Deny restrictions. If an attempted save is rejected, checked boxes show the unsaved draft until you correct it.') }}</p>
         <p class="field-help" id="user-global-denials-help">{{ __('These are this account\'s global Deny choices, not the complete effective permissions. Every checked box blocks that capability at this level. An unchecked box does not override the role, Target scope, Group, or Target-specific restrictions. Use the Targets and Groups sections above to review those rules.') }}</p>
         <details id="user-permission-restrictions" class="permission-category-collapsible" aria-describedby="user-global-denials-help" open>
             <summary>{{ __('User global restrictions — checked means blocked') }} ({{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Saved: :count checked', ['count' => $checkedRestrictionCount]) }})</summary>
@@ -100,6 +103,7 @@
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
             <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. Target-scoped denials apply across every Target in the user\'s scope. SSH can be authorized only on Selected Targets with explicit Owner confirmation. Owner restrictions are intentionally ignored and cleared.') }}</p>
+            @error('denied_permissions')<p class="field-error" id="denied_permissions-error" role="alert">{{ $message }}</p>@enderror
             <input type="hidden" name="ssh_permissions_reviewed" value="1">
             @include('admin.partials.permission-groups', [
                 'permissions' => $permissions,

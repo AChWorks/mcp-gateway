@@ -97,6 +97,7 @@ final class UserController extends Controller
         $confirmation->confirm($request);
 
         $validated = $this->validated($request, $user);
+        $this->guardPersistableDenyChoices($validated, $user, $access);
         $validated['email'] = Str::lower(trim((string) $validated['email']));
         $validated['access_enabled'] = $request->boolean('access_enabled');
         if ($request->has('ai_access_enabled')) {
@@ -163,6 +164,50 @@ final class UserController extends Controller
             'confirm_ssh_permission_changes' => ['nullable', 'boolean'],
             'ssh_permissions_reviewed' => ['nullable', 'in:1'],
         ]);
+    }
+
+    /**
+     * The editor renders the full permission catalog for role changes, but
+     * the access engine stores only Deny choices allowed by the selected
+     * role. Never claim a successful save while silently dropping checked
+     * choices (including unrestricted Owner restrictions).
+     *
+     * @param  array<string,mixed>  $validated
+     */
+    private function guardPersistableDenyChoices(
+        array $validated, User $user, UserAccessManager $access,
+    ): void {
+        // Previously saved checks may become outside a *new* role on a
+        // downgrade/Owner promotion. Let existing role normalization handle
+        // those unchanged choices. Reject newly checked impossible choices
+        // rather than saying they were saved.
+        $newChoices = array_values(array_diff(
+            $this->deniedPermissions($validated),
+            $access->globalDenials($user),
+        ));
+        if ($newChoices === []) {
+            return;
+        }
+
+        $role = GatewayRole::from((string) $validated['role']);
+        if ($role === GatewayRole::Owner) {
+            throw ValidationException::withMessages([
+                'denied_permissions' => __('Owner accounts cannot save new global Deny restrictions. Uncheck newly selected Deny choices before saving; no changes were applied.'),
+            ]);
+        }
+
+        $unsupported = array_values(array_unique(array_filter(
+            $newChoices,
+            static fn (string $key): bool => ! $role->allows(GatewayPermission::from($key)),
+        )));
+        if ($unsupported !== []) {
+            sort($unsupported);
+            throw ValidationException::withMessages([
+                'denied_permissions' => __('These Deny choices are already outside the selected role and cannot be saved as global restrictions: :permissions. Uncheck them or choose a role that allows those capabilities. No changes were applied.', [
+                    'permissions' => implode(', ', $unsupported),
+                ]),
+            ]);
+        }
     }
 
     /**
