@@ -77,7 +77,10 @@ jobs:
   upgrade-from-released-baselines:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Both historical browser-upgrade and backup-integrity matrices run here.
+    # The 20-minute ceiling cancelled run 41199825813 after 29/31 backup checks;
+    # match the release workflow's 30-minute budget without dropping coverage.
+    timeout-minutes: 30
 
     services:
       mariadb:
