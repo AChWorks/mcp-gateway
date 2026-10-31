@@ -1,3 +1,16 @@
+# MCP Gateway v2.5.3
+
+**Stable v2.5.3 — clear User Account save outcomes and durable Deny checkbox state.**
+
+This patch includes [reviewed User Account fix PR #261](https://github.com/AChWorks/mcp-gateway/pull/261) after v2.5.2. It addresses two reproducible sources of the reported **Users → Account and restrictions → Save → leave → reopen** confusion; the precise installed-host failure remains unverified until a signed-in post-update acceptance test.
+
+- **Rejected saves no longer resemble success:** an unsuccessful User create/edit submission shows a prominent **not saved** alert above the form. The displayed checkboxes are an unsaved draft, not persisted access. An independent fresh Account visit reads the durable global Deny state. Current-password errors, invalid inputs and missing Owner SSH confirmation retain their existing fail-closed behavior and actionable feedback.
+- **Existing-account edits cannot silently discard newly checked impossible Deny options:** newly selected restrictions outside the chosen role's permission ceiling or on an unrestricted Owner are rejected before mutation, with an explicit explanation instead of an apparent successful save. Previously saved restrictions do not block legitimate role downgrades or Owner promotion; original role, Group, Target and SSH authorization remains authoritative.
+- **Verified behavior and compatibility:** official PHP, MariaDB concurrency and Chromium browser gates validate successful and rejected User create/edit/save/list/reopen workflows, including JavaScript and native/no-JavaScript paths. This patch adds no migration, Composer dependency, configuration setting, required service, new authorization capability or change to existing keys, OAuth clients or Target access policy. It does **not** certify the installed Admin session, complete effective permissions or WCAG conformance.
+- **Update validation:** the official browser-update and backup-integrity matrices now include the published **v2.5.2** baseline, alongside the previously supported 28 versions (29 total). Existing installations use the **official update ZIP and its checksum** with a restorable database backup and the existing Owner-gated updater. Publication is not automatic installation.
+
+Operator guidance: [README — Administration and safety](README.md#administration-and-safety), [Admin access workflows](docs/ADMIN-ACCESS-WORKFLOWS.md#read-saved-user-account-restrictions), [Development](docs/DEVELOPMENT.md#user-account-restriction-form-state) and [Deployment/recovery](docs/DEPLOYMENT.md).
+
 # MCP Gateway v2.5.2
 
 **Stable v2.5.2 — reusable downstream MCP transport foundation and focused Admin usability corrections.**
