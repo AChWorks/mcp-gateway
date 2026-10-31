@@ -55,6 +55,12 @@ async function state(page, expected) {
     assert.equal(await page.locator('#ai_access_enabled').isChecked(), expected.ai);
     assert.deepEqual(await checked(page), [...expected.denials].sort());
 }
+async function assertRestrictionSummary(page, status, count) {
+    const counter = page.locator('#user-permission-restrictions > summary [data-user-checked-count]');
+    assert.equal(await counter.innerText(), status + ': ' + count + ' checked',
+        'Restriction counter must truthfully reflect persisted/default/unsaved draft state');
+}
+
 async function run(browser, javaScriptEnabled) {
     const suffix = javaScriptEnabled ? 'JS' : 'native';
     const context = await browser.newContext({ javaScriptEnabled,
@@ -68,8 +74,10 @@ async function run(browser, javaScriptEnabled) {
     try {
         assert.equal((await page.goto(base + '/__browser__/group-workflows/owner')).status(), 200);
         await page.goto(base + '/admin/users/create');
+        await assertRestrictionSummary(page, 'Defaults', 3);
         const name = 'Browser saved user ' + suffix;
         const email = 'browser-saved-user-' + suffix.toLowerCase() + '@example.test';
+        const saved = [...sshDenials, 'activity.view', 'targets.view'];
         await page.locator('#name').fill(name);
         await page.locator('#email').fill(email);
         await page.locator('#password').fill('User-Browser-Password!234');
@@ -78,15 +86,59 @@ async function run(browser, javaScriptEnabled) {
         await page.locator('#target_scope_mode').selectOption('selected');
         await page.locator('#access_enabled').check();
         await page.locator('#ai_access_enabled').check();
-        const saved = [...sshDenials, 'activity.view', 'targets.view'];
+
+        // Rejected Create with nonzero Deny draft: JavaScript must never
+        // relabel flashed Unsaved input as Defaults.
+        await setDenials(page, saved);
+        await page.locator('#current_password').fill('Wrong-Owner-Password!234');
+        await post(page, 'Create user');
+        assert.equal(await page.locator('[data-user-save-failed]').count(), 1);
+        assert.equal(await page.locator('#current_password-error').count(), 1);
+        await assertRestrictionSummary(page, 'Unsaved', saved.length);
+
+        // Ordinary validation rejection with explicitly empty Deny draft.
+        // Password inputs are intentionally NOT flashed after a failed POST.
+        await setDenials(page, []);
+        await page.locator('#password').fill('User-Browser-Password!234');
+        await page.locator('#password_confirmation').fill('Mismatched-User-Password!234');
+        await page.locator('#current_password').fill(ownerPassword);
+        await post(page, 'Create user');
+        assert.equal(await page.locator('[data-user-save-failed]').count(), 1);
+        assert.equal(await page.locator('#password-error').count(), 1);
+        await assertRestrictionSummary(page, 'Unsaved', 0);
+        await page.goto(base + '/admin/users');
+        assert.equal(await page.getByRole('link', { name: 'Manage ' + name, exact: true }).count(), 0,
+            'Rejected Create must not persist an account');
+        await page.goto(base + '/admin/users/create');
+        await assertRestrictionSummary(page, 'Defaults', 3);
+
+        // A subsequent successful Create must use only the fresh form.
+        await page.locator('#name').fill(name);
+        await page.locator('#email').fill(email);
+        await page.locator('#password').fill('User-Browser-Password!234');
+        await page.locator('#password_confirmation').fill('User-Browser-Password!234');
+        await page.locator('#role').selectOption('operator');
+        await page.locator('#target_scope_mode').selectOption('selected');
+        await page.locator('#access_enabled').check();
+        await page.locator('#ai_access_enabled').check();
         await setDenials(page, saved);
         await page.locator('#current_password').fill(ownerPassword);
         await post(page, 'Create user');
         await page.getByRole('heading', { name, exact: true }).waitFor();
         const editUrl = page.url();
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
+        await assertRestrictionSummary(page, 'Saved', saved.length);
         await reopen(page, name);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
+        await assertRestrictionSummary(page, 'Saved', saved.length);
+
+        // GET Role preview is not persisted even with JavaScript enabled.
+        await page.goto(editUrl + '?preview_role=administrator');
+        assert.equal(await page.locator('#role').inputValue(), 'administrator');
+        await assertRestrictionSummary(page, 'Unsaved', saved.length);
+        await page.goto(editUrl);
+        await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
+        await assertRestrictionSummary(page, 'Saved', saved.length);
         // An unavailable role capability is not offered as a checkbox and
         // cannot enter a normal form submission. The original server guard
         // still rejects crafted ineligible requests in PHP feature tests.
@@ -165,6 +217,7 @@ async function run(browser, javaScriptEnabled) {
         await post(page, 'Save user access');
         assert.equal(await page.locator('[data-user-save-failed]').count(), 1);
         assert.deepEqual(await checked(page), saved.filter(value => value !== 'ssh.file.read').sort());
+        await assertRestrictionSummary(page, 'Unsaved', saved.length - 1);
         const originalViewport = page.viewportSize();
         for (const width of [390, 768, 1366]) {
             for (const theme of ['light', 'dark']) {
@@ -199,10 +252,12 @@ async function run(browser, javaScriptEnabled) {
         assert.equal(await page.locator('#current_password-error').count(), 1);
         await state(page, { role: 'operator', scope: 'selected', enabled: false, ai: false, denials: [] });
         assert.equal(await page.locator('[data-user-permission-state="submitted"]').count(), 1);
+        await assertRestrictionSummary(page, 'Unsaved', 0);
         await assertGlobalDenyChoice(page, 'activity.view', false);
         await page.goto(editUrl);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
         assert.equal(await page.locator('[data-user-permission-state="saved"]').count(), 1);
+        await assertRestrictionSummary(page, 'Saved', saved.length);
         await assertGlobalDenyChoice(page, 'activity.view', true);
         assert.notEqual(await page.locator('#user-permission-restrictions').getAttribute('open'), null);
 
@@ -216,6 +271,7 @@ async function run(browser, javaScriptEnabled) {
         assert.deepEqual(await checked(page), []);
         await assertGlobalDenyChoice(page, 'activity.view', false);
         assert.equal(await page.locator('[data-user-permission-state="submitted"]').count(), 1);
+        await assertRestrictionSummary(page, 'Unsaved', 0);
         await assertGlobalDenyChoice(page, 'activity.view', false);
         await page.goto(editUrl);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
@@ -239,6 +295,7 @@ async function run(browser, javaScriptEnabled) {
         await post(page, 'Save user access');
         await reopen(page, name);
         await state(page, { role: 'operator', scope: 'selected', enabled: false, ai: false, denials: [] });
+        await assertRestrictionSummary(page, 'Saved', 0);
         assert.equal(await page.locator('[data-user-permission-state="saved"]').count(), 1);
         await assertGlobalDenyChoice(page, 'activity.view', false);
         if (!javaScriptEnabled) {
@@ -255,7 +312,7 @@ async function run(browser, javaScriptEnabled) {
                 <= document.documentElement.clientWidth), 'Native Role preview fits 360px');
             await page.setViewportSize(previewViewport);
             assert.equal(await page.locator('[data-user-permission-state="editing"]').count(), 1);
-            assert.match(await page.locator('#user-permission-restrictions > summary').innerText(), /Unsaved/);
+            await assertRestrictionSummary(page, 'Unsaved', 0);
             await page.locator('#confirm_ssh_permission_changes').check();
             await page.locator('#current_password').fill(ownerPassword);
             await post(page, 'Save user access');
@@ -264,7 +321,7 @@ async function run(browser, javaScriptEnabled) {
         }
         assert.deepEqual(errors, []);
         assert.deepEqual(external, []);
-        console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, role-aware unavailable Deny controls, dynamic role switching, rejected-SSH unsaved drafts, empty error drafts, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);
+        console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, role-aware choices, visible Saved/Unsaved/Defaults on rejected Create/Edit, native Role preview, rejected SSH, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);
     } finally { await context.close(); }
 }
 (async () => {

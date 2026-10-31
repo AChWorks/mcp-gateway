@@ -204,8 +204,11 @@
             state.textContent = state.dataset.userDraftMessage;
         }
         if (checkedCount) {
-            const template = changed || state?.dataset.userPermissionState === 'editing'
-                ? checkedCount.dataset.pendingTemplate : checkedCount.dataset.statusTemplate;
+            // Failed saves flash submitted input and are NOT persisted. An
+            // initializer must never re-label that unsaved draft Saved/Defaults.
+            const stateName = state?.dataset.userPermissionState;
+            const unsaved = changed || stateName === 'editing' || stateName === 'submitted';
+            const template = unsaved ? checkedCount.dataset.pendingTemplate : checkedCount.dataset.statusTemplate;
             checkedCount.textContent = template.replace(':count', String(denied));
         }
     };
