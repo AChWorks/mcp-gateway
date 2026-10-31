@@ -791,8 +791,6 @@ final class AdminUiPresentationTest extends TestCase
                 ->assertSee('Shared Target management')
                 ->assertSee('WordPress (WP AI Bridge)')
                 ->assertSee('Direct SSH')
-                ->assertSee('Checked = DENY')
-                ->assertSee('Active')
                 ->assertDontSee('AI Server Agent')
                 ->assertDontSee('View paused Agent permission identifiers (read-only)')
                 ->assertDontSee('SSH settings require an authorized Owner editor');
@@ -800,7 +798,8 @@ final class AdminUiPresentationTest extends TestCase
 
         $createUser = $this->actingAs($owner)->get('/admin/users/create')->assertOk()
             ->assertSee('Gateway administration')
-            ->assertSee('Active · Owner-confirmed')
+            ->assertSee('new users default DENY')
+            ->assertSee('New users: all three SSH Denies are checked for safety.')
             ->assertSee('ssh_permissions_reviewed')
             ->assertSee('Owner bypasses every permission and Target restriction for recovery')
             ->assertSee('confirm_ssh_permission_changes')
@@ -814,6 +813,7 @@ final class AdminUiPresentationTest extends TestCase
             );
         }
         $this->actingAs($owner)->get('/admin/target-groups/create')
+            ->assertSee('Checked = DENY')
             ->assertSee('Active · deny-only')
             ->assertSee('confirm_ssh_group_changes')
             ->assertSee('value="ssh.command.run"', false);
@@ -1212,6 +1212,9 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('data-user-role-restrictions', $userHtml);
         self::assertStringContainsString('data-user-role-summary', $userHtml);
         self::assertStringContainsString('Already unavailable in this Role', $userHtml);
+        self::assertStringContainsString('new users default DENY', $userHtml);
+        self::assertStringContainsString('Owner-gated', $userHtml);
+        self::assertStringContainsString('data-user-role-ssh-choice', $userHtml);
         self::assertStringContainsString('data-user-role-choice', $userHtml);
         self::assertStringContainsString('data-user-role-unavailable-item', $userHtml);
         $groupHtml = $this->get('/admin/target-groups/create')->assertOk()->getContent();
@@ -1226,6 +1229,16 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('initUserRoleRestrictions(root)', $js);
         self::assertStringContainsString('[data-user-role-choice][hidden]', $css);
         self::assertStringContainsString('[data-user-role-ssh-review][hidden]', $css);
+        // The same shared section gap applies in User and Group/Target forms.
+        self::assertMatchesRegularExpression(
+            '/\\.permission-category \\+ \\.permission-category \\{[^}]*margin-block-start: var\\(--ui-panel-stack-gap\\);[^}]*border-block-start:/s',
+            $css,
+        );
+        self::assertMatchesRegularExpression(
+            '/\\.permission-category ~ \\.permission-category-collapsible \\{[^}]*margin-block-start: var\\(--ui-panel-stack-gap\\);/s',
+            $css,
+        );
+        self::assertStringNotContainsString('data-user-role-ssh-choice', $groupHtml);
     }
 
     public function test_user_edit_deny_choice_copy_is_draft_scoped_and_accessibly_linked(): void

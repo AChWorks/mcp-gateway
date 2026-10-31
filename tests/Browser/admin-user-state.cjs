@@ -48,6 +48,27 @@ async function assertGlobalDenyChoice(page, key, denied) {
     assert.equal(await choice.locator('[data-global-deny-choice="denied"]').isVisible(), denied);
     assert.equal(await choice.locator('[data-global-deny-choice="not-denied"]').isVisible(), !denied);
 }
+async function assertSectionSpacing(page, label) {
+    const layout = await page.evaluate(() => {
+        const root = document.querySelector('[data-user-role-restrictions]');
+        if (!root) return null;
+        const visible = node => getComputedStyle(node).display !== 'none';
+        const categories = [...root.querySelectorAll(':scope > .permission-category')].filter(visible);
+        const gaps = categories.slice(1).map((section, index) =>
+            section.getBoundingClientRect().top - categories[index].getBoundingClientRect().bottom);
+        const details = root.querySelector('[data-user-role-unavailable]');
+        const unavailableGap = details && visible(details) && categories.length
+            ? details.getBoundingClientRect().top - categories.at(-1).getBoundingClientRect().bottom
+            : null;
+        return { gaps, unavailableGap };
+    });
+    assert.ok(layout && layout.gaps.length >= 2, label + ': expected visible permission sections');
+    layout.gaps.forEach(gap => assert.ok(gap >= 12,
+        label + ': divider must have breathing room above it (measured ' + gap + 'px)'));
+    assert.ok(layout.unavailableGap !== null && layout.unavailableGap >= 12,
+        label + ': Role-unavailable disclosure must be separated (measured ' + layout.unavailableGap + 'px)');
+}
+
 async function state(page, expected) {
     assert.equal(await page.locator('#role').inputValue(), expected.role);
     assert.equal(await page.locator('#target_scope_mode').inputValue(), expected.scope);
@@ -204,6 +225,7 @@ async function run(browser, javaScriptEnabled) {
                     && layout.panel.right <= width + 2,
                     'Permission UI fits viewport at ' + width + ' ' + theme);
                 assert.ok(layout.rowCount > 0, 'Role-capable controls remain visible');
+                await assertSectionSpacing(page, 'Operator ' + width + 'px ' + theme);
             }
         }
         await page.setViewportSize(roleViewport);
@@ -319,9 +341,66 @@ async function run(browser, javaScriptEnabled) {
             await reopen(page, name);
             await state(page, { role: 'administrator', scope: 'selected', enabled: false, ai: false, denials: [] });
         }
+        // An account demoted to Viewer has no stored SSH Denies. On first
+        // promotion back to an SSH-capable Role, form controls must start DENIED,
+        // not display three unsolicited grants. Native preview must agree.
+        await page.goto(editUrl);
+        if (javaScriptEnabled) {
+            await page.locator('#role').selectOption('viewer');
+        } else {
+            await page.locator('noscript a[href*="preview_role=viewer"]').click();
+            await page.waitForLoadState('networkidle');
+        }
+        await page.locator('#current_password').fill(ownerPassword);
+        await post(page, 'Save user access');
+        await reopen(page, name);
+        await state(page, { role: 'viewer', scope: 'selected', enabled: false, ai: false, denials: [] });
+        assert.equal(await page.locator('input[value="ssh.command.run"][name="denied_permissions[]"]').isDisabled(), true);
+
+        if (javaScriptEnabled) {
+            await page.locator('#role').selectOption('operator');
+            await assertRestrictionSummary(page, 'Unsaved', 3);
+            for (const key of sshDenials) {
+                const input = page.locator('input[name="denied_permissions[]"][value="' + key + '"]');
+                assert.ok(await input.isChecked(), key + ' initially denied after Viewer promotion');
+                assert.ok(await input.isEnabled(), key + ' editable by Owner');
+            }
+            await assertSectionSpacing(page, 'Viewer-to-Operator role change');
+            const sftpRead = page.locator('input[name="denied_permissions[]"][value="ssh.file.read"]');
+            await sftpRead.uncheck();
+            await page.locator('#role').selectOption('viewer');
+            await page.locator('#role').selectOption('operator');
+            assert.equal(await sftpRead.isChecked(), false,
+                'Deliberate unsaved SSH draft survives a later Role round trip');
+            await assertRestrictionSummary(page, 'Unsaved', 2);
+        } else {
+            await page.locator('noscript a[href*="preview_role=operator"]').click();
+            await page.waitForLoadState('networkidle');
+            await assertRestrictionSummary(page, 'Unsaved', 3);
+            for (const key of sshDenials) {
+                assert.ok(await page.locator('input[name="denied_permissions[]"][value="' + key + '"]').isChecked(),
+                    key + ' defaults to DENY on native Viewer-to-Operator preview');
+            }
+            await assertSectionSpacing(page, 'Native Viewer-to-Operator preview');
+        }
+        await page.goto(editUrl);
+        await state(page, { role: 'viewer', scope: 'selected', enabled: false, ai: false, denials: [] });
+
+        // Group editors reuse the same permission-category divider style,
+        // but must not inherit User role-specific SSH control initialization.
+        await page.goto(base + '/admin/target-groups/create');
+        const groupGap = await page.evaluate(() => {
+            const visible = [...document.querySelectorAll('.permission-category')]
+                .filter(node => getComputedStyle(node).display !== 'none');
+            return visible.length >= 2
+                ? visible[1].getBoundingClientRect().top - visible[0].getBoundingClientRect().bottom
+                : null;
+        });
+        assert.ok(groupGap !== null && groupGap >= 12,
+            'Shared Target Group permission divider has breathing room: ' + groupGap);
         assert.deepEqual(errors, []);
         assert.deepEqual(external, []);
-        console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, role-aware choices, visible Saved/Unsaved/Defaults on rejected Create/Edit, native Role preview, rejected SSH, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);
+        console.log('PASS: User Create/Edit safe SSH defaults, first Viewer-to-Operator promotion, draft preservation, native Role preview, shared section/card spacing, Group sibling spacing, save/reopen and unsaved/failure recovery; ' + suffix);
     } finally { await context.close(); }
 }
 (async () => {

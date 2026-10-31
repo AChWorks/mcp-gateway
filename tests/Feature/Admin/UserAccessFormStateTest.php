@@ -129,14 +129,22 @@ final class UserAccessFormStateTest extends TestCase
         $preview = $this->get($url.'?preview_role=operator')->assertOk();
         $xpath = $this->document($preview);
         self::assertSame('operator', $xpath->evaluate('string(//select[@name="role"]/option[@selected]/@value)'));
-        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and not(@hidden)][input[@value="ssh.file.read" and not(@disabled)]]')->length);
+        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and not(@hidden)][input[@value="ssh.file.read" and @checked and not(@disabled)]]')->length);
+        self::assertSame(3, $xpath->query('//label[@data-user-role-ssh-choice and not(@hidden)][input[@checked and not(@disabled)]]')->length);
         self::assertSame(1, $xpath->query('//label[@data-user-role-choice and @hidden][input[@value="users.manage" and @disabled]]')->length);
         self::assertSame(1, $xpath->query('//a[contains(@href,"preview_role=administrator") and ancestor::noscript]')->length);
         self::assertSame(1, $xpath->query('//*[@data-user-permission-state="editing"]')->length);
-        self::assertStringContainsString('Unsaved: 1 checked',
+        self::assertStringContainsString('Unsaved: 4 checked',
             $xpath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
         self::assertSame('viewer', $viewer->fresh()->role->value);
         self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($viewer));
+
+        // A no-JS promotion from a non-SSH Role shows fail-closed drafts,
+        // while unchanged stored Viewer permissions remain authoritative.
+        $ownerToOperator = $this->get('/admin/users/'.$owner->id.'/edit?preview_role=operator')->assertOk();
+        self::assertSame(3, $this->document($ownerToOperator)
+            ->query('//label[@data-user-role-ssh-choice and not(@hidden)][input[@checked and not(@disabled)]]')->length);
+        self::assertSame([], $this->storedDenials($owner));
 
         $invalid = $this->get($url.'?preview_role=not-a-role')->assertOk();
         self::assertSame('viewer', $this->document($invalid)

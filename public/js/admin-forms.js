@@ -152,6 +152,7 @@
     if (!role || !panel) return;
 
     const choices = Array.from(panel.querySelectorAll('[data-user-role-choice]'));
+    const sshChoices = choices.filter(choice => choice.hasAttribute('data-user-role-ssh-choice'));
     const unavailable = Array.from(panel.querySelectorAll('[data-user-role-unavailable-item]'));
     const sections = Array.from(panel.querySelectorAll('[data-user-role-section]'));
     const roleStatus = panel.querySelector('[data-user-role-summary]');
@@ -164,6 +165,21 @@
 
     const permitted = (element, selectedRole) =>
         selectedRole !== 'owner' && (element.dataset.allowedRoles || '').split(' ').includes(selectedRole);
+
+    // A Viewer/Owner account has no stored SSH Denies because its Role
+    // excludes SSH already. On the FIRST in-form promotion to Operator/Admin,
+    // preselect safe SSH Denies instead of suggesting three implicit grants.
+    // After entry, keep the actual draft choices across later Role switches.
+    let sshChoicesInitialized = sshChoices.some(choice => permitted(choice, role.value));
+    const seedNewSshRole = () => {
+        if (sshChoicesInitialized) return;
+        const newlyEligible = sshChoices.filter(choice => permitted(choice, role.value));
+        if (!newlyEligible.length) return;
+        newlyEligible.forEach(choice => {
+            choice.querySelector('input[name="denied_permissions[]"]').checked = true;
+        });
+        sshChoicesInitialized = true;
+    };
 
     const sync = (changed) => {
         const current = role.value;
@@ -212,7 +228,7 @@
             checkedCount.textContent = template.replace(':count', String(denied));
         }
     };
-    role.addEventListener('change', () => sync(true));
+    role.addEventListener('change', () => { seedNewSshRole(); sync(true); });
     panel.addEventListener('change', event => {
         if (event.target.matches('input[name="denied_permissions[]"]')) sync(true);
     });

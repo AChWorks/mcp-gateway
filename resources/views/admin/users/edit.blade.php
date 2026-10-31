@@ -12,6 +12,18 @@
     $previewIsUnsaved = ! $hasSubmittedRestrictions && $selectedUserRole !== $managedUser->role;
     $selectedDenials = old('denied_permissions', $hasSubmittedRestrictions ? [] : $deniedPermissions);
     $selectedDenials = is_array($selectedDenials) ? $selectedDenials : [];
+    // A first-time promotion from Viewer or unrestricted Owner must show
+    // fail-closed SSH defaults in native Role preview. Never overwrite an
+    // explicit failed draft or an SSH-eligible account's stored grant choices.
+    if ($previewIsUnsaved && ($managedUser->role === \App\Domain\Access\GatewayRole::Owner
+        || ! $managedUser->role->allows(\App\Domain\Access\GatewayPermission::SshCommandRun))
+        && $selectedUserRole->allows(\App\Domain\Access\GatewayPermission::SshCommandRun)) {
+        $selectedDenials = array_values(array_unique([
+            ...$selectedDenials,
+            ...array_map(static fn ($permission): string => $permission->value,
+                \App\Domain\Access\GatewayPermission::sshCapabilities()),
+        ]));
+    }
     $checkedRestrictionCount = count(array_filter($permissions, static fn ($permission): bool =>
         $selectedUserRole !== \App\Domain\Access\GatewayRole::Owner
         && $selectedUserRole->allows($permission)
