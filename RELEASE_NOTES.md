@@ -1,3 +1,17 @@
+# MCP Gateway v2.5.4
+
+**Stable v2.5.4 — Role-aware User Deny choices and accurate Saved/Unsaved/Defaults feedback.**
+
+This patch packages the independently reviewed [User global Deny UX correction PR #263](https://github.com/AChWorks/mcp-gateway/pull/263) after official v2.5.3, under [Admin acceptance Issue #136](https://github.com/AChWorks/mcp-gateway/issues/136). The update improves what an Owner can edit and what a rejected form actually means; it **does not change effective authorization policy**.
+
+- **Only meaningful editable Deny controls:** User Create/Edit show interactive global Deny checkboxes only for capabilities eligible under the selected Role. Other capabilities appear separately as read-only information, never as apparent grants; Owner retains unrestricted recovery semantics. The shared Target and Target Group editors remain unchanged.
+- **Safe Role changes and native fallback:** JavaScript updates eligible controls immediately, preserves temporary draft selections for a later Role switch and excludes ineligible controls from normal submission. With JavaScript disabled, a read-only Role-preview GET renders the selected Role before the normal CSRF- and password-protected Save; previews do not modify stored access.
+- **Honest persisted-versus-draft feedback:** Fresh Create shows `Defaults`, fresh Edit shows `Saved`, and validation/password/SSH-confirmation rejected submissions retain `Unsaved` (including zero checked). Reopening the Account independently reloads persisted Denies; a failed POST never becomes a falsely labeled successful save after JavaScript initialization.
+- **Compatibility and verification boundary:** Official exact-candidate CI, real SSH/systemd checks and Chromium browser runs passed for [PR #263](https://github.com/AChWorks/mcp-gateway/pull/263) with JavaScript on/off. There are no database migrations, dependency changes, required new services, environment keys, Role capabilities, Target Group/Target Deny policy changes, OAuth changes or new WordPress publishing grants. The historical crafted Create User out-of-role Deny normalization edge remains outside this UI-only patch. Neither source/release validation nor publication proves installed-host Admin acceptance or full WCAG conformance.
+- **Upgrade validation:** Official browser-update and backup-integrity matrices include the released **v2.5.3** baseline alongside 29 earlier supported releases (**30 total**). Use only the official update ZIP and matching checksum, with verified restorable backup and the existing Owner-gated updater. No GitHub Release automatically installs the upgrade.
+
+Guidance: [README — Administration and safety](README.md#administration-and-safety), [Admin access workflows](docs/ADMIN-ACCESS-WORKFLOWS.md#read-saved-user-account-restrictions) and [Deployment/recovery](docs/DEPLOYMENT.md).
+
 # MCP Gateway v2.5.3
 
 **Stable v2.5.3 — clear User Account save outcomes and durable Deny checkbox state.**
