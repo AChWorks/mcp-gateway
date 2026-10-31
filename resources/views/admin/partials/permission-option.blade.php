@@ -2,6 +2,7 @@
 <label class="checkbox-option permission-option" title="{{ $permission->description() }}"
     @if ($roleAwareUser ?? false)
         data-user-role-choice data-allowed-roles="{{ $roleChoiceAllowedRoles }}"
+        @if ($roleChoiceIsSsh ?? false) data-user-role-ssh-choice @endif
         @if (! $roleChoiceAllowed) hidden @endif
     @endif>
     <input

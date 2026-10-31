@@ -826,9 +826,18 @@ input[type="radio"]:checked::before {
     display: none;
 }
 
+/* Internal permission sections share the same rhythm as other stacked panels.
+   Padding alone leaves the divider touching the preceding checkbox cards. */
 .permission-category + .permission-category {
-    padding-top: 1.1rem;
-    border-top: 1px solid var(--ui-border);
+    margin-block-start: var(--ui-panel-stack-gap);
+    padding-block-start: 1.1rem;
+    border-block-start: 1px solid var(--ui-border);
+}
+
+/* The trailing Role-unavailable disclosure is a sibling of the sections,
+   sometimes separated by a hidden Owner note. Keep the gap in normal flow. */
+.permission-category ~ .permission-category-collapsible {
+    margin-block-start: var(--ui-panel-stack-gap);
 }
 
 .permission-category-heading {

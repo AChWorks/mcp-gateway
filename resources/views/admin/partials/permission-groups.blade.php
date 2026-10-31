@@ -5,12 +5,12 @@
     $sshHelp = match ($sshPermissionContext) {
         'group' => __('Live SSH controls. Checked boxes DENY the capability for assigned users on matching Targets. Removing a denial never grants a capability that the user role/global policy lacks.'),
         'target' => __('Live SSH controls for this exact Target. Checked boxes DENY the capability. Unchecking only removes this Target-level restriction; global role/grants, groups and Target reachability still apply.'),
-        default => __('Live SSH controls. Checked boxes DENY the capability; unchecked boxes may authorize it only for a separately selected Target and a role that allows SSH. Every SSH command can read/write files and use permitted sudo/root even if the SFTP boxes remain denied.'),
+        default => __('SSH is available within Administrator and Operator roles, but starts DENIED for new users. A checked box blocks the tool; an unchecked box can enable it only after an Owner-confirmed Save on explicitly Selected Targets. Existing account choices are loaded from saved global Denies. SSH commands may read/write files and use permitted sudo/root even when SFTP is denied.'),
     };
     $sshStatus = match ($sshPermissionContext) {
         'group' => __('Active · deny-only'),
         'target' => __('Active · Target-specific denies'),
-        default => __('Active · Owner-confirmed'),
+        default => __('Owner-gated · new users default DENY'),
     };
     $permissionSections = [
         'gateway' => [
@@ -120,7 +120,9 @@
                 </details>
             @else
                 @if ($group === 'ssh')
-                    <p class="permission-safety-hint"><strong>{{ __('Checked = DENY. Unchecked = potentially ALLOW, never beyond role and Target scope.') }}</strong></p>
+                    <p class="permission-safety-hint"><strong>{{ $roleAwareUser
+                        ? __('New users: all three SSH Denies are checked for safety. Existing users: checkboxes reflect saved Denies on a fresh visit. Uncheck only for an intentional Owner-approved SSH grant; Save to apply.')
+                        : __('Checked = DENY. Unchecked = potentially ALLOW, never beyond role and Target scope.') }}</strong></p>
                 @endif
                 <div class="checkbox-grid">
                     @foreach ($items as $permission)
@@ -131,6 +133,7 @@
                             'roleAwareUser' => $roleAwareUser,
                             'roleChoiceAllowed' => ! $roleAwareUser || $isRestrictable($permission),
                             'roleChoiceAllowedRoles' => $roleAwareUser ? $rolesAllowingRestriction($permission) : '',
+                            'roleChoiceIsSsh' => $roleAwareUser && $group === 'ssh',
                         ])
                     @endforeach
                 </div>

@@ -1,3 +1,17 @@
+# MCP Gateway v2.5.5
+
+**Stable v2.5.5 — clearer, safer User SSH Deny defaults and consistent permission-section spacing.**
+
+This update addresses the Owner's [Admin User restriction follow-up #136](https://github.com/AChWorks/mcp-gateway/issues/136) after v2.5.4 while preserving current authorization and already saved grants.
+
+- **SSH Denies are not grants:** Operator and Administrator can be eligible for SSH command/SFTP capabilities, yet **all three global Denies start checked for a new user**. Existing accounts show their stored Denies instead. The User section status and guidance now distinguish this fail-closed default from permission availability; removing a Deny only permits a possible grant after Owner-confirmed Save with explicit Selected Target scope and all other restrictions.
+- **Role promotions stay fail-closed:** The first unsaved Viewer/Owner → Operator/Administrator switch shows three checked SSH Denies with or without JavaScript, instead of implying a new grant. A saved Operator/Administrator account retains actual checked/unchecked SSH choices, and subsequent form Role switches preserve deliberate unsaved selections. Native Role-preview GET never changes account rights, and failed saves remain Unsaved.
+- **Shared spacing rather than per-page hacks:** Permission-section dividers have a common `--ui-panel-stack-gap` before their borders; the Role-unavailable disclosure has that same exterior gap. The shared logical CSS applies in User, Target and Target Group forms with mobile/RTL-compatible spacing.
+- **Boundaries and checks:** PHP User/Admin regression and Chromium JS/no-JS testing cover safe defaults, fresh saved state, Role switch, denied/failed changes, 360–1366px light/dark layouts and Group siblings. No Role, Target/Group, SSH Owner security, OAuth/WordPress authorization, database schema, dependency, environment setting or service behavior is intentionally changed. Release/publication never proves an installed authenticated Admin session or WCAG certification.
+- **Upgrade:** Official release/update browser-upgrade and backup-integrity workflows include published **v2.5.4** alongside 30 earlier supported releases (**31 baselines total**). Use only official ZIPs with SHA256 and a restorable backup through the Owner-gated updater; no Production host is updated by publication.
+
+Guidance: [README](README.md#administration-and-safety), [Admin access workflows](docs/ADMIN-ACCESS-WORKFLOWS.md#read-saved-user-account-restrictions), [Admin UI Quality](docs/ADMIN-UI-QUALITY.md), [Deployment/recovery](docs/DEPLOYMENT.md).
+
 # MCP Gateway v2.5.4
 
 **Stable v2.5.4 — Role-aware User Deny choices and accurate Saved/Unsaved/Defaults feedback.**
