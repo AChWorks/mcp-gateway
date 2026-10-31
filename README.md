@@ -13,6 +13,8 @@ Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run
 3. Authorize the Target and grant specific Gateway users or Target Groups access.
 4. Connect your MCP client using Gateway OAuth, then choose a Target and use its permitted tools.
 
+**For connector developers:** the codebase also includes a [bounded shared downstream MCP transport](docs/OUTBOUND-MCP-TRANSPORT.md) for future *registered and separately authorized* connectors speaking request-only stateless MCP `2026-07-28`. It reuses the Gateway's existing safe HTTPS transport; a connector still owns remote identity, credentials, authorization, protocol compatibility and operation policy. This is **not** an activated generic MCP Target, a way to enroll arbitrary MCP servers or a replacement for the existing WordPress/SSH connector paths. See the [connector integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md).
+
 Before registering a WordPress or Direct SSH Target, use **Check endpoint from Gateway (no registration)** in **Add Target** to inspect public DNS/destination-policy errors and suggested fixes. This optional read-only check identifies the endpoint actually checked and becomes stale if you change the URL, host, port or connector; run it again for the new destination. It does not register the Target or test WordPress authorization, TLS, the SSH host key or login. The actual connection performs its own security checks.
 
 Targets can be **paused** without deleting their configuration or disconnecting WordPress. Pausing stops new Gateway operations for that Target; it does **not** stop a remote SSH Job already running. An MCP client's OAuth approval and a user's Target permissions are separate requirements. The Owner can also enable or disable a user's **AI connection access** independently of their human Admin login and Target operation grants; a disabled user's existing AI consent/tokens cannot be used. Optional per-Target AI guidance provides context to an AI client; it does not override permissions or approve operations.
@@ -143,6 +145,7 @@ If an update stops during migration or recovery, **do not blindly retry** or tre
 - [Configuration](docs/CONFIGURATION.md) and [`.env.example`](.env.example) — supported settings and safe changes.
 - [Whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) and [Direct SSH](docs/DIRECT-SSH-CONNECTOR.md) — detailed remote file/Job operation.
 - [Target connection recovery](docs/TARGET-DISCONNECT-RECOVERY.md) — safe WordPress OAuth recovery.
+- [Connector integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md) and [downstream MCP transport](docs/OUTBOUND-MCP-TRANSPORT.md) — shared foundation and boundaries for future connectors.
 - [Project documentation map](docs/PROJECT-MAP.md) and [Master Specification](docs/MASTER-SPEC.md) — authoritative engineering references and durable product boundaries.
 - [Development](docs/DEVELOPMENT.md) — source/CLI installation and contributor tests.
 

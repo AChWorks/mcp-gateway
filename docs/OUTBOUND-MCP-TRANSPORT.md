@@ -32,4 +32,4 @@ php artisan test --filter=SshCommandMcpTest
 php vendor/bin/pint --test
 ```
 
-Source, CI and independent review are separate from any installed-host or release acceptance. No change to `v2.5.1` and no Production action is authorized by this document.
+The shared source-level primitive is included in the **v2.5.2** release line; its availability in an official package is distinct from connecting a real downstream MCP provider. Source, CI, release publication and installed-host acceptance remain separate. This document does not authorize deployment, production configuration changes, product account linking or the activation of a generic MCP Target. For exact published artifacts and upgrade instructions, consult [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases) and [Deployment](DEPLOYMENT.md).
