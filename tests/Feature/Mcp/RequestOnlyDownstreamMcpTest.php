@@ -217,6 +217,7 @@ final class RequestOnlyDownstreamMcpTest extends TestCase
         $cases = [
             [fn (Request $r) => Http::response('unavailable', 503), 'downstream_http_failure'],
             [fn (Request $r) => Http::response(['jsonrpc' => '2.0', 'id' => 'wrong-id', 'result' => []]), 'invalid_rpc_envelope'],
+            [fn (Request $r) => Http::response('true', 200, ['Content-Type' => 'application/json']), 'invalid_response_json'],
             [fn (Request $r) => $this->rpc($r, [], ['Mcp-Session-Id' => 'legacy-not-supported']), 'unsupported_response_profile'],
         ];
 
