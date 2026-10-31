@@ -35,7 +35,7 @@ final readonly class RequestOnlyMcpClient
         $versions = $result['supportedVersions'] ?? null;
         if (! self::validCacheableResult($result) || ! is_array($versions) || ! array_is_list($versions)
             || $versions === [] || count(array_filter($versions, 'is_string')) !== count($versions)
-            || ! is_array($result['capabilities'] ?? null)) {
+            || ! ($result['capabilities'] ?? null) instanceof \stdClass) {
             throw $this->failure('invalid_discovery', 'discovery', false, true);
         }
         if (! in_array(self::PROTOCOL_VERSION, $versions, true)) {
@@ -49,7 +49,7 @@ final readonly class RequestOnlyMcpClient
      * One bounded catalog page; no implicit pagination, idle catalog refresh,
      * or trust in effect annotations as permission.
      *
-     * @return array{tools:list<array<string,mixed>>,next_cursor:?string}
+     * @return array{tools:list<\stdClass>,next_cursor:?string}
      */
     public function listTools(Target $target, BoundMcpTarget $bound, string $correlationId, ?string $cursor = null): array
     {
@@ -71,13 +71,13 @@ final readonly class RequestOnlyMcpClient
 
         $names = [];
         foreach ($tools as $tool) {
-            if (! is_array($tool) || ! self::validToolName($tool['name'] ?? null)
-                || isset($names[$tool['name']])
-                || ! is_array($tool['inputSchema'] ?? null)
-                || ($tool['inputSchema']['type'] ?? null) !== 'object') {
+            if (! $tool instanceof \stdClass || ! self::validToolName($tool->name ?? null)
+                || isset($names[$tool->name])
+                || ! ($tool->inputSchema ?? null) instanceof \stdClass
+                || ($tool->inputSchema->type ?? null) !== 'object') {
                 throw $this->failure('unsupported_tool_schema', 'catalog', false, true);
             }
-            $names[$tool['name']] = true;
+            $names[$tool->name] = true;
         }
 
         $next = $result['nextCursor'] ?? null;
@@ -233,20 +233,26 @@ final readonly class RequestOnlyMcpClient
         }
 
         try {
-            $wire = $response->json();
-        } catch (OutboundRequestException $exception) {
+            // The shared HTTP decoder is associative; only this MCP boundary
+            // preserves JSON objects as stdClass (including empty objects and
+            // nested structuredContent) so arrays cannot impersonate objects.
+            $wire = json_decode($response->body, false, 64, JSON_THROW_ON_ERROR);
+        } catch (JsonException $exception) {
             throw new OutboundMcpFailure(
                 'invalid_response_json', 'unknown', 'response',
                 'Downstream MCP returned an invalid JSON response.', [], null, null, $exception,
             );
         }
-        if (($wire['jsonrpc'] ?? null) !== '2.0' || ($wire['id'] ?? null) !== $rpcId
-            || array_key_exists('result', $wire) === array_key_exists('error', $wire)) {
+        if (! $wire instanceof \stdClass) {
+            throw $this->failure('invalid_response_json', 'response', $mutationRisk, true);
+        }
+        if (($wire->jsonrpc ?? null) !== '2.0' || ($wire->id ?? null) !== $rpcId
+            || property_exists($wire, 'result') === property_exists($wire, 'error')) {
             throw $this->failure('invalid_rpc_envelope', 'response', $mutationRisk, true);
         }
-        if (array_key_exists('error', $wire)) {
-            $error = $wire['error'];
-            $code = is_array($error) ? ($error['code'] ?? null) : null;
+        if (property_exists($wire, 'error')) {
+            $error = $wire->error;
+            $code = $error instanceof \stdClass ? ($error->code ?? null) : null;
 
             throw new OutboundMcpFailure(
                 'downstream_rpc_error', 'unknown', 'protocol',
@@ -255,17 +261,19 @@ final readonly class RequestOnlyMcpClient
                 null, $this->safeId($response->header('X-Request-ID'), 128, $bound->authorizationHeader()),
             );
         }
-        if (! is_array($wire['result'])) {
+        if (! $wire->result instanceof \stdClass) {
             throw $this->failure('invalid_rpc_result', 'response', $mutationRisk, true);
         }
 
-        return $wire['result'];
+        // Only the named result fields become a PHP map; every nested JSON
+        // object remains an object. This preserves output-schema type fidelity.
+        return get_object_vars($wire->result);
     }
 
     /** @param array<string, mixed> $result */
     private function toolFailure(array $result, bool $mutationRisk, string $authorization): OutboundMcpFailure
     {
-        $text = $result['content'][0]['text'] ?? null;
+        $text = $result['content'][0]->text ?? null;
         $fault = is_string($text) ? json_decode($text, true, 16) : null;
         $fault = is_array($fault) ? $fault : [];
 
@@ -313,17 +321,17 @@ final readonly class RequestOnlyMcpClient
 
     private static function validContentBlock(mixed $block): bool
     {
-        if (! is_array($block)) {
+        if (! $block instanceof \stdClass) {
             return false;
         }
 
-        return match ($block['type'] ?? null) {
-            'text' => is_string($block['text'] ?? null),
-            'image', 'audio' => is_string($block['data'] ?? null) && is_string($block['mimeType'] ?? null),
-            'resource_link' => is_string($block['name'] ?? null) && is_string($block['uri'] ?? null),
-            'resource' => is_array($block['resource'] ?? null)
-                && is_string($block['resource']['uri'] ?? null)
-                && (is_string($block['resource']['text'] ?? null) || is_string($block['resource']['blob'] ?? null)),
+        return match ($block->type ?? null) {
+            'text' => is_string($block->text ?? null),
+            'image', 'audio' => is_string($block->data ?? null) && is_string($block->mimeType ?? null),
+            'resource_link' => is_string($block->name ?? null) && is_string($block->uri ?? null),
+            'resource' => ($block->resource ?? null) instanceof \stdClass
+                && is_string($block->resource->uri ?? null)
+                && (is_string($block->resource->text ?? null) || is_string($block->resource->blob ?? null)),
             default => false,
         };
     }

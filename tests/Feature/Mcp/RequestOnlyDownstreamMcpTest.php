@@ -88,10 +88,13 @@ final class RequestOnlyDownstreamMcpTest extends TestCase
         self::assertContains('2026-07-28', $client->discover($target, $bound, 'request-123')['supportedVersions']);
         $tools = $client->listTools($target, $bound, 'request-123');
         self::assertCount(1, $tools['tools']);
+        self::assertInstanceOf(\stdClass::class, $tools['tools'][0]);
+        self::assertInstanceOf(\stdClass::class, $tools['tools'][0]->inputSchema);
         self::assertNull($tools['next_cursor']);
         $result = $client->callTool($target, $bound, 'notes.unfamiliar_new_operation', ['text' => 'hello'], true, 'request-123');
-        self::assertSame('hello', $result['structuredContent']['text']);
-        self::assertSame('product-user-one', $result['structuredContent']['subject']);
+        self::assertInstanceOf(\stdClass::class, $result['structuredContent']);
+        self::assertSame('hello', $result['structuredContent']->text);
+        self::assertSame('product-user-one', $result['structuredContent']->subject);
         self::assertSame([
             ['server/discover', 'https://bridge-one.example.test/mcp'],
             ['tools/list', 'https://bridge-one.example.test/mcp'],
@@ -443,7 +446,12 @@ final class RequestOnlyDownstreamMcpTest extends TestCase
                 $target, $this->bound($target), 'notes.read', [], false, 'corr-one',
             );
             self::assertArrayHasKey('structuredContent', $result);
-            self::assertSame($value, $result['structuredContent']);
+            if (is_array($value) && ! array_is_list($value)) {
+                self::assertInstanceOf(\stdClass::class, $result['structuredContent']);
+            } else {
+                self::assertSame($value, $result['structuredContent']);
+            }
+            self::assertSame(json_encode($value, JSON_THROW_ON_ERROR), json_encode($result['structuredContent'], JSON_THROW_ON_ERROR));
             Http::assertSentCount(1);
         }
     }
@@ -519,6 +527,99 @@ final class RequestOnlyDownstreamMcpTest extends TestCase
         }
     }
 
+    public function test_raw_wire_rejects_json_object_array_shape_confusion_without_replaying_effects(): void
+    {
+        $target = $this->target('bridge-one');
+        $cases = [
+            ['tools/call', '{"resultType":"complete","content":{}}', 'invalid_tool_result'],
+            ['tools/call', '{"resultType":"complete","content":[[]]}', 'invalid_tool_result'],
+            ['tools/call', '[]', 'invalid_rpc_result'],
+            ['tools/list', '{"resultType":"complete","cacheScope":"private","ttlMs":0,"tools":{}}', 'invalid_catalog'],
+            ['server/discover', '{"resultType":"complete","cacheScope":"private","ttlMs":0,"supportedVersions":["2026-07-28"],"capabilities":[]}', 'invalid_discovery'],
+        ];
+
+        foreach ($cases as [$method, $rawResult, $reason]) {
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(fn (Request $request) => $this->rawRpc($request, $rawResult));
+
+            try {
+                $client = app(RequestOnlyMcpClient::class);
+                match ($method) {
+                    'tools/call' => $client->callTool(
+                        $target, $this->bound($target), 'notes.write', ['text' => 'once'], true, 'corr-one',
+                    ),
+                    'tools/list' => $client->listTools($target, $this->bound($target), 'corr-one'),
+                    'server/discover' => $client->discover($target, $this->bound($target), 'corr-one'),
+                };
+                self::fail('Wrong JSON wire type was accepted.');
+            } catch (OutboundMcpFailure $exception) {
+                self::assertSame($reason, $exception->reason);
+                self::assertSame('unknown', $exception->outcome);
+            }
+            Http::assertSentCount(1);
+        }
+    }
+
+    public function test_raw_wire_accepts_distinct_empty_lists_and_objects(): void
+    {
+        $target = $this->target('bridge-one');
+
+        Http::fake(fn (Request $request) => $this->rawRpc($request,
+            '{"resultType":"complete","cacheScope":"private","ttlMs":0,"supportedVersions":["2026-07-28"],"capabilities":{}}',
+        ));
+        $discovery = app(RequestOnlyMcpClient::class)->discover($target, $this->bound($target), 'corr-one');
+        self::assertInstanceOf(\stdClass::class, $discovery['capabilities']);
+        self::assertSame('{}', json_encode($discovery['capabilities'], JSON_THROW_ON_ERROR));
+        Http::assertSentCount(1);
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => $this->rawRpc($request,
+            '{"resultType":"complete","cacheScope":"private","ttlMs":0,"tools":[]}',
+        ));
+        $catalog = app(RequestOnlyMcpClient::class)->listTools($target, $this->bound($target), 'corr-one');
+        self::assertSame([], $catalog['tools']);
+        self::assertSame('[]', json_encode($catalog['tools'], JSON_THROW_ON_ERROR));
+        Http::assertSentCount(1);
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => $this->rawRpc($request,
+            '{"resultType":"complete","content":[]}',
+        ));
+        $tool = app(RequestOnlyMcpClient::class)->callTool(
+            $target, $this->bound($target), 'notes.write', [], true, 'corr-one',
+        );
+        self::assertSame([], $tool['content']);
+        self::assertSame('[]', json_encode($tool['content'], JSON_THROW_ON_ERROR));
+        Http::assertSentCount(1);
+    }
+
+    public function test_raw_wire_structured_content_retains_nested_json_object_array_identity(): void
+    {
+        $target = $this->target('bridge-one');
+        foreach (['{}', '[]', '{"details":{},"items":[]}', '{"items":[{},[]]}'] as $structuredJson) {
+            Http::swap(new Factory);
+            Http::preventStrayRequests();
+            Http::fake(fn (Request $request) => $this->rawRpc($request,
+                '{"resultType":"complete","content":[],"structuredContent":'.$structuredJson.'}',
+            ));
+
+            $result = app(RequestOnlyMcpClient::class)->callTool(
+                $target, $this->bound($target), 'notes.read', [], false, 'corr-one',
+            );
+            self::assertArrayHasKey('structuredContent', $result);
+            self::assertSame($structuredJson, json_encode($result['structuredContent'], JSON_THROW_ON_ERROR));
+            if (str_starts_with($structuredJson, '{')) {
+                self::assertInstanceOf(\stdClass::class, $result['structuredContent']);
+            } else {
+                self::assertIsArray($result['structuredContent']);
+            }
+            Http::assertSentCount(1);
+        }
+    }
+
     private function target(string $slug): Target
     {
         return Target::query()->create([
@@ -533,6 +634,18 @@ final class RequestOnlyDownstreamMcpTest extends TestCase
     {
         return BoundMcpTarget::forRegisteredTarget(
             $target, 'https://bridge-one.example.test/mcp', 'scoped-product-user-one',
+        );
+    }
+
+    private function rawRpc(Request $request, string $rawResult): PromiseInterface
+    {
+        // Raw JSON, not PHP arrays: {} and [] must reach the decoder unchanged.
+        $id = json_encode($request->data()['id'], JSON_THROW_ON_ERROR);
+
+        return Http::response(
+            '{"jsonrpc":"2.0","id":'.$id.',"result":'.$rawResult.'}',
+            200,
+            ['Content-Type' => 'application/json'],
         );
     }
 
