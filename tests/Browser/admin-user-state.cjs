@@ -241,6 +241,27 @@ async function run(browser, javaScriptEnabled) {
         await state(page, { role: 'operator', scope: 'selected', enabled: false, ai: false, denials: [] });
         assert.equal(await page.locator('[data-user-permission-state="saved"]').count(), 1);
         await assertGlobalDenyChoice(page, 'activity.view', false);
+        if (!javaScriptEnabled) {
+            // A GET-only Role preview is the native fallback for a Role
+            // transition: it changes just the displayed form, never storage.
+            await page.goto(editUrl);
+            await page.locator('noscript a[href*="preview_role=administrator"]').click();
+            await page.waitForLoadState('networkidle');
+            assert.equal(await page.locator('#role').inputValue(), 'administrator');
+            assert.ok(await page.locator('input[value="targets.create"][name="denied_permissions[]"]').isEnabled());
+            const previewViewport = page.viewportSize();
+            await page.setViewportSize({ width: 360, height: 850 });
+            assert.ok(await page.evaluate(() => document.documentElement.scrollWidth
+                <= document.documentElement.clientWidth), 'Native Role preview fits 360px');
+            await page.setViewportSize(previewViewport);
+            assert.equal(await page.locator('[data-user-permission-state="editing"]').count(), 1);
+            assert.match(await page.locator('#user-permission-restrictions > summary').innerText(), /Unsaved/);
+            await page.locator('#confirm_ssh_permission_changes').check();
+            await page.locator('#current_password').fill(ownerPassword);
+            await post(page, 'Save user access');
+            await reopen(page, name);
+            await state(page, { role: 'administrator', scope: 'selected', enabled: false, ai: false, denials: [] });
+        }
         assert.deepEqual(errors, []);
         assert.deepEqual(external, []);
         console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, role-aware unavailable Deny controls, dynamic role switching, rejected-SSH unsaved drafts, empty error drafts, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);

@@ -6,8 +6,10 @@
 @section('content')
 @php
     $hasSubmittedRestrictions = session()->hasOldInput();
-    $selectedUserRole = \App\Domain\Access\GatewayRole::tryFrom((string) old('role', $managedUser->role->value))
+    $previewRole = \App\Domain\Access\GatewayRole::tryFrom((string) request()->query('preview_role', ''));
+    $selectedUserRole = \App\Domain\Access\GatewayRole::tryFrom((string) old('role', $previewRole?->value ?? $managedUser->role->value))
         ?? \App\Domain\Access\GatewayRole::Operator;
+    $previewIsUnsaved = ! $hasSubmittedRestrictions && $selectedUserRole !== $managedUser->role;
     $selectedDenials = old('denied_permissions', $hasSubmittedRestrictions ? [] : $deniedPermissions);
     $selectedDenials = is_array($selectedDenials) ? $selectedDenials : [];
     $checkedRestrictionCount = count(array_filter($permissions, static fn ($permission): bool =>
@@ -34,6 +36,13 @@
 @include('admin.access-batches.context-nav', ['context' => 'user-account', 'subject' => ['id' => (string) $managedUser->getKey()]])
 
 @include('admin.partials.user-form-errors', ['editingUser' => true])
+
+@include('admin.partials.user-role-preview', [
+    'roles' => $roles,
+    'selectedUserRole' => $selectedUserRole,
+    'previewRoute' => 'admin.users.edit',
+    'previewRouteParameters' => ['user' => $managedUser->id],
+])
 
 <section class="panel panel-wide">
     @if ($managedUser->role->value === 'owner')
@@ -62,10 +71,9 @@
                 <label for="role">{{ __('Role') }}</label>
                 <select id="role" name="role" required @error('role') aria-invalid="true" @enderror aria-describedby="role-help{{ $errors->has('role') ? ' role-error' : '' }}">
                     @foreach ($roles as $role)
-                        <option value="{{ $role->value }}" @selected(old('role', $managedUser->role->value) === $role->value)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
+                        <option value="{{ $role->value }}" @selected($selectedUserRole === $role)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
                     @endforeach
                 </select>
-                <noscript><p class="field-help">{{ __('Without JavaScript, save a Role change first, then reopen this form to configure its available Deny restrictions.') }}</p></noscript>
                 <p class="field-help" id="role-help">{{ __('Owner bypasses all restrictions. Administrator and Operator SSH grants require Selected Target scope and Owner confirmation; Viewer does not have remote shell/SFTP permissions.') }}</p>
                 @error('role')<p class="field-error" id="role-error" role="alert">{{ $message }}</p>@enderror
             </div>
@@ -102,7 +110,7 @@
         <p class="field-help">{{ __('The Deny controls below adapt to the selected Role. Capabilities outside that Role are listed read-only; their boxes cannot be submitted. Switching Roles does not grant capabilities or bypass Target, Group or SSH restrictions.') }}</p>
         <p class="field-help" id="user-global-denials-help">{{ __('These are this account\'s global Deny choices, not the complete effective permissions. Every checked box blocks that capability at this level. An unchecked box does not override the role, Target scope, Group, or Target-specific restrictions. Use the Targets and Groups sections above to review those rules.') }}</p>
         <details id="user-permission-restrictions" class="permission-category-collapsible" aria-describedby="user-global-denials-help" open>
-            <summary>{{ __('User global restrictions — checked means blocked') }} (<span data-user-checked-count data-status-template="{{ __('Saved: :count checked') }}" data-pending-template="{{ __('Unsaved: :count checked') }}">{{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Saved: :count checked', ['count' => $checkedRestrictionCount]) }}</span>)</summary>
+            <summary>{{ __('User global restrictions — checked means blocked') }} (<span data-user-checked-count data-status-template="{{ __('Saved: :count checked') }}" data-pending-template="{{ __('Unsaved: :count checked') }}">{{ __($hasSubmittedRestrictions || $previewIsUnsaved ? 'Unsaved: :count checked' : 'Saved: :count checked', ['count' => $checkedRestrictionCount]) }}</span>)</summary>
             <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
@@ -132,10 +140,12 @@
 
             </div>
         </details>
-        <p class="field-help" data-user-draft-message="{{ __('Showing unsaved Role or restriction choices. Save to apply them; unavailable capabilities will not be submitted.') }}" data-user-permission-state="{{ $hasSubmittedRestrictions ? 'submitted' : 'saved' }}">
+        <p class="field-help" data-user-draft-message="{{ __('Showing unsaved Role or restriction choices. Save to apply them; unavailable capabilities will not be submitted.') }}" data-user-permission-state="{{ $hasSubmittedRestrictions ? 'submitted' : ($previewIsUnsaved ? 'editing' : 'saved') }}">
             {{ __($hasSubmittedRestrictions
                 ? 'Showing unsaved restriction choices after an unsuccessful submission. No account changes were saved.'
-                : 'Showing saved account restrictions. Unchecked boxes keep the role ceiling; group and direct Target restrictions can still block access.') }}
+                : ($previewIsUnsaved
+                    ? 'Previewing an unsaved Role selection. No account changes have been applied. Save the form to make this Role active.'
+                    : 'Showing saved account restrictions. Unchecked boxes keep the role ceiling; group and direct Target restrictions can still block access.')) }}
         </p>
 
         <div class="form-grid">

@@ -6,7 +6,8 @@
 @section('content')
 @php
     $hasSubmittedRestrictions = session()->hasOldInput();
-    $selectedUserRole = \App\Domain\Access\GatewayRole::tryFrom((string) old('role', 'operator'))
+    $previewRole = \App\Domain\Access\GatewayRole::tryFrom((string) request()->query('preview_role', ''));
+    $selectedUserRole = \App\Domain\Access\GatewayRole::tryFrom((string) old('role', $previewRole?->value ?? 'operator'))
         ?? \App\Domain\Access\GatewayRole::Operator;
     $selectedDenials = old('denied_permissions', $hasSubmittedRestrictions ? [] : $sshDefaultDenials);
     $selectedDenials = is_array($selectedDenials) ? $selectedDenials : [];
@@ -25,6 +26,13 @@
 </div>
 
 @include('admin.partials.user-form-errors', ['editingUser' => false])
+
+@include('admin.partials.user-role-preview', [
+    'roles' => $roles,
+    'selectedUserRole' => $selectedUserRole,
+    'previewRoute' => 'admin.users.create',
+    'previewRouteParameters' => [],
+])
 
 <section class="panel panel-wide">
     <form class="form-stack" data-user-role-form method="post" action="{{ route('admin.users.store') }}">
@@ -61,10 +69,9 @@
                 <label for="role">{{ __('Role') }}</label>
                 <select id="role" name="role" required @error('role') aria-invalid="true" @enderror aria-describedby="role-help{{ $errors->has('role') ? ' role-error' : '' }}">
                     @foreach ($roles as $role)
-                        <option value="{{ $role->value }}" @selected(old('role', 'operator') === $role->value)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
+                        <option value="{{ $role->value }}" @selected($selectedUserRole === $role)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
                     @endforeach
                 </select>
-                <noscript><p class="field-help">{{ __('Without JavaScript, save a Role change first, then reopen this form to configure its available Deny restrictions.') }}</p></noscript>
                 <p class="field-help" id="role-help">{{ __('Owner bypasses every permission and Target restriction for recovery. Operator and Administrator can receive SSH only on explicitly Selected Targets; Viewer cannot execute SSH commands or SFTP tools regardless of checkbox state.') }}</p>
                 @error('role')<p class="field-error" id="role-error" role="alert">{{ $message }}</p>@enderror
             </div>

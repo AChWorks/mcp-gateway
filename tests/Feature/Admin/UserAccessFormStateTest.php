@@ -119,6 +119,34 @@ final class UserAccessFormStateTest extends TestCase
         self::assertStringContainsString('Defaults: 3 checked', $createXPath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
     }
 
+    public function test_native_role_preview_is_read_only_and_renders_selected_role_permissions(): void
+    {
+        $owner = $this->owner();
+        $viewer = $this->viewer();
+        $this->actingAs($owner);
+
+        $url = '/admin/users/'.$viewer->id.'/edit';
+        $preview = $this->get($url.'?preview_role=operator')->assertOk();
+        $xpath = $this->document($preview);
+        self::assertSame('operator', $xpath->evaluate('string(//select[@name="role"]/option[@selected]/@value)'));
+        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and not(@hidden)][input[@value="ssh.file.read" and not(@disabled)]]')->length);
+        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and @hidden][input[@value="users.manage" and @disabled]]')->length);
+        self::assertSame(1, $xpath->query('//a[contains(@href,"preview_role=administrator") and ancestor::noscript]')->length);
+        self::assertSame(1, $xpath->query('//*[@data-user-permission-state="editing"]')->length);
+        self::assertStringContainsString('Unsaved: 1 checked',
+            $xpath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
+        self::assertSame('viewer', $viewer->fresh()->role->value);
+        self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($viewer));
+
+        $invalid = $this->get($url.'?preview_role=not-a-role')->assertOk();
+        self::assertSame('viewer', $this->document($invalid)
+            ->evaluate('string(//select[@name="role"]/option[@selected]/@value)'));
+        $create = $this->get('/admin/users/create?preview_role=viewer')->assertOk();
+        $xpath = $this->document($create);
+        self::assertSame('viewer', $xpath->evaluate('string(//select[@name="role"]/option[@selected]/@value)'));
+        self::assertSame(1, $xpath->query('//input[@value="ssh.file.read" and @disabled]')->length);
+    }
+
     public function test_role_ineligible_deny_cannot_silently_disappear_after_successful_submit(): void
     {
         $owner = $this->owner();
