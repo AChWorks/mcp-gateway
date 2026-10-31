@@ -99,37 +99,52 @@ async function assertCenteredFrame(page, path) {
     return frame;
 }
 
-async function assertLifecycleRows(page) {
-    const notes = page.getByRole('complementary', { name: 'Client profile lifecycle notes', exact: true });
-    assert.deepEqual(await notes.locator('dt').allTextContents(),
+async function assertLifecycleCards(page) {
+    const notes = page.getByRole('complementary', { name: 'Client profile management', exact: true });
+    assert.equal(await notes.locator('h2#client-lifecycle-title').innerText(), 'Client profile management');
+    assert.deepEqual(await notes.locator('.lifecycle-card h3').allTextContents(),
         ['Finding profiles', 'Automatic retirement', 'Administrator actions']);
-    assert.deepEqual(await notes.locator('dd p').allTextContents(), lifecycleParagraphs);
+    assert.deepEqual(await notes.locator('.lifecycle-card > p').allTextContents(), lifecycleParagraphs);
+    assert.equal(await notes.locator('.lifecycle-icon[aria-hidden="true"] svg').count(), 3);
     const geometry = await notes.evaluate(element => {
-        const box = element.getBoundingClientRect();
+        const grid = element.querySelector('.lifecycle-cards');
+        const rectangle = node => {
+            const box = node.getBoundingClientRect();
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+        };
         return {
-            left: box.left, right: box.right,
-            rows: Array.from(element.querySelectorAll('dl > div')).map(row => {
-                const label = row.querySelector('dt').getBoundingClientRect();
-                const description = row.querySelector('dd').getBoundingClientRect();
-                const columns = getComputedStyle(row).gridTemplateColumns.trim().split(/\s+/).length;
-                return { columns, label: { left: label.left, top: label.top, bottom: label.bottom },
-                    description: { left: description.left, right: description.right, top: description.top } };
-            }),
+            viewport: innerWidth,
+            fontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+            columns: getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).filter(track => parseFloat(track) > 1).length,
+            grid: rectangle(grid),
+            cards: Array.from(grid.querySelectorAll('.lifecycle-card')).map(card => ({
+                ...rectangle(card), scroll: card.scrollWidth, width: card.clientWidth,
+                heading: rectangle(card.querySelector('h3')),
+                paragraph: rectangle(card.querySelector('p')),
+            })),
         };
     });
-    for (const row of geometry.rows) {
-        assert.ok(Math.abs(row.label.left - geometry.left) <= 1, 'Lifecycle labels lost the shared starting edge.');
-        assert.ok(Math.abs(row.description.right - geometry.right) <= 1,
-            'Lifecycle descriptions must compose the opposite edge, not strand a narrow note: ' + JSON.stringify(geometry));
-        if (row.columns === 1) {
-            assert.ok(row.description.top >= row.label.bottom, 'Narrow lifecycle reading order must stack label then paragraph.');
-            assert.ok(Math.abs(row.description.left - geometry.left) <= 1);
-        } else {
-            assert.ok(row.description.left > row.label.left, 'Wide lifecycle rows must separate the label and readable body.');
+    assert.equal(geometry.cards.length, 3);
+    assert.ok(geometry.columns >= 1 && geometry.columns <= 3, 'Guidance must use one to three responsive columns.');
+    if (geometry.viewport <= 390) assert.equal(geometry.columns, 1, 'Phone guidance must stack.');
+    if (geometry.viewport >= 1440 && geometry.fontSize < 20) assert.equal(geometry.columns, 3, 'Wide guidance should show three cards.');
+    for (const [index, card] of geometry.cards.entries()) {
+        assert.ok(card.left >= geometry.grid.left - 1 && card.right <= geometry.grid.right + 1,
+            'Lifecycle card escaped its shared grid: ' + JSON.stringify(geometry));
+        assert.ok(card.scroll <= card.width + 1,
+            'Lifecycle card text overflowed at this text size: ' + JSON.stringify(geometry));
+        assert.ok(card.paragraph.top >= card.heading.bottom,
+            'Card heading must precede its explanation.');
+        if (index > 0) {
+            const previous = geometry.cards[index - 1];
+            if (Math.abs(card.top - previous.top) <= 1) {
+                assert.ok(card.left > previous.right, 'Adjacent guidance cards must not overlap.');
+            } else {
+                assert.ok(card.top >= previous.bottom, 'Wrapped guidance cards must retain reading order.');
+            }
         }
     }
 }
-
 
 async function matrix(browser) {
     const run = await create(browser);
@@ -163,7 +178,7 @@ async function matrix(browser) {
                 await run.page.emulateMedia({ colorScheme, reducedMotion: 'reduce' });
                 let sharedFrame;
                 for (const path of ['/admin', '/admin/targets', '/admin/targets/create?connector_type=ssh_direct',
-                    '/admin/users/create', accountPath, '/admin/target-groups/create', '/admin/oauth-clients', '/admin/operations']) {
+                    '/admin/targets/ui-ssh-connected/edit', '/admin/users/create', accountPath, '/admin/target-groups/create', '/admin/oauth-clients', '/admin/operations']) {
                     await run.page.goto(base + path);
                     await run.page.locator('#main-content h1').waitFor();
                     const frame = await assertCenteredFrame(run.page, path);
@@ -172,7 +187,40 @@ async function matrix(browser) {
                             && Math.abs(frame.mainWidth - sharedFrame.mainWidth) <= 1,
                         'Same-viewport Admin pages must share one outer canvas: ' + JSON.stringify({ width, path, sharedFrame, frame }));
                     } else sharedFrame = frame;
-                    if (path === '/admin/oauth-clients') await assertLifecycleRows(run.page);
+                    if (path === '/admin/oauth-clients') await assertLifecycleCards(run.page);
+                    if (path === '/admin/targets/ui-ssh-connected/edit') {
+                        const geometry = await run.page.evaluate(() => {
+                            const grid = document.querySelector('section[aria-label="Target identity"] .target-field-grid');
+                            if (!grid || grid.children.length !== 3) return null;
+                            const rect = el => {
+                                const box = el.getBoundingClientRect();
+                                return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+                            };
+                            const [target, name, guidance] = grid.children;
+                            return {
+                                columns: getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).length,
+                                grid: rect(grid), target: rect(target), name: rect(name), guidance: rect(guidance),
+                            };
+                        });
+                        assert.ok(geometry, 'Edit Target must use the three-field shared identity grid.');
+                        const near = (a, b) => Math.abs(a - b) <= 2;
+                        assert.ok(near(geometry.guidance.left, geometry.grid.left) &&
+                            near(geometry.guidance.right, geometry.grid.right),
+                        'AI guidance must span both columns: ' + JSON.stringify(geometry));
+                        if (geometry.columns === 2) {
+                            assert.ok(near(geometry.target.top, geometry.name.top) &&
+                                near(geometry.target.left, geometry.guidance.left) &&
+                                near(geometry.name.right, geometry.guidance.right) &&
+                                geometry.target.right < geometry.name.left &&
+                                geometry.guidance.top >= Math.max(geometry.target.bottom, geometry.name.bottom),
+                            'Edit Target identity must fill two balanced desktop columns: ' + JSON.stringify(geometry));
+                        } else {
+                            assert.equal(geometry.columns, 1);
+                            assert.ok(geometry.name.top >= geometry.target.bottom &&
+                                geometry.guidance.top >= geometry.name.bottom,
+                            'Mobile Edit Target identity must stack in source order.');
+                        }
+                    }
                     if (await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) console.log('OVERFLOW', JSON.stringify(await run.page.evaluate(() => [...document.querySelectorAll('.admin-shell,.admin-workspace,main,.panel,.table-wrap')].map(e=>({tag:e.tagName,cls:e.className,right:Math.round(e.getBoundingClientRect().right),width:Math.round(e.getBoundingClientRect().width),scroll:e.scrollWidth,overflow:getComputedStyle(e).overflowX,min:getComputedStyle(e).minWidth,cols:getComputedStyle(e).gridTemplateColumns})))));;
                     assert.equal(await run.page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
                         false, 'Page overflow at ' + width + ' ' + path);
@@ -181,8 +229,8 @@ async function matrix(browser) {
                         const name = path === accountPath ? 'user-edit' : path.replace(/[^a-z0-9]+/gi, '-');
                         await run.page.screenshot({ path: join(artifactDirectory, width + '-' + colorScheme + '-' + name + '.png') });
                         if (path === '/admin/oauth-clients') await run.page
-                            .getByRole('complementary', { name: 'Client profile lifecycle notes', exact: true })
-                            .screenshot({ path: join(artifactDirectory, width + '-' + colorScheme + '-lifecycle-rows.png') });
+                            .getByRole('complementary', { name: 'Client profile management', exact: true })
+                            .screenshot({ path: join(artifactDirectory, width + '-' + colorScheme + '-lifecycle-cards.png') });
                     }
                     renders++;
                 }
@@ -197,7 +245,7 @@ async function matrix(browser) {
         }
         assert.deepEqual(run.errors, []);
         assert.deepEqual(run.external, []);
-        pass(renders + ' real styled Admin viewport/theme renders; one cross-page canvas and full-width panels; labelled lifecycle rows; local assets; scoped summary and five-row review bound');
+        pass(renders + ' real styled Admin viewport/theme renders; one cross-page canvas and full-width panels; labelled lifecycle cards; local assets; scoped summary and five-row review bound');
     } finally {
         await run.context.close();
     }
@@ -325,9 +373,9 @@ async function mobileAndNative(browser) {
                     'Native/mobile pages selected different outer widths.');
                 else sharedFrame = frame;
                 await assertReflow(run.page, 'native/mobile ' + path);
-                if (path === '/admin/oauth-clients') await assertLifecycleRows(run.page);
+                if (path === '/admin/oauth-clients') await assertLifecycleCards(run.page);
             }
-            pass('360px dark keyboard/disclosure, native navigation and shared canvas/lifecycle rows with JavaScript ' + (javaScriptEnabled ? 'on' : 'off'));
+            pass('360px dark keyboard/disclosure, native navigation and shared canvas/lifecycle cards with JavaScript ' + (javaScriptEnabled ? 'on' : 'off'));
         } finally {
             await run.context.close();
         }
@@ -434,17 +482,17 @@ async function adaptation(browser) {
             const sizes = await page.evaluate(() => ({
                 root: parseFloat(getComputedStyle(document.documentElement).fontSize),
                 main: parseFloat(getComputedStyle(document.querySelector('main')).fontSize),
-                note: document.querySelector('.explanation-list dd')
-                    ? parseFloat(getComputedStyle(document.querySelector('.explanation-list dd')).fontSize) : null,
+                note: document.querySelector('.lifecycle-card p')
+                    ? parseFloat(getComputedStyle(document.querySelector('.lifecycle-card p')).fontSize) : null,
             }));
             await page.addStyleTag({ content: 'html { font-size: ' + sizes.root * 2 + 'px !important; }' });
             await page.waitForFunction(({ main, note }) =>
                 parseFloat(getComputedStyle(document.querySelector('main')).fontSize) === main * 2
-                && (note === null || parseFloat(getComputedStyle(document.querySelector('.explanation-list dd')).fontSize) === note * 2),
+                && (note === null || parseFloat(getComputedStyle(document.querySelector('.lifecycle-card p')).fontSize) === note * 2),
             sizes, { timeout: 2000 });
             await assertCenteredFrame(page, '200% text ' + path);
             await assertReflow(page, '200% text ' + path);
-            if (path === '/admin/oauth-clients') await assertLifecycleRows(page);
+            if (path === '/admin/oauth-clients') await assertLifecycleCards(page);
         }
 
         await page.setViewportSize({ width: 320, height: 900 });

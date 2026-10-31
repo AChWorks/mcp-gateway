@@ -104,6 +104,7 @@
                         @include('admin.partials.permission-option', [
                             'permission' => $permission,
                             'checked' => in_array($permission->value, $selectedDenials, true),
+                            'displayChoiceStatus' => $displayChoiceStatus ?? false,
                         ])
                     @endforeach
                 </div>

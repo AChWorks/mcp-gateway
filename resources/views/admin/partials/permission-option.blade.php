@@ -5,7 +5,7 @@
         name="denied_permissions[]"
         value="{{ $permission->value }}"
         aria-label="{{ __('Deny :permission', ['permission' => $permission->title()]) }}"
-        aria-describedby="{{ $permissionId }}-scope {{ $permissionId }}-key {{ $permissionId }}-help"
+        aria-describedby="{{ $permissionId }}-scope {{ $permissionId }}-key {{ $permissionId }}-help{{ ($displayChoiceStatus ?? false) ? ' '.$permissionId.'-choice' : '' }}"
         @checked($checked)
     >
     <span class="permission-copy">
@@ -15,5 +15,11 @@
         </span>
         <code class="permission-key" id="{{ $permissionId }}-key" dir="ltr">{{ $permission->value }}</code>
         <span class="permission-help" id="{{ $permissionId }}-help">{{ $permission->description() }}</span>
+        @if ($displayChoiceStatus ?? false)
+            <span class="permission-help permission-choice" id="{{ $permissionId }}-choice">
+                <span data-global-deny-choice="denied">{{ __('Current form choice: Deny globally — save to apply changes') }}</span>
+                <span data-global-deny-choice="not-denied">{{ __('Current form choice: No global Deny — other restrictions may apply; save to apply changes') }}</span>
+            </span>
+        @endif
     </span>
 </label>

@@ -59,6 +59,26 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('overflow-wrap: anywhere;', $css);
     }
 
+    public function test_target_edit_reuses_shared_enrollment_grid_for_identity_and_full_width_guidance(): void
+    {
+        $owner = $this->owner();
+        $target = Target::query()->create([
+            'target_id' => 'layout-target',
+            'display_name' => 'Layout Target',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $html = $this->actingAs($owner)->get(route('admin.targets.edit', [
+            'target' => $target->target_id,
+        ]))->assertOk()->getContent();
+        $dom = new \DOMDocument;
+        $dom->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($dom);
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(concat(" ",normalize-space(@class)," ")," target-field-grid ")])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(@class,"target-field-grid")]/div[@class="field"]/input[@id="target_id"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(@class,"target-field-grid")]/div[@class="field"]/input[@id="display_name"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(@class,"target-field-grid")]/div[contains(@class,"target-span-all")]/textarea[@id="ai_guidance"])'));
+    }
+
     public function test_endpoint_preflight_is_in_shared_enrollment_actions_for_both_connectors(): void
     {
         $this->actingAs($this->owner());
@@ -433,7 +453,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringNotContainsString('max-width: 54rem;', $css);
     }
 
-    public function test_shared_permission_badges_fill_available_width_and_table_notes_use_readable_flow(): void
+    public function test_shared_permission_badges_and_ai_client_lifecycle_cards_preserve_content_and_hierarchy(): void
     {
         $this->actingAs($this->owner())->get('/admin/users/create')
             ->assertOk()
@@ -448,17 +468,23 @@ final class AdminUiPresentationTest extends TestCase
         libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($document);
         $note = '//main/aside[contains(concat(" ",normalize-space(@class)," ")," panel-note ")]';
+        $cards = $note.'/div[contains(concat(" ",normalize-space(@class)," ")," lifecycle-cards ")]/article[contains(concat(" ",normalize-space(@class)," ")," lifecycle-card ")]';
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.')'));
-        self::assertSame(3, (int) $xpath->evaluate('count('.$note.'/dl/div/dt)'));
-        self::assertSame(3, (int) $xpath->evaluate('count('.$note.'/dl/div/dd/p)'));
-        self::assertSame(0, (int) $xpath->evaluate('count('.$note.'[contains(concat(" ",normalize-space(@class)," ")," reading-width ")])'));
+        self::assertSame('client-lifecycle-title', $xpath->evaluate('string('.$note.'/@aria-labelledby)'));
+        self::assertSame('Client profile management', trim($xpath->evaluate('string('.$note.'/h2[@id="client-lifecycle-title"])')));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/p[contains(@class,"field-help")])'));
+        self::assertSame(3, (int) $xpath->evaluate('count('.$cards.')'));
         self::assertSame(['Finding profiles', 'Automatic retirement', 'Administrator actions'], array_map(
             static fn (\DOMNode $node): string => trim($node->textContent),
-            iterator_to_array($xpath->query($note.'/dl/div/dt')),
+            iterator_to_array($xpath->query($cards.'/div[contains(@class,"lifecycle-card-heading")]/h3')),
         ));
+        foreach ($xpath->query($cards) as $card) {
+            self::assertSame(1, (int) $xpath->evaluate('count(.//span[@aria-hidden="true"]/svg[@focusable="false"])', $card));
+            self::assertSame(1, (int) $xpath->evaluate('count(./p)', $card));
+        }
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/preceding-sibling::*[1][self::section[contains(concat(" ",normalize-space(@class)," ")," panel ")]])'));
         self::assertSame(1, (int) $xpath->evaluate('count('.$note.'/following-sibling::*[1][self::section[contains(concat(" ",normalize-space(@class)," ")," ai-client-authorizations ")]])'));
-        $paragraphs = array_map(static fn (\DOMNode $node): string => trim($node->textContent), iterator_to_array($xpath->query($note.'/dl/div/dd/p')));
+        $paragraphs = array_map(static fn (\DOMNode $node): string => trim($node->textContent), iterator_to_array($xpath->query($cards.'/p')));
         self::assertSame([
             'Configured profiles always appear above. DCR profiles are paginated and the Exact profile key filter below can find an older record.',
             'Registered identities remain immutable; only never-authorized clients older than 24 hours may be retired automatically under admission pressure.',
@@ -473,7 +499,11 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString('margin-block: var(--ui-panel-stack-gap);', $noteRule[1]);
         self::assertStringNotContainsString('column', $noteRule[1]);
         self::assertSame(1, preg_match('/\.reading-width\s*\{[^}]*max-width:\s*70ch;/s', $css));
-        self::assertMatchesRegularExpression('/\.explanation-list dd\s*\{[^}]*max-inline-size:\s*95ch;[^}]*justify-self:\s*end;/s', $css);
+        self::assertStringContainsString('.lifecycle-cards {', $css);
+        self::assertStringContainsString('grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));', $css);
+        self::assertStringContainsString('.lifecycle-card-heading {', $css);
+        self::assertStringContainsString('.lifecycle-icon svg {', $css);
+        self::assertStringNotContainsString('.explanation-list', $css);
     }
 
     public function test_shared_admin_headings_wrap_valid_long_target_names_and_tables_follow_direction(): void
@@ -1134,6 +1164,37 @@ final class AdminUiPresentationTest extends TestCase
         ]);
         $xpath = $xpathFor($this->withSession(['errors' => new ViewErrorBag])->get('/admin')->assertOk()->getContent());
         self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="needs-review-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][contains(concat(" ",normalize-space(@class)," ")," table-wrap ")])'));
+    }
+
+    public function test_user_edit_deny_choice_copy_is_draft_scoped_and_accessibly_linked(): void
+    {
+        $owner = $this->owner();
+        $operator = User::query()->create([
+            'name' => 'Operator',
+            'email' => 'operator-'.uniqid().'@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+            'access_enabled' => true,
+        ]);
+
+        $html = $this->actingAs($owner)
+            ->get('/admin/users/'.$operator->getKey().'/edit')
+            ->assertOk()
+            ->assertSee('Current form choice: Deny globally')
+            ->assertSee('Current form choice: No global Deny')
+            ->getContent();
+
+        self::assertStringContainsString('data-global-deny-choice="denied"', $html);
+        self::assertStringContainsString('data-global-deny-choice="not-denied"', $html);
+        self::assertMatchesRegularExpression(
+            '/<input[^>]*value="activity\\.view"[^>]*aria-describedby="[^"]*permission-activity-view-choice[^"]*"/s',
+            $html,
+        );
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertStringContainsString('input:checked ~ .permission-copy [data-global-deny-choice="not-denied"]', $css);
+        self::assertStringContainsString('input:not(:checked) ~ .permission-copy [data-global-deny-choice="denied"]', $css);
     }
 
     private function owner(): User
