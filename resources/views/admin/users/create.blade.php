@@ -20,6 +20,8 @@
     <a href="{{ route('admin.users.index') }}">{{ __('Back to users') }}</a>
 </div>
 
+@include('admin.partials.user-form-errors', ['editingUser' => false])
+
 <section class="panel panel-wide">
     <form class="form-stack" method="post" action="{{ route('admin.users.store') }}">
         @csrf

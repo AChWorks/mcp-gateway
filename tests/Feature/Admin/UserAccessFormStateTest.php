@@ -57,6 +57,98 @@ final class UserAccessFormStateTest extends TestCase
         self::assertSame($this->storedDenials($user), $this->checkedDenials($page));
     }
 
+    public function test_rejected_ssh_grant_is_visibly_unsaved_and_durable_denials_reappear_on_reopen(): void
+    {
+        $owner = $this->owner();
+        $ssh = array_map(static fn (GatewayPermission $permission): string => $permission->value, GatewayPermission::sshCapabilities());
+        $user = app(UserAccessManager::class)->create([
+            'name' => 'Managed Operator', 'email' => 'operator@example.test',
+            'password' => 'DifferentHorse!234', 'role' => 'operator',
+            'target_scope_mode' => 'selected', 'access_enabled' => true,
+        ], $ssh);
+        $url = '/admin/users/'.$user->id.'/edit';
+        $attempted = [GatewayPermission::SshCommandRun->value, GatewayPermission::SshFileWrite->value];
+
+        // Removing the SSH read Deny would be a high-trust grant; without
+        // Owner acknowledgement the POST fails and returns an unsaved draft.
+        $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
+            ...$this->fields('operator'), 'name' => $user->name, 'email' => $user->email,
+            'denied_permissions' => $attempted,
+        ])->assertRedirect($url)->assertSessionHasErrors('confirm_ssh_permission_changes');
+
+        $draft = $this->get($url)->assertOk()->assertSee('User changes were not saved.');
+        self::assertSame($attempted, $this->checkedDenials($draft));
+        self::assertSame(1, $this->document($draft)->query('//*[@data-user-save-failed]')->length);
+        self::assertSame(1, $this->document($draft)->query('//*[@data-user-permission-state="submitted"]')->length);
+        self::assertSame($ssh, $this->storedDenials($user));
+
+        // A subsequent independent GET is the durable truth, not old input.
+        $saved = $this->get($url)->assertOk();
+        self::assertSame($ssh, $this->checkedDenials($saved));
+        self::assertSame(0, $this->document($saved)->query('//*[@data-user-save-failed]')->length);
+        self::assertSame(1, $this->document($saved)->query('//*[@data-user-permission-state="saved"]')->length);
+    }
+
+    public function test_role_ineligible_deny_cannot_silently_disappear_after_successful_submit(): void
+    {
+        $owner = $this->owner();
+        $user = $this->viewer();
+        $url = '/admin/users/'.$user->id.'/edit';
+
+        $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
+            ...$this->fields(), 'denied_permissions' => [
+                GatewayPermission::TargetsView->value,
+                GatewayPermission::UsersManage->value,
+            ],
+        ])->assertRedirect($url)->assertSessionHasErrors('denied_permissions');
+
+        $draft = $this->get($url)->assertOk()->assertSee('User changes were not saved.')
+            ->assertSee('users.manage');
+        self::assertSame(2, count($this->checkedDenials($draft)));
+        self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($user));
+        $saved = $this->get($url)->assertOk();
+        self::assertSame([GatewayPermission::TargetsView->value], $this->checkedDenials($saved));
+    }
+
+    public function test_role_downgrade_keeps_working_with_previously_saved_but_now_ineligible_denials(): void
+    {
+        $owner = $this->owner();
+        $ssh = array_map(static fn (GatewayPermission $permission): string => $permission->value, GatewayPermission::sshCapabilities());
+        $user = app(UserAccessManager::class)->create([
+            'name' => 'Downgraded Operator', 'email' => 'downgrade@example.test',
+            'password' => 'DifferentHorse!234', 'role' => 'operator',
+            'target_scope_mode' => 'selected', 'access_enabled' => true,
+        ], [GatewayPermission::TargetsView->value, ...$ssh]);
+        $url = '/admin/users/'.$user->id.'/edit';
+
+        $this->actingAs($owner)->put('/admin/users/'.$user->id, [
+            ...$this->fields('viewer'), 'name' => $user->name, 'email' => $user->email,
+            'denied_permissions' => [GatewayPermission::TargetsView->value, ...$ssh],
+        ])->assertSessionHasNoErrors()->assertRedirect($url);
+        self::assertSame('viewer', $user->fresh()->role->value);
+        // The role itself blocks SSH; explicit active Deny storage is
+        // normalized to the new ceiling without granting any capability.
+        self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($user));
+        $saved = $this->get($url)->assertOk();
+        self::assertSame([GatewayPermission::TargetsView->value], $this->checkedDenials($saved));
+        self::assertSame(0, $this->document($saved)->query('//*[@data-user-save-failed]')->length);
+    }
+
+    public function test_owner_cannot_be_shown_success_for_deny_options_that_owner_ignores(): void
+    {
+        $owner = $this->owner();
+        $url = '/admin/users/'.$owner->id.'/edit';
+
+        $this->actingAs($owner)->from($url)->put('/admin/users/'.$owner->id, [
+            ...$this->fields('owner'), 'name' => $owner->name, 'email' => $owner->email,
+            'target_scope_mode' => 'all',
+            'denied_permissions' => [GatewayPermission::TargetsView->value],
+        ])->assertRedirect($url)->assertSessionHasErrors('denied_permissions');
+
+        $this->get($url)->assertOk()->assertSee('User changes were not saved.');
+        self::assertSame([], $this->storedDenials($owner));
+    }
+
     public function test_edit_validation_error_keeps_an_explicitly_empty_restriction_choice(): void
     {
         $owner = $this->owner();
