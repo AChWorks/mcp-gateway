@@ -89,6 +89,64 @@ final class UserAccessFormStateTest extends TestCase
         self::assertSame(1, $this->document($saved)->query('//*[@data-user-permission-state="saved"]')->length);
     }
 
+    public function test_initial_user_role_hides_ineligible_denials_without_losing_saved_allowed_choices(): void
+    {
+        $owner = $this->owner();
+        $viewer = $this->viewer();
+        $page = $this->actingAs($owner)->get('/admin/users/'.$viewer->id.'/edit')->assertOk();
+        $xpath = $this->document($page);
+        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and @hidden][input[@value="users.manage" and @disabled]]')->length);
+        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and @hidden][input[@value="ssh.command.run" and @disabled]]')->length);
+        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and not(@hidden)][input[@value="targets.view" and @checked and not(@disabled)]]')->length);
+        self::assertSame(1, $xpath->query('//li[@data-user-role-unavailable-item and not(@hidden)][code="users.manage"]')->length);
+        self::assertSame(1, $xpath->query('//li[@data-user-role-unavailable-item and @hidden][code="targets.view"]')->length);
+        self::assertSame(0, $xpath->query('//*[@data-user-role-owner-note and not(@hidden)]')->length);
+        self::assertSame([GatewayPermission::TargetsView->value], $this->checkedDenials($page));
+        self::assertStringContainsString('Saved: 1 checked', $xpath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
+
+        $ownerPage = $this->get('/admin/users/'.$owner->id.'/edit')->assertOk();
+        $ownerXPath = $this->document($ownerPage);
+        self::assertSame(0, $ownerXPath->query('//label[@data-user-role-choice and not(@hidden)]')->length);
+        self::assertSame(1, $ownerXPath->query('//*[@data-user-role-owner-note and not(@hidden)]')->length);
+        self::assertSame(1, $ownerXPath->query('//*[@data-user-role-unavailable and @hidden]')->length);
+        self::assertSame(1, $ownerXPath->query('//*[@data-user-role-ssh-review and @hidden]')->length);
+        self::assertStringContainsString('Saved: 0 checked', $ownerXPath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
+
+        $create = $this->get('/admin/users/create')->assertOk();
+        $createXPath = $this->document($create);
+        self::assertSame(1, $createXPath->query('//label[@data-user-role-choice and @hidden][input[@value="users.manage" and @disabled]]')->length);
+        self::assertSame(1, $createXPath->query('//label[@data-user-role-choice and not(@hidden)][input[@value="ssh.file.read" and @checked and not(@disabled)]]')->length);
+        self::assertStringContainsString('Defaults: 3 checked', $createXPath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
+    }
+
+    public function test_native_role_preview_is_read_only_and_renders_selected_role_permissions(): void
+    {
+        $owner = $this->owner();
+        $viewer = $this->viewer();
+        $this->actingAs($owner);
+
+        $url = '/admin/users/'.$viewer->id.'/edit';
+        $preview = $this->get($url.'?preview_role=operator')->assertOk();
+        $xpath = $this->document($preview);
+        self::assertSame('operator', $xpath->evaluate('string(//select[@name="role"]/option[@selected]/@value)'));
+        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and not(@hidden)][input[@value="ssh.file.read" and not(@disabled)]]')->length);
+        self::assertSame(1, $xpath->query('//label[@data-user-role-choice and @hidden][input[@value="users.manage" and @disabled]]')->length);
+        self::assertSame(1, $xpath->query('//a[contains(@href,"preview_role=administrator") and ancestor::noscript]')->length);
+        self::assertSame(1, $xpath->query('//*[@data-user-permission-state="editing"]')->length);
+        self::assertStringContainsString('Unsaved: 1 checked',
+            $xpath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
+        self::assertSame('viewer', $viewer->fresh()->role->value);
+        self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($viewer));
+
+        $invalid = $this->get($url.'?preview_role=not-a-role')->assertOk();
+        self::assertSame('viewer', $this->document($invalid)
+            ->evaluate('string(//select[@name="role"]/option[@selected]/@value)'));
+        $create = $this->get('/admin/users/create?preview_role=viewer')->assertOk();
+        $xpath = $this->document($create);
+        self::assertSame('viewer', $xpath->evaluate('string(//select[@name="role"]/option[@selected]/@value)'));
+        self::assertSame(1, $xpath->query('//input[@value="ssh.file.read" and @disabled]')->length);
+    }
+
     public function test_role_ineligible_deny_cannot_silently_disappear_after_successful_submit(): void
     {
         $owner = $this->owner();
@@ -132,6 +190,40 @@ final class UserAccessFormStateTest extends TestCase
         $saved = $this->get($url)->assertOk();
         self::assertSame([GatewayPermission::TargetsView->value], $this->checkedDenials($saved));
         self::assertSame(0, $this->document($saved)->query('//*[@data-user-save-failed]')->length);
+    }
+
+    public function test_owner_promotion_with_old_operator_denials_reopens_without_invalid_restrictions(): void
+    {
+        $owner = $this->owner();
+        $oldDenials = [
+            GatewayPermission::TargetsView->value,
+            GatewayPermission::SshCommandRun->value,
+            GatewayPermission::SshFileRead->value,
+            GatewayPermission::SshFileWrite->value,
+        ];
+        $operator = app(UserAccessManager::class)->create([
+            'name' => 'Promotable Operator', 'email' => 'promote@example.test',
+            'password' => 'DifferentHorse!234', 'role' => 'operator',
+            'target_scope_mode' => 'selected', 'access_enabled' => true,
+        ], $oldDenials);
+        $url = '/admin/users/'.$operator->id.'/edit';
+        $this->actingAs($owner)->put('/admin/users/'.$operator->id, [
+            ...$this->fields('owner'),
+            'name' => $operator->name, 'email' => $operator->email,
+            'target_scope_mode' => 'all', 'denied_permissions' => $oldDenials,
+        ])->assertSessionHasNoErrors()->assertRedirect($url);
+
+        $updated = $operator->fresh();
+        self::assertSame('owner', $updated->role->value);
+        self::assertSame('all', $updated->target_scope_mode->value);
+        self::assertSame([], $this->storedDenials($operator));
+        $page = $this->get($url)->assertOk();
+        self::assertSame([], $this->checkedDenials($page));
+        $xpath = $this->document($page);
+        self::assertSame(0, $xpath->query('//label[@data-user-role-choice and not(@hidden)]')->length);
+        self::assertSame(1, $xpath->query('//*[@data-user-role-owner-note and not(@hidden)]')->length);
+        self::assertStringContainsString('Saved: 0 checked',
+            $xpath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
     }
 
     public function test_owner_cannot_be_shown_success_for_deny_options_that_owner_ignores(): void

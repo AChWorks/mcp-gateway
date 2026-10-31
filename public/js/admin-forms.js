@@ -144,6 +144,81 @@
     sync();
     }
 
+    function initUserRoleRestrictions(root) {
+    const form = root.querySelector('[data-user-role-form]');
+    if (!form || !claim(form, 'UserRoleRestrictions')) return;
+    const role = form.querySelector('#role');
+    const panel = form.querySelector('[data-user-role-restrictions]');
+    if (!role || !panel) return;
+
+    const choices = Array.from(panel.querySelectorAll('[data-user-role-choice]'));
+    const unavailable = Array.from(panel.querySelectorAll('[data-user-role-unavailable-item]'));
+    const sections = Array.from(panel.querySelectorAll('[data-user-role-section]'));
+    const roleStatus = panel.querySelector('[data-user-role-summary]');
+    const unavailablePanel = panel.querySelector('[data-user-role-unavailable]');
+    const unavailableCount = panel.querySelector('[data-role-unavailable-count]');
+    const ownerNote = panel.querySelector('[data-user-role-owner-note]');
+    const checkedCount = form.querySelector('[data-user-checked-count]');
+    const sshReview = form.querySelector('[data-user-role-ssh-review]');
+    const state = form.querySelector('[data-user-permission-state]');
+
+    const permitted = (element, selectedRole) =>
+        selectedRole !== 'owner' && (element.dataset.allowedRoles || '').split(' ').includes(selectedRole);
+
+    const sync = (changed) => {
+        const current = role.value;
+        const owner = current === 'owner';
+        let eligible = 0, denied = 0;
+        choices.forEach(choice => {
+            const allowed = permitted(choice, current);
+            const checkbox = choice.querySelector('input[name="denied_permissions[]"]');
+            choice.hidden = !allowed;
+            checkbox.disabled = !allowed;
+            if (allowed) {
+                eligible++;
+                if (checkbox.checked) denied++;
+            }
+        });
+        unavailable.forEach(item => { item.hidden = owner || permitted(item, current); });
+        sections.forEach(section => {
+            section.hidden = !Array.from(section.querySelectorAll('[data-user-role-choice]'))
+                .some(choice => !choice.hidden);
+        });
+        const excluded = choices.length - eligible;
+        ownerNote.hidden = !owner;
+        unavailablePanel.hidden = owner;
+        unavailableCount.textContent = String(excluded);
+        const roleName = role.selectedOptions[0]?.textContent.trim() || current;
+        roleStatus.textContent = owner ? panel.dataset.roleOwnerSummary
+            : panel.dataset.roleSummaryTemplate
+                .replace(':role', roleName).replace(':eligible', String(eligible))
+                .replace(':unavailable', String(excluded));
+
+        if (sshReview) {
+            const show = current === 'operator' || current === 'administrator';
+            sshReview.hidden = !show;
+            sshReview.querySelectorAll('input').forEach(input => { input.disabled = !show; });
+        }
+        if (changed && state) {
+            state.dataset.userPermissionState = 'editing';
+            state.textContent = state.dataset.userDraftMessage;
+        }
+        if (checkedCount) {
+            // Failed saves flash submitted input and are NOT persisted. An
+            // initializer must never re-label that unsaved draft Saved/Defaults.
+            const stateName = state?.dataset.userPermissionState;
+            const unsaved = changed || stateName === 'editing' || stateName === 'submitted';
+            const template = unsaved ? checkedCount.dataset.pendingTemplate : checkedCount.dataset.statusTemplate;
+            checkedCount.textContent = template.replace(':count', String(denied));
+        }
+    };
+    role.addEventListener('change', () => sync(true));
+    panel.addEventListener('change', event => {
+        if (event.target.matches('input[name="denied_permissions[]"]')) sync(true);
+    });
+    sync(false);
+    }
+
     function initSettings(root) {
     root.querySelectorAll('[data-clear-setting]').forEach(button => {
         const input = root.getElementById(button.dataset.clearSetting);
@@ -161,6 +236,7 @@
         initSshEnrollment(root);
         initSshConfiguration(root);
         initSettings(root);
+        initUserRoleRestrictions(root);
     }
     document.addEventListener('gateway:admin-ready', event => init(event.detail.root));
     if (document.readyState === 'loading') {

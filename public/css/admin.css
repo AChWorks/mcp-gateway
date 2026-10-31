@@ -814,6 +814,18 @@ input[type="radio"]:checked::before {
     font-size: 1.05rem;
 }
 
+/* Role-specific User Deny controls disappear from both pointer and keyboard
+   interaction when outside the selected role. Group/Target editors are
+   unchanged, and JS/native edit paths share this first-paint contract. */
+[data-user-role-choice][hidden],
+[data-user-role-section][hidden],
+[data-user-role-unavailable-item][hidden],
+[data-user-role-unavailable][hidden],
+[data-user-role-owner-note][hidden],
+[data-user-role-ssh-review][hidden] {
+    display: none;
+}
+
 .permission-category + .permission-category {
     padding-top: 1.1rem;
     border-top: 1px solid var(--ui-border);
