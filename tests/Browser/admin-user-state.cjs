@@ -16,8 +16,14 @@ async function expand(page) {
 }
 async function setDenials(page, values) {
     await expand(page);
-    for (const input of await checks(page).all()) await input.uncheck();
-    for (const value of values) await page.locator('input[name="denied_permissions[]"][value="' + value + '"]').check();
+    for (const input of await checks(page).all()) {
+        if (await input.isEnabled()) await input.uncheck();
+    }
+    for (const value of values) {
+        const input = page.locator('input[name="denied_permissions[]"][value="' + value + '"]');
+        assert.ok(await input.isEnabled(), 'Cannot Deny a role-ineligible capability: ' + value);
+        await input.check();
+    }
 }
 async function post(page, name) {
     const pending = page.waitForResponse(response => response.request().method() === 'POST'
@@ -81,16 +87,84 @@ async function run(browser, javaScriptEnabled) {
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
         await reopen(page, name);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
-        // A role-ineligible checked Deny was previously silently discarded by
-        // the application and could masquerade as a successful save.
-        await page.locator('input[name="denied_permissions[]"][value="users.manage"]').check();
+        // An unavailable role capability is not offered as a checkbox and
+        // cannot enter a normal form submission. The original server guard
+        // still rejects crafted ineligible requests in PHP feature tests.
+        const userManage = page.locator('input[name="denied_permissions[]"][value="users.manage"]');
+        const targetCreate = page.locator('input[name="denied_permissions[]"][value="targets.create"]');
+        const sshCommand = page.locator('input[name="denied_permissions[]"][value="ssh.command.run"]');
+        assert.ok(await userManage.isDisabled(), 'Operator cannot edit users.manage Deny');
+        assert.equal(await userManage.locator('..').getAttribute('hidden'), '');
+        assert.equal(await page.locator('[data-user-role-unavailable-item] code')
+            .filter({ hasText: /^users\.manage$/ }).count(), 1);
+
+        if (javaScriptEnabled) {
+            await page.locator('#role').selectOption('administrator');
+            assert.ok(await targetCreate.isEnabled(), 'Administrator can Deny targets.create');
+            assert.ok(await userManage.isDisabled(), 'Administrator still cannot manage users');
+            assert.equal(await page.locator('[data-user-permission-state="editing"]').count(), 1);
+            await targetCreate.check();
+            await page.locator('#role').selectOption('operator');
+            assert.ok(await targetCreate.isDisabled());
+            assert.ok(await targetCreate.isChecked(), 'Temporary draft returns when original Role is selected');
+            const submitted = await page.locator('form[data-user-role-form]').evaluate(form =>
+                new FormData(form).getAll('denied_permissions[]'));
+            assert.ok(!submitted.includes('targets.create'), 'Role-ineligible Deny is never submitted');
+            await page.locator('#role').selectOption('administrator');
+            assert.ok(await targetCreate.isChecked(), 'Allowed draft restored when switching Role back');
+            await targetCreate.uncheck();
+            await page.locator('#role').selectOption('viewer');
+            assert.ok(await sshCommand.isDisabled(), 'Viewer cannot edit SSH Deny');
+            await page.locator('#role').selectOption('owner');
+            assert.ok(await targetCreate.isDisabled(), 'Owner cannot set global Deny');
+            assert.equal(await page.locator('[data-user-role-owner-note]').isVisible(), true);
+            assert.equal(await page.locator('[data-user-role-unavailable]').isVisible(), false);
+            assert.deepEqual(await page.locator('form[data-user-role-form]').evaluate(form =>
+                new FormData(form).getAll('denied_permissions[]')), [],
+                'Owner does not submit inapplicable Deny choices');
+            await page.locator('#role').selectOption('operator');
+            assert.ok(await sshCommand.isEnabled(), 'Operator can edit SSH Deny');
+            assert.ok(await userManage.isDisabled());
+            assert.deepEqual(await checked(page), [...saved].sort(), 'Role round trip retains unsaved checkbox state');
+        }
+
+        // The changed two-section permission presentation and its long
+        // identifiers must reflow without horizontal document overflow.
+        const roleViewport = page.viewportSize();
+        for (const width of [360, 390, 768, 1366]) {
+            for (const theme of ['light', 'dark']) {
+                await page.setViewportSize({ width, height: 950 });
+                await page.emulateMedia({ colorScheme: theme });
+                const layout = await page.evaluate(() => {
+                    const panel = document.querySelector('[data-user-role-restrictions]');
+                    const region = panel.getBoundingClientRect();
+                    return {
+                        document: document.documentElement.scrollWidth,
+                        viewport: document.documentElement.clientWidth,
+                        panel: { x: region.x, right: region.right, width: region.width },
+                        rowCount: [...panel.querySelectorAll('[data-user-role-choice]')]
+                            .filter(el => !el.hidden && getComputedStyle(el).display !== 'none').length,
+                    };
+                });
+                assert.ok(layout.document <= layout.viewport,
+                    'Permission UI creates no overflow at ' + width + ' ' + theme);
+                assert.ok(layout.panel.width > 170 && layout.panel.x >= -1
+                    && layout.panel.right <= width + 2,
+                    'Permission UI fits viewport at ' + width + ' ' + theme);
+                assert.ok(layout.rowCount > 0, 'Role-capable controls remain visible');
+            }
+        }
+        await page.setViewportSize(roleViewport);
+        await page.emulateMedia({ colorScheme: 'light' });
+
+        // Unchecking a saved SSH Deny without the explicit confirmation also
+        // returns a draft; a later list -> Account visit must show only saved
+        // restrictions, never an apparent temporary grant.
+        await page.locator('input[name="denied_permissions[]"][value="ssh.file.read"]').uncheck();
         await page.locator('#current_password').fill(ownerPassword);
         await post(page, 'Save user access');
         assert.equal(await page.locator('[data-user-save-failed]').count(), 1);
-        assert.match(await page.locator('[data-user-save-failed]').innerText(), /users\.manage/);
-        assert.ok((await checked(page)).includes('users.manage'), 'rejected draft retains unsaved choice');
-        // Real rendered shared error banner must remain legible at mobile,
-        // tablet and desktop widths in both supported color schemes.
+        assert.deepEqual(await checked(page), saved.filter(value => value !== 'ssh.file.read').sort());
         const originalViewport = page.viewportSize();
         for (const width of [390, 768, 1366]) {
             for (const theme of ['light', 'dark']) {
@@ -101,25 +175,13 @@ async function run(browser, javaScriptEnabled) {
                     document: document.documentElement.scrollWidth,
                     alert: document.querySelector('[data-user-save-failed]').getBoundingClientRect().toJSON(),
                 }));
-                assert.ok(geometry.document <= geometry.viewport,
-                    'No document overflow for rejected account save at ' + width + ' ' + theme);
+                assert.ok(geometry.document <= geometry.viewport, 'No overflow at ' + width + ' ' + theme);
                 assert.ok(geometry.alert.width > 180 && geometry.alert.x >= -1,
-                    'Error banner stays legible and in flow at ' + width + ' ' + theme);
+                    'Account save banner stays in flow at ' + width + ' ' + theme);
             }
         }
         await page.setViewportSize(originalViewport);
         await page.emulateMedia({ colorScheme: 'light' });
-        await reopen(page, name);
-        await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
-
-        // Unchecking a saved SSH Deny without the explicit confirmation also
-        // returns a draft; a later list -> Account visit must show only saved
-        // restrictions, never an apparent temporary grant.
-        await page.locator('input[name="denied_permissions[]"][value="ssh.file.read"]').uncheck();
-        await page.locator('#current_password').fill(ownerPassword);
-        await post(page, 'Save user access');
-        assert.equal(await page.locator('[data-user-save-failed]').count(), 1);
-        assert.deepEqual(await checked(page), saved.filter(value => value !== 'ssh.file.read').sort());
         await reopen(page, name);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
         await page.locator('input[name="denied_permissions[]"][value="activity.view"]').uncheck();
@@ -181,7 +243,7 @@ async function run(browser, javaScriptEnabled) {
         await assertGlobalDenyChoice(page, 'activity.view', false);
         assert.deepEqual(errors, []);
         assert.deepEqual(external, []);
-        console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, explicit rejected-role/SSH unsaved drafts, empty error drafts, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);
+        console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, role-aware unavailable Deny controls, dynamic role switching, rejected-SSH unsaved drafts, empty error drafts, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);
     } finally { await context.close(); }
 }
 (async () => {

@@ -1,5 +1,9 @@
 @php($permissionId = 'permission-'.str_replace('.', '-', $permission->value))
-<label class="checkbox-option permission-option" title="{{ $permission->description() }}">
+<label class="checkbox-option permission-option" title="{{ $permission->description() }}"
+    @if ($roleAwareUser ?? false)
+        data-user-role-choice data-allowed-roles="{{ $roleChoiceAllowedRoles }}"
+        @if (! $roleChoiceAllowed) hidden @endif
+    @endif>
     <input
         type="checkbox"
         name="denied_permissions[]"
@@ -7,6 +11,7 @@
         aria-label="{{ __('Deny :permission', ['permission' => $permission->title()]) }}"
         aria-describedby="{{ $permissionId }}-scope {{ $permissionId }}-key {{ $permissionId }}-help{{ ($displayChoiceStatus ?? false) ? ' '.$permissionId.'-choice' : '' }}"
         @checked($checked)
+        @disabled(($roleAwareUser ?? false) && ! $roleChoiceAllowed)
     >
     <span class="permission-copy">
         <span class="permission-heading">

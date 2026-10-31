@@ -54,6 +54,19 @@
         $visiblePermissions = $visiblePermissions->reject($otherConnectorPermission);
     }
     $groupedPermissions = $visiblePermissions->groupBy(static fn ($permission): string => $permission->adminGroup());
+    $roleAwareUser = (bool) ($roleAwareUser ?? false);
+    $selectedUserRole = $roleAwareUser
+        ? ($selectedUserRole ?? \App\Domain\Access\GatewayRole::Operator)
+        : null;
+    $isRestrictable = static fn ($permission): bool => $selectedUserRole !== \App\Domain\Access\GatewayRole::Owner
+        && $selectedUserRole?->allows($permission) === true;
+    $rolesAllowingRestriction = static fn ($permission): string => implode(' ', array_map(
+        static fn ($role): string => $role->value,
+        array_filter(\App\Domain\Access\GatewayRole::cases(),
+            static fn ($role): bool => $role !== \App\Domain\Access\GatewayRole::Owner && $role->allows($permission)),
+    ));
+    $roleEligibleCount = $roleAwareUser ? $visiblePermissions->filter($isRestrictable)->count() : 0;
+    $roleUnavailableCount = $visiblePermissions->count() - $roleEligibleCount;
 @endphp
 
 {{-- A connector-specific Target edit must not erase older, unrelated stored denial keys. --}}
@@ -64,10 +77,20 @@
     <p class="field-help">{{ __('Existing restrictions for other connector types are preserved but have no effect on this Target.') }}</p>
 @endif
 
+@if ($roleAwareUser)
+    <div data-user-role-restrictions
+        data-role-summary-template="{{ __(':role: :eligible capabilities can be restricted; :unavailable are already excluded by the Role.') }}"
+        data-role-owner-summary="{{ __('Owner has no global Deny controls. When enabled, Owner bypasses Target restrictions for recovery.') }}">
+        <p class="field-help" role="status" aria-live="polite" data-user-role-summary>{{ $selectedUserRole === \App\Domain\Access\GatewayRole::Owner
+            ? __('Owner has no global Deny controls. When enabled, Owner bypasses Target restrictions for recovery.')
+            : __(':role: :eligible capabilities can be restricted; :unavailable are already excluded by the Role.', ['role' => \Illuminate\Support\Str::headline($selectedUserRole->value), 'eligible' => $roleEligibleCount, 'unavailable' => $roleUnavailableCount]) }}</p>
+@endif
+
 @foreach ($permissionSections as $group => $section)
     @php($items = $groupedPermissions->get($group, collect()))
     @if ($items->isNotEmpty())
-        <section class="permission-category" aria-label="{{ $section['title'] }}">
+        <section class="permission-category" aria-label="{{ $section['title'] }}"
+            @if ($roleAwareUser) data-user-role-section @if (! $items->contains($isRestrictable)) hidden @endif @endif>
             <div class="permission-category-heading">
                 <h3>{{ $section['title'] }}</h3>
                 @if ($section['status'] !== null)
@@ -105,6 +128,9 @@
                             'permission' => $permission,
                             'checked' => in_array($permission->value, $selectedDenials, true),
                             'displayChoiceStatus' => $displayChoiceStatus ?? false,
+                            'roleAwareUser' => $roleAwareUser,
+                            'roleChoiceAllowed' => ! $roleAwareUser || $isRestrictable($permission),
+                            'roleChoiceAllowedRoles' => $roleAwareUser ? $rolesAllowingRestriction($permission) : '',
                         ])
                     @endforeach
                 </div>
@@ -112,3 +138,24 @@
         </section>
     @endif
 @endforeach
+
+@if ($roleAwareUser)
+    <div data-user-role-owner-note @if ($selectedUserRole !== \App\Domain\Access\GatewayRole::Owner) hidden @endif>
+        <p class="field-help">{{ __('Owner does not need global Deny restrictions. When account access is enabled, Target restrictions are bypassed for recovery.') }}</p>
+    </div>
+    <details class="permission-category-collapsible" data-user-role-unavailable
+        @if ($selectedUserRole === \App\Domain\Access\GatewayRole::Owner) hidden @endif>
+        <summary>{{ __('Already unavailable in this Role') }} (<span data-role-unavailable-count>{{ $roleUnavailableCount }}</span>)</summary>
+        <p class="field-help">{{ __('These capabilities are excluded by the selected Role. They cannot be enabled or denied here. Choosing another Role may change which restrictions are editable.') }}</p>
+        <ul class="permission-reserved-list">
+            @foreach ($visiblePermissions as $permission)
+                <li data-user-role-unavailable-item data-allowed-roles="{{ $rolesAllowingRestriction($permission) }}"
+                    @if ($isRestrictable($permission)) hidden @endif>
+                    <strong>{{ $permission->title() }}</strong>
+                    <code dir="ltr">{{ $permission->value }}</code>
+                </li>
+            @endforeach
+        </ul>
+    </details>
+    </div>
+@endif

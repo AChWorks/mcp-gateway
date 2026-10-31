@@ -6,10 +6,13 @@
 @section('content')
 @php
     $hasSubmittedRestrictions = session()->hasOldInput();
+    $selectedUserRole = \App\Domain\Access\GatewayRole::tryFrom((string) old('role', $managedUser->role->value))
+        ?? \App\Domain\Access\GatewayRole::Operator;
     $selectedDenials = old('denied_permissions', $hasSubmittedRestrictions ? [] : $deniedPermissions);
     $selectedDenials = is_array($selectedDenials) ? $selectedDenials : [];
     $checkedRestrictionCount = count(array_filter($permissions, static fn ($permission): bool =>
-        ($permission->adminGroup() !== 'ssh' || $sshPermissionsEditable)
+        $selectedUserRole !== \App\Domain\Access\GatewayRole::Owner
+        && $selectedUserRole->allows($permission)
         && in_array($permission->value, $selectedDenials, true)));
 @endphp
 <div class="page-heading">
@@ -37,7 +40,7 @@
         <div class="alert alert-success" role="status">{{ __('Owners retain unrestricted all-target authority for recovery. Global/per-target denials and target-group assignments are cleared for this role.') }}</div>
     @endif
 
-    <form class="form-stack" method="post" action="{{ route('admin.users.update', ['user' => $managedUser->id]) }}">
+    <form class="form-stack" data-user-role-form method="post" action="{{ route('admin.users.update', ['user' => $managedUser->id]) }}">
         @csrf
         @method('PUT')
 
@@ -62,6 +65,7 @@
                         <option value="{{ $role->value }}" @selected(old('role', $managedUser->role->value) === $role->value)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
                     @endforeach
                 </select>
+                <noscript><p class="field-help">{{ __('Without JavaScript, save a Role change first, then reopen this form to configure its available Deny restrictions.') }}</p></noscript>
                 <p class="field-help" id="role-help">{{ __('Owner bypasses all restrictions. Administrator and Operator SSH grants require Selected Target scope and Owner confirmation; Viewer does not have remote shell/SFTP permissions.') }}</p>
                 @error('role')<p class="field-error" id="role-error" role="alert">{{ $message }}</p>@enderror
             </div>
@@ -95,10 +99,10 @@
             <p class="field-help">{{ __('This Gateway-wide connection gate is independent of the account role and human Admin/Target permissions. It never adds a Target or action permission. Disabling revokes existing AI client consents/tokens; re-enabling requires fresh client authorization. New users start with AI access disabled; existing users retain their prior state after upgrade.') }}</p>
         </fieldset>
 
-        <p class="field-help">{{ __('Only Deny choices within the selected role can be saved. Owner accounts cannot retain Deny restrictions. If an attempted save is rejected, checked boxes show the unsaved draft until you correct it.') }}</p>
+        <p class="field-help">{{ __('The Deny controls below adapt to the selected Role. Capabilities outside that Role are listed read-only; their boxes cannot be submitted. Switching Roles does not grant capabilities or bypass Target, Group or SSH restrictions.') }}</p>
         <p class="field-help" id="user-global-denials-help">{{ __('These are this account\'s global Deny choices, not the complete effective permissions. Every checked box blocks that capability at this level. An unchecked box does not override the role, Target scope, Group, or Target-specific restrictions. Use the Targets and Groups sections above to review those rules.') }}</p>
         <details id="user-permission-restrictions" class="permission-category-collapsible" aria-describedby="user-global-denials-help" open>
-            <summary>{{ __('User global restrictions — checked means blocked') }} ({{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Saved: :count checked', ['count' => $checkedRestrictionCount]) }})</summary>
+            <summary>{{ __('User global restrictions — checked means blocked') }} (<span data-user-checked-count data-status-template="{{ __('Saved: :count checked') }}" data-pending-template="{{ __('Unsaved: :count checked') }}">{{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Saved: :count checked', ['count' => $checkedRestrictionCount]) }}</span>)</summary>
             <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
@@ -110,21 +114,25 @@
                 'selectedDenials' => $selectedDenials,
                 'sshPermissionsEditable' => $sshPermissionsEditable,
                 'sshPermissionContext' => 'user',
+                'roleAwareUser' => true,
+                'selectedUserRole' => $selectedUserRole,
                 'displayChoiceStatus' => true,
             ])
         </fieldset>
 
-        @if ($sshPermissionsEditable && $managedUser->role->value !== 'owner')
-            <label class="checkbox-option" for="confirm_ssh_permission_changes">
-                <input id="confirm_ssh_permission_changes" type="checkbox" name="confirm_ssh_permission_changes" value="1" @checked(old('confirm_ssh_permission_changes', false)) @error('confirm_ssh_permission_changes') aria-invalid="true" aria-describedby="confirm_ssh_permission_changes-error" @enderror>
-                <span>{{ __('Owner confirmation: explicitly apply each SSH command, SFTP read and SFTP write permission above. Unchecked denial boxes grant that capability only on approved Selected Targets. SSH command access can read/write files and use permitted sudo/root regardless of the SFTP switches.') }}</span>
-            </label>
-            @error('confirm_ssh_permission_changes')<p class="field-error" id="confirm_ssh_permission_changes-error" role="alert">{{ $message }}</p>@enderror
+        @if ($sshPermissionsEditable)
+            <div data-user-role-ssh-review @if (! in_array($selectedUserRole, [\App\Domain\Access\GatewayRole::Administrator, \App\Domain\Access\GatewayRole::Operator], true)) hidden @endif>
+                <label class="checkbox-option" for="confirm_ssh_permission_changes">
+                    <input id="confirm_ssh_permission_changes" type="checkbox" name="confirm_ssh_permission_changes" value="1" @checked(old('confirm_ssh_permission_changes', false)) @error('confirm_ssh_permission_changes') aria-invalid="true" aria-describedby="confirm_ssh_permission_changes-error" @enderror>
+                    <span>{{ __('Owner confirmation: explicitly apply each SSH command, SFTP read and SFTP write permission above. Unchecked denial boxes grant that capability only on approved Selected Targets. SSH command access can read/write files and use permitted sudo/root regardless of the SFTP switches.') }}</span>
+                </label>
+                @error('confirm_ssh_permission_changes')<p class="field-error" id="confirm_ssh_permission_changes-error" role="alert">{{ $message }}</p>@enderror
+            </div>
         @endif
 
             </div>
         </details>
-        <p class="field-help" data-user-permission-state="{{ $hasSubmittedRestrictions ? 'submitted' : 'saved' }}">
+        <p class="field-help" data-user-draft-message="{{ __('Showing unsaved Role or restriction choices. Save to apply them; unavailable capabilities will not be submitted.') }}" data-user-permission-state="{{ $hasSubmittedRestrictions ? 'submitted' : 'saved' }}">
             {{ __($hasSubmittedRestrictions
                 ? 'Showing unsaved restriction choices after an unsuccessful submission. No account changes were saved.'
                 : 'Showing saved account restrictions. Unchecked boxes keep the role ceiling; group and direct Target restrictions can still block access.') }}

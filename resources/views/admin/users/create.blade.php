@@ -6,10 +6,14 @@
 @section('content')
 @php
     $hasSubmittedRestrictions = session()->hasOldInput();
+    $selectedUserRole = \App\Domain\Access\GatewayRole::tryFrom((string) old('role', 'operator'))
+        ?? \App\Domain\Access\GatewayRole::Operator;
     $selectedDenials = old('denied_permissions', $hasSubmittedRestrictions ? [] : $sshDefaultDenials);
     $selectedDenials = is_array($selectedDenials) ? $selectedDenials : [];
     $checkedRestrictionCount = count(array_filter($permissions, static fn ($permission): bool =>
-        in_array($permission->value, $selectedDenials, true)));
+        $selectedUserRole !== \App\Domain\Access\GatewayRole::Owner
+        && $selectedUserRole->allows($permission)
+        && in_array($permission->value, $selectedDenials, true)));
 @endphp
 <div class="page-heading">
     <div>
@@ -23,7 +27,7 @@
 @include('admin.partials.user-form-errors', ['editingUser' => false])
 
 <section class="panel panel-wide">
-    <form class="form-stack" method="post" action="{{ route('admin.users.store') }}">
+    <form class="form-stack" data-user-role-form method="post" action="{{ route('admin.users.store') }}">
         @csrf
 
         <div class="form-grid">
@@ -60,6 +64,7 @@
                         <option value="{{ $role->value }}" @selected(old('role', 'operator') === $role->value)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
                     @endforeach
                 </select>
+                <noscript><p class="field-help">{{ __('Without JavaScript, save a Role change first, then reopen this form to configure its available Deny restrictions.') }}</p></noscript>
                 <p class="field-help" id="role-help">{{ __('Owner bypasses every permission and Target restriction for recovery. Operator and Administrator can receive SSH only on explicitly Selected Targets; Viewer cannot execute SSH commands or SFTP tools regardless of checkbox state.') }}</p>
                 @error('role')<p class="field-error" id="role-error" role="alert">{{ $message }}</p>@enderror
             </div>
@@ -94,7 +99,7 @@
         </fieldset>
 
         <details id="user-permission-restrictions" class="permission-category-collapsible" @if ($hasSubmittedRestrictions || $errors->hasAny(['denied_permissions', 'confirm_ssh_permission_changes'])) open @endif>
-            <summary>{{ __('Advanced permission restrictions — checked means blocked') }} ({{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Defaults: :count checked', ['count' => $checkedRestrictionCount]) }})</summary>
+            <summary>{{ __('Advanced permission restrictions — checked means blocked') }} (<span data-user-checked-count data-status-template="{{ __('Defaults: :count checked') }}" data-pending-template="{{ __('Unsaved: :count checked') }}">{{ __($hasSubmittedRestrictions ? 'Unsaved: :count checked' : 'Defaults: :count checked', ['count' => $checkedRestrictionCount]) }}</span>)</summary>
             <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
@@ -105,18 +110,22 @@
                 'selectedDenials' => $selectedDenials,
                 'sshPermissionsEditable' => true,
                 'sshPermissionContext' => 'user',
+                'roleAwareUser' => true,
+                'selectedUserRole' => $selectedUserRole,
             ])
         </fieldset>
-        <label class="checkbox-option" for="confirm_ssh_permission_changes">
-            <input id="confirm_ssh_permission_changes" type="checkbox" name="confirm_ssh_permission_changes" value="1"
-                @checked(old('confirm_ssh_permission_changes', false)) @error('confirm_ssh_permission_changes') aria-invalid="true" aria-describedby="confirm_ssh_permission_changes-error" @enderror>
-            <span>{{ __('Owner confirmation for SSH grants: I reviewed each SSH denial checkbox. Unchecking a denial may enable remote OS commands or file access on an explicitly Selected Target; it does not sandbox remote sudo/root.') }}</span>
-        </label>
-        @error('confirm_ssh_permission_changes')<p class="field-error" id="confirm_ssh_permission_changes-error" role="alert">{{ $message }}</p>@enderror
+        <div data-user-role-ssh-review @if (! in_array($selectedUserRole, [\App\Domain\Access\GatewayRole::Administrator, \App\Domain\Access\GatewayRole::Operator], true)) hidden @endif>
+            <label class="checkbox-option" for="confirm_ssh_permission_changes">
+                <input id="confirm_ssh_permission_changes" type="checkbox" name="confirm_ssh_permission_changes" value="1"
+                    @checked(old('confirm_ssh_permission_changes', false)) @error('confirm_ssh_permission_changes') aria-invalid="true" aria-describedby="confirm_ssh_permission_changes-error" @enderror>
+                <span>{{ __('Owner confirmation for SSH grants: I reviewed each SSH denial checkbox. Unchecking a denial may enable remote OS commands or file access on an explicitly Selected Target; it does not sandbox remote sudo/root.') }}</span>
+            </label>
+            @error('confirm_ssh_permission_changes')<p class="field-error" id="confirm_ssh_permission_changes-error" role="alert">{{ $message }}</p>@enderror
+        </div>
 
             </div>
         </details>
-        <p class="field-help" data-user-permission-state="{{ $hasSubmittedRestrictions ? 'submitted' : 'defaults' }}">
+        <p class="field-help" data-user-draft-message="{{ __('Showing unsaved Role or restriction choices. Save to apply them; unavailable capabilities will not be submitted.') }}" data-user-permission-state="{{ $hasSubmittedRestrictions ? 'submitted' : 'defaults' }}">
             {{ __($hasSubmittedRestrictions
                 ? 'Showing unsaved restriction choices after an unsuccessful submission. No account changes were saved.'
                 : 'Restriction checkboxes block the named capability. New accounts start with SSH blocked unless explicitly reviewed; unchecked boxes never bypass the role or Target restrictions.') }}

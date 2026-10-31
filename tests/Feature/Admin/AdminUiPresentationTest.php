@@ -1198,6 +1198,36 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringNotContainsString('data-user-save-failed', $fresh);
     }
 
+    public function test_role_filter_is_opt_in_and_sibling_group_restrictions_remain_unfiltered(): void
+    {
+        $owner = $this->owner();
+        $this->actingAs($owner);
+        $user = User::query()->create([
+            'name' => 'Role-filter operator', 'email' => 'role-filter@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+        ]);
+        $userHtml = $this->get('/admin/users/'.$user->id.'/edit')->assertOk()->getContent();
+        self::assertStringContainsString('data-user-role-restrictions', $userHtml);
+        self::assertStringContainsString('data-user-role-summary', $userHtml);
+        self::assertStringContainsString('Already unavailable in this Role', $userHtml);
+        self::assertStringContainsString('data-user-role-choice', $userHtml);
+        self::assertStringContainsString('data-user-role-unavailable-item', $userHtml);
+        $groupHtml = $this->get('/admin/target-groups/create')->assertOk()->getContent();
+        self::assertStringNotContainsString('data-user-role-restrictions', $groupHtml);
+        self::assertStringNotContainsString('data-user-role-choice', $groupHtml);
+        self::assertStringContainsString('name="denied_permissions[]"', $groupHtml);
+
+        $js = file_get_contents(public_path('js/admin-forms.js'));
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($js);
+        self::assertIsString($css);
+        self::assertStringContainsString('initUserRoleRestrictions(root)', $js);
+        self::assertStringContainsString('[data-user-role-choice][hidden]', $css);
+        self::assertStringContainsString('[data-user-role-ssh-review][hidden]', $css);
+    }
+
     public function test_user_edit_deny_choice_copy_is_draft_scoped_and_accessibly_linked(): void
     {
         $owner = $this->owner();
