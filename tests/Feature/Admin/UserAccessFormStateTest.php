@@ -118,8 +118,8 @@ final class UserAccessFormStateTest extends TestCase
         $xpath = $this->document($page);
         self::assertSame([GatewayPermission::TargetsView->value], $this->checkedDenials($page));
         self::assertSame(1, $xpath->query('//details[@id="user-permission-restrictions" and @open]')->length);
-        self::assertSame(1, $xpath->query('//*[@data-global-deny-state="denied"]')->length);
-        self::assertGreaterThan(0, $xpath->query('//*[@data-global-deny-state="not-denied-here"]')->length);
+        self::assertSame(1, $xpath->query('//label[contains(@class,"permission-option")][input[@value="targets.view" and @checked]][.//*[@data-global-deny-choice="denied"]][.//*[@data-global-deny-choice="not-denied"]]')->length);
+        self::assertGreaterThan(0, $xpath->query('//*[@data-global-deny-choice="not-denied"]')->length);
         self::assertStringContainsString('Saved: 1 checked', $xpath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
         self::assertSame(1, $xpath->query('//*[@data-user-permission-state="saved"]')->length);
         $this->assertDatabaseHas('user_permission_denials', ['user_id' => $user->id, 'permission' => 'historical.retired.permission']);
@@ -137,7 +137,8 @@ final class UserAccessFormStateTest extends TestCase
         self::assertSame([], $this->storedDenials($user));
         self::assertStringContainsString('Saved: 0 checked', $xpath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
         self::assertSame(1, $xpath->query('//details[@id="user-permission-restrictions" and @open]')->length);
-        self::assertSame(0, $xpath->query('//*[@data-global-deny-state="denied"]')->length);
+        self::assertGreaterThan(0, $xpath->query('//*[@data-global-deny-choice="denied"]')->length);
+        self::assertSame(0, $xpath->query('//label[contains(@class,"permission-option")]/input[@checked]')->length);
         self::assertSame(1, $xpath->query('//*[@data-user-permission-state="saved"]')->length);
         $page->assertSee('group and direct Target restrictions can still block access.');
     }

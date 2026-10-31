@@ -989,6 +989,12 @@ input[type="radio"]:checked::before {
     color: var(--ui-danger-contrast);
 }
 
+/* CSS-only feedback stays in sync in native/no-JS forms and failed drafts. */
+.permission-option > input:checked ~ .permission-copy [data-global-deny-choice="not-denied"],
+.permission-option > input:not(:checked) ~ .permission-copy [data-global-deny-choice="denied"] {
+    display: none;
+}
+
 .permission-fieldset .checkbox-option code {
     font-size: 0.78rem;
     color: var(--ui-muted);

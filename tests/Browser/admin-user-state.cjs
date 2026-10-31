@@ -35,6 +35,13 @@ async function reopen(page, name) {
     await page.getByRole('link', { name: 'Manage ' + name, exact: true }).click();
     await page.getByRole('heading', { name, exact: true }).waitFor();
 }
+async function assertGlobalDenyChoice(page, key, denied) {
+    const checkbox = page.locator('input[name="denied_permissions[]"][value="' + key + '"]');
+    const choice = checkbox.locator('..').locator('.permission-choice');
+    assert.equal(await checkbox.isChecked(), denied);
+    assert.equal(await choice.locator('[data-global-deny-choice="denied"]').isVisible(), denied);
+    assert.equal(await choice.locator('[data-global-deny-choice="not-denied"]').isVisible(), !denied);
+}
 async function state(page, expected) {
     assert.equal(await page.locator('#role').inputValue(), expected.role);
     assert.equal(await page.locator('#target_scope_mode').inputValue(), expected.scope);
@@ -74,9 +81,15 @@ async function run(browser, javaScriptEnabled) {
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
         await reopen(page, name);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
+        await assertGlobalDenyChoice(page, 'activity.view', true);
+        await page.locator('input[name="denied_permissions[]"][value="activity.view"]').uncheck();
+        await assertGlobalDenyChoice(page, 'activity.view', false);
+        await page.locator('input[name="denied_permissions[]"][value="activity.view"]').check();
+        await assertGlobalDenyChoice(page, 'activity.view', true);
 
         // A failed password confirmation must display the empty draft, never saved/default Deny checks.
         await setDenials(page, []);
+        await assertGlobalDenyChoice(page, 'activity.view', false);
         await page.locator('#access_enabled').uncheck();
         await page.locator('#ai_access_enabled').uncheck();
         await page.locator('#current_password').fill('Wrong-Owner-Password!234');
@@ -84,9 +97,11 @@ async function run(browser, javaScriptEnabled) {
         assert.equal(await page.locator('#current_password-error').count(), 1);
         await state(page, { role: 'operator', scope: 'selected', enabled: false, ai: false, denials: [] });
         assert.equal(await page.locator('[data-user-permission-state="submitted"]').count(), 1);
+        await assertGlobalDenyChoice(page, 'activity.view', false);
         await page.goto(editUrl);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
         assert.equal(await page.locator('[data-user-permission-state="saved"]').count(), 1);
+        await assertGlobalDenyChoice(page, 'activity.view', true);
         assert.notEqual(await page.locator('#user-permission-restrictions').getAttribute('open'), null);
 
         // Server validation is reached through valid native inputs with a mismatched password pair.
@@ -97,7 +112,9 @@ async function run(browser, javaScriptEnabled) {
         await post(page, 'Save user access');
         assert.equal(await page.locator('#password-error').count(), 1);
         assert.deepEqual(await checked(page), []);
+        await assertGlobalDenyChoice(page, 'activity.view', false);
         assert.equal(await page.locator('[data-user-permission-state="submitted"]').count(), 1);
+        await assertGlobalDenyChoice(page, 'activity.view', false);
         await page.goto(editUrl);
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
 
@@ -121,6 +138,7 @@ async function run(browser, javaScriptEnabled) {
         await reopen(page, name);
         await state(page, { role: 'operator', scope: 'selected', enabled: false, ai: false, denials: [] });
         assert.equal(await page.locator('[data-user-permission-state="saved"]').count(), 1);
+        await assertGlobalDenyChoice(page, 'activity.view', false);
         assert.deepEqual(errors, []);
         assert.deepEqual(external, []);
         console.log('PASS: User create/save/list/reopen, role/scope/access/AI flags, exact saved Deny state, empty error drafts, no-mutation recovery and Owner-confirmed empty saved restrictions; ' + suffix);

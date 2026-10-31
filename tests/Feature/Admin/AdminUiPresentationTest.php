@@ -1166,6 +1166,37 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="needs-review-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][contains(concat(" ",normalize-space(@class)," ")," table-wrap ")])'));
     }
 
+    public function test_user_edit_deny_choice_copy_is_draft_scoped_and_accessibly_linked(): void
+    {
+        $owner = $this->owner();
+        $operator = User::query()->create([
+            'name' => 'Operator',
+            'email' => 'operator-'.uniqid().'@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+            'access_enabled' => true,
+        ]);
+
+        $html = $this->actingAs($owner)
+            ->get('/admin/users/'.$operator->getKey().'/edit')
+            ->assertOk()
+            ->assertSee('Current form choice: Deny globally')
+            ->assertSee('Current form choice: No global Deny')
+            ->getContent();
+
+        self::assertStringContainsString('data-global-deny-choice="denied"', $html);
+        self::assertStringContainsString('data-global-deny-choice="not-denied"', $html);
+        self::assertMatchesRegularExpression(
+            '/<input[^>]*value="activity\\.view"[^>]*aria-describedby="[^"]*permission-activity-view-choice[^"]*"/s',
+            $html,
+        );
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($css);
+        self::assertStringContainsString('input:checked ~ .permission-copy [data-global-deny-choice="not-denied"]', $css);
+        self::assertStringContainsString('input:not(:checked) ~ .permission-copy [data-global-deny-choice="denied"]', $css);
+    }
+
     private function owner(): User
     {
         return User::query()->create([
