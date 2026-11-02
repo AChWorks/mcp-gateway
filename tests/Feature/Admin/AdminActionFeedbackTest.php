@@ -359,11 +359,49 @@ final class AdminActionFeedbackTest extends TestCase
             ->assertOk()->assertSee('Target operations paused.');
         $handoff = $this->get('/admin/targets/'.$target->target_id
             .'/external-authorization/'.str_repeat('a', 32))
-            ->assertRedirect(route('admin.targets.show', ['target' => $target->target_id]));
-        $this->get((string) $handoff->headers->get('Location'))
+            ->assertAdminRedirect(route('admin.targets.show', ['target' => $target->target_id]));
+        $url = (string) $handoff->headers->get('Location');
+        $this->get('/admin/operations')->assertOk()
+            ->assertDontSee('Authorization handoff expired or was already used.');
+        $this->get($url)
             ->assertOk()
             ->assertSee('Authorization handoff expired or was already used.')
             ->assertDontSee('Target operations paused.');
+        $this->get($url)
+            ->assertOk()
+            ->assertDontSee('Authorization handoff expired or was already used.');
+    }
+
+    public function test_authenticated_oauth_callback_error_is_delivered_only_to_its_redirect(): void
+    {
+        $this->actingAs($this->owner());
+        $result = $this->get('/oauth/targets/callback?state=invalid_fixture_state&code=untrusted')
+            ->assertAdminRedirect(route('admin.targets.index'))
+            ->assertSessionHas('diagnostic_code', 'invalid_state');
+        $destination = (string) $result->headers->get('Location');
+
+        self::assertStringNotContainsString('invalid_fixture_state', $destination);
+        self::assertStringNotContainsString('code=', $destination);
+        $this->get('/admin/operations')->assertOk()
+            ->assertDontSee('invalid_state')
+            ->assertDontSee('id="admin-feedback"', false);
+        $this->get($destination)->assertOk()
+            ->assertSee('invalid_state')
+            ->assertSee('Log reference')
+            ->assertSee('id="admin-feedback"', false);
+        $this->get($destination)->assertOk()
+            ->assertDontSee('invalid_state')
+            ->assertDontSee('id="admin-feedback"', false);
+    }
+
+    public function test_guest_oauth_callback_keeps_public_route_and_native_flash_fallback(): void
+    {
+        // OAuth protocol routing remains public; adding feedback transport
+        // must not silently introduce an Admin login requirement.
+        $result = $this->get('/oauth/targets/callback?state=invalid_guest_state')
+            ->assertRedirect(route('admin.targets.index'))
+            ->assertSessionHas('diagnostic_code', 'invalid_state');
+        self::assertStringNotContainsString('_admin_feedback=', (string) $result->headers->get('Location'));
     }
 
     private function owner(): User

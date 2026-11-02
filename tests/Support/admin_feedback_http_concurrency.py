@@ -163,6 +163,42 @@ def main():
     _, _, reread = first(paused_url)
     check('id="admin-feedback"' not in reread, "A claimed result replayed.")
 
+    def assert_correlated_get_result(call, location, destination, expected, label, *, prohibited=()):
+        """A GET redirect's result must belong to the intended tab and path."""
+        parsed = urllib.parse.urlparse(location)
+        query = urllib.parse.parse_qs(parsed.query)
+        token = query.get("_admin_feedback", [""])[0]
+        check(parsed.netloc == urllib.parse.urlparse(base).netloc and parsed.path == destination,
+              label + ": redirect changed its exact canonical destination.")
+        check(re.fullmatch(r"[a-f0-9]{40}", token) is not None and set(query) == {"_admin_feedback"},
+              label + ": GET redirect lacked an opaque one-use result token.")
+        check(not any(value in location.lower() for value in
+                      ("state=", "code=", "iss=", "password", "refresh_token", "fixture-authorization-code")),
+              label + ": sensitive OAuth state/code escaped into the feedback URL.")
+
+        # A query-tampered destination cannot consume or expose this result.
+        status, _, wrong_query = call(location + "&unrelated_filter=1")
+        check(status == 200 and expected not in wrong_query
+              and 'id="admin-feedback"' not in wrong_query,
+              label + ": wrong-filter GET consumed or exposed feedback.")
+
+        other_page = "/admin/operations" if destination == "/admin/targets" else "/admin/targets"
+        status, _, unrelated = call(other_page)
+        check(status == 200 and expected not in unrelated
+              and 'id="admin-feedback"' not in unrelated,
+              label + ": an unrelated same-session tab stole the pending GET result.")
+        status, _, delivered = call(location)
+        check(status == 200 and expected in delivered
+              and 'id="admin-feedback"' in delivered,
+              label + ": the intended GET destination lost its one-use result.")
+        check(not any(value in delivered for value in prohibited),
+              label + ": an unrelated result was mixed into the destination.")
+        status, _, replay = call(location)
+        check(status == 200 and expected not in replay
+              and 'id="admin-feedback"' not in replay,
+              label + ": reload replayed a consumed GET result.")
+        return delivered
+
     # 4. Exercise the actual production WordPress callback route/controller
     # through a disposable registered Target and mocked loopback HTTP provider.
     # Its callback is GET-originated and outside the correlated Admin route.
@@ -187,10 +223,10 @@ def main():
     missing_handoff = "/admin/targets/browser-wp/external-authorization/" + "f" * 32
     status, hdr, _ = oauth(missing_handoff)
     check(status == 302, "Missing handoff did not redirect.")
-    status, _, handoff_first_error = oauth(hdr["Location"])
-    check(status == 200
-          and "Authorization handoff expired or was already used." in handoff_first_error,
-          "GET-generated handoff error was erased while prior POST source tag was active.")
+    handoff_first_error = assert_correlated_get_result(
+        oauth, hdr["Location"], "/admin/targets/browser-wp",
+        "Authorization handoff expired or was already used.",
+        "Pending POST + new GET handoff rejection")
     status, _, original_post_page = oauth(prior_token_url)
     check(status == 200, "The original correlated POST result was lost after the handoff GET.")
     check("Authorization handoff expired or was already used." not in original_post_page,
@@ -217,12 +253,9 @@ def main():
     check(status == 302, "Actual successful OAuth callback did not redirect.")
     check(urllib.parse.urlparse(hdr["Location"]).path == "/admin/targets/browser-wp",
           "Successful OAuth callback did not target its own Target.")
-    status, _, authorized = oauth(hdr["Location"])
-    check(status == 200 and "WordPress Target authorization completed." in authorized,
-          "GET-originated successful OAuth callback feedback was suppressed.")
-    status, _, authorized_replay = oauth(hdr["Location"])
-    check(status == 200 and "WordPress Target authorization completed." not in authorized_replay,
-          "OAuth success feedback replayed on reload.")
+    authorized = assert_correlated_get_result(
+        oauth, hdr["Location"], "/admin/targets/browser-wp",
+        "WordPress Target authorization completed.", "Successful OAuth callback")
 
     # Explicit separate POST then fresh invalid-state callback: the error
     # category and log reference must be visible and nonrepeating as well.
@@ -235,28 +268,23 @@ def main():
     status, hdr, _ = oauth("/oauth/targets/callback?state=invalid_fixture_state&code=invalid")
     check(status == 302 and urllib.parse.urlparse(hdr["Location"]).path == "/admin/targets",
           "Actual OAuth callback rejection did not return to Admin Targets.")
-    status, _, rejected = oauth(hdr["Location"])
-    check(status == 200 and "invalid_state" in rejected and "Log reference" in rejected,
-          "Fresh OAuth failure category/reference was suppressed by earlier POST correlation.")
-    check(re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', rejected)
-          is not None, "OAuth callback failure did not expose a correlation UUID.")
-    status, _, rejected_replay = oauth(hdr["Location"])
-    check(status == 200 and "invalid_state" not in rejected_replay,
-          "OAuth failure feedback replayed on reload.")
+    rejected = assert_correlated_get_result(
+        oauth, hdr["Location"], "/admin/targets", "invalid_state",
+        "Failed OAuth callback", prohibited=("WordPress Target authorization completed.",))
+    check("Log reference" in rejected and
+          re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', rejected),
+          "Failed OAuth callback lost its diagnostic correlation reference.")
 
     # The original handoff is now already consumed. Its actual GET-generated
     # rejection must remain visible after the earlier POST result was shown.
     status, hdr, _ = oauth(handoff_path)
     check(status == 302, "Reused external authorization handoff did not reject.")
-    status, _, stale_handoff = oauth(hdr["Location"])
-    check(status == 200
-          and "Authorization handoff expired or was already used." in stale_handoff,
-          "GET-originated handoff expiration error was hidden by earlier POST.")
-    status, _, handoff_replay = oauth(hdr["Location"])
-    check(status == 200 and "Authorization handoff expired or was already used." not in handoff_replay,
-          "GET-originated handoff error was replayed.")
+    stale_handoff = assert_correlated_get_result(
+        oauth, hdr["Location"], "/admin/targets/browser-wp",
+        "Authorization handoff expired or was already used.",
+        "Reused GET handoff", prohibited=("WordPress Target authorization completed.",))
 
-    print("PASS: real WordPress OAuth callback success/failure and expired GET handoff survive earlier POST result.")
+    print("PASS: real OAuth callback success/failure and expired GET-handoff destination-bound one-use feedback survive same-session unrelated tab GETs.")
     print("PASS: real HTTP interleaved tab GET, separate login session, wrong-route/query claim defense, "
           "inverse-order POST results, atomic simultaneous claim, and no replay")
 

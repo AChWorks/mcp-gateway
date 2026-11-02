@@ -4,6 +4,7 @@ use App\Http\Controllers\OAuth\AuthorizationController;
 use App\Http\Controllers\OAuth\GatewayBridgeClientJwksController;
 use App\Http\Controllers\OAuth\GatewayBridgeClientMetadataController;
 use App\Http\Controllers\OAuth\TargetOAuthCallbackController;
+use App\Http\Middleware\CorrelatedAdminFeedback;
 use App\Http\Middleware\EnsureLocalUserAccessEnabled;
 use Illuminate\Support\Facades\Route;
 
@@ -13,7 +14,7 @@ Route::get('/oauth/jwks.json', GatewayBridgeClientJwksController::class)
     ->name('bridge.client.jwks');
 // The breaking Target migration requires fresh WordPress OAuth authorization.
 Route::get('/oauth/targets/callback', TargetOAuthCallbackController::class)
-    ->middleware('throttle:oauth-browser')
+    ->middleware(['throttle:oauth-browser', CorrelatedAdminFeedback::class])
     ->name('bridge.target.callback');
 
 Route::get('/oauth/authorize', [AuthorizationController::class, 'show'])

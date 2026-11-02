@@ -60,13 +60,13 @@ final class ConnectorExternalAuthorizationTest extends TestCase
             'content="0;url=https://identity.example.test/consent?state=opaque&audience=other"', $html,
         );
         self::assertStringContainsString('rel="noreferrer noopener"', $html);
-        $this->get($location)->assertRedirect('/admin/targets/other-connector')
+        $this->get($location)->assertAdminRedirect('/admin/targets/other-connector')
             ->assertSessionHasErrors('target');
 
         // Simulate a concurrent Admin request saving its pre-consumption
         // session snapshot after the handoff was already claimed.
         $this->withSession(['admin.external_authorization_handoffs' => $staleSessionSnapshot]);
-        $this->get($location)->assertRedirect('/admin/targets/other-connector')
+        $this->get($location)->assertAdminRedirect('/admin/targets/other-connector')
             ->assertSessionHasErrors('target');
     }
 

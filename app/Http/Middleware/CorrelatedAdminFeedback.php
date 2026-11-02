@@ -18,8 +18,8 @@ use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
 /**
- * Deliver native Admin POST/redirect/GET feedback to its own redirect, not
- * whichever tab next makes a request with the same Laravel session cookie.
+ * Deliver native Admin POST/redirect/GET and GET-originated redirect feedback
+ * to its own destination, not whichever tab next shares the session cookie.
  *
  * The URL carries only an unpredictable identifier. The result is encrypted in
  * the shared server cache, bound to the current user, session and exact path,
@@ -31,7 +31,8 @@ final class CorrelatedAdminFeedback
 
     private const LIFETIME_SECONDS = 600;
 
-    private const POST_FLASH_SOURCE = 'admin.feedback.post_flash_source';
+    // Keep the existing key for in-flight POST redirects across an upgrade.
+    private const REDIRECT_FLASH_SOURCE = 'admin.feedback.post_flash_source';
 
     private const SESSION_BINDING = 'admin.feedback.session_binding';
 
@@ -45,6 +46,13 @@ final class CorrelatedAdminFeedback
 
     public function handle(Request $request, Closure $next): Response
     {
+        // The OAuth callback remains publicly routable for protocol reasons.
+        // Do not silently change that access boundary or force a guest's
+        // previously native-flashed result through an authenticated-only claim.
+        if ($request->is('oauth/targets/callback') && $request->user() === null) {
+            return $next($request);
+        }
+
         // Stable session-held nonce rather than a browser cookie or a request-
         // local session ID, which can change on authentication rotation.
         // Created on the first Admin GET, before any valid form can POST.
@@ -53,7 +61,17 @@ final class CorrelatedAdminFeedback
         }
 
         if ($request->isMethod('GET') && ! $request->expectsJson()) {
-            return $this->display($request, $next);
+            $response = $this->display($request, $next);
+
+            // A controller may generate NEW flash data on a GET: OAuth
+            // callbacks and single-use external-authorization handoffs do.
+            // Bind that result to its exact redirect before StartSession
+            // commits the native flash, as for authenticated POST results.
+            if ($response instanceof RedirectResponse) {
+                $this->routeFeedback($request, $response);
+            }
+
+            return $response;
         }
 
         if (! in_array($request->method(), ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
@@ -63,7 +81,7 @@ final class CorrelatedAdminFeedback
         // Old pending notices belong to their previous redirect token. They
         // must not be merged into a second operation's flashed error bag.
         $this->forgetFields($request);
-        $request->session()->forget(self::POST_FLASH_SOURCE);
+        $request->session()->forget(self::REDIRECT_FLASH_SOURCE);
         try {
             $response = $next($request);
         } catch (ValidationException $exception) {
@@ -85,11 +103,11 @@ final class CorrelatedAdminFeedback
     {
         $token = $request->query(self::PARAMETER);
         $hasToken = is_string($token) && preg_match('/\A[a-f0-9]{40}\z/D', $token) === 1;
-        // This source tag belongs to the same *one-request* flash generation
-        // as the POST notice. OAuth callback GETs and Admin GET-originated
-        // redirects create fresh flashes without this tag. A long-lived marker
-        // would erase those legitimate later results.
-        $routed = is_string($request->session()->get(self::POST_FLASH_SOURCE));
+        // The one-request source tag is shared by POST and GET-generated
+        // redirect notices. A later unrelated GET removes only native flash
+        // from that result; the encrypted token remains claimable by its tab.
+        // No long-lived session-wide suppression marker is needed.
+        $routed = is_string($request->session()->get(self::REDIRECT_FLASH_SOURCE));
 
         if (! $hasToken && ! $routed) {
             return $next($request);
@@ -119,9 +137,9 @@ final class CorrelatedAdminFeedback
             return $next($request);
         } finally {
             // GET handlers (notably external authorization handoffs) may
-            // generate NEW flash errors while rendering a correlated result.
-            // Keep that new flash generation; remove only the consumed
-            // POST-result fields so reloading cannot replay the feedback.
+            // generate NEW flash errors while rendering an earlier result.
+            // Keep the new generation; routeFeedback() then correlates its
+            // redirect independently of the old result.
             $newFlash = (array) $request->session()->get('_flash.new', []);
             $request->session()->forget(array_diff(self::FIELDS, $newFlash));
         }
@@ -160,15 +178,15 @@ final class CorrelatedAdminFeedback
                 'data' => $data,
             ], JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE));
             if (! Cache::put($key, $ciphertext, self::LIFETIME_SECONDS)) {
-                // Degrade to Laravel's normal flash; no POST source tag is
-                // installed if the shared cache cannot retain the result.
+                // Degrade to Laravel native flash; no correlation source tag
+                // is installed if shared cache cannot retain the result.
                 return;
             }
 
-            // Source tagging ages with Laravel flash, never with the cached
-            // result TTL. An intervening GET can suppress stale POST flash,
-            // whereas a later OAuth callback cannot be confused with it.
-            $request->session()->flash(self::POST_FLASH_SOURCE, $token);
+            // Source tagging ages with Laravel flash, not cache TTL. A
+            // competing GET suppresses native flash from this redirect only,
+            // never a new independent result generated on that GET.
+            $request->session()->flash(self::REDIRECT_FLASH_SOURCE, $token);
             $response->setTargetUrl((string) $destination->withQuery([self::PARAMETER => $token]));
         } catch (Throwable $exception) {
             // The operation may have succeeded already. Feedback transport
