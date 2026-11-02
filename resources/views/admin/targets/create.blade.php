@@ -2,6 +2,7 @@
 
 @section('title', __('Add Target'))
 @section('form-page', '1')
+@section('admin-errors-inline', '1')
 
 @section('content')
 @php
@@ -23,9 +24,11 @@
     <form id="target-create-form" method="post" action="{{ route('admin.targets.store') }}" class="form-stack">
         @csrf
         @if ($errors->any())
-            <div id="target-registration-errors" class="alert alert-error" role="alert" tabindex="-1" aria-labelledby="target-registration-errors-title">
-                <h3 id="target-registration-errors-title">{{ __('Target was not registered.') }}</h3>
-                <p>{{ __('Correct the fields below and submit again. Previously entered passwords, private keys and passphrases must be entered again.') }}</p>
+            <div id="target-registration-errors" class="alert alert-error" data-admin-feedback role="alert" tabindex="-1" autofocus aria-labelledby="target-registration-errors-title">
+                <h3 id="target-registration-errors-title">{{ session('target_preflight_validation_failed') ? __('Endpoint check could not be completed.') : __('Target was not registered.') }}</h3>
+                <p>{{ session('target_preflight_validation_failed')
+                    ? __('Correct the endpoint fields and check again. No Target was registered.')
+                    : __('Correct the fields below and submit again. Previously entered passwords, private keys and passphrases must be entered again.') }}</p>
                 <ul>
                     @foreach ($errors->all() as $message)
                         <li>{{ $message }}</li>
@@ -101,7 +104,7 @@
         @if (session('target_endpoint_preflight'))
             @php($preflight = (array) session('target_endpoint_preflight'))
             <div id="target-endpoint-preflight" class="alert {{ ($preflight['ok'] ?? false) ? 'alert-success' : 'alert-error' }}"
-                role="{{ ($preflight['ok'] ?? false) ? 'status' : 'alert' }}"
+                role="{{ ($preflight['ok'] ?? false) ? 'status' : 'alert' }}" data-admin-feedback tabindex="-1" autofocus
                 @if (($preflight['ok'] ?? false) && isset($preflight['checked_connector'], $preflight['checked_fields']))
                     data-checked-connector="{{ $preflight['checked_connector'] }}"
                     data-checked-fields="{{ json_encode($preflight['checked_fields'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) }}"

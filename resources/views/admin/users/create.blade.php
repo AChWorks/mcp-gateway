@@ -2,6 +2,7 @@
 
 @section('title', __('Add user'))
 @section('form-page', '1')
+@section('admin-errors-inline', '1')
 
 @section('content')
 @php

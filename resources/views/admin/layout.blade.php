@@ -73,36 +73,49 @@
 
         <p id="admin-navigation-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
         <main id="main-content" @class(['shell', 'main-content', 'form-page' => $__env->hasSection('form-page')]) tabindex="-1">
-            @if (session('status'))
-                <div class="alert alert-success" role="status">{{ session('status') }}</div>
-            @endif
-
-            @if ($errors->has('site'))
-                <div class="alert alert-error" role="alert">{{ $errors->first('site') }}</div>
-            @endif
-
-            @if (session('target_connection_failed'))
-                <div class="alert alert-error" role="alert">{{ __('Target authorization did not complete. Open your Target and try again.') }}</div>
-            @endif
-            @if ($errors->has('target'))
-                <div class="alert alert-error" role="alert">{{ $errors->first('target') }}</div>
-            @endif
-            @if (session('diagnostic_code'))
-                <section class="panel" aria-label="{{ __('Operation diagnostic') }}" role="status">
-                    <p><strong>{{ __('Diagnostic category') }}:</strong>
-                        <code>{{ session('diagnostic_code') }}</code>
-                        @if (session('diagnostic_stage'))
-                            · <strong>{{ __('Failure stage') }}:</strong> <code>{{ session('diagnostic_stage') }}</code>
-                        @endif
-                    </p>
-                    <p>{{ \App\Support\OperationDiagnostics::summary((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
-                    <p><strong>{{ __('What to check') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
-                    @if (session('diagnostic_reference'))
-                        <p><strong>{{ __('Log reference') }}:</strong> <code>{{ session('diagnostic_reference') }}</code></p>
+            {{-- Form-owned failed drafts are summarized locally; every other error uses the shared shell. --}}
+            @php($inlineErrors = $__env->hasSection('admin-errors-inline'))
+            @php($globalErrors = ! $inlineErrors && ($errors->any() || session('target_connection_failed')))
+            @php($globalDiagnostics = session('diagnostic_code') && (! $inlineErrors || ! $errors->any()))
+            @php($showSuccess = session('status') && ! $errors->any() && ! session('target_connection_failed') && ! session('diagnostic_code'))
+            @if ($showSuccess || $globalErrors || $globalDiagnostics)
+                <div id="admin-feedback" class="admin-feedback" data-admin-feedback tabindex="-1" autofocus
+                    role="group" aria-label="{{ __('Operation feedback') }}">
+                    @if ($showSuccess)
+                        <div class="alert alert-success" role="status">{{ session('status') }}</div>
                     @endif
-                </section>
+                    @if ($globalErrors)
+                        <div class="alert alert-error" role="alert">
+                            <strong>{{ __('The action needs attention.') }}</strong>
+                            @if (session('target_connection_failed'))
+                                <p>{{ __('Target authorization did not complete. Open your Target and try again.') }}</p>
+                            @endif
+                            @if ($errors->any())
+                                <ul>
+                                    @foreach (array_unique($errors->all()) as $message)
+                                        <li>{{ $message }}</li>
+                                    @endforeach
+                                </ul>
+                            @endif
+                        </div>
+                    @endif
+                    @if ($globalDiagnostics)
+                        <section class="panel" aria-label="{{ __('Operation diagnostic') }}" role="status">
+                            <p><strong>{{ __('Diagnostic category') }}:</strong>
+                                <code>{{ session('diagnostic_code') }}</code>
+                                @if (session('diagnostic_stage'))
+                                    · <strong>{{ __('Failure stage') }}:</strong> <code>{{ session('diagnostic_stage') }}</code>
+                                @endif
+                            </p>
+                            <p>{{ \App\Support\OperationDiagnostics::summary((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
+                            <p><strong>{{ __('What to check') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
+                            @if (session('diagnostic_reference'))
+                                <p><strong>{{ __('Log reference') }}:</strong> <code>{{ session('diagnostic_reference') }}</code></p>
+                            @endif
+                        </section>
+                    @endif
+                </div>
             @endif
-
             @yield('content')
         </main>
     </div>

@@ -1166,6 +1166,32 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="needs-review-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][contains(concat(" ",normalize-space(@class)," ")," table-wrap ")])'));
     }
 
+    public function test_shared_operation_feedback_has_one_accessible_shell_across_admin_sections(): void
+    {
+        $this->actingAs($this->owner());
+
+        foreach (['/admin/targets', '/admin/users', '/admin/target-groups', '/admin/operations'] as $url) {
+            $html = $this->withSession(['status' => 'The fixture operation was saved.'])
+                ->get($url)->assertOk()
+                ->assertSee('The fixture operation was saved.')
+                ->getContent();
+
+            $document = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($document);
+            self::assertSame(1, (int) $xpath->evaluate('count(//main[@id="main-content"]/*[@id="admin-feedback"][@role="group"][@tabindex="-1"][@autofocus])'), $url);
+            self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="admin-feedback"]/div[@role="status"])'), $url);
+            self::assertSame(0, (int) $xpath->evaluate('count(//*[@id="admin-feedback"]//div[@role="alert"])'), $url);
+        }
+
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        self::assertStringContainsString('.admin-feedback {', $css);
+        self::assertStringContainsString('[data-admin-feedback]:focus {', $css);
+    }
+
     public function test_user_create_and_edit_rejections_expose_shared_unsaved_alert(): void
     {
         $owner = $this->owner();

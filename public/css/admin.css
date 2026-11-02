@@ -1098,6 +1098,32 @@ a:focus-visible {
 
 .alert[hidden] { display: none; }
 
+/* The shared shell and the explicitly owned form summaries are both
+   discoverable after POST/redirect/GET, even if the browser restores scroll. */
+.admin-feedback {
+    display: grid;
+    gap: 0.75rem;
+    margin-block-end: var(--ui-panel-stack-gap);
+}
+
+.admin-feedback > :is(.alert, .panel) {
+    margin: 0;
+}
+
+.admin-feedback .alert ul {
+    margin-block: 0.4rem 0;
+    padding-inline-start: 1.4rem;
+}
+
+[data-admin-feedback] {
+    scroll-margin-block-start: 1rem;
+}
+
+[data-admin-feedback]:focus {
+    outline: 3px solid var(--ui-focus);
+    outline-offset: 3px;
+}
+
 .alert {
     margin-bottom: 1rem;
     padding: 0.8rem 1rem;
