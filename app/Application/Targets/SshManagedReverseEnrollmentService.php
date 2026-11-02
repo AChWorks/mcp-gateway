@@ -15,6 +15,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Support\CorrelationId;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 use phpseclib4\Crypt\EC;
 use RuntimeException;
@@ -182,8 +183,10 @@ final readonly class SshManagedReverseEnrollmentService
 
     /**
      * Owner-confirmed reissue preserves Target identity and encrypted login
-     * key, but rotates authorization, control identity and listener. Old
-     * ports are permanently quarantined because an old -R session may live.
+     * key, but rotates the enrollment ID as well as control authorization,
+     * identity and listener. A previously claimed Target must never reuse its
+     * old root-owned state file/unit when the new command is executed.
+     * Old ports are permanently quarantined because old -R sessions may live.
      *
      * @return array{enrollment:SshManagedReverseEnrollment,token:string}
      */
@@ -222,7 +225,12 @@ final readonly class SshManagedReverseEnrollmentService
                     'observed_at' => null,
                     'updated_at' => now(),
                 ]);
+                // Rotate the PRIMARY enrollment identity, not the stable
+                // Target ID. The Target installer namespaces state, Unix
+                // tunnel identity and systemd unit by this immutable ID:
+                // reusing it would replay a stored old claim response.
                 $current->forceFill([
+                    'id' => strtolower((string) Str::ulid()),
                     'listener_port' => $newPort,
                     'tunnel_identity' => $identity,
                     'control_public_key' => null,

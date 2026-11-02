@@ -440,7 +440,8 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         $row = $started['enrollment'];
         $row->forceFill(['token_expires_at' => now()->subMinute()])->save();
         $second = app(SshManagedReverseEnrollmentService::class)->reissue($row);
-        self::assertSame($row->id, $second['enrollment']->id);
+        self::assertNotSame($row->id, $second['enrollment']->id);
+        self::assertMatchesRegularExpression('/^[0-9a-hjkmnp-tv-z]{26}$/', $second['enrollment']->id);
         self::assertSame($oldTarget, $second['enrollment']->target_record_id);
         self::assertNotSame($oldPort, $second['enrollment']->listener_port);
         self::assertSame(1, DB::table('ssh_reverse_managed_retired_ports')->where('listener_port', $oldPort)->count());
@@ -456,9 +457,10 @@ final class SshManagedReverseEnrollmentTest extends TestCase
             self::assertSame('pending', $second['enrollment']->fresh()->state);
         }
         app(SshManagedReverseEnrollmentService::class)->claim(
-            $row->id, $second['token'], $this->publicKey(62),
+            $second['enrollment']->id, $second['token'], $this->publicKey(62),
         );
-        self::assertSame('active', $row->fresh()->state);
+        self::assertSame('active', $second['enrollment']->fresh()->state);
+        self::assertNull($row->fresh(), 'Previous enrollment ID must not resolve after rotation.');
         self::assertStringContainsString((string) $second['enrollment']->listener_port, file_get_contents($this->keyFile));
         self::assertStringNotContainsString('permitlisten="127.0.0.1:'.$oldPort.'"', file_get_contents($this->keyFile));
     }

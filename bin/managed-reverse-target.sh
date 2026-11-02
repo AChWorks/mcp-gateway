@@ -52,7 +52,9 @@ declare -r state_file="$state_dir/enrollment.json"
 declare -r keys_dir="$state_dir/ssh"
 declare -r control_key="$keys_dir/control"
 declare -r unit="/etc/systemd/system/mcp-gateway-reverse-$enrollment.service"
-declare -r client_user="mcp-r-$(printf '%s' "${enrollment:0:12}" | tr '[:upper:]' '[:lower:]')"
+# Use the 60 random ULID bits, not the time-dominated prefix. Concurrent
+# enrollments in one millisecond must not share a dedicated OS account.
+declare -r client_user="mcp-r-$(printf '%s' "${enrollment:14:12}" | tr '[:upper:]' '[:lower:]')"
 declare -r api="${gateway%/}/reverse-ssh/enroll/$enrollment/claim"
 # Guard every root-written state parent BEFORE any mkdir, lock redirection,
 # key creation or one-use claim. install -d does not take ownership of an

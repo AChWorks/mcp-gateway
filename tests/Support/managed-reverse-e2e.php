@@ -77,6 +77,28 @@ try {
     }
 
     $target = Target::query()->where('target_id', $targetId)->firstOrFail();
+    if ($mode === 'reissue') {
+        $original = SshManagedReverseEnrollment::query()
+            ->where('target_record_id', $target->getKey())->sole();
+        $oldId = (string) $original->getKey();
+        $oldPort = $original->listener_port;
+        $next = app(SshManagedReverseEnrollmentService::class)->reissue($original);
+        $enrollment = $next['enrollment'];
+        if ($enrollment->id === $oldId || $enrollment->target_record_id !== $target->getKey()
+            || $enrollment->listener_port === $oldPort || $enrollment->state !== 'pending') {
+            throw new RuntimeException('Owner reissue reused prior Target-side identity or listener.');
+        }
+        $command = app(SshManagedReverseInstallCommand::class)
+            ->command($enrollment, $next['token']);
+        if (! str_contains($command, (string) $enrollment->id)) {
+            throw new RuntimeException('Generated reissue command omits rotated enrollment identity.');
+        }
+        file_put_contents($root.'/one-command.sh', $command."\n", LOCK_EX);
+        file_put_contents($root.'/enrollment-id', (string) $enrollment->id, LOCK_EX);
+        echo "PASS: uncertain claimed enrollment reissued with stable Target, new installer namespace and fenced old port.\n";
+        exit(0);
+    }
+
     $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->firstOrFail();
     $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->firstOrFail();
     $vault = app(SshTargetVault::class);

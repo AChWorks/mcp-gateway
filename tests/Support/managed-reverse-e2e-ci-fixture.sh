@@ -30,6 +30,8 @@ tls_port=44999
 target_id="ci-managed-reverse"
 target_unit=""
 control_user=""
+prior_unit=""
+prior_user=""
 php_pid=""
 tls_pid=""
 export MANAGED_REVERSE_E2E_DIR="$tmp"
@@ -44,19 +46,25 @@ export APP_KEY="base64:$(openssl rand -base64 32 | tr -d '\n')"
 cleanup() {
     [[ -z "$php_pid" ]] || { kill "$php_pid" >/dev/null 2>&1 || true; wait "$php_pid" 2>/dev/null || true; }
     [[ -z "$tls_pid" ]] || { kill "$tls_pid" >/dev/null 2>&1 || true; wait "$tls_pid" 2>/dev/null || true; }
-    if [[ -n "$target_unit" && "$target_unit" =~ ^mcp-gateway-reverse-[0-9a-hjkmnp-tv-z]{26}\.service$ ]]; then
-        sudo systemctl disable --now "$target_unit" >/dev/null 2>&1 || true
-        sudo rm -f -- "/etc/systemd/system/$target_unit"
-        sudo systemctl daemon-reload >/dev/null 2>&1 || true
-    fi
+    local owned_unit
+    for owned_unit in "$target_unit" "$prior_unit"; do
+        if [[ -n "$owned_unit" && "$owned_unit" =~ ^mcp-gateway-reverse-[0-9a-hjkmnp-tv-z]{26}\.service$ ]]; then
+            sudo systemctl disable --now "$owned_unit" >/dev/null 2>&1 || true
+            sudo rm -f -- "/etc/systemd/system/$owned_unit"
+        fi
+    done
+    sudo systemctl daemon-reload >/dev/null 2>&1 || true
     if [[ -f "$tmp/target.pid" ]]; then
         local pid
         pid="$(cat "$tmp/target.pid")"
         [[ "$pid" =~ ^[0-9]+$ ]] && sudo kill "$pid" 2>/dev/null || true
     fi
-    if [[ -n "$control_user" && "$control_user" =~ ^mcp-r-[a-z0-9]{12}$ ]]; then
-        sudo userdel "$control_user" >/dev/null 2>&1 || true
-    fi
+    local owned_account
+    for owned_account in "$control_user" "$prior_user"; do
+        if [[ -n "$owned_account" && "$owned_account" =~ ^mcp-r-[a-z0-9]{12}$ ]]; then
+            sudo userdel "$owned_account" >/dev/null 2>&1 || true
+        fi
+    done
     sudo systemctl disable --now mcp-gateway-reverse-sshd.service >/dev/null 2>&1 || true
     if sudo test -f /etc/mcp-gateway-reverse/manifest.json; then
         sudo rm -f /etc/systemd/system/mcp-gateway-reverse-sshd.service
@@ -115,7 +123,7 @@ enrollment="$(cat "$tmp/enrollment-id")"
 [[ "$enrollment" =~ ^[0-9a-hjkmnp-tv-z]{26}$ ]] ||
     die "Generated enrollment ID is malformed."
 target_unit="mcp-gateway-reverse-$enrollment.service"
-control_user="mcp-r-$(printf '%s' "${enrollment:0:12}" | tr '[:upper:]' '[:lower:]')"
+control_user="mcp-r-$(printf '%s' "${enrollment:14:12}" | tr '[:upper:]' '[:lower:]')"
 
 # Short-lived, private TLS bridge to an ordinary loopback Laravel HTTP
 # process; no external endpoint or insecure curl -k.
@@ -234,6 +242,31 @@ sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \
 sudo systemctl is-active --quiet "$target_unit" ||
     { sudo journalctl -u "$target_unit" -n 30 --no-pager >&2; die "Target systemd tunnel not running."; }
 echo "PASS: exact generated command, HTTPS TLS + release digest, one-use claim and Target systemd activation."
+
+# Exercise the recovery flow after an already successful but unverified
+# one-use claim. The old complete root state and systemd unit still exist.
+prior_unit="$target_unit"
+prior_user="$control_user"
+prior_id="$enrollment"
+php tests/Support/managed-reverse-e2e.php reissue ||
+    die "Owner could not reissue the claimed but unverified enrollment."
+enrollment="$(cat "$tmp/enrollment-id")"
+[[ "$enrollment" != "$prior_id" && "$enrollment" =~ ^[0-9a-hjkmnp-tv-z]{26}$ ]] ||
+    die "Reissued Target installer identity was reused or invalid."
+target_unit="mcp-gateway-reverse-$enrollment.service"
+control_user="mcp-r-$(printf '%s' "$enrollment" | cut -c15-26)"
+sudo systemctl is-active --quiet "$prior_unit" ||
+    die "Previous Target unit was unexpectedly destroyed during Owner reissue."
+sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \
+    > "$tmp/reissued.log" 2>&1 || {
+        sed -E 's/[a-f0-9]{64}/[REDACTED]/g' "$tmp/reissued.log" >&2
+        die "New single command failed while old root-owned Target state still existed."
+    }
+sudo systemctl is-active --quiet "$target_unit" ||
+    die "Reissued new Target unit did not start."
+sudo systemctl disable --now "$prior_unit" >/dev/null ||
+    die "Could not stop the exact superseded disposable Target service."
+echo "PASS: reissued command used new root state/systemd/control account while retaining original Target identity."
 
 listener="$(php -r '
 require "vendor/autoload.php";

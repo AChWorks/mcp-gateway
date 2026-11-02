@@ -107,8 +107,11 @@ point-in-time proof, not a heartbeat.
   Owner password and an exact Target-ID confirmation. This preserves the
   Target's original identity, independently pinned real SSH host key,
   login identity and encrypted private key. The new enrollment rotates
-  its short-lived token, unique loopback port, control binding and Job
-  binding revision. Old listener ports remain quarantined because an
+  its **enrollment ULID** (the Target-side state directory, Unix control
+  identity and systemd unit namespace), short-lived token, unique loopback
+  port, control binding and Job binding revision. An existing Target-side
+  state file from an uncertain prior claim cannot be mistaken for the new
+  authorized response. Old listener ports remain quarantined because an
   older established `-R` session may still exist; the external Target
   service must be stopped by a separately authorized Target operator.
 - A best-effort **Gateway namespace** TCP bind probe excludes already
@@ -164,7 +167,7 @@ real isolated OpenSSH/systemd acceptance must pass. The disposable
 single-command installer, real local TLS and one-use HTTP enrollment against
 Laravel/SQLite, separately restricted control and Target SSHD identities,
 a persistent Target systemd service, real Gateway pinned login/Command/SFTP,
-a managed retained SSH Job with verified binding, safe repeat invocation,
+a managed retained SSH Job with verified binding, a second one-command setup after an already claimed but unverified enrollment (new OS account/unit/state while the old files still exist), safe repeat invocation,
 explicit stopped-control-host health diagnosis, and systemd reconnection.
 It also uses a real existing `deploy.prod` Unix account in CI to cover
 the dotted-username contract and rejects unsafe root-state ownership and

@@ -232,6 +232,7 @@ final class SshManagedReverseAdminTest extends TestCase
         );
         $row = $started['enrollment'];
         $oldPort = $row->listener_port;
+        $oldEnrollmentId = $row->id;
         $url = '/admin/targets/retry-target/reverse-ssh/reissue';
         $this->get('/admin/targets/retry-target')->assertOk()
             ->assertSee('Retry Pending Setup without deleting this Target')
@@ -247,11 +248,14 @@ final class SshManagedReverseAdminTest extends TestCase
             ->assertSee('deploy.prod')->assertSee('--target-user');
         self::assertStringContainsString('no-store', $reply->headers->get('Cache-Control'));
         self::assertSame(1, SshManagedReverseEnrollment::query()->count());
-        self::assertNotSame($oldPort, $row->fresh()->listener_port);
+        $newEnrollment = SshManagedReverseEnrollment::query()->sole();
+        self::assertNotSame($oldEnrollmentId, $newEnrollment->id);
+        self::assertNotSame($oldPort, $newEnrollment->listener_port);
+        self::assertNull($row->fresh(), 'Old Target-side installation namespace must be retired.');
         self::assertSame(1, $row->target->sshConfig->fresh()->binding_revision);
         self::assertSame(1, DB::table('ssh_reverse_managed_retired_ports')
             ->where('listener_port', $oldPort)->count());
-        self::assertSame('pending', $row->fresh()->state);
+        self::assertSame('pending', $newEnrollment->state);
     }
 
     public function test_failed_host_revocation_publication_keeps_owner_retry_visible_and_fences_local_authority(): void
