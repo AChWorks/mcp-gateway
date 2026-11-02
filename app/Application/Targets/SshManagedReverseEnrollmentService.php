@@ -209,6 +209,17 @@ final readonly class SshManagedReverseEnrollmentService
                     || $config->route_mode !== 'reverse') {
                     throw new InvalidArgumentException('Only an unverified Pending Setup managed enrollment can be reissued.');
                 }
+                // The vault ciphertext is bound to the exact route epoch,
+                // port and tunnel identity. Reissue must re-seal the SAME
+                // approved Target login key with the new binding atomically
+                // with the config update, or real post-reissue SSH Verify
+                // fails even though the new control tunnel is up.
+                $credential = TargetCredential::query()
+                    ->where('target_record_id', $target->getKey())
+                    ->where('connector_type', 'ssh_direct')
+                    ->where('purpose', SshTargetVault::PURPOSE)
+                    ->lockForUpdate()->firstOrFail();
+                $loginMaterial = $this->vault->open($target, $config, $credential);
                 $newPort = $this->allocatePort();
                 DB::table('ssh_reverse_managed_retired_ports')->insert([
                     'listener_port' => $current->listener_port,
@@ -229,6 +240,13 @@ final readonly class SshManagedReverseEnrollmentService
                 // Target ID. The Target installer namespaces state, Unix
                 // tunnel identity and systemd unit by this immutable ID:
                 // reusing it would replay a stored old claim response.
+                $newConfig = SshTargetConfig::query()->whereKey($config->getKey())->firstOrFail();
+                $credential->forceFill([
+                    'encrypted_payload' => $this->vault->seal(
+                        $target, $newConfig, $loginMaterial['secret'], $loginMaterial['passphrase'],
+                    ),
+                ])->save();
+                unset($loginMaterial);
                 $current->forceFill([
                     'id' => strtolower((string) Str::ulid()),
                     'listener_port' => $newPort,

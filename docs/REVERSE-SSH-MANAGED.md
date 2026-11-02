@@ -106,7 +106,11 @@ point-in-time proof, not a heartbeat.
   command** for unverified `Pending Setup` enrollments, guarded by
   Owner password and an exact Target-ID confirmation. This preserves the
   Target's original identity, independently pinned real SSH host key,
-  login identity and encrypted private key. The new enrollment rotates
+  login identity and approved private key. The encrypted Target login
+  credential is opened under the original trusted binding and re-sealed
+  atomically under the new route revision/port/identity, without changing
+  the approved secret. This preserves real post-reissue Verify while
+  fencing older retained Jobs. The new enrollment rotates
   its **enrollment ULID** (the Target-side state directory, Unix control
   identity and systemd unit namespace), short-lived token, unique loopback
   port, control binding and Job binding revision. An existing Target-side

@@ -250,6 +250,7 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertSame(1, SshManagedReverseEnrollment::query()->count());
         $newEnrollment = SshManagedReverseEnrollment::query()->sole();
         self::assertNotSame($oldEnrollmentId, $newEnrollment->id);
+        self::assertStringContainsString($newEnrollment->id, $reply->getContent());
         self::assertNotSame($oldPort, $newEnrollment->listener_port);
         self::assertNull($row->fresh(), 'Old Target-side installation namespace must be retired.');
         self::assertSame(1, $row->target->sshConfig->fresh()->binding_revision);

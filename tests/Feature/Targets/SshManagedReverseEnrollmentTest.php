@@ -438,8 +438,18 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         $oldPort = $started['enrollment']->listener_port;
         $oldTarget = $started['enrollment']->target_record_id;
         $row = $started['enrollment'];
+        $vault = app(SshTargetVault::class);
+        $target = $row->target;
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $originalCiphertext = (string) $credential->encrypted_payload;
+        $approvedLogin = $vault->open($target, $target->sshConfig, $credential);
         $row->forceFill(['token_expires_at' => now()->subMinute()])->save();
         $second = app(SshManagedReverseEnrollmentService::class)->reissue($row);
+        $reboundCredential = $credential->fresh();
+        self::assertNotSame($originalCiphertext, $reboundCredential->encrypted_payload);
+        self::assertSame($approvedLogin, $vault->open(
+            $target, $target->sshConfig->fresh(), $reboundCredential,
+        ));
         self::assertNotSame($row->id, $second['enrollment']->id);
         self::assertMatchesRegularExpression('/^[0-9a-hjkmnp-tv-z]{26}$/', $second['enrollment']->id);
         self::assertSame($oldTarget, $second['enrollment']->target_record_id);
