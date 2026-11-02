@@ -12,7 +12,9 @@ This update addresses the Owner's [Admin User restriction follow-up #136](https:
 
 Guidance: [README](README.md#administration-and-safety), [Admin access workflows](docs/ADMIN-ACCESS-WORKFLOWS.md#read-saved-user-account-restrictions), [Admin UI Quality](docs/ADMIN-UI-QUALITY.md), [Deployment/recovery](docs/DEPLOYMENT.md).
 
-# MCP Gateway v2.5.3
+<!-- Temporary valid release-note-only CI routing proof. -->
+
+# MCP Gateway v2.5.4
 
 **Stable v2.5.4 — Role-aware User Deny choices and accurate Saved/Unsaved/Defaults feedback.**
 
@@ -26,7 +28,7 @@ This patch packages the independently reviewed [User global Deny UX correction P
 
 Guidance: [README — Administration and safety](README.md#administration-and-safety), [Admin access workflows](docs/ADMIN-ACCESS-WORKFLOWS.md#read-saved-user-account-restrictions) and [Deployment/recovery](docs/DEPLOYMENT.md).
 
-# MCP Gateway v2.5.4
+# MCP Gateway v2.5.3
 
 **Stable v2.5.3 — clear User Account save outcomes and durable Deny checkbox state.**
 
