@@ -15,6 +15,7 @@ use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetAdapter;
 use App\Support\CorrelationId;
@@ -64,6 +65,11 @@ final class TargetConnectionController extends Controller
     public function disconnect(Target $target, TargetConnectorRegistry $connectors): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsDisconnect->value, $target);
+        if (SshManagedReverseEnrollment::query()
+            ->where('target_record_id', $target->getKey())->where('state', '!=', 'revoked')->exists()) {
+            return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+                ->withErrors(['target' => __('Revoke the managed Reverse SSH route with Owner confirmation before disconnecting its local SSH credential.')]);
+        }
 
         try {
             return $this->result($target, $connectors->forTarget($target)->disconnect($target), 'disconnect');

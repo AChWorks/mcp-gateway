@@ -20,6 +20,11 @@ final class SshReverseRoutePolicy
             throw new SshTargetConnectionException('target_changed');
         }
 
+        $managed = SshManagedReverseEnrollment::query()->where('target_id', $target->target_id)->first();
+        if ($managed && (string) $managed->target_record_id !== (string) $target->getKey()) {
+            throw new SshTargetConnectionException('reverse_route_not_approved');
+        }
+
         return $this->approve(
             (string) $target->target_id, (string) ($config->route_mode ?? 'direct'),
             $config->reverse_listener_port, $config->reverse_tunnel_identity,
@@ -62,15 +67,40 @@ final class SshReverseRoutePolicy
         $document = is_string($raw) ? json_decode($raw, false, 16) : null;
         // Require an object map, not a JSON array of unowned ports.
         $allowed = $document instanceof \stdClass ? json_decode($raw, true, 16) : null;
+        if ($allowed === null && trim($raw) === '') {
+            $allowed = [];
+        }
         if (! is_array($allowed) || ! $this->unambiguousAllowlist($allowed)) {
             throw new SshTargetConnectionException('reverse_route_not_approved');
         }
         // An empty/malformed/multi-owner port assignment fails closed. No
         // app-level listener can choose its own identity by changing DB fields.
         $entry = $allowed[$targetId] ?? null;
-        if (! is_array($entry) || count($entry) !== 2
-            || ($entry['port'] ?? null) !== $number
-            || ($entry['tunnel_identity'] ?? null) !== $identity) {
+        if (is_array($entry) && count($entry) === 2
+            && ($entry['port'] ?? null) === $number
+            && ($entry['tunnel_identity'] ?? null) === $identity) {
+            // A managed identity must never override or shadow a legacy operator key.
+            if (SshManagedReverseEnrollment::query()->where('target_id', $targetId)->exists()) {
+                throw new SshTargetConnectionException('reverse_route_not_approved');
+            }
+
+            return SshReverseRoute::fromApprovedPolicy($targetId, $number, $identity);
+        }
+
+        if (! SshManagedReverseGateway::active() || isset($allowed[$targetId])) {
+            throw new SshTargetConnectionException('reverse_route_not_approved');
+        }
+        // The DB approval is independent of the Target form, and is usable
+        // only after a one-use enrollment is claimed and host keys are staged.
+        $managed = SshManagedReverseEnrollment::query()
+            ->where('target_id', $targetId)
+            ->where('listener_port', $number)
+            ->where('tunnel_identity', $identity)
+            ->where('state', 'active')
+            ->whereNull('revoked_at')
+            ->whereNotNull('control_public_key')
+            ->first();
+        if (! $managed || in_array($number, array_column($allowed, 'port'), true)) {
             throw new SshTargetConnectionException('reverse_route_not_approved');
         }
 

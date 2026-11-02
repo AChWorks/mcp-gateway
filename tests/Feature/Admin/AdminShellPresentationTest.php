@@ -23,7 +23,8 @@ final class AdminShellPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//a[@class="skip-link"][@href="#main-content"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//main[@id="main-content"][@tabindex="-1"])'));
         self::assertSame(3, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]/section)'));
-        self::assertSame(8, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]//a)'));
+        self::assertSame(9, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]//a)'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//nav//a[@href="'.route('admin.reverse-ssh.index').'"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]//a[@aria-current="page"])'));
         self::assertSame('Dashboard', trim($xpath->evaluate('string(//nav//a[@aria-current="page"]/span)')));
         self::assertSame(1, (int) $xpath->evaluate('count(//form[@method="post"][@action="'.route('admin.logout').'"]//input[@name="_token"])'));

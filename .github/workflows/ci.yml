@@ -162,3 +162,20 @@ jobs:
       - name: Clean isolated SSH fixture
         if: always()
         run: bash tests/Support/ssh-fixture.sh stop
+
+  managed-reverse-host-openssh:
+    # Only on a disposable GitHub-hosted runner; never the Gateway's NL/IR host.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install isolated OpenSSH fixture dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
+
+      - name: Verify real restricted OpenSSH control host
+        run: bash tests/Support/managed-reverse-host-ci-fixture.sh

@@ -26,6 +26,7 @@ final class AdminNavigation
             ['destination' => 'admin.connection', 'activePattern' => 'admin.connection', 'label' => 'Connection information', 'icon' => 'connection', 'permission' => GatewayPermission::GatewayConnectionView],
             // Operations has always been Owner-only, independently of menu permissions.
             ['destination' => 'admin.operations.index', 'activePattern' => 'admin.operations.*', 'label' => 'Operational settings', 'icon' => 'settings', 'permission' => null],
+            ['destination' => 'admin.reverse-ssh.index', 'activePattern' => 'admin.reverse-ssh.*', 'label' => 'Reverse SSH', 'icon' => 'settings', 'permission' => null],
         ]],
     ];
 

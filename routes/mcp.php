@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\ManagedReverseClaimController;
+use App\Http\Controllers\ManagedReverseInstallerController;
 use App\Http\Controllers\Mcp\SshWholeFileController;
 use App\Http\Controllers\OAuth\AuthorizationServerMetadataController;
 use App\Http\Controllers\OAuth\DcrRegistrationController;
@@ -15,6 +17,13 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/.well-known/oauth-protected-resource/mcp', ProtectedResourceMetadataController::class);
 Route::get('/.well-known/oauth-authorization-server', AuthorizationServerMetadataController::class);
+
+// Stateless, narrowly scoped one-time enrollment. No GET token or session.
+Route::get('/reverse-ssh/installer/v1', ManagedReverseInstallerController::class);
+
+Route::post('/reverse-ssh/enroll/{enrollment}/claim', ManagedReverseClaimController::class)
+    ->where('enrollment', '[A-Za-z0-9]{26}')
+    ->middleware('throttle:10,1');
 
 Route::post('/oauth/register', DcrRegistrationController::class)->middleware('throttle:oauth-register');
 Route::post('/oauth/token', TokenController::class)->middleware([EnsureCorrelationId::class, ObserveOAuthTokenRequest::class, 'throttle:oauth-token']);

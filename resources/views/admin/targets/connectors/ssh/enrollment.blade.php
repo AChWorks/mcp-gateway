@@ -23,6 +23,11 @@
 
     <div class="target-subsection">
         <h3>{{ __('SSH connection route') }}</h3>
+        @if (auth()->user()?->getRawOriginal('role') === 'owner')
+            <p class="field-help">{{ __('Prefer one-command Managed Reverse SSH enrollment for new inbound-blocked Targets.') }}
+                <a href="{{ route('admin.reverse-ssh.targets.create') }}">{{ __('Configure new managed Reverse SSH Target') }}</a>
+            </p>
+        @endif
         <p class="field-help">{{ __('Direct uses the public SSH TCP endpoint. Reverse uses only an NL operator-approved 127.0.0.1 listener created by the Target-initiated OpenSSH remote forward. The original registered server and host-key pin remain the authenticated identity.') }}</p>
         <div class="field">
             <label for="ssh_route_mode">{{ __('Connection route') }}</label>
