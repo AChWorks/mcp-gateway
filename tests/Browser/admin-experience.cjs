@@ -408,7 +408,14 @@ async function nativeFormsAndScope(browser) {
         await page.locator('input[name="values[wp_response_kib]"]').fill('999999999');
         await page.locator('input[name="current_password"]').fill('isolated-browser-password');
         await page.locator('form[action$="/admin/operations"]').evaluate(form => form.noValidate = true);
+        const invalidPost = page.waitForResponse(r => r.request().method() === 'POST'
+            && new URL(r.url()).pathname === '/admin/operations');
         await page.getByRole('button', { name: 'Save operational settings', exact: true }).click();
+        const invalidReply = await invalidPost;
+        assert.equal(invalidReply.status(), 302, 'Server validation must keep native POST/redirect/GET.');
+        assert.ok(new URL(invalidReply.headers()['location'], base).searchParams.has('_admin_feedback'),
+            'A framework-generated validation redirect must receive its own result token.');
+        await page.waitForLoadState('networkidle');
         await page.locator('input[name="values[wp_response_kib]"][aria-invalid="true"]').waitFor();
         assert.equal(await page.locator('input[name="values[wp_response_kib]"]').inputValue(), '999999999');
         assert.equal(await page.locator('input[name="current_password"]').inputValue(), '', 'The password was restored after invalid input.');
@@ -1049,10 +1056,13 @@ async function semanticDirtyForms(browser) {
         await page.locator('#ssh_trust_confirmed').check();
         await page.getByRole('button', { name: 'Register Target', exact: true }).click();
         await page.locator('#target-registration-errors').waitFor();
-        assert.match(page.url(), /\/admin\/targets\/create\?connector_type=ssh_direct$/);
+        assert.equal(new URL(page.url()).pathname, '/admin/targets/create');
+        assert.equal(new URL(page.url()).searchParams.get('connector_type'), 'ssh_direct');
         assert.equal(await page.locator('#ssh_password').inputValue(), '', 'Never restore SSH secrets');
         assert.equal(await page.locator('#connector_type').inputValue(), 'ssh_direct');
         assert.equal(await page.locator('#target_id').inputValue(), 'ui-invalid-pin');
+        await page.waitForFunction(() =>
+            document.querySelector('#target-create-form')?.dataset.adminDirty === 'true');
         assert.equal(await page.locator('#target-create-form').getAttribute('data-admin-dirty'), 'true',
             'A rejected server-rendered draft must still guard genuine data loss');
 
@@ -1154,6 +1164,11 @@ async function roleSensitiveDirtyForms(browser) {
         await page.getByRole('button', { name: 'Save user access', exact: true }).click();
         assert.equal((await waitReject).status(), 302);
         await page.locator('[data-user-save-failed]').waitFor();
+        // The server-rendered alert can appear before the deferred dirty-state
+        // initialization has completed. Observe the actual ready state rather
+        // than racing the DOM parser on fast or heavily loaded CI workers.
+        await page.waitForFunction(() =>
+            document.querySelector('form[data-user-role-form]')?.dataset.adminDirty === 'true');
         assert.equal(await page.locator('form[data-user-role-form]').getAttribute('data-admin-dirty'), 'true',
             'Server-flashed failed User draft must retain unsaved guard');
         await nav(page, 'Dashboard', 'Gateway overview');
@@ -1166,11 +1181,100 @@ async function roleSensitiveDirtyForms(browser) {
     }
 }
 
+async function actionFeedback(browser) {
+    for (const javaScriptEnabled of [true, false]) {
+        const run = await create(browser, { width: javaScriptEnabled ? 1440 : 360,
+            javaScriptEnabled, dark: !javaScriptEnabled });
+        const page = run.page;
+        try {
+            await enter(page);
+
+            // Real native Save/redirect/GET, including a lower-page action.
+            await page.goto(base + '/admin/targets/ui-ssh-connected');
+            const pauseAction = page.getByRole('button', {
+                name: /Pause Target operations|Resume Target operations/,
+            });
+            // The isolated fixture starts paused; restore that state if another
+            // group changed it, without contacting the remote SSH endpoint.
+            if ((await pauseAction.innerText()).includes('Pause')) {
+                await pauseAction.click();
+                await page.locator('#admin-feedback').waitFor();
+            }
+
+            // The normal Verify button is intentionally not offered when
+            // paused. Submit the production endpoint with a test-only native
+            // form, so the paused gate is tested without dialing real SSH.
+            await page.evaluate(() => {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '/admin/targets/ui-ssh-connected/test';
+                const token = document.querySelector('form input[name="_token"]');
+                const input = document.createElement('input');
+                input.name = '_token';
+                input.type = 'hidden';
+                input.value = token.value;
+                form.append(input);
+                document.body.append(form);
+                form.submit();
+            });
+            const failure = page.locator('#admin-feedback');
+            await failure.waitFor();
+            assert.equal(await failure.locator('[role="alert"]').count(), 1);
+            assert.match(await failure.innerText(), /Resume Target operations before starting a new connection test/);
+            assert.equal(await failure.isVisible(), true);
+            if (javaScriptEnabled) {
+                await page.waitForFunction(() => document.activeElement?.id === 'admin-feedback');
+                assert.equal(await failure.evaluate(node =>
+                    node.getBoundingClientRect().top >= -2 && node.getBoundingClientRect().top < innerHeight), true,
+                'Verify error must be in the visible viewport.');
+            }
+            const freshTab = await run.context.newPage();
+            await freshTab.goto(base + '/admin/targets');
+            assert.equal(await freshTab.locator('#admin-feedback').count(), 0,
+                'Consumed Verify flash must not move into an unrelated new tab.');
+            await freshTab.close();
+            await page.reload();
+            assert.equal(await failure.count(), 0, 'Verify result is one-shot, not a persistent stale flash.');
+
+            // The real Target action must report success after its native
+            // redirect, and reloading must not replay its old result.
+            await page.getByRole('button', { name: 'Resume Target operations' }).click();
+            await failure.waitFor();
+            assert.match(await failure.innerText(), /Target operations resumed/);
+            assert.equal(await failure.locator('[role="status"]').count(), 1);
+            if (javaScriptEnabled) {
+                await page.waitForFunction(() => document.activeElement?.id === 'admin-feedback');
+            }
+            await page.reload();
+            assert.equal(await failure.count(), 0);
+
+            // The invalid preflight returns to Add Target, not inventory,
+            // with an accurate operation-specific error summary.
+            await page.goto(base + '/admin/targets/create?connector_type=ssh_direct');
+            await page.getByRole('button', { name: 'Check endpoint from Gateway (no registration)' }).click();
+            const preflight = page.locator('#target-registration-errors');
+            await preflight.waitFor();
+            assert.match(await preflight.innerText(), /Endpoint check could not be completed/);
+            assert.equal(new URL(page.url()).pathname, '/admin/targets/create');
+        assert.equal(new URL(page.url()).searchParams.get('connector_type'), 'ssh_direct');
+            if (javaScriptEnabled) {
+                await page.waitForFunction(() => document.activeElement?.id === 'target-registration-errors');
+            }
+            assert.deepEqual(run.errors, []);
+            assert.deepEqual(run.external, []);
+            pass('native Verify error, Save success, preflight validation, one-shot flash and focus '
+                + (javaScriptEnabled ? 'with JavaScript' : 'without JavaScript'));
+        } finally {
+            await run.context.close();
+        }
+    }
+}
+
 (async () => {
     const browser = await chromium.launch({ headless: true });
     try {
         const group = process.env.GATEWAY_UI_TEST_GROUP || 'all';
-        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets', 'attachments', 'dirty'].includes(group), 'Unknown UI test group.');
+        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets', 'attachments', 'dirty', 'feedback'].includes(group), 'Unknown UI test group.');
         if (group === 'all' || group === 'matrix') await matrix(browser);
         if (group === 'all' || group === 'navigation') await navigation(browser);
         if (group === 'all' || group === 'mobile') await mobileAndNative(browser);
@@ -1185,6 +1289,7 @@ async function roleSensitiveDirtyForms(browser) {
         }
         if (group === 'all' || group === 'dirty') await semanticDirtyForms(browser);
         if (group === 'all' || group === 'dirty') await roleSensitiveDirtyForms(browser);
+        if (group === 'all' || group === 'feedback') await actionFeedback(browser);
     } finally {
         await browser.close();
     }

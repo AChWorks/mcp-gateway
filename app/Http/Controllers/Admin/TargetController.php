@@ -126,7 +126,8 @@ final class TargetController extends Controller
 
             return redirect()->route('admin.targets.create', $query)
                 ->withInput($this->safeOldInput($request, $adapter))
-                ->withErrors($exception->errors());
+                ->withErrors($exception->errors())
+                ->with('target_preflight_validation_failed', true);
         }
 
         try {

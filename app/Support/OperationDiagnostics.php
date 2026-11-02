@@ -59,6 +59,9 @@ final class OperationDiagnostics
     public static function safeContext(array $details): array
     {
         $safe = [];
+        if (($details['operation_kind'] ?? null) === 'ssh_verify') {
+            $safe['operation_kind'] = 'ssh_verify';
+        }
         $origin = $details['failure_origin'] ?? null;
         if (is_string($origin) && in_array($origin, [
             'gateway_admission', 'gateway_transport', 'gateway_response',
@@ -222,7 +225,9 @@ final class OperationDiagnostics
             'revocation_conflict' => __('The credential or revocation state changed while the operation was running.'),
             'revocation_uncertain' => __('A previous WordPress token revoke may have reached the server; no safe replay or cancellation proof exists.'),
             'cancel_not_safe', 'cancel_verification_failed', 'cancel_verification_unavailable' => __('The old WordPress authorization has not been independently verified and the pending disconnect remains in force.'),
-            'operation_unconfirmed' => __('Gateway could not confirm durable completion. The remote operation may already have executed.'),
+            'operation_unconfirmed' => (self::safeContext($details)['operation_kind'] ?? null) === 'ssh_verify'
+                ? __('SSH host-key/login verification could not be confirmed. Gateway verification evidence may be incomplete; this check did not request a remote command or credential revocation.')
+                : __('Gateway could not confirm durable completion. The remote operation may already have executed.'),
             'refresh_unavailable' => __('WordPress credential renewal is temporarily unavailable. Remote authorization has not necessarily been lost.'),
             'refresh_ambiguous', 'refresh_pending' => __('The outcome of a remote token rotation is uncertain; automatic replay is unsafe.'),
             'credential_unavailable' => __('The stored credential could not be opened with the current Gateway encryption configuration.'),
@@ -265,7 +270,9 @@ final class OperationDiagnostics
                 : __('Compare the WordPress Bridge version, advertised OAuth endpoints and exact issuer/resource metadata.'),
             'revocation_pending', 'disconnect_pending', 'revocation_failed', 'revocation_uncertain' => __('Open Target Details → Connection and recovery. Resume only a step explicitly marked proven-not-sent. For unknown results, the Owner must remove the Gateway client approval in WordPress and complete attested reconciliation. A green Metadata check does not change this.'),
             'cancel_not_safe', 'cancel_verification_failed', 'cancel_verification_unavailable' => __('Do not assume Cancel succeeded. The Owner can finish a proven-not-sent revoke or independently reconcile the authorization at WordPress.'),
-            'operation_unconfirmed' => __('Reload Target Details to inspect the durable intent phase and use only the action offered there. Do not blindly resubmit remote operations.'),
+            'operation_unconfirmed' => (self::safeContext($details)['operation_kind'] ?? null) === 'ssh_verify'
+                ? __('Reload Target Details to inspect current SSH verification status and compare the diagnostic reference with Gateway logs. Confirm the endpoint and pinned host key before starting another explicit Verify; no remote-revocation intent needs recovery.')
+                : __('Reload Target Details to inspect the durable intent phase and use only the action offered there. Do not blindly resubmit remote operations.'),
             'revocation_conflict' => __('Reload current Target details and reconcile the existing pending operation before another attempt.'),
             'refresh_unavailable' => __('Check the Gateway signing configuration and remote HTTPS reachability, then retry after the defined backoff.'),
             'refresh_ambiguous', 'refresh_pending' => __('Do not rotate the old token again. Follow the documented Owner-only remote-revocation and recovery procedure.'),

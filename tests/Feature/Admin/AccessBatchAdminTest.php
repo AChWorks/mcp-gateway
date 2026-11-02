@@ -36,7 +36,7 @@ final class AccessBatchAdminTest extends TestCase
 
         $response = $this->post('/admin/target-groups', ['name' => 'New group', 'current_password' => 'CorrectHorse!234']);
         $created = TargetGroup::query()->where('name', 'New group')->firstOrFail();
-        $response->assertRedirect(route('admin.target-groups.targets.index', ['targetGroup' => $created->id]));
+        $response->assertAdminRedirect(route('admin.target-groups.targets.index', ['targetGroup' => $created->id]));
     }
 
     public function test_native_paging_preserves_explicit_choices_and_applies_only_the_three_reviewed_targets(): void
@@ -54,7 +54,7 @@ final class AccessBatchAdminTest extends TestCase
         $next = $this->post($this->selection('group-targets', $group->id), [
             'page_ids' => $firstIds, 'selectable_ids' => $firstIds, 'selected_ids' => $selected,
             'intent' => 'add', 'shown_intent' => 'add', 'membership' => 'available', 'page' => 1, 'action' => 'next',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $second = $this->get($next->headers->get('Location'))->assertOk()->viewData('data');
         self::assertCount(5, $second['items']);
         self::assertSame(2, $second['selected_count']);
@@ -68,7 +68,7 @@ final class AccessBatchAdminTest extends TestCase
 
         $this->post($this->applyUrl('group-targets', $group->id), [
             'review_id' => $saved['id'], 'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect($this->collection('group-targets', $group->id))->assertSessionHasNoErrors();
+        ])->assertAdminRedirect($this->collection('group-targets', $group->id))->assertSessionHasNoErrors();
         self::assertEqualsCanonicalizing([...$selected, $lastId], $group->targets()->pluck('targets.id')->all());
         Http::assertNothingSent();
     }
@@ -83,7 +83,7 @@ final class AccessBatchAdminTest extends TestCase
             'page_ids' => [$first->id, $other->id], 'selected_ids' => [$first->id],
             'membership' => 'available', 'intent' => 'add', 'shown_intent' => 'add',
             'search' => 'no-matching-name', 'action' => 'filter',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $filtered = $this->get($response->headers->get('Location'))->assertOk();
         self::assertSame([], $filtered->viewData('data')['items']);
         $filtered->assertSee('Your saved selection is kept.')->assertSee('Saved selection: 1');
@@ -106,7 +106,7 @@ final class AccessBatchAdminTest extends TestCase
             $this->post($this->selection('group-targets', $group->id), [
                 'page_ids' => $pageIds, 'selectable_ids' => $pageIds, 'selected_ids' => [],
                 'membership' => 'available', 'intent' => 'add', 'page' => $page, 'action' => 'select-page',
-            ])->assertRedirect()->assertSessionHasNoErrors();
+            ])->assertAdminRedirect()->assertSessionHasNoErrors();
             $ids = [...$ids, ...$pageIds];
         }
         self::assertCount(100, $ids);
@@ -158,7 +158,7 @@ final class AccessBatchAdminTest extends TestCase
         $new = $this->review('group-targets', $second->id, [$target->id]);
         $this->post($this->applyUrl('group-targets', $first->id), [
             'review_id' => $old['id'], 'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect($this->collection('group-targets', $first->id))->assertSessionHasErrors('selection');
+        ])->assertAdminRedirect($this->collection('group-targets', $first->id))->assertSessionHasErrors('selection');
         self::assertSame($new['id'], session('admin_access_batch_review')['id']);
         self::assertSame(0, $first->targets()->count());
         self::assertSame(0, $second->targets()->count());
@@ -173,7 +173,7 @@ final class AccessBatchAdminTest extends TestCase
         $this->post($this->selection('group-targets', $group->id), [
             'page_ids' => [$missing->id, $kept->id], 'selected_ids' => [$missing->id, $kept->id],
             'membership' => 'available', 'intent' => 'add', 'action' => 'save',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $missingId = $missing->id;
         $missing->delete();
         $selected = $this->page('group-targets', $group->id, ['membership' => 'selected', 'intent' => 'add']);
@@ -181,7 +181,7 @@ final class AccessBatchAdminTest extends TestCase
         $this->post($this->selection('group-targets', $group->id), [
             'page_ids' => [$kept->id], 'unavailable_ids' => [$missingId], 'selected_ids' => [$kept->id],
             'membership' => 'selected', 'intent' => 'add', 'action' => 'save',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         self::assertSame(1, $this->page('group-targets', $group->id, ['membership' => 'selected', 'intent' => 'add'])['selected_count']);
     }
 
@@ -196,7 +196,7 @@ final class AccessBatchAdminTest extends TestCase
         $saved = $this->review('user-groups', (string) $user->id, [$first->id, $second->id]);
         $this->post($this->applyUrl('user-groups', (string) $user->id), [
             'review_id' => $saved['id'], 'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         self::assertSame(2, DB::table('target_group_users')->where('user_id', $user->id)->count());
         self::assertSame(TargetScopeMode::Selected, $user->refresh()->target_scope_mode);
         self::assertFalse($user->ai_access_enabled);
@@ -240,7 +240,7 @@ final class AccessBatchAdminTest extends TestCase
         self::assertSame($saved['preview']['token'], session('admin_access_batch_review')['preview']['token']);
         $this->post($this->applyUrl('group-targets', $group->id), [
             'review_id' => $saved['id'], 'current_password' => 'CorrectHorse!234', 'confirm_ssh_changes' => '1',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         self::assertSame(1, $group->targets()->count());
     }
 
@@ -265,7 +265,7 @@ final class AccessBatchAdminTest extends TestCase
             $this->post($this->selection('user-targets', (string) $user->id), [
                 'page_ids' => [$target->id], 'selected_ids' => [$target->id],
                 'membership' => 'all', 'intent' => $intent, 'shown_intent' => $intent, 'action' => 'save',
-            ])->assertRedirect()->assertSessionHasNoErrors();
+            ])->assertAdminRedirect()->assertSessionHasNoErrors();
         }
         $saved = $this->review('user-targets', (string) $user->id, [$first->id], [
             'membership' => 'all', 'intent' => 'deny', 'shown_intent' => 'allow',
@@ -289,7 +289,7 @@ final class AccessBatchAdminTest extends TestCase
         self::assertSame(0, $this->page('group-targets', $group->id, ['membership' => 'selected', 'intent' => 'add'])['selected_count']);
         $this->post($this->applyUrl('group-targets', $group->id), [
             'review_id' => $saved['id'], 'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasErrors('selection');
+        ])->assertAdminRedirect()->assertSessionHasErrors('selection');
         self::assertSame(0, $group->targets()->count());
     }
 
@@ -310,7 +310,7 @@ final class AccessBatchAdminTest extends TestCase
             'page_ids' => $firstIds, 'selected_ids' => $savedIds,
             'intent' => 'add', 'shown_intent' => 'add', 'shown_membership' => 'available',
             'membership' => 'available', 'page' => 1, 'action' => 'next',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $second = $this->get($next->headers->get('Location'))->assertOk()->viewData('data');
         $newlyChecked = $second['items'][0]['id'];
         $response = $this->post($this->selection('group-targets', $group->id), [
@@ -318,7 +318,7 @@ final class AccessBatchAdminTest extends TestCase
             'intent' => 'add', 'shown_intent' => 'add', 'shown_membership' => 'available',
             'membership' => 'available', 'page' => 2, 'search' => 'no-matching-name',
             'connector_type' => 'wp_ai_bridge', 'action' => 'selected',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $selected = $this->get($response->headers->get('Location'))->assertOk();
         self::assertSame('', $selected->viewData('filters')['search']);
         self::assertSame('', $selected->viewData('filters')['connector_type']);
@@ -339,12 +339,12 @@ final class AccessBatchAdminTest extends TestCase
             'page_ids' => [$target->id], 'selected_ids' => [$target->id],
             'membership' => 'available', 'shown_membership' => 'available',
             'intent' => 'add', 'shown_intent' => 'add', 'action' => 'save',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         $toSelected = $this->post($this->selection('group-targets', $group->id), [
             'membership' => 'selected', 'shown_membership' => 'available',
             'intent' => 'add', 'shown_intent' => 'add', 'search' => 'no-matching-name',
             'connector_type' => 'ssh_direct', 'action' => 'filter',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $selected = $this->get($toSelected->headers->get('Location'))->assertOk();
         self::assertSame('add', $selected->viewData('intent'));
         self::assertSame([$target->id], array_column($selected->viewData('data')['items'], 'id'));
@@ -355,7 +355,7 @@ final class AccessBatchAdminTest extends TestCase
             'page_ids' => [$target->id], 'selected_ids' => [$target->id],
             'membership' => 'selected', 'shown_membership' => 'selected',
             'intent' => 'add', 'shown_intent' => 'add', 'search' => 'intentional-no-match', 'action' => 'filter',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $filtered = $this->get($withinSelected->headers->get('Location'))->assertOk();
         self::assertSame('add', $filtered->viewData('intent'));
         self::assertSame('intentional-no-match', $filtered->viewData('filters')['search']);
@@ -367,7 +367,7 @@ final class AccessBatchAdminTest extends TestCase
             $response = $this->post($this->selection('group-targets', $group->id), [
                 'membership' => $view, 'shown_membership' => $shown,
                 'intent' => $currentIntent, 'shown_intent' => $currentIntent, 'action' => 'filter',
-            ])->assertRedirect();
+            ])->assertAdminRedirect();
             $page = $this->get($response->headers->get('Location'))->assertOk();
             self::assertSame($nextIntent, $page->viewData('intent'));
             self::assertSame($count, $page->viewData('data')['selected_count']);
@@ -452,7 +452,7 @@ final class AccessBatchAdminTest extends TestCase
             'page_ids' => $ids, 'selected_ids' => $ids, 'selectable_ids' => $ids,
             'membership' => 'available', 'intent' => $intent, 'shown_intent' => $intent,
             'action' => 'review', ...$overrides,
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
 
         return session('admin_access_batch_review');
     }

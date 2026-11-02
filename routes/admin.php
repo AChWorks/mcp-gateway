@@ -19,6 +19,7 @@ use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\UserTargetAccessController;
 use App\Http\Controllers\Admin\UserWordpressPublishGrantController;
 use App\Http\Controllers\Admin\WordpressBridgeInfoController;
+use App\Http\Middleware\CorrelatedAdminFeedback;
 use App\Http\Middleware\EnsureLocalUserAccessEnabled;
 use Illuminate\Support\Facades\Route;
 
@@ -29,7 +30,7 @@ Route::post('/admin/login', [AuthenticatedSessionController::class, 'store'])
     ->middleware(['guest', 'throttle:admin-login'])
     ->name('admin.login.store');
 
-Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-mutation'])->prefix('admin')->name('admin.')->group(function (): void {
+Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-mutation', CorrelatedAdminFeedback::class])->prefix('admin')->name('admin.')->group(function (): void {
     Route::get('/', DashboardController::class)->name('dashboard');
     Route::get('/access', AdministrationAccessController::class)->name('access');
 

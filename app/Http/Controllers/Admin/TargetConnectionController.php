@@ -41,8 +41,8 @@ final class TargetConnectionController extends Controller
             return $this->result($target, $connectors->forTarget($target)->connect($target), 'connect');
         } catch (TargetConnectorFailure $exception) {
             return $this->failed($target, $exception->getMessage(), 'target-connect', $exception->reason ?? 'connector_failure', $exception->diagnostics);
-        } catch (Throwable) {
-            return $this->unexpected($target, 'target-connect');
+        } catch (Throwable $exception) {
+            return $this->unexpected($target, 'target-connect', $exception);
         }
     }
 
@@ -56,8 +56,8 @@ final class TargetConnectionController extends Controller
             return $this->result($target, $connectors->forTarget($target)->reconnect($target), 'reconnect');
         } catch (TargetConnectorFailure $exception) {
             return $this->failed($target, $exception->getMessage(), 'target-reconnect', $exception->reason ?? 'connector_failure', $exception->diagnostics);
-        } catch (Throwable) {
-            return $this->unexpected($target, 'target-reconnect');
+        } catch (Throwable $exception) {
+            return $this->unexpected($target, 'target-reconnect', $exception);
         }
     }
 
@@ -69,8 +69,8 @@ final class TargetConnectionController extends Controller
             return $this->result($target, $connectors->forTarget($target)->disconnect($target), 'disconnect');
         } catch (TargetConnectorFailure $exception) {
             return $this->failed($target, $exception->getMessage(), 'target-disconnect', $exception->reason ?? 'connector_failure', $exception->diagnostics);
-        } catch (Throwable) {
-            return $this->unexpected($target, 'target-disconnect');
+        } catch (Throwable $exception) {
+            return $this->unexpected($target, 'target-disconnect', $exception);
         }
     }
 
@@ -90,8 +90,8 @@ final class TargetConnectionController extends Controller
                 ->with('status', __('Disconnect confirmed. The old authorization is removed locally; you can now authorize WordPress again.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
             return $this->failed($target, $adapter->connectionFailureMessage($exception), 'wordpress-disconnect-finish', $exception->reason, $exception->diagnostics);
-        } catch (Throwable) {
-            return $this->unexpected($target, 'wordpress-disconnect-finish');
+        } catch (Throwable $exception) {
+            return $this->unexpected($target, 'wordpress-disconnect-finish', $exception);
         }
     }
 
@@ -132,8 +132,8 @@ final class TargetConnectionController extends Controller
                 ->with('status', __('Disconnect cancellation confirmed: no revoke was sent and the existing WordPress authorization passed a fresh authenticated catalog check.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
             return $this->failed($target, $adapter->connectionFailureMessage($exception), 'wordpress-disconnect-cancel', $exception->reason, $exception->diagnostics);
-        } catch (Throwable) {
-            return $this->unexpected($target, 'wordpress-disconnect-cancel');
+        } catch (Throwable $exception) {
+            return $this->unexpected($target, 'wordpress-disconnect-cancel', $exception);
         }
     }
 
@@ -173,8 +173,8 @@ final class TargetConnectionController extends Controller
                 ->with('status', __('Local authorization was cleared based on your WordPress-side revocation attestation, not independent Gateway proof. Authorize a new WordPress session when ready.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
             return $this->failed($target, $adapter->connectionFailureMessage($exception), 'wordpress-disconnect-reconcile', $exception->reason, $exception->diagnostics);
-        } catch (Throwable) {
-            return $this->unexpected($target, 'wordpress-disconnect-reconcile');
+        } catch (Throwable $exception) {
+            return $this->unexpected($target, 'wordpress-disconnect-reconcile', $exception);
         }
     }
 
@@ -233,6 +233,8 @@ final class TargetConnectionController extends Controller
             return $this->result($target, $connectors->forTarget($target)->test($target), 'test');
         } catch (TargetConnectorFailure $exception) {
             return $this->failed($target, $exception->getMessage(), 'target-metadata-test', $exception->reason ?? 'connector_failure', $exception->diagnostics);
+        } catch (Throwable $exception) {
+            return $this->unexpected($target, 'target-metadata-test', $exception);
         }
     }
 
@@ -347,16 +349,35 @@ final class TargetConnectionController extends Controller
         };
     }
 
-    private function unexpected(Target $target, string $operation): RedirectResponse
+    private function unexpected(Target $target, string $operation, Throwable $exception): RedirectResponse
     {
-        // Remote I/O or a required audit may have succeeded before local
-        // persistence failed. Never expose raw exceptions or imply safe retry.
+        // A test only authenticates the endpoint and writes local verification
+        // evidence; no SSH command or remote credential revocation takes place.
+        // Other connector operations can have uncertain side effects.
+        $message = match ($operation) {
+            'target-metadata-test' => $target->connector_type === 'ssh_direct'
+                ? __('SSH verification did not complete reliably. No remote command or credential revocation was requested. The saved verification state may be incomplete; reload Target details and review the diagnostic reference before deciding to verify again.')
+                : __('The remote connection check did not complete reliably. Its saved verification result may be incomplete; reload Target details and inspect diagnostics before deciding whether a fresh check is safe.'),
+            'target-connect', 'target-reconnect' => __('Gateway could not confirm the connection or reconnection result. Inspect current Target authorization and connection status before attempting it again.'),
+            default => __('Gateway could not durably confirm this operation. Reload the Target recovery status. Do not repeat an uncertain remote revoke or restore the old credential.'),
+        };
+
         return $this->failed(
             $target,
-            __('Gateway could not durably confirm this operation. Reload the Target recovery status. Do not repeat an uncertain remote revoke or restore the old credential.'),
+            $message,
             $operation,
             'operation_unconfirmed',
-            ['retry_safe' => false],
+            [
+                'retry_safe' => false,
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'operation',
+                // Distinguish read-only SSH authentication verification from
+                // side-effecting remote operations in ALL rendered guidance.
+                'operation_kind' => $operation === 'target-metadata-test'
+                    && $target->connector_type === 'ssh_direct' ? 'ssh_verify' : null,
+                // Only safe type: raw internal errors may contain SQL parameters.
+                'exception_class' => $exception::class,
+            ],
         );
     }
 

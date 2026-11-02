@@ -27,7 +27,7 @@ final class SshTargetRegistrationTest extends TestCase
         $this->actingAs($this->user('owner'));
         $fields = $this->fields();
         $fields['ai_guidance'] = 'Production host: request confirmation before changes.';
-        $this->post('/admin/targets', $fields)->assertRedirect('/admin/targets/ssh-alpha');
+        $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/ssh-alpha');
         $target = Target::query()->where('target_id', 'ssh-alpha')->sole();
         self::assertSame('ssh_direct', $target->connector_type);
         self::assertSame($fields['ai_guidance'], $target->ai_guidance);
@@ -87,7 +87,7 @@ final class SshTargetRegistrationTest extends TestCase
         $fields['ssh_host_key'] = 'ssh-ed25519 malformed-host-key';
 
         $failure = $this->withHeader('Referer', '/admin/targets')->post('/admin/targets', $fields)
-            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct')
+            ->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct')
             ->assertSessionHasErrors('ssh_host_key')
             ->assertSessionHas('diagnostic_code', 'invalid_ssh_host_key');
         $old = $failure->baseResponse->getSession()->getOldInput();
@@ -113,7 +113,7 @@ final class SshTargetRegistrationTest extends TestCase
         $fields = $this->fields();
         $fields['display_name'] = '';
         $this->withHeader('Referer', '/admin/targets')->post('/admin/targets', $fields)
-            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct')
+            ->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct')
             ->assertSessionHasErrors('display_name')
             ->assertSessionHas('diagnostic_code', 'invalid_input');
         $this->followingRedirects()->withHeader('Referer', '/admin/targets')
@@ -127,10 +127,10 @@ final class SshTargetRegistrationTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $fields = $this->fields();
-        $this->post('/admin/targets', $fields)->assertRedirect('/admin/targets/ssh-alpha');
+        $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/ssh-alpha');
 
         $this->withHeader('Referer', '/admin/targets')->post('/admin/targets', $fields)
-            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct')
+            ->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct')
             ->assertSessionHasErrors('target_id')
             ->assertSessionHas('diagnostic_code', 'duplicate_target_id');
         $this->followingRedirects()->withHeader('Referer', '/admin/targets')
@@ -181,7 +181,7 @@ final class SshTargetRegistrationTest extends TestCase
         $this->actingAs($operator)->post('/admin/targets/guarded/test')->assertForbidden();
 
         $this->actingAs($owner)->post('/admin/targets/guarded/test')
-            ->assertRedirect('/admin/targets/guarded')
+            ->assertAdminRedirect('/admin/targets/guarded')
             ->assertSessionHasErrors('target');
         self::assertSame('egress_denied', $target->refresh()->last_error_code);
         self::assertSame(1, DB::table('activity_events')
@@ -214,21 +214,21 @@ final class SshTargetRegistrationTest extends TestCase
         self::assertFalse(app(AccessControl::class)->allows($operator, GatewayPermission::SshFileRead, $target));
         self::assertFalse(app(AccessControl::class)->allows($operator, GatewayPermission::SshFileWrite, $target));
 
-        $this->actingAs($owner)->post('/admin/targets/unsafe/test')
-            ->assertRedirect('/admin/targets/unsafe')
+        $result = $this->actingAs($owner)->post('/admin/targets/unsafe/test')
+            ->assertAdminRedirect('/admin/targets/unsafe')
             ->assertSessionHasErrors('target')
             ->assertSessionHas('diagnostic_code', 'egress_denied')
             ->assertSessionHas('diagnostic_context', static fn (array $context): bool => ($context['outbound_address_source'] ?? null) === 'literal'
                 && ($context['outbound_rejected_address'] ?? null) === '127.0.0.1'
                 && ($context['failure_stage'] ?? null) === 'admission');
-        $this->get('/admin/targets/unsafe')->assertOk()
+        $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('configured')
             ->assertSee('127.0.0.1')
             ->assertSee('SSRF');
         $target->refresh();
         self::assertSame('egress_denied', $target->last_error_code);
         self::assertNull(SshTargetConfig::query()->sole()->observed_peer_ip);
-        $this->post('/admin/targets/unsafe/disconnect')->assertRedirect('/admin/targets/unsafe');
+        $this->post('/admin/targets/unsafe/disconnect')->assertAdminRedirect('/admin/targets/unsafe');
         self::assertSame(0, TargetCredential::query()->count());
         self::assertSame('disconnected', $target->refresh()->connection_state->value);
         self::assertSame('failure', DB::table('activity_events')->where('operation', 'ssh-login-verify')->sole()->outcome);

@@ -114,3 +114,11 @@ fi
 if [[ "$mode" == browser || "$mode" == user-state-only ]]; then
     node tests/Browser/admin-user-state.cjs
 fi
+
+# The real feedback regression completes a valid OAuth callback and therefore
+# changes the disposable browser-wp Target to connected. Execute after the
+# separate initial authorization browser contract, which needs disconnected
+# browser-wp. The concurrency-only mode remains self-contained.
+if [[ "$mode" == browser || "$mode" == concurrency-only ]]; then
+    python3 tests/Support/admin_feedback_http_concurrency.py
+fi

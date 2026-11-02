@@ -87,7 +87,7 @@ final class TargetConfigurationAdminTest extends TestCase
 
         $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
             'ssh_port' => 2222,
-        ]))->assertRedirect('/admin/targets/ssh-demo')->assertSessionHasNoErrors();
+        ]))->assertAdminRedirect('/admin/targets/ssh-demo')->assertSessionHasNoErrors();
 
         $target->refresh();
         self::assertSame((string) $oldId, (string) $target->getKey());
@@ -129,7 +129,7 @@ final class TargetConfigurationAdminTest extends TestCase
         $revision = $this->editRevision('ssh-demo');
         $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
             'ssh_password' => 'updated-test-password',
-        ]))->assertRedirect('/admin/targets/ssh-demo');
+        ]))->assertAdminRedirect('/admin/targets/ssh-demo');
         $config = SshTargetConfig::query()->sole();
         self::assertSame('updated-test-password', app(SshTargetVault::class)->open(
             $target, $config, TargetCredential::query()->sole(),
@@ -145,7 +145,7 @@ final class TargetConfigurationAdminTest extends TestCase
             'ssh_auth_method' => 'private_key',
             'ssh_private_key' => EC::createKey('Ed25519')->toString('OpenSSH'),
             'ssh_passphrase' => 'test-key-passphrase',
-        ]))->assertRedirect('/admin/targets/ssh-demo');
+        ]))->assertAdminRedirect('/admin/targets/ssh-demo');
         $config->refresh();
         self::assertSame('private_key', $config->auth_method);
         $rotated = app(SshTargetVault::class)->open($target, $config, TargetCredential::query()->sole());
@@ -183,7 +183,7 @@ final class TargetConfigurationAdminTest extends TestCase
 
         $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
             'ssh_port' => 2222,
-        ]))->assertRedirect('/admin/targets/ssh-demo');
+        ]))->assertAdminRedirect('/admin/targets/ssh-demo');
         $stale = $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
             'ssh_port' => 2223, 'ssh_password' => 'stale-secret',
         ]))->assertSessionHasErrors('configuration_revision');
@@ -210,7 +210,7 @@ final class TargetConfigurationAdminTest extends TestCase
 
         $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
             'ssh_port' => 2222,
-        ]))->assertRedirect('/admin/targets/ssh-demo');
+        ]))->assertAdminRedirect('/admin/targets/ssh-demo');
 
         try {
             app(SshVerificationState::class)->succeeded($target, $config, $credential, $attempt, '1.1.1.1');
@@ -259,7 +259,7 @@ final class TargetConfigurationAdminTest extends TestCase
         $revision = $this->editRevision('ssh-demo');
         $cipher = TargetCredential::query()->sole()->encrypted_payload;
         $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision))
-            ->assertRedirect('/admin/targets/ssh-demo')->assertSessionHasNoErrors();
+            ->assertAdminRedirect('/admin/targets/ssh-demo')->assertSessionHasNoErrors();
         self::assertSame($cipher, TargetCredential::query()->sole()->encrypted_payload);
         self::assertSame(TargetConnectionState::Connected, $target->fresh()->connection_state);
         self::assertSame(0, DB::table('activity_events')->where('operation', 'ssh-target-reconfigure')->count());
@@ -288,13 +288,13 @@ final class TargetConfigurationAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $target = $this->ssh();
-        $this->post('/admin/targets/ssh-demo/disconnect')->assertRedirect('/admin/targets/ssh-demo');
+        $this->post('/admin/targets/ssh-demo/disconnect')->assertAdminRedirect('/admin/targets/ssh-demo');
         self::assertSame(0, TargetCredential::query()->count());
 
         $revision = $this->editRevision('ssh-demo');
         $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
             'ssh_password' => 'new-secret-after-disconnect',
-        ]))->assertRedirect('/admin/targets/ssh-demo');
+        ]))->assertAdminRedirect('/admin/targets/ssh-demo');
         self::assertSame('ssh-demo', $target->fresh()->target_id);
         self::assertSame('new-secret-after-disconnect', app(SshTargetVault::class)->open(
             $target, SshTargetConfig::query()->sole(), TargetCredential::query()->sole(),
@@ -307,7 +307,7 @@ final class TargetConfigurationAdminTest extends TestCase
         $this->post('/admin/targets', [
             'connector_type' => 'wp_ai_bridge', 'target_id' => 'wp-demo',
             'display_name' => 'WP Demo', 'base_url' => 'https://old.example.test',
-        ])->assertRedirect('/admin/targets/wp-demo');
+        ])->assertAdminRedirect('/admin/targets/wp-demo');
 
         $target = Target::query()->where('target_id', 'wp-demo')->sole();
         $firstRevision = $this->editRevision('wp-demo');
@@ -332,7 +332,7 @@ final class TargetConfigurationAdminTest extends TestCase
 
         $revision = $this->editRevision('wp-demo');
         $this->put('/admin/targets/wp-demo/configuration', $this->wpUpdate($revision, 'https://new.example.test'))
-            ->assertRedirect('/admin/targets/wp-demo')->assertSessionHasNoErrors();
+            ->assertAdminRedirect('/admin/targets/wp-demo')->assertSessionHasNoErrors();
         $config->refresh();
         self::assertSame('https://new.example.test', $config->base_url);
         self::assertSame('https://new.example.test', $config->oauth_issuer_url);
@@ -349,7 +349,7 @@ final class TargetConfigurationAdminTest extends TestCase
         $this->post('/admin/targets', [
             'connector_type' => 'wp_ai_bridge', 'target_id' => 'wp-pending',
             'display_name' => 'Pending OAuth', 'base_url' => 'https://old.example.test',
-        ])->assertRedirect('/admin/targets/wp-pending');
+        ])->assertAdminRedirect('/admin/targets/wp-pending');
 
         $target = Target::query()->where('target_id', 'wp-pending')->sole();
         $revision = $this->editRevision('wp-pending');
@@ -382,7 +382,7 @@ final class TargetConfigurationAdminTest extends TestCase
             $this->post('/admin/targets', [
                 'connector_type' => 'wp_ai_bridge', 'target_id' => 'wp-'.$id,
                 'display_name' => 'WP '.$id, 'base_url' => 'https://'.$id.'.example.test',
-            ])->assertRedirect('/admin/targets/wp-'.$id);
+            ])->assertAdminRedirect('/admin/targets/wp-'.$id);
         }
         $revision = $this->editRevision('wp-one');
         $this->put('/admin/targets/wp-one/configuration', $this->wpUpdate($revision, 'https://127.0.0.1'))
@@ -402,7 +402,7 @@ final class TargetConfigurationAdminTest extends TestCase
             'target_id' => 'wp-dns-override',
             'display_name' => 'WordPress DNS override',
             'base_url' => 'https://old.example.test',
-        ])->assertRedirect('/admin/targets/wp-dns-override');
+        ])->assertAdminRedirect('/admin/targets/wp-dns-override');
 
         $target = Target::query()->where('target_id', 'wp-dns-override')->sole();
         $revision = $this->editRevision('wp-dns-override');
@@ -414,7 +414,7 @@ final class TargetConfigurationAdminTest extends TestCase
             }
         });
 
-        $this->put('/admin/targets/wp-dns-override/configuration', $this->wpUpdate(
+        $result = $this->put('/admin/targets/wp-dns-override/configuration', $this->wpUpdate(
             $revision, 'https://blocked.example.test',
         ))->assertSessionHasErrors('base_url')
             ->assertSessionHas('diagnostic_code', 'unsafe_target')
@@ -422,7 +422,7 @@ final class TargetConfigurationAdminTest extends TestCase
                 && ($details['outbound_rejected_address'] ?? null) === '127.0.0.1'
             );
 
-        $this->get('/admin/targets/wp-dns-override/edit')->assertOk()
+        $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('127.0.0.1')
             ->assertSee('/etc/hosts')
             ->assertDontSee('CorrectHorse!234');
@@ -441,7 +441,7 @@ final class TargetConfigurationAdminTest extends TestCase
             'target_id' => 'wp-url-secrets',
             'display_name' => 'Original WordPress',
             'base_url' => 'https://old.example.test',
-        ])->assertRedirect('/admin/targets/wp-url-secrets');
+        ])->assertAdminRedirect('/admin/targets/wp-url-secrets');
 
         $target = Target::query()->where('target_id', 'wp-url-secrets')->sole();
         $revision = $this->editRevision('wp-url-secrets');
