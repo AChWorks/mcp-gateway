@@ -3,6 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
@@ -10,8 +11,10 @@ use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Tests\TestCase;
 
 final class SshManagedReverseAdminTest extends TestCase
@@ -218,5 +221,144 @@ final class SshManagedReverseAdminTest extends TestCase
         ];
         $this->delete('/admin/targets/managed-forget/forget', $payload)->assertSessionHasErrors('target');
         self::assertSame('pending', $started['enrollment']->fresh()->state);
+    }
+
+    public function test_owner_reissues_expired_pending_command_on_same_target_with_new_port_and_key(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $started = app(SshManagedReverseEnrollmentService::class)->begin(
+            'retry-target', 'Retry Target', '8.8.8.8', 22, 'deploy.prod', $this->publicKey(52),
+        );
+        $row = $started['enrollment'];
+        $oldPort = $row->listener_port;
+        $url = '/admin/targets/retry-target/reverse-ssh/reissue';
+        $this->get('/admin/targets/retry-target')->assertOk()
+            ->assertSee('Retry Pending Setup without deleting this Target')
+            ->assertSee('Reissue one-use install command');
+        $this->post($url, [
+            'confirm_target_id' => 'wrong',
+            'current_password' => 'StrongPassword!234',
+        ])->assertSessionHasErrors('confirm_target_id');
+        $reply = $this->post($url, [
+            'confirm_target_id' => 'retry-target',
+            'current_password' => 'StrongPassword!234',
+        ])->assertOk()->assertSee('Pending Setup created')
+            ->assertSee('deploy.prod')->assertSee('--target-user');
+        self::assertStringContainsString('no-store', $reply->headers->get('Cache-Control'));
+        self::assertSame(1, SshManagedReverseEnrollment::query()->count());
+        self::assertNotSame($oldPort, $row->fresh()->listener_port);
+        self::assertSame(1, $row->target->sshConfig->fresh()->binding_revision);
+        self::assertSame(1, DB::table('ssh_reverse_managed_retired_ports')
+            ->where('listener_port', $oldPort)->count());
+        self::assertSame('pending', $row->fresh()->state);
+    }
+
+    public function test_failed_host_revocation_publication_keeps_owner_retry_visible_and_fences_local_authority(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $started = app(SshManagedReverseEnrollmentService::class)->begin(
+            'partial-revoke', 'Partial Revoke', '8.8.8.8', 22, 'deploy', $this->publicKey(52),
+        );
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $started['enrollment']->id, $started['token'], $this->publicKey(61),
+        );
+        $writer = new class extends SshManagedReverseAuthorizedKeys
+        {
+            public bool $fail = true;
+
+            protected function publish(string $contents): void
+            {
+                if ($this->fail) {
+                    throw new RuntimeException('Injected host publication failure');
+                }
+
+                parent::publish($contents);
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+        $url = '/admin/targets/partial-revoke/reverse-ssh/revoke';
+        $payload = ['confirm_target_id' => 'partial-revoke', 'current_password' => 'StrongPassword!234'];
+        $this->post($url, $payload)->assertSessionHasErrors('target');
+        self::assertSame('revoked', $started['enrollment']->fresh()->state);
+        self::assertTrue($started['enrollment']->fresh()->publication_pending);
+        self::assertSame(0, TargetCredential::query()->count());
+        $this->get('/admin/targets/partial-revoke')->assertOk()
+            ->assertSee('Retry host key revocation')
+            ->assertSee('publication of the updated control key reader is still pending');
+        $this->delete('/admin/targets/partial-revoke/forget', [
+            'confirm_target_id' => 'partial-revoke',
+            'confirm_local_only' => 'yes',
+            'confirm_remote_revocation_unknown' => 'yes',
+            'current_password' => 'StrongPassword!234',
+        ])->assertSessionHasErrors('target');
+        $writer->fail = false;
+        $this->post($url, $payload)->assertRedirect();
+        self::assertFalse($started['enrollment']->fresh()->publication_pending);
+        self::assertSame('', file_get_contents($this->keyFile));
+        self::assertSame(1, $started['enrollment']->target->sshConfig->fresh()->binding_revision);
+    }
+
+    public function test_owner_settings_truthfully_distinguish_host_absence_and_stopped_local_sshd(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $manifest = dirname($this->keyFile).'/manifest.json';
+        $original = file_get_contents($manifest);
+        unlink($manifest);
+        $this->get('/admin/settings/reverse-ssh')->assertOk()
+            ->assertSee('Needs host setup')->assertSee('Trusted host manifest missing');
+        file_put_contents($manifest, $original);
+        $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        // No OpenSSH listener was started by a PHP feature test.
+        $this->get('/admin/settings/reverse-ssh')->assertOk()
+            ->assertSee('Degraded')->assertSee('Local control SSHD listener not reachable')
+            ->assertSee('Remote Target reachability')
+            ->assertSee('sudo systemctl status');
+        file_put_contents(dirname($this->keyFile).'/manifest.json', json_encode([
+            'version' => 1, 'control_port' => 7770,
+            'control_user' => 'other-control',
+            'control_host_key' => $this->publicKey(41),
+            'authorized_keys_file' => $this->keyFile,
+        ], JSON_THROW_ON_ERROR));
+        $this->get('/admin/settings/reverse-ssh')->assertOk()
+            ->assertSee('Control SSHD host identity, username or port differs');
+    }
+
+    public function test_global_publication_receipt_requires_owner_reconciliation(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $started = app(SshManagedReverseEnrollmentService::class)->begin(
+            'global-receipt', 'Global Receipt', '8.8.8.8', 22, 'deploy', $this->publicKey(52),
+        );
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $started['enrollment']->id, $started['token'], $this->publicKey(61),
+        );
+        $disable = $this->settings(false);
+        $disable['revision'] = 1;
+        $this->put('/admin/settings/reverse-ssh', $disable)->assertRedirect();
+        self::assertSame('', file_get_contents($this->keyFile));
+        $writer = new class extends SshManagedReverseAuthorizedKeys
+        {
+            protected function publish(string $contents): void
+            {
+                throw new RuntimeException('Fixture publication unavailable');
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+        $enable = $this->settings(true);
+        $enable['revision'] = 2;
+        $this->put('/admin/settings/reverse-ssh', $enable)->assertSessionHasErrors('site');
+        self::assertTrue(SshManagedReverseGateway::query()->sole()->publication_pending);
+        self::assertFalse(SshManagedReverseGateway::active());
+        self::assertSame('', file_get_contents($this->keyFile));
+        app()->forgetInstance(SshManagedReverseAuthorizedKeys::class);
+        $this->post('/admin/settings/reverse-ssh/repair', [
+            'current_password' => 'StrongPassword!234',
+        ])->assertRedirect();
+        self::assertFalse(SshManagedReverseGateway::query()->sole()->publication_pending);
+        self::assertTrue(SshManagedReverseGateway::active());
+        self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
     }
 }

@@ -45,9 +45,17 @@ forwarder; the control port needs separate egress reachability from Target.
 In Admin > Reverse SSH settings, Owner configures the reachable control host,
 port, dedicated control user and verified SSHD public host key, with password
 confirmation. The PHP configuration is bound to a root-owned manifest at
-/etc/mcp-gateway-reverse/manifest.json. The status intentionally does not
-claim successful host-level verification merely because a key file exists.
-The separate host approval is required only once, not per added Target.
+/etc/mcp-gateway-reverse/manifest.json. Its Owner page distinguishes
+`Disabled`, `Needs host setup`, `Ready`, and `Degraded`: a bounded
+local TCP/OpenSSH handshake checks the exact independently pinned control
+host key, plus the actual PHP-owned authorized-key policy and any pending
+publication receipts. `Ready` is only local control-host readiness, NOT proof
+of public firewall access, systemd service identity, a working external
+Target route, or a completed Target login. Where PHP lacks OS privileges,
+the page displays separately approved `systemctl status`, `ss -lntp`
+and the immutable host installer `--preflight` commands rather than
+silently claiming privileged host inspection. The separate host approval is
+required only once, not per added Target.
 
 ## Adding a Target in one command
 
@@ -90,32 +98,63 @@ point-in-time proof, not a heartbeat.
 
 ## Uncertain results, recovery, revocation and rollback
 
-- Hashed one-use token, expiry, DB uniqueness, per-Target route approval and
-  no silent Direct fallback prevent cross-Target replay. Repeated claims fail
-  without reauthorization.
-- If claim response is lost, treat it as uncertain, not safe to retry.
-  Successful Target response is saved in root-only local state for safe
-  local setup continuation. Otherwise revoke/reconcile with Owner and create
-  a fresh enrollment; do not reuse a consumed token.
-- Owner can disable managed routing or reconcile an authorized-keys policy
-  without host privileges. Host account/service repair still requires a
-  separately authorized root bootstrap.
-- Managed Target SSH endpoint/route/credential updates are rejected until the
-Owner first revokes the live managed enrollment, preventing an authorized
-control-key listener from being orphaned by a silent Direct route edit.
-Owner-only Target revocation requires exact ID and password. It removes
-  control key admission, local login credential and bumps the binding
-  revision to fence retained Jobs. Normal disconnect/forget cannot silently
-  leave a managed control public key authorized.
-- Removing an authorized key does NOT forcibly terminate already established
-  SSH sessions. Stop the exact Target systemd unit and remove its owned login
-  key in a separately approved Target-side cleanup.
-- Disable the feature in Admin first to fail-close application access, then
-  with separate host authorization run verified host bootstrap --disable
-  with the same full arguments to stop only the owned control SSHD service.
-  This preserves durable state and does not touch original SSHD/firewall.
-- Migration rollback is intentionally blocked while non-revoked managed
-  enrollments exist. Revoke and reconcile before rollback.
+- A one-use token is consumed exactly once. An ambiguous/missing claim
+  response **cannot** be retried automatically; it may already have
+  authorized a control key. Neither claim nor file publication is a
+  verified Target login or a Connected state.
+- The existing Target detail screen offers **Reissue one-use install
+  command** for unverified `Pending Setup` enrollments, guarded by
+  Owner password and an exact Target-ID confirmation. This preserves the
+  Target's original identity, independently pinned real SSH host key,
+  login identity and encrypted private key. The new enrollment rotates
+  its short-lived token, unique loopback port, control binding and Job
+  binding revision. Old listener ports remain quarantined because an
+  older established `-R` session may still exist; the external Target
+  service must be stopped by a separately authorized Target operator.
+- A best-effort **Gateway namespace** TCP bind probe excludes already
+  occupied loopback ports on enrollment and reissue. This is not a
+  promise about cross-namespace listeners or a race-free reservation;
+  OpenSSH `ExitOnForwardFailure` remains the authoritative runtime check.
+- Key-reader publication and DB intent are deliberately **not** one
+  transaction: a one-use claim commits `claimed + publication_pending`
+  before a public-key file is atomically published. Only after the
+  reader bytes are confirmed and a new DB finalization commits does
+  the enrollment become `active`. A failure/crash leaves a durable
+  pending receipt and blocks the managed route until Owner
+  reconciliation. The Owner can safely retry **Reconcile restricted
+  public keys**. Activation is never inferred solely from a written file.
+- Owner revocation atomically commits `revoked`, credential deletion,
+  a monotonic binding revision for retained Job fencing and the
+  Disconnected Target state **before** external key-file publication.
+  The host key-removal stage has a separate durable pending receipt;
+  failures leave a visible/retriable Owner action. Do not describe
+  revocation as fully completed while host policy is still pending.
+  Local delete/forget remains blocked until the host reader is reconciled.
+- Existing PHP processes coordinate policy publication with claim, reissue,
+  revoke and Gateway feature state using a PHP-owned file lock. No PHP
+  request gains OS root access. Disabling Gateway routing remains
+  possible even if the host reader is damaged; the resulting application
+  route then fails closed and host reconciliation is still required.
+- The Target installer refuses pre-planted non-root-owned or
+  group/world-writable root state directories, malicious lock paths and
+  unsafe control-key ownership/mode **before** token consumption. It
+  preserves verified partial root-owned state for bounded idempotent
+  retries, never recursively follows/reowns a user-controlled tree.
+  Existing login account names may contain uppercase letters, dots,
+  plus signs and hyphens within the canonical SSH registration contract.
+- Removing a public control key prevents **new** control authentication
+  but does **not** forcibly terminate already established SSH sessions or
+  retroactively stop detached commands. Stop the exact Target
+  systemd unit and remove its login public key separately with explicit
+  Target authorization.
+- Disable the feature in Owner Admin first, then use the verified host
+  bootstrap `--disable` with the exact originally approved arguments
+  to stop only the owned control SSHD service. This preserves other SSHD
+  services, host firewall rules and system accounts.
+- Rollback of managed state requires all non-revoked enrollments to be
+  revoked and their external policy reconciled. The migration rollback
+  is intentionally blocked while any non-revoked enrollment remains;
+  after an interrupted revocation, reconcile before any local Target deletion.
 
 ## Acceptance gates
 
@@ -125,10 +164,18 @@ real isolated OpenSSH/systemd acceptance must pass. The disposable
 single-command installer, real local TLS and one-use HTTP enrollment against
 Laravel/SQLite, separately restricted control and Target SSHD identities,
 a persistent Target systemd service, real Gateway pinned login/Command/SFTP,
-safe repeat invocation, disconnection and systemd reconnection. It removes
+a managed retained SSH Job with verified binding, safe repeat invocation,
+explicit stopped-control-host health diagnosis, and systemd reconnection.
+It also uses a real existing `deploy.prod` Unix account in CI to cover
+the dotted-username contract and rejects unsafe root-state ownership and
+lock-file symlinks before claim. A separate disposable Chromium browser
+suite tests responsive/dark/RTL Admin recovery views and no-JS denial. It removes
 its isolated runtime state afterward. This is a single-host loopback network
-simulation; it does not prove cross-border network reachability or actual
-host reboot persistence. Verify false host pins,
+simulation; it does not prove cross-border network reachability, a real
+whole-machine reboot, all claimed RHEL-family distributions or the
+correct firewall on a deployed Gateway. The test asserts `systemctl
+is-enabled` plus process/service restart, not a simulated reboot.
+Those operator acceptance steps remain separately gated and unverified. Verify false host pins,
 wrong listeners, no shell, replay, concurrency, restart/recovery, revocation
 and partial outcomes. Green CI is not a production host proof; production
 SSHD changes, Merge, release and deployment need exact Owner authorization.

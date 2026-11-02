@@ -333,7 +333,9 @@ final class TargetController extends Controller
                 $id = $locked->getKey();
 
                 if (SshManagedReverseEnrollment::query()
-                    ->where('target_record_id', $id)->where('state', '!=', 'revoked')->exists()
+                    ->where('target_record_id', $id)
+                    ->where(static fn ($query) => $query->where('state', '!=', 'revoked')
+                        ->orWhere('publication_pending', true))->exists()
                     || TargetCredential::query()->where('target_record_id', $id)->exists()
                     || $connectors->hasPendingDeletion($locked)
                     || in_array($locked->getAttribute('connection_state'), [
@@ -392,7 +394,9 @@ final class TargetController extends Controller
         // A local-only forget must not leave a live control key installed in
         // the host reader file after the enrollment DB row cascades away.
         if (SshManagedReverseEnrollment::query()
-            ->where('target_record_id', $target->getKey())->where('state', '!=', 'revoked')->exists()) {
+            ->where('target_record_id', $target->getKey())
+            ->where(static fn ($query) => $query->where('state', '!=', 'revoked')
+                ->orWhere('publication_pending', true))->exists()) {
             throw ValidationException::withMessages([
                 'target' => __('Revoke the managed Reverse SSH route first. Forgetting locally cannot silently leave its host control key active.'),
             ]);

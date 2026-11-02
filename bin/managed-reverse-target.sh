@@ -54,8 +54,42 @@ declare -r control_key="$keys_dir/control"
 declare -r unit="/etc/systemd/system/mcp-gateway-reverse-$enrollment.service"
 declare -r client_user="mcp-r-$(printf '%s' "${enrollment:0:12}" | tr '[:upper:]' '[:lower:]')"
 declare -r api="${gateway%/}/reverse-ssh/enroll/$enrollment/claim"
-[[ ! -L "$base_dir" && ! -L "$state_dir" && ! -L "$keys_dir" ]] || die "Symlinked managed state path refused."
-[[ ! -e "$unit" || -f "$unit" && ! -L "$unit" ]] || die "Unexpected service unit type."
+# Guard every root-written state parent BEFORE any mkdir, lock redirection,
+# key creation or one-use claim. install -d does not take ownership of an
+# existing directory; a pre-planted writable directory must never be adopted.
+# Only root may own the enrollment and lock directory. The private SSH key
+# directory may belong to our verified dedicated tunnel account on a retry.
+python3 - "$base_dir" "$state_dir" "$keys_dir" "$state_file" "$unit" "$client_user" <<'PYTHON'
+import os, pathlib, pwd, stat, sys
+base, state, keys, state_file, unit, tunnel_user = sys.argv[1:]
+try:
+    tunnel_uid = pwd.getpwnam(tunnel_user).pw_uid
+except KeyError:
+    tunnel_uid = None
+for path in (base, state, keys):
+    if not os.path.lexists(path):
+        continue
+    st = os.lstat(path)
+    expected = {0} if path != keys else {0} | ({tunnel_uid} if tunnel_uid is not None else set())
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid not in expected or st.st_mode & 0o022:
+        raise SystemExit(f"Unsafe managed directory ownership, mode or type: {path}")
+    if path == keys and st.st_mode & 0o077:
+        raise SystemExit("Private control key directory must be mode 0700")
+for path in (state_file, os.path.join(state, ".install.lock"), unit):
+    if not os.path.lexists(path):
+        continue
+    st = os.lstat(path)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+        raise SystemExit(f"Unsafe root-managed file ownership, mode or type: {path}")
+for name in ("control", "control.pub", "known_hosts"):
+    path = os.path.join(keys, name)
+    if not os.path.lexists(path):
+        continue
+    st = os.lstat(path)
+    allowed = {0} | ({tunnel_uid} if tunnel_uid is not None else set())
+    if not stat.S_ISREG(st.st_mode) or st.st_uid not in allowed or st.st_mode & 0o022:
+        raise SystemExit(f"Unsafe control key file ownership, mode or type: {path}")
+PYTHON
 # In a fresh run no Target system files are touched until local SSH identity is
 # observed and compared against the independently Owner-confirmed pin.
 owner_pin="$(printf '%s' "$host_key_b64" | base64 --decode)" || die "Cannot decode verified Target host key."
@@ -104,17 +138,24 @@ flock -n 9 || die "Another installer is already running for this enrollment."
 if getent passwd "$client_user" >/dev/null; then
     [[ -f "$control_key" && -f "$control_key.pub" ]] ||
         die "Existing tunnel account lost its control key; Owner reconciliation required."
+    if [[ "$(stat -c '%u' "$keys_dir")" == 0 ]]; then
+        # Recover a root-owned, previously verified partial claim. Never
+        # recursively chown a directory controlled by an unprivileged user.
+        chown "$client_user:$client_user" "$keys_dir" "$control_key" "$control_key.pub"
+    fi
     runuser -u "$client_user" -- install -d -m 0700 "$keys_dir" ||
         die "Tunnel user cannot access owned private key directory."
+    runuser -u "$client_user" -- chmod 0600 "$control_key"
+    runuser -u "$client_user" -- chmod 0644 "$control_key.pub"
 else
     install -d -m 0700 "$keys_dir"
-fi
-if [[ ! -f "$control_key" ]]; then
-    ssh-keygen -q -t ed25519 -N '' -f "$control_key" -C "" || die "SSH key creation failed."
+    if [[ ! -f "$control_key" ]]; then
+        ssh-keygen -q -t ed25519 -N '' -f "$control_key" -C "" || die "SSH key creation failed."
+    fi
+    chmod 0600 "$control_key"
+    chmod 0644 "$control_key.pub"
 fi
 [[ -f "$control_key" && ! -L "$control_key" && -f "$control_key.pub" && ! -L "$control_key.pub" ]] || die "Unexpected tunnel key layout."
-chmod 0600 "$control_key"
-chmod 0644 "$control_key.pub"
 # The token never appears in the HTTP URL, access log route, or public artifact.
 # The request file is private and deleted immediately after use.
 tmp_request="$state_dir/.request.$$"
@@ -150,8 +191,12 @@ if ! getent passwd "$client_user" >/dev/null; then
 fi
 [[ "$(id -gn "$client_user")" == "$client_user" ]] ||
     die "Dedicated tunnel service group does not match its account."
-chown -R "$client_user:$client_user" "$keys_dir"
-chmod 0700 "$keys_dir"
+# Only an initially root-owned, preflight-verified key directory may be
+# transferred. There is no recursive root traversal of a user-writable tree.
+if [[ "$(stat -c '%u' "$keys_dir")" == 0 ]]; then
+    chown "$client_user:$client_user" "$keys_dir" "$control_key" "$control_key.pub"
+fi
+runuser -u "$client_user" -- chmod 0700 "$keys_dir"
 
 # Parse untrusted JSON as data, NEVER evaluate as shell. Strict fields only.
 params="$state_dir/.parameters.$$"
@@ -166,7 +211,7 @@ for key in names:
     assert key in data, key
 assert re.fullmatch(r"[A-Za-z0-9.:-]{1,253}", data["control_host"])
 assert re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", data["control_user"])
-assert re.fullmatch(r"[a-z_][a-z0-9_-]{0,127}", data["target_username"])
+assert re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,127}", data["target_username"])
 for key in ("control_port", "listener_port", "target_port"):
     assert type(data[key]) is int and 1 <= data[key] <= 65535
 for key in ("control_host_key", "login_public_key"):

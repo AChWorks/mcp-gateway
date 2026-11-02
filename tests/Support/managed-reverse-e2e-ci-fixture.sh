@@ -19,7 +19,7 @@ done
 if compgen -G '/etc/systemd/system/mcp-gateway-reverse-*.service' >/dev/null; then
     die "Unrelated managed Target services must not be touched."
 fi
-getent passwd mcptargetci >/dev/null && die "Fixture test account already exists."
+getent passwd deploy.prod >/dev/null && die "Fixture test account already exists."
 getent passwd mcp-reverse >/dev/null && die "Gateway control account already exists."
 
 tmp="$(mktemp -d /tmp/mcp-managed-e2e.XXXXXXXX)"
@@ -68,14 +68,16 @@ cleanup() {
     if [[ -n "$target_unit" ]]; then
         sudo rm -rf /var/lib/mcp-gateway-reverse
     fi
-    sudo userdel -r mcptargetci >/dev/null 2>&1 || true
+    sudo loginctl disable-linger deploy.prod >/dev/null 2>&1 || true
+    sudo loginctl terminate-user deploy.prod >/dev/null 2>&1 || true
+    sudo userdel -r deploy.prod >/dev/null 2>&1 || true
     sudo rm -rf -- "$tmp"
 }
 trap cleanup EXIT
 
 touch "$DB_DATABASE"
 sudo install -d -m 0755 /run/sshd
-sudo useradd --user-group --create-home --shell /bin/bash --password '*' mcptargetci
+sudo useradd --badname --user-group --create-home --shell /bin/bash --password '*' deploy.prod
 ssh-keygen -q -t ed25519 -N '' -C '' -f "$tmp/target-host"
 cat > "$tmp/target-sshd.conf" <<EOF
 Port $target_port
@@ -87,7 +89,7 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
 UsePAM yes
-AllowUsers mcptargetci
+AllowUsers deploy.prod
 AllowTcpForwarding no
 PermitRootLogin no
 Subsystem sftp internal-sftp
@@ -145,21 +147,61 @@ sha256sum "$tmp/installer-check.sh" | awk '{print $1}' > "$tmp/actual-sha"
 cmp "$tmp/expected-sha" "$tmp/actual-sha" ||
     die "Live HTTPS installer source bytes differ from accepted release."
 
+# Root-side managed-state preflight must reject pre-planted directories and
+# unsafe lock files BEFORE opening any root-owned file or burning a claim.
+target_pin="$(awk '{print $1" "$2}' "$tmp/target-host.pub" | base64 -w 0)"
+state_dir="/var/lib/mcp-gateway-reverse/$enrollment"
+sudo install -d -m 0755 /var/lib/mcp-gateway-reverse
+sudo install -d -m 0711 "$state_dir"
+sudo chown deploy.prod:deploy.prod "$state_dir"
+if sudo env CURL_CA_BUNDLE="$tmp/tls.crt" bash bin/managed-reverse-target.sh \
+    --gateway "$APP_URL" --enrollment "$enrollment" --token "$(printf '0%.0s' {1..64})" \
+    --host-key-b64 "$target_pin" --target-port "$target_port" --target-user deploy.prod \
+    > "$tmp/unsafe-owner.log" 2>&1; then
+    die "Target installer adopted an attacker-owned managed state directory."
+fi
+grep -Fq 'Unsafe managed directory ownership' "$tmp/unsafe-owner.log" ||
+    die "Unsafe state ownership was not specifically diagnosed."
+sudo chown root:root "$state_dir"
+sudo chmod 0733 "$state_dir"
+if sudo env CURL_CA_BUNDLE="$tmp/tls.crt" bash bin/managed-reverse-target.sh \
+    --gateway "$APP_URL" --enrollment "$enrollment" --token "$(printf '0%.0s' {1..64})" \
+    --host-key-b64 "$target_pin" --target-port "$target_port" --target-user deploy.prod \
+    > "$tmp/unsafe-mode.log" 2>&1; then
+    die "Target installer adopted a group/world-writable managed state directory."
+fi
+sudo chmod 0711 "$state_dir"
+protected_passwd="$(sudo sha256sum /etc/passwd | cut -d' ' -f1)"
+sudo ln -s /etc/passwd "$state_dir/.install.lock"
+if sudo env CURL_CA_BUNDLE="$tmp/tls.crt" bash bin/managed-reverse-target.sh \
+    --gateway "$APP_URL" --enrollment "$enrollment" --token "$(printf '0%.0s' {1..64})" \
+    --host-key-b64 "$target_pin" --target-port "$target_port" --target-user deploy.prod \
+    > "$tmp/unsafe-lock.log" 2>&1; then
+    die "Target installer followed a root-state lock symlink."
+fi
+grep -Fq 'Unsafe root-managed file' "$tmp/unsafe-lock.log" ||
+    die "Unsafe lock file was not specifically diagnosed."
+[[ "$(sudo sha256sum /etc/passwd | cut -d' ' -f1)" == "$protected_passwd" ]] ||
+    die "Unsafe root lock redirection modified unrelated /etc/passwd."
+sudo rm -- "$state_dir/.install.lock"
+[[ ! -e "$state_dir/enrollment.json" ]] || die "Unsafe preflight consumed enrollment."
+echo "PASS: untrusted root-state owner/mode and lock symlink rejected before claim and privileged writes."
+
 # A user-writable symlink in Target's login home must be rejected BEFORE
 # consuming even a valid-looking claim. Avoid any privileged writes through
 # the Target user's home and leave the exact OS identity untouched.
-sudo runuser -u mcptargetci -- ln -s /etc /home/mcptargetci/.ssh
+sudo runuser -u deploy.prod -- ln -s /etc /home/deploy.prod/.ssh
 if sudo env CURL_CA_BUNDLE="$tmp/tls.crt" bash bin/managed-reverse-target.sh \
     --gateway "$APP_URL" --enrollment "$enrollment" \
     --token "$(printf '0%.0s' {1..64})" \
     --host-key-b64 "$(awk '{print $1" "$2}' "$tmp/target-host.pub" | base64 -w 0)" \
-    --target-port "$target_port" --target-user mcptargetci \
+    --target-port "$target_port" --target-user deploy.prod \
     > "$tmp/symlink-preflight.log" 2>&1; then
     die "Target installer adopted a user-controlled symlink."
 fi
 grep -Fq 'Symlinked Target login SSH key paths are unsafe.' "$tmp/symlink-preflight.log" ||
     die "Target installer did not specifically block the unsafe login path."
-sudo runuser -u mcptargetci -- rm -f /home/mcptargetci/.ssh
+sudo runuser -u deploy.prod -- rm -f /home/deploy.prod/.ssh
 [[ ! -e "/var/lib/mcp-gateway-reverse/$enrollment/enrollment.json" ]] ||
     die "Symlink preflight consumed an enrollment unexpectedly."
 echo "PASS: unsafe Target SSH-home symlink is rejected before claim."
@@ -171,7 +213,7 @@ if sudo env CURL_CA_BUNDLE="$tmp/tls.crt" bash bin/managed-reverse-target.sh \
     --gateway "$APP_URL" --enrollment "$enrollment" \
     --token "$(printf '0%.0s' {1..64})" \
     --host-key-b64 "$bad_host_pin" --target-port "$target_port" \
-    --target-user mcptargetci \
+    --target-user deploy.prod \
     > "$tmp/rejected.log" 2>&1; then
     die "Wrong one-use claim was accepted by Laravel."
 fi
@@ -215,6 +257,35 @@ done
 }
 
 php tests/Support/managed-reverse-e2e.php verify
+php tests/Support/managed-reverse-e2e.php readiness
+sudo systemctl is-enabled --quiet "$target_unit" ||
+    die "Target reverse service was not enabled for reboot persistence."
+# The control SSHD is a different owned unit. Prove truthful unavailable
+# diagnostics when that unit stops, then require a bounded reconnection.
+sudo systemctl stop mcp-gateway-reverse-sshd.service
+php tests/Support/managed-reverse-e2e.php readiness-stopped
+sudo systemctl start mcp-gateway-reverse-sshd.service
+for i in {1..45}; do
+    if ss -H -lnt | grep -Fq "127.0.0.1:$listener"; then break; fi
+    sleep 1
+done
+php tests/Support/managed-reverse-e2e.php readiness
+sudo loginctl enable-linger deploy.prod
+uid="$(id -u deploy.prod)"
+job_runtime_ready=false
+for i in {1..30}; do
+    if sudo runuser -u deploy.prod -- env \
+        XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        systemctl --user show-environment >/dev/null 2>&1; then
+        job_runtime_ready=true
+        break
+    fi
+    sleep 1
+done
+[[ "$job_runtime_ready" == true ]] || die "Dedicated Target login systemd --user manager did not start."
+php tests/Support/managed-reverse-e2e.php job
+echo "PASS: local pinned host readiness, degraded stopped SSHD state, reconnection and real managed retained Job."
 # A second paste must not duplicate the Target OS user/service/key.
 sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \
     > "$tmp/repeated.log" 2>&1 ||

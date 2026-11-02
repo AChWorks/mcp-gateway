@@ -15,16 +15,16 @@ final class SshManagedReverseGateway extends Model
 
     protected $fillable = [
         'id', 'enabled', 'control_host', 'control_port', 'control_user',
-        'control_host_key', 'revision',
+        'control_host_key', 'revision', 'publication_pending',
     ];
 
     protected function casts(): array
     {
-        return ['enabled' => 'boolean', 'control_port' => 'integer', 'revision' => 'integer'];
+        return ['enabled' => 'boolean', 'publication_pending' => 'boolean', 'control_port' => 'integer', 'revision' => 'integer'];
     }
 
     public static function active(): bool
     {
-        return (bool) self::query()->whereKey(1)->where('enabled', true)->exists();
+        return (bool) self::query()->whereKey(1)->where('enabled', true)->where('publication_pending', false)->exists();
     }
 }

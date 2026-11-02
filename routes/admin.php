@@ -123,6 +123,8 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
         ->name('reverse-ssh.targets.create');
     Route::post('/targets/{target:target_id}/reverse-ssh/revoke', SshManagedReverseRevocationController::class)
         ->name('reverse-ssh.targets.revoke');
+    Route::post('/targets/{target:target_id}/reverse-ssh/reissue', [SshManagedReverseTargetController::class, 'reissue'])
+        ->name('reverse-ssh.targets.reissue');
     Route::post('/targets/managed-reverse', [SshManagedReverseTargetController::class, 'store'])
         ->name('reverse-ssh.targets.store');
 

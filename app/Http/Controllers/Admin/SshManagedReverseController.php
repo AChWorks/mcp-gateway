@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\SshManagedReverseAuthorizedKeys;
+use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Domain\Access\GatewayRole;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
@@ -20,18 +21,20 @@ use InvalidArgumentException;
 
 final class SshManagedReverseController extends Controller
 {
-    public function index(Request $request, SshManagedReverseAuthorizedKeys $keys): View
+    public function index(Request $request, SshManagedReverseAuthorizedKeys $keys, SshManagedReverseHostReadiness $readiness): View
     {
         $this->requireOwner($request);
         $gateway = SshManagedReverseGateway::query()->find(1);
         $fileReady = $keys->canPublish();
-        $status = $gateway?->enabled
-            ? ($fileReady ? 'Configured (host service not verified)' : 'Degraded')
-            : ($fileReady ? 'Disabled' : 'Needs host setup');
+        $health = $readiness->assess($gateway);
 
         return view('admin.reverse-ssh.index', [
             'gateway' => $gateway,
-            'status' => $status,
+            'status' => $health['state'],
+            'readiness' => $health,
+            'policyReconciled' => $keys->isReconciled(),
+            'controlPort' => ($gateway instanceof SshManagedReverseGateway ? $gateway->control_port : null)
+                ?? $keys->hostManifest()['control_port'] ?? null,
             'fileReady' => $fileReady,
             'pending' => SshManagedReverseEnrollment::query()->whereIn('state', ['pending', 'claimed'])->count(),
             'active' => SshManagedReverseEnrollment::query()->where('state', 'active')->count(),
@@ -78,37 +81,59 @@ final class SshManagedReverseController extends Controller
                 ]);
             }
         }
-        DB::transaction(function () use ($fields, $endpoint, $pin, $enabled): void {
-            $current = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
-            $revision = $current instanceof SshManagedReverseGateway ? (int) $current->revision : 0;
-            if ($revision !== (int) $fields['revision']) {
-                throw ValidationException::withMessages([
-                    'revision' => __('Reverse SSH settings changed in another session. Reload before applying changes.'),
+        $saveIntent = static function () use ($fields, $endpoint, $pin, $enabled): void {
+            DB::transaction(function () use ($fields, $endpoint, $pin, $enabled): void {
+                $current = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
+                $revision = $current instanceof SshManagedReverseGateway ? (int) $current->revision : 0;
+                if ($revision !== (int) $fields['revision']) {
+                    throw ValidationException::withMessages([
+                        'revision' => __('Reverse SSH settings changed in another session. Reload before applying changes.'),
+                    ]);
+                }
+                if ($current && SshManagedReverseEnrollment::query()
+                    ->where('state', '!=', 'revoked')->exists()
+                    && ($current->control_host !== $endpoint->host
+                        || $current->control_port !== $endpoint->port
+                        || $current->control_user !== $endpoint->username
+                        || $current->control_host_key !== $pin->canonicalLine())) {
+                    throw ValidationException::withMessages([
+                        'control_host' => __('Revoke or safely migrate active enrollments before rotating the control endpoint/identity.'),
+                    ]);
+                }
+                SshManagedReverseGateway::query()->updateOrCreate(['id' => 1], [
+                    'enabled' => $enabled,
+                    'control_host' => $endpoint->host,
+                    'control_port' => $endpoint->port,
+                    'control_user' => $endpoint->username,
+                    'control_host_key' => $pin->canonicalLine(),
+                    'revision' => $revision + 1,
+                    'publication_pending' => true,
                 ]);
-            }
-            if ($current && SshManagedReverseEnrollment::query()
-                ->where('state', '!=', 'revoked')->exists()
-                && ($current->control_host !== $endpoint->host
-                    || $current->control_port !== $endpoint->port
-                    || $current->control_user !== $endpoint->username
-                    || $current->control_host_key !== $pin->canonicalLine())) {
-                throw ValidationException::withMessages([
-                    'control_host' => __('Revoke or safely migrate active enrollments before rotating the control endpoint/identity.'),
-                ]);
-            }
-            SshManagedReverseGateway::query()->updateOrCreate(['id' => 1], [
-                'enabled' => $enabled,
-                'control_host' => $endpoint->host,
-                'control_port' => $endpoint->port,
-                'control_user' => $endpoint->username,
-                'control_host_key' => $pin->canonicalLine(),
-                'revision' => $revision + 1,
-            ]);
-        }, 3);
-        // After disable, application routing is already fail-closed. Any key
-        // publishing failure is accurately surfaced as requiring host repair.
+            }, 3);
+        };
+
         if ($keys->canPublish()) {
-            $keys->sync();
+            // Serialize configuration and key-reader policy with claim,
+            // reissue and revoke. Committed disable still fails closed
+            // immediately if the external publication later fails.
+            try {
+                $keys->withPolicyLock(static function () use ($saveIntent, $keys): void {
+                    $saveIntent();
+                    $keys->sync();
+                });
+            } catch (\RuntimeException) {
+                return redirect()->route('admin.reverse-ssh.index')
+                    ->withErrors(['site' => __('Gateway configuration intent may have changed, but restricted key publication could not be reconciled. Inspect the current revision and retry Owner Repair. Do not assume the control host key reader was updated.')]);
+            }
+        } else {
+            if ($enabled) {
+                throw ValidationException::withMessages([
+                    'enabled' => __('Cannot enable Reverse SSH with an unavailable host key reader.'),
+                ]);
+            }
+            // Disabling must remain available even with a degraded reader:
+            // application route authorization then fails closed immediately.
+            $saveIntent();
         }
 
         return redirect()->route('admin.reverse-ssh.index')

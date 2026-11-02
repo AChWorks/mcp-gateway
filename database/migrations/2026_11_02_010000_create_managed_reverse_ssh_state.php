@@ -12,6 +12,8 @@ return new class extends Migration
         Schema::create('ssh_reverse_gateway_settings', static function (Blueprint $table): void {
             $table->unsignedTinyInteger('id')->primary();
             $table->boolean('enabled')->default(false);
+            // Prevent admission while configuration and SSHD key file diverge.
+            $table->boolean('publication_pending')->default(false);
             $table->string('control_host', 253);
             $table->unsignedSmallInteger('control_port');
             $table->string('control_user', 64);
@@ -36,7 +38,17 @@ return new class extends Migration
             $table->timestamp('activated_at')->nullable();
             $table->timestamp('revoked_at')->nullable();
             $table->string('state', 16)->default('pending');
+            // Durable publication receipt survives PHP/file/DB partial failures.
+            $table->boolean('publication_pending')->default(false);
             $table->timestamps();
+        });
+
+        // Never recycle a listener that may still be occupied by a remote
+        // reverse forward from an earlier enrollment generation.
+        Schema::create('ssh_reverse_managed_retired_ports', static function (Blueprint $table): void {
+            $table->unsignedSmallInteger('listener_port')->primary();
+            $table->string('target_id', 64);
+            $table->timestamp('retired_at');
         });
     }
 
@@ -45,6 +57,7 @@ return new class extends Migration
         if (DB::table('ssh_reverse_managed_enrollments')->where('state', '!=', 'revoked')->exists()) {
             throw new RuntimeException('Revoke and retire managed Reverse SSH enrollments before rollback.');
         }
+        Schema::dropIfExists('ssh_reverse_managed_retired_ports');
         Schema::dropIfExists('ssh_reverse_managed_enrollments');
         Schema::dropIfExists('ssh_reverse_gateway_settings');
     }

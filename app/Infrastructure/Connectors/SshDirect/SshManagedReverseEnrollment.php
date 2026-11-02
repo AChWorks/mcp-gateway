@@ -16,7 +16,7 @@ final class SshManagedReverseEnrollment extends Model
     protected $fillable = [
         'target_id', 'target_record_id', 'listener_port', 'tunnel_identity',
         'login_public_key', 'control_public_key', 'control_key_hash', 'token_hash', 'token_expires_at',
-        'state', 'claimed_at', 'activated_at', 'revoked_at',
+        'state', 'claimed_at', 'activated_at', 'revoked_at', 'publication_pending',
     ];
 
     protected $hidden = ['token_hash'];
@@ -25,6 +25,7 @@ final class SshManagedReverseEnrollment extends Model
     {
         return [
             'listener_port' => 'integer',
+            'publication_pending' => 'boolean',
             'token_expires_at' => 'immutable_datetime',
             'claimed_at' => 'immutable_datetime',
             'activated_at' => 'immutable_datetime',

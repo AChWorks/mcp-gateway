@@ -7,7 +7,9 @@
  */
 declare(strict_types=1);
 
+use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
+use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\SshManagedReverseInstallCommand;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
@@ -17,10 +19,14 @@ use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
+use App\Models\User;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use phpseclib4\Net\SFTP;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
@@ -59,7 +65,7 @@ try {
 
         $result = app(SshManagedReverseEnrollmentService::class)->begin(
             $targetId, 'Disposable E2E Target',
-            '8.8.8.8', $targetPort, 'mcptargetci', $pin,
+            '8.8.8.8', $targetPort, 'deploy.prod', $pin,
         );
         $enrollment = $result['enrollment'];
         $command = app(SshManagedReverseInstallCommand::class)
@@ -83,6 +89,63 @@ try {
     $transport = app(SshVerifiedTransport::class);
     $pin = SshHostKeyPin::fromLine($config->pinned_host_key);
 
+    if ($mode === 'readiness' || $mode === 'readiness-stopped') {
+        $health = app(SshManagedReverseHostReadiness::class)->assess(
+            SshManagedReverseGateway::query()->findOrFail(1),
+        );
+        $expected = $mode === 'readiness' ? 'Ready' : 'Degraded';
+        if ($health['state'] !== $expected) {
+            throw new RuntimeException('Expected '.$expected.' control-host readiness, got '.$health['state'].': '.$health['reason']);
+        }
+        echo 'PASS: bounded pinned control-host readiness state '.$health['state'].".\n";
+        exit(0);
+    }
+
+    if ($mode === 'job') {
+        $owner = User::query()->create([
+            'name' => 'Disposable managed retained Job',
+            'email' => 'managed-job-'.bin2hex(random_bytes(6)).'@example.test',
+            'password' => 'StrongPassword!234',
+            'role' => 'owner',
+            'target_scope_mode' => 'all',
+            'access_enabled' => true,
+        ]);
+        $client = hash('sha256', 'managed-reverse-e2e-job');
+        $tools = app(SshJobMcpToolHandlers::class);
+        $started = $tools->start(
+            $owner, $target->target_id, $client, (string) Str::uuid(),
+            'printf managed_real_retained_job_ok', 60,
+        );
+        if (! ($started['ok'] ?? false)) {
+            throw new RuntimeException('Managed SSH Job launch failed: '.json_encode($started));
+        }
+        $id = $started['result']['job_id'];
+        if (DB::table('ssh_command_jobs')->where('id', $id)->value('target_binding_hash')
+            !== SshTargetBinding::hash($target, $config)) {
+            throw new RuntimeException('Managed Job does not retain its exact route binding.');
+        }
+        $status = null;
+        for ($attempt = 0; $attempt < 30; $attempt++) {
+            $status = $tools->status($owner, $target->target_id, $client, $id);
+            if (($status['result']['status'] ?? null) === 'completed'
+                && ($status['result']['exit_code'] ?? null) === 0) {
+                break;
+            }
+            sleep(2);
+        }
+        if (($status['result']['status'] ?? null) !== 'completed'
+            || ($status['result']['exit_code'] ?? null) !== 0) {
+            throw new RuntimeException('Managed retained Job failed or incomplete: '.json_encode($status));
+        }
+        $output = $tools->output($owner, $target->target_id, $client, $id, 'stdout', 0, 16384);
+        if (! ($output['ok'] ?? false)
+            || base64_decode((string) ($output['result']['data'] ?? ''), true) !== 'managed_real_retained_job_ok') {
+            throw new RuntimeException('Managed retained Job output mismatch.');
+        }
+        echo "PASS: newly enrolled managed Reverse SSH executes pinned, retained Job with durable completion and output.\n";
+        exit(0);
+    }
+
     if ($mode === 'verify') {
         $observed = app(SshTargetConnectionService::class)->test($target);
         if (! is_string($observed) || $target->fresh()->connection_state->value !== 'connected') {
@@ -101,7 +164,7 @@ try {
             $config->endpoint(), $pin, $config->auth_method,
             $material['secret'], $material['passphrase'],
             static function ($sftp): string {
-                $path = '/home/mcptargetci/.mcp-reverse-e2e.txt';
+                $path = '/home/deploy.prod/.mcp-reverse-e2e.txt';
                 // phpseclib 4 SFTP::put() and delete() return void, not bool.
                 // Verify the bytes actually stored and independently read back.
                 $sftp->put($path, 'bounded-mcp-reverse-e2e', SFTP::SOURCE_STRING);
@@ -175,7 +238,7 @@ try {
     // Only fixed-mode diagnostic context is disclosed, never the token/key.
     fwrite(STDERR, sprintf(
         "FAIL: managed Reverse SSH E2E mode=%s, exception=%s, message=%s\n",
-        in_array($mode, ['enroll', 'verify', 'offline', 'revoke'], true) ? $mode : 'invalid',
+        in_array($mode, ['enroll', 'readiness', 'readiness-stopped', 'verify', 'job', 'offline', 'revoke'], true) ? $mode : 'invalid',
         $exception::class,
         $exception->getMessage(),
     ));

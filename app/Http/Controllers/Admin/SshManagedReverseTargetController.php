@@ -7,7 +7,10 @@ use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Application\Targets\SshManagedReverseInstallCommand;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
+use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Http\Controllers\Controller;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -84,6 +87,46 @@ final class SshManagedReverseTargetController extends Controller
             'expires' => $enrollment->token_expires_at,
         ])->with('notices', [])
             ->with('suppressCache', true);
+    }
+
+    public function reissue(
+        Request $request, Target $target, AdministratorPasswordConfirmation $password,
+        SshManagedReverseEnrollmentService $enroll, SshManagedReverseInstallCommand $installer,
+    ): View {
+        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
+        $fields = $request->validate([
+            'confirm_target_id' => ['required', 'string', 'max:64'],
+        ]);
+        if (! hash_equals($target->target_id, $fields['confirm_target_id'])) {
+            throw ValidationException::withMessages([
+                'confirm_target_id' => __('Type the exact Target ID to rotate an unverified enrollment.'),
+            ]);
+        }
+        $password->confirm($request);
+        $managed = SshManagedReverseEnrollment::query()
+            ->where('target_record_id', $target->getKey())->firstOrFail();
+        if ($managed->state === 'revoked' || $target->getRawOriginal('connection_state') !== TargetConnectionState::Pending->value) {
+            throw ValidationException::withMessages([
+                'target' => __('Only an unverified Pending Setup can be reissued. Revoke or inspect this Target first.'),
+            ]);
+        }
+        $installer->scriptDigest();
+        try {
+            $started = $enroll->reissue($managed);
+        } catch (InvalidArgumentException|RuntimeException) {
+            throw ValidationException::withMessages([
+                'target' => __('Cannot reissue the enrollment. Inspect Reverse SSH host readiness, publication and audit diagnostics; reconcile then retry.'),
+            ]);
+        }
+        $enrollment = $started['enrollment'];
+
+        return view('admin.reverse-ssh.install-command', [
+            'target' => $target,
+            'command' => $installer->command($enrollment, $started['token']),
+            'installerSha' => $installer->scriptDigest(),
+            'expires' => $enrollment->token_expires_at,
+        ])->with('notices', [])->with('suppressCache', true);
     }
 
     private function requireOwner(Request $request): User

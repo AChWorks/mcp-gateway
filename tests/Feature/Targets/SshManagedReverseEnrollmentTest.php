@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Targets;
 
+use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Application\Targets\SshManagedReverseInstallCommand;
 use App\Application\Targets\SshTargetConnectionException;
@@ -9,6 +10,7 @@ use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
@@ -295,5 +297,260 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         } catch (InvalidArgumentException) {
             self::assertSame('pending', $started['enrollment']->fresh()->state);
         }
+    }
+
+    public function test_failed_claim_publication_is_durable_and_owner_repair_activates_only_after_publication(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        $writer = new class extends SshManagedReverseAuthorizedKeys
+        {
+            public bool $fail = true;
+
+            protected function publish(string $contents): void
+            {
+                if ($this->fail) {
+                    throw new RuntimeException('Injected stage/rename publication failure');
+                }
+
+                parent::publish($contents);
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+        try {
+            app(SshManagedReverseEnrollmentService::class)->claim(
+                $started['enrollment']->id, $started['token'], $this->publicKey(61),
+            );
+            self::fail('Injected publication failure was hidden.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('Injected', $exception->getMessage());
+        }
+        self::assertSame('claimed', $started['enrollment']->fresh()->state);
+        self::assertTrue($started['enrollment']->fresh()->publication_pending);
+        self::assertSame('', file_get_contents($this->keyFile));
+        self::assertFalse($writer->isReconciled());
+        try {
+            app(SshReverseRoutePolicy::class)->forTarget(
+                $started['enrollment']->target, $started['enrollment']->target->sshConfig,
+            );
+            self::fail('Unpublished claim authorized a route.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('reverse_route_not_approved', $exception->reason);
+        }
+        $writer->fail = false;
+        $writer->sync();
+        self::assertSame('active', $started['enrollment']->fresh()->state);
+        self::assertFalse($started['enrollment']->fresh()->publication_pending);
+        self::assertTrue($writer->isReconciled());
+        self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
+    }
+
+    public function test_crash_after_policy_rename_cannot_erase_committed_claim_intent(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        $writer = new class extends SshManagedReverseAuthorizedKeys
+        {
+            public bool $interrupt = true;
+
+            protected function publish(string $contents): void
+            {
+                parent::publish($contents);
+                if ($this->interrupt) {
+                    throw new RuntimeException('Injected interruption after atomic rename');
+                }
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+        try {
+            app(SshManagedReverseEnrollmentService::class)->claim(
+                $started['enrollment']->id, $started['token'], $this->publicKey(61),
+            );
+            self::fail('Post-rename interruption was hidden.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('interruption', $exception->getMessage());
+        }
+        self::assertSame('claimed', $started['enrollment']->fresh()->state);
+        self::assertTrue($started['enrollment']->fresh()->publication_pending);
+        self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
+        $this->expectException(InvalidArgumentException::class);
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $started['enrollment']->id, $started['token'], $this->publicKey(61),
+        );
+    }
+
+    public function test_failed_revocation_publication_still_destroys_credential_and_fences_jobs(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $started['enrollment']->id, $started['token'], $this->publicKey(61),
+        );
+        $writer = new class extends SshManagedReverseAuthorizedKeys
+        {
+            public bool $fail = true;
+
+            protected function publish(string $contents): void
+            {
+                if ($this->fail) {
+                    throw new RuntimeException('Injected revoke key publication failure');
+                }
+
+                parent::publish($contents);
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+        $target = $started['enrollment']->target;
+        $service = app(SshManagedReverseEnrollmentService::class);
+        try {
+            $service->revoke($started['enrollment']);
+            self::fail('Revocation incorrectly returned complete.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('Injected', $exception->getMessage());
+        }
+        self::assertSame('revoked', $started['enrollment']->fresh()->state);
+        self::assertTrue($started['enrollment']->fresh()->publication_pending);
+        self::assertSame(0, TargetCredential::query()->where('target_record_id', $target->id)->count());
+        self::assertSame(1, $target->sshConfig->fresh()->binding_revision);
+        self::assertSame(TargetConnectionState::Disconnected, $target->fresh()->connection_state);
+        self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
+        try {
+            app(SshReverseRoutePolicy::class)->forTarget($target, $target->sshConfig->fresh());
+            self::fail('Partial host revocation permitted a Gateway SSH operation.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('reverse_route_not_approved', $exception->reason);
+        }
+        $writer->fail = false;
+        $service->revoke($started['enrollment']);
+        self::assertSame('', file_get_contents($this->keyFile));
+        self::assertFalse($started['enrollment']->fresh()->publication_pending);
+        self::assertSame(1, $target->sshConfig->fresh()->binding_revision);
+    }
+
+    public function test_expired_or_uncertain_pending_enrollment_can_reissue_with_same_target_and_retired_port(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        $oldPort = $started['enrollment']->listener_port;
+        $oldTarget = $started['enrollment']->target_record_id;
+        $row = $started['enrollment'];
+        $row->forceFill(['token_expires_at' => now()->subMinute()])->save();
+        $second = app(SshManagedReverseEnrollmentService::class)->reissue($row);
+        self::assertSame($row->id, $second['enrollment']->id);
+        self::assertSame($oldTarget, $second['enrollment']->target_record_id);
+        self::assertNotSame($oldPort, $second['enrollment']->listener_port);
+        self::assertSame(1, DB::table('ssh_reverse_managed_retired_ports')->where('listener_port', $oldPort)->count());
+        self::assertSame(1, $row->target->sshConfig->fresh()->binding_revision);
+        self::assertSame('pending', $second['enrollment']->state);
+        self::assertFalse($second['enrollment']->publication_pending);
+        try {
+            app(SshManagedReverseEnrollmentService::class)->claim(
+                $row->id, $started['token'], $this->publicKey(61),
+            );
+            self::fail('Old enrollment token was accepted after reissue.');
+        } catch (InvalidArgumentException) {
+            self::assertSame('pending', $second['enrollment']->fresh()->state);
+        }
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $row->id, $second['token'], $this->publicKey(62),
+        );
+        self::assertSame('active', $row->fresh()->state);
+        self::assertStringContainsString((string) $second['enrollment']->listener_port, file_get_contents($this->keyFile));
+        self::assertStringNotContainsString('permitlisten="127.0.0.1:'.$oldPort.'"', file_get_contents($this->keyFile));
+    }
+
+    public function test_listener_allocation_skips_an_unrelated_occupied_local_port(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $socket = @stream_socket_server('tcp://127.0.0.1:42000', $errno, $error);
+        if (! is_resource($socket)) {
+            $this->markTestSkipped('Port 42000 is occupied in this test environment.');
+        }
+        try {
+            $started = $this->begin();
+            self::assertNotSame(42000, $started['enrollment']->listener_port);
+        } finally {
+            fclose($socket);
+        }
+    }
+
+    public function test_post_publish_database_drift_requires_reconciliation_not_false_activation(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        $writer = new class extends SshManagedReverseAuthorizedKeys
+        {
+            public bool $drift = true;
+
+            protected function publish(string $contents): void
+            {
+                parent::publish($contents);
+                if ($this->drift) {
+                    // Simulate a separate, already committed revocation
+                    // between publication and the final DB commit.
+                    DB::table('ssh_reverse_managed_enrollments')->update([
+                        'state' => 'revoked',
+                        'revoked_at' => now(),
+                        'publication_pending' => true,
+                    ]);
+                }
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+        try {
+            app(SshManagedReverseEnrollmentService::class)->claim(
+                $started['enrollment']->id, $started['token'], $this->publicKey(61),
+            );
+            self::fail('Post-publication intent drift silently activated an enrollment.');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('changed during publication', $e->getMessage());
+        }
+        self::assertSame('revoked', $started['enrollment']->fresh()->state);
+        self::assertTrue($started['enrollment']->fresh()->publication_pending);
+        self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
+        try {
+            app(SshReverseRoutePolicy::class)->forTarget(
+                $started['enrollment']->target, $started['enrollment']->target->sshConfig,
+            );
+            self::fail('Revoked route stayed authorized after a partial finalization.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('reverse_route_not_approved', $e->reason);
+        }
+        $writer->drift = false;
+        $writer->sync();
+        self::assertSame('', file_get_contents($this->keyFile));
+        self::assertFalse($started['enrollment']->fresh()->publication_pending);
+    }
+
+    public function test_revocation_still_fences_local_authority_if_policy_lock_unavailable(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $started['enrollment']->id, $started['token'], $this->publicKey(61),
+        );
+        // The unprivileged writer has lost access to the policy reader.
+        chmod($this->keyFile, 0400);
+        try {
+            app(SshManagedReverseEnrollmentService::class)->revoke($started['enrollment']);
+            self::fail('Unreadable key publication was reported as complete.');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('unavailable', $e->getMessage());
+        } finally {
+            chmod($this->keyFile, 0600);
+        }
+        self::assertSame('revoked', $started['enrollment']->fresh()->state);
+        self::assertTrue($started['enrollment']->fresh()->publication_pending);
+        self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame(1, $started['enrollment']->target->sshConfig->fresh()->binding_revision);
+        app(SshManagedReverseAuthorizedKeys::class)->sync();
+        self::assertSame('', file_get_contents($this->keyFile));
     }
 }

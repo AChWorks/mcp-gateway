@@ -7,18 +7,13 @@ use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetConnectionState;
-use App\Domain\Targets\TargetCredential;
 use App\Http\Controllers\Controller;
-use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
-use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
-use App\Support\CorrelationId;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
+use RuntimeException;
 
 final class SshManagedReverseRevocationController extends Controller
 {
@@ -26,7 +21,6 @@ final class SshManagedReverseRevocationController extends Controller
         Request $request, Target $target,
         AdministratorPasswordConfirmation $password,
         SshManagedReverseEnrollmentService $enroll,
-        ActivityRecorder $activity,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::SecurityManage->value);
         Gate::authorize(GatewayPermission::TargetsDisconnect->value, $target);
@@ -45,39 +39,20 @@ final class SshManagedReverseRevocationController extends Controller
         $managed = SshManagedReverseEnrollment::query()
             ->where('target_record_id', $target->getKey())->first();
         abort_unless($managed instanceof SshManagedReverseEnrollment, 404);
-        // Drop route authority FIRST, even if public-key file sync subsequently
-        // fails or a previously established control session remains in memory.
-        $enroll->revoke($managed);
-
-        DB::transaction(function () use ($target, $activity): void {
-            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
-            $config = SshTargetConfig::query()->where('target_record_id', $locked->getKey())
-                ->lockForUpdate()->firstOrFail();
-            // Same audited immutable-binding bypass as SshTargetReconfiguration:
-            // route was independently revoked and the credential is destroyed.
-            DB::table('ssh_direct_target_configs')->where('id', $config->getKey())->update([
-                'binding_revision' => ((int) $config->binding_revision) + 1,
-                'verification_attempt_id' => null,
-                'observed_peer_ip' => null,
-                'observed_at' => null,
-                'updated_at' => now(),
-            ]);
-            // This is terminal local revocation, not an automatic reroute. A
-            // fresh Owner enrollment is required before any reauthorization.
-            TargetCredential::query()->where('target_record_id', $locked->getKey())
-                ->where('connector_type', 'ssh_direct')->delete();
-            $locked->forceFill([
-                'connection_state' => TargetConnectionState::Disconnected,
-                'connected_at' => null,
-                'last_error_code' => 'reverse_route_not_approved',
-            ])->save();
-            $activity->recordRequired(
-                CorrelationId::current(), 'ssh-managed-reverse-revoke', 'success', $locked,
-            );
-        });
+        // One durable local revocation transaction destroys the SSH vault
+        // credential and fences retained Jobs BEFORE host-file publication.
+        try {
+            $enroll->revoke($managed);
+        } catch (RuntimeException $exception) {
+            if ($managed->fresh()?->state === 'revoked') {
+                return redirect()->route('admin.targets.show', ['target' => $target->target_id])
+                    ->withErrors(['target' => __('Gateway route and credential were revoked, but host key publication is not reconciled. Retry the same Owner revoke action or use Reverse SSH Settings → Reconcile. Do not claim complete host revocation yet.')]);
+            }
+            throw $exception;
+        }
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
-            ->with('status', __('Managed Reverse SSH authorization revoked and local SSH credential removed. '
-                .'Existing control sessions may remain until the Target service disconnects; stop its systemd unit and remove the installed Target login key separately.'));
+            ->with('status', __('Managed Reverse SSH access revoked and restricted key reader reconciled. Existing control sessions may persist until the Target-side systemd unit is stopped separately.'));
+
     }
 }

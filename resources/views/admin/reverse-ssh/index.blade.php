@@ -18,10 +18,18 @@
     <dl class="detail-list">
         <dt>{{ __('State') }}</dt><dd><strong>{{ __($status) }}</strong></dd>
         <dt>{{ __('Restricted key reader') }}</dt><dd>{{ $fileReady ? __('Available locally') : __('Missing or not writable by PHP') }}</dd>
+        <dt>{{ __('Key policy publication') }}</dt><dd>{{ $policyReconciled ? __('Reconciled') : __('Pending or mismatched — Owner repair required') }}</dd>
+        <dt>{{ __('Local SSH host verification') }}</dt><dd>{{ __($readiness['reason']) }}</dd>
+        <dt>{{ __('Control TCP port') }}</dt><dd>{{ $controlPort ?? __('Not configured') }}</dd>
+        <dt>{{ __('Remote Target reachability') }}</dt><dd>{{ __($readiness['external']) }}</dd>
         <dt>{{ __('Pending enrollments') }}</dt><dd>{{ $pending }}</dd>
         <dt>{{ __('Activated enrollments') }}</dt><dd>{{ $active }}</dd>
     </dl>
-    <p class="field-help">{{ __('This status only checks local configuration and key-reader availability. It does not prove that sshd, firewall, control port or a remote tunnel is reachable. PHP cannot change root-owned SSHD/systemd configuration without a separately approved bootstrap.') }}</p>
+    <p class="field-help">{{ __('The local status probes a bounded SSH handshake with the pinned control key when enabled and reachable. It does not prove systemd supervision, firewall policy, container-host namespace equivalence or remote Target egress. PHP cannot change root-owned SSHD/systemd configuration without a separately approved bootstrap.') }}</p>
+    <p class="field-help">{{ __('Trusted Gateway host checks (run with separately authorized host access):') }} <code>sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager</code> {{ __('and') }} <code>sudo ss -lntp</code>. {{ __('To validate setup compatibility first, run the verified release installer with --preflight, the actual --app path, --php-user and selected --port.') }}</p>
+    @if ($status === 'Degraded' || $status === 'Needs host setup')
+        <div class="alert alert-error" role="status">{{ __('Gateway Reverse SSH requires explicit host inspection or key-policy reconciliation before onboarding. Do not treat a working key reader alone as SSHD availability.') }}</div>
+    @endif
     @unless ($fileReady)
         <div class="alert alert-error" role="status">
             {{ __('One-time Gateway host setup is required. Use a trusted, independently verified release installer with explicit host approval. No host privileges are granted to this Admin page.') }}
