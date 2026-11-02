@@ -1071,13 +1071,28 @@ async function roleSensitiveDirtyForms(browser) {
         const { page } = run;
         const warnings = [];
         page.on('dialog', async dialog => { warnings.push(dialog.type()); await dialog.accept(); });
+        // The Account link performs a native document navigation. Playwright
+        // may expose the new form before deferred admin-forms.js has attached
+        // Role listeners. An early selectOption would falsely report missing
+        // fail-closed defaults. Observe the real application readiness event,
+        // after all of its synchronous initialization listeners have run.
+        await run.context.addInitScript(() => {
+            document.addEventListener('gateway:admin-ready', () => {
+                queueMicrotask(() => { document.body.dataset.browserAdminReady = 'true'; });
+            });
+        });
+        const openUser = async name => {
+            await page.goto(base + '/admin/users');
+            await page.getByRole('link', { name: 'Manage ' + name, exact: true }).click();
+            await page.locator('body[data-browser-admin-ready="true"]').waitFor({ timeout: 5000 });
+            await page.locator('form[data-user-role-form]').waitFor();
+        };
 
         // Create both accounts through the isolated loopback fixture, then
         // exercise the actual saved-user editor (not a synthetic DOM fragment).
         await enter(page, 'viewer');
         await enter(page, 'owner');
-        await page.goto(base + '/admin/users');
-        await page.getByRole('link', { name: 'Manage UI Fixture Viewer', exact: true }).click();
+        await openUser('UI Fixture Viewer');
 
         const form = page.locator('form[data-user-role-form]');
         const role = page.locator('#role');
@@ -1105,8 +1120,7 @@ async function roleSensitiveDirtyForms(browser) {
         await nav(page, 'Dashboard', 'Gateway overview');
         assert.deepEqual(warnings, [], 'Reverted Viewer/Operator role switching must not ask to discard');
 
-        await page.goto(base + '/admin/users');
-        await page.getByRole('link', { name: 'Manage UI Fixture Owner', exact: true }).click();
+        await openUser('UI Fixture Owner');
         const ownerForm = page.locator('form[data-user-role-form]');
         assert.equal(await ownerForm.getAttribute('data-admin-dirty'), null, 'Owner begins clean');
         await page.locator('#role').selectOption('operator');
@@ -1119,8 +1133,7 @@ async function roleSensitiveDirtyForms(browser) {
 
         // Save establishes a fresh baseline; an unsuccessful subsequent
         // validation keeps the server-flashed unsaved User draft protected.
-        await page.goto(base + '/admin/users');
-        await page.getByRole('link', { name: 'Manage UI Fixture Viewer', exact: true }).click();
+        await openUser('UI Fixture Viewer');
         const savedName = 'UI Fixture Viewer saved';
         await page.locator('#name').fill(savedName);
         await page.locator('#current_password').fill('isolated-browser-password');
