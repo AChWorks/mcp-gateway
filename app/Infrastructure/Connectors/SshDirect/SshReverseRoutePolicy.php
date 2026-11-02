@@ -21,7 +21,10 @@ final class SshReverseRoutePolicy
         }
 
         $managed = SshManagedReverseEnrollment::query()->where('target_id', $target->target_id)->first();
-        if ($managed && (string) $managed->target_record_id !== (string) $target->getKey()) {
+        if ($managed && ((string) $managed->target_record_id !== (string) $target->getKey()
+            || ($managed->state !== 'revoked' && ($config->route_mode ?? 'direct') !== 'reverse'))) {
+            // No silent Direct fallback from a live or pending managed
+            // tunnel, even if an internal caller bypassed the Admin form.
             throw new SshTargetConnectionException('reverse_route_not_approved');
         }
 

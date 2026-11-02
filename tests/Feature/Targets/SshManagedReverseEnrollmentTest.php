@@ -3,7 +3,9 @@
 namespace Tests\Feature\Targets;
 
 use App\Application\Targets\SshManagedReverseEnrollmentService;
+use App\Application\Targets\SshManagedReverseInstallCommand;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Targets\Target;
@@ -14,6 +16,7 @@ use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use InvalidArgumentException;
 use RuntimeException;
@@ -149,6 +152,45 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         app(SshReverseRoutePolicy::class)->forTarget(Target::query()->sole(), SshTargetConfig::query()->sole());
     }
 
+    public function test_pending_managed_route_never_degrades_to_direct_after_configuration_drift(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        $target = $started['enrollment']->target;
+        $config = $target->sshConfig;
+        // Simulate a privileged schema/data drift that bypasses the form.
+        DB::table('ssh_direct_target_configs')
+            ->where('id', $config->getKey())
+            ->update([
+                'route_mode' => 'direct',
+                'reverse_listener_port' => null,
+                'reverse_tunnel_identity' => null,
+            ]);
+        try {
+            app(SshReverseRoutePolicy::class)->forTarget($target, $config->fresh());
+            self::fail('Live managed authorization unexpectedly permitted Direct fallback.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('reverse_route_not_approved', $e->reason);
+        }
+    }
+
+    public function test_direct_service_disconnect_cannot_orphan_managed_control_authority(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        $target = $started['enrollment']->target;
+        try {
+            app(SshTargetConnectionService::class)->disconnect($target);
+            self::fail('Direct credential disconnect removed a live managed binding.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('reverse_route_not_approved', $e->reason);
+        }
+        self::assertSame(1, TargetCredential::query()
+            ->where('target_record_id', $target->getKey())->count());
+    }
+
     public function test_active_managed_enrollment_cannot_be_silently_reconfigured_to_direct(): void
     {
         $this->gateway();
@@ -183,6 +225,21 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         self::assertSame('pending', $started['enrollment']->fresh()->state);
         self::assertSame(1, TargetCredential::query()
             ->where('target_record_id', $target->getKey())->count());
+    }
+
+    public function test_enrollment_uses_the_lowercase_laravel_ulid_accepted_by_target_installer(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        config()->set('app.url', 'https://gateway.example.test');
+        $started = $this->begin();
+        $id = (string) $started['enrollment']->getKey();
+        self::assertMatchesRegularExpression('/^[0-9a-hjkmnp-tv-z]{26}$/D', $id);
+
+        $command = app(SshManagedReverseInstallCommand::class)
+            ->command($started['enrollment'], $started['token']);
+        self::assertStringContainsString($id, $command);
+        self::assertStringContainsString('--enrollment', $command);
     }
 
     public function test_one_control_public_key_cannot_be_claimed_for_two_targets(): void

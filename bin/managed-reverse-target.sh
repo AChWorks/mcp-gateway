@@ -27,7 +27,7 @@ while (($#)); do
 done
 [[ "$EUID" -eq 0 ]] || die "Run with sudo/root; no privilege escalation is attempted."
 [[ "$gateway" =~ ^https://[A-Za-z0-9.:-]+(:[0-9]+)?(/[^\ \?\#]*)?$ ]] || die "Gateway must be an explicit HTTPS endpoint."
-[[ "$enrollment" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ ]] || die "Invalid enrollment identity."
+[[ "$enrollment" =~ ^[0-9a-hjkmnp-tv-z]{26}$ ]] || die "Invalid enrollment identity."
 [[ "$token" =~ ^[a-f0-9]{64}$ ]] || die "Invalid one-use enrollment authorization."
 [[ "$host_key_b64" =~ ^[A-Za-z0-9+/=]+$ ]] || die "Invalid verified Target host key encoding."
 [[ -z "$port_override" || "$port_override" =~ ^[1-9][0-9]{0,4}$ ]] || die "Invalid SSH port override."

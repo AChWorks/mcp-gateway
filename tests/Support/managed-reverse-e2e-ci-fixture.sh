@@ -44,7 +44,7 @@ export APP_KEY="base64:$(openssl rand -base64 32 | tr -d '\n')"
 cleanup() {
     [[ -z "$php_pid" ]] || { kill "$php_pid" >/dev/null 2>&1 || true; wait "$php_pid" 2>/dev/null || true; }
     [[ -z "$tls_pid" ]] || { kill "$tls_pid" >/dev/null 2>&1 || true; wait "$tls_pid" 2>/dev/null || true; }
-    if [[ -n "$target_unit" && "$target_unit" =~ ^mcp-gateway-reverse-[0-9A-HJKMNP-TV-Z]{26}\.service$ ]]; then
+    if [[ -n "$target_unit" && "$target_unit" =~ ^mcp-gateway-reverse-[0-9a-hjkmnp-tv-z]{26}\.service$ ]]; then
         sudo systemctl disable --now "$target_unit" >/dev/null 2>&1 || true
         sudo rm -f -- "/etc/systemd/system/$target_unit"
         sudo systemctl daemon-reload >/dev/null 2>&1 || true
@@ -110,7 +110,7 @@ php tests/Support/managed-reverse-e2e.php enroll ||
 [[ -s "$tmp/one-command.sh" && -s "$tmp/enrollment-id" ]] ||
     die "Enrollment command/identifier was not produced; stop before any Target effect."
 enrollment="$(cat "$tmp/enrollment-id")"
-[[ "$enrollment" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ ]] ||
+[[ "$enrollment" =~ ^[0-9a-hjkmnp-tv-z]{26}$ ]] ||
     die "Generated enrollment ID is malformed."
 target_unit="mcp-gateway-reverse-$enrollment.service"
 control_user="mcp-r-$(printf '%s' "${enrollment:0:12}" | tr '[:upper:]' '[:lower:]')"
@@ -144,6 +144,23 @@ sha256sum bin/managed-reverse-target.sh | awk '{print $1}' > "$tmp/expected-sha"
 sha256sum "$tmp/installer-check.sh" | awk '{print $1}' > "$tmp/actual-sha"
 cmp "$tmp/expected-sha" "$tmp/actual-sha" ||
     die "Live HTTPS installer source bytes differ from accepted release."
+
+# A definitively rejected claim must not create an orphan OS identity. The
+# next valid command may safely reuse the locally staged (unpublished) key.
+bad_host_pin="$(awk '{print $1" "$2}' "$tmp/target-host.pub" | base64 -w 0)"
+if sudo env CURL_CA_BUNDLE="$tmp/tls.crt" bash bin/managed-reverse-target.sh \
+    --gateway "$APP_URL" --enrollment "$enrollment" \
+    --token "$(printf '0%.0s' {1..64})" \
+    --host-key-b64 "$bad_host_pin" --target-port "$target_port" \
+    > "$tmp/rejected.log" 2>&1; then
+    die "Wrong one-use claim was accepted by Laravel."
+fi
+if getent passwd "$control_user" >/dev/null; then
+    die "Rejected claim created an orphaned OS account."
+fi
+[[ ! -e "/var/lib/mcp-gateway-reverse/$enrollment/enrollment.json" ]] ||
+    die "Rejected claim wrote a misleading successful enrollment record."
+echo "PASS: rejected token fails before control-account provisioning."
 
 # EXACT application-generated command executed as root; public test CA is
 # explicitly trusted only by this disposable process. No shell secrets logged.
