@@ -25,11 +25,11 @@ jobs:
   package:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     services:
       mariadb:
-        image: mariadb:10.11
+        image: mariadb:12.3
         env:
           MARIADB_DATABASE: mcp_gateway_test
           MARIADB_USER: mcp_gateway
@@ -50,7 +50,7 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
-          php-version: '8.4'
+          php-version: '8.5'
           extensions: curl, mbstring, openssl, pdo_mysql, pdo_sqlite, sodium
           coverage: none
           tools: composer:v2
@@ -131,7 +131,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2 2.2.0 2.2.1 2.3.0 2.3.1 2.3.2 2.3.3 2.3.4 2.3.5 2.3.6 2.3.7 2.3.8 2.3.9 2.3.10 2.3.11 2.3.12 2.4.0 2.4.1 2.4.2 2.5.0 2.5.1 2.5.2 2.5.3 2.5.4; do
+          mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
+          [[ ${#versions[@]} -eq 3 ]] || { echo "Cannot select exactly three release baselines" >&2; exit 1; }
+          for version in "${versions[@]}"; do
             gh release download "v$version" \
               --pattern "mcp-gateway-v$version.zip*" \
               --dir dist/baseline
@@ -151,7 +153,9 @@ jobs:
           UPDATE_TEST_DB_PASSWORD: test-password
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2 2.2.0 2.2.1 2.3.0 2.3.1 2.3.2 2.3.3 2.3.4 2.3.5 2.3.6 2.3.7 2.3.8 2.3.9 2.3.10 2.3.11 2.3.12 2.4.0 2.4.1 2.4.2 2.5.0 2.5.1 2.5.2 2.5.3 2.5.4; do
+          mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
+          [[ ${#versions[@]} -eq 3 ]] || { echo "Cannot select exactly three release baselines" >&2; exit 1; }
+          for version in "${versions[@]}"; do
             bash bin/test-update-package.sh \
               "dist/$UPDATE_PACKAGE.zip" \
               "dist/baseline/mcp-gateway-v$version.zip"
@@ -166,7 +170,9 @@ jobs:
           UPDATE_TEST_DB_USERNAME: mcp_gateway
           UPDATE_TEST_DB_PASSWORD: test-password
         run: |
-          for version in 1.1.2 1.1.10 1.2.1 2.0.0 2.0.1 2.0.2 2.0.3 2.1.2 2.2.0 2.2.1 2.3.0 2.3.1 2.3.2 2.3.3 2.3.4 2.3.5 2.3.6 2.3.7 2.3.8 2.3.9 2.3.10 2.3.11 2.3.12 2.4.0 2.4.1 2.4.2 2.5.0 2.5.1 2.5.2 2.5.3 2.5.4; do
+          mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
+          [[ ${#versions[@]} -eq 3 ]] || { echo "Cannot select exactly three release baselines" >&2; exit 1; }
+          for version in "${versions[@]}"; do
             bash bin/test-update-backup-integrity.sh \
               "dist/$UPDATE_PACKAGE.zip" \
               "dist/baseline/mcp-gateway-v$version.zip"
@@ -191,7 +197,13 @@ jobs:
 
           ## Fresh installation
 
-          Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MariaDB 10.11 (recommended) or MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
+          Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.5 + MariaDB 12.3 host (primary CI-validated runtime; older PHP 8.4.1+/MariaDB or MySQL combinations require separate verification), point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
+
+          ## Supported direct upgrade window
+
+          Direct browser updates are verified only from the three most recent
+          preceding stable releases. Older installations need a verified intermediate
+          upgrade or separately approved backup-and-migration path.
 
           ## Simple browser update
 
