@@ -6,7 +6,7 @@ umask 077
 export LC_ALL=C
 
 die() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
-[[ "\${GITHUB_ACTIONS:-}" == true && "$EUID" -ne 0 ]] ||
+[[ "${GITHUB_ACTIONS:-}" == true && "$EUID" -ne 0 ]] ||
     die "Only the normal, non-root user on disposable GitHub Actions may invoke this fixture."
 [[ "$(cat /proc/1/comm)" == systemd ]] || die "Real systemd PID 1 required."
 for tool in sudo sshd ssh-keygen ssh-keyscan socat openssl curl php python3 systemctl; do
@@ -111,7 +111,7 @@ enrollment="$(cat "$tmp/enrollment-id")"
 [[ "$enrollment" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ ]] ||
     die "Generated enrollment ID is malformed."
 target_unit="mcp-gateway-reverse-$enrollment.service"
-control_user="mcp-r-$(printf '%s' "\${enrollment:0:12}" | tr '[:upper:]' '[:lower:]')"
+control_user="mcp-r-$(printf '%s' "${enrollment:0:12}" | tr '[:upper:]' '[:lower:]')"
 
 # Short-lived, private TLS bridge to an ordinary loopback Laravel HTTP
 # process; no external endpoint or insecure curl -k.
