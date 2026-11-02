@@ -109,7 +109,15 @@ test can set Connected. This is point-in-time proof, not a heartbeat.
 ## Acceptance gates
 
 Code lint, static analysis, PHP tests, release-artifact verification and
-real isolated OpenSSH/systemd acceptance must pass. Verify false host pins,
+real isolated OpenSSH/systemd acceptance must pass. The disposable
+`managed-reverse-single-command-e2e` job uses the actual generated
+single-command installer, real local TLS and one-use HTTP enrollment against
+Laravel/SQLite, separately restricted control and Target SSHD identities,
+a persistent Target systemd service, real Gateway pinned login/Command/SFTP,
+safe repeat invocation, disconnection and systemd reconnection. It removes
+its isolated runtime state afterward. This is a single-host loopback network
+simulation; it does not prove cross-border network reachability or actual
+host reboot persistence. Verify false host pins,
 wrong listeners, no shell, replay, concurrency, restart/recovery, revocation
 and partial outcomes. Green CI is not a production host proof; production
 SSHD changes, Merge, release and deployment need exact Owner authorization.

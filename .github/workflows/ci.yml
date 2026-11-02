@@ -179,3 +179,33 @@ jobs:
 
       - name: Verify real restricted OpenSSH control host
         run: bash tests/Support/managed-reverse-host-ci-fixture.sh
+
+  managed-reverse-single-command-e2e:
+    # Only on a disposable, isolated GitHub-hosted runner. Tests the exact
+    # generated Target installer against a real local TLS claim, OpenSSH and
+    # systemd; never connected to a production Gateway, Target or API key.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring, openssl, pdo_sqlite, sodium
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare disposable restricted OpenSSH and TLS tools
+        run: |
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server socat
+
+      - name: Install exact generated Target command over real local TLS and verify Gateway SSH
+        run: bash tests/Support/managed-reverse-e2e-ci-fixture.sh

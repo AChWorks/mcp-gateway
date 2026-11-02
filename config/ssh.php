@@ -29,6 +29,6 @@ return [
         'installer_path' => base_path('bin/managed-reverse-target.sh'),
         // Committed digest from the exact installer delivered by the package.
         // The release/distribution process must independently verify this.
-        'installer_sha256' => 'bf4a6e17a5a727e0499ef949dd68433a07025de5b8c9144cad3f1b42bb480fdb',
+        'installer_sha256' => '7dfea60fa001c737bb4d6c9e6dd2a4960d9e0f629a7b240f7e8d4be485c0bf91',
     ],
 ];

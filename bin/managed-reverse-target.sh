@@ -71,16 +71,23 @@ fi
 if [[ -e "$state_file" ]]; then
     [[ -f "$state_file" && ! -L "$state_file" ]] || die "Unexpected existing enrollment state."
 fi
+# Before consuming the one-use claim, refuse an unrelated OS account or
+# pre-existing systemd unit. A first installation creates the dedicated OS
+# user ONLY after the claim response is stored, so a lost response does not
+# leave an orphaned account that prevents safe Owner reconciliation.
 if getent passwd "$client_user" >/dev/null; then
-    [[ -f "$state_file" ]] || die "Existing service user cannot be adopted without owned enrollment state."
-else
-    useradd --system --create-home --shell /usr/sbin/nologin "$client_user"
+    [[ -f "$state_file" ]] || die "Existing service user has no completed enrollment state; request Owner reconciliation."
+    [[ "$(id -gn "$client_user")" == "$client_user" ]] ||
+        die "Existing control account lacks its dedicated service group."
+fi
+if [[ -e "$unit" && $(grep -cx '# Managed by MCP Gateway Reverse SSH' "$unit" || true) != 1 ]]; then
+    die "Existing systemd unit is not owned by this enrollment; no overwrite."
 fi
 install -d -m 0755 "$base_dir"
 install -d -m 0711 "$state_dir"
 exec 9> "$state_dir/.install.lock"
 flock -n 9 || die "Another installer is already running for this enrollment."
-install -d -m 0700 -o "$client_user" "$keys_dir"
+install -d -m 0700 "$keys_dir"
 if [[ ! -f "$control_key" ]]; then
     ssh-keygen -q -t ed25519 -N '' -f "$control_key" -C "" || die "SSH key creation failed."
 fi
@@ -112,6 +119,19 @@ PYTHON
     mv -n -- "$tmp_response" "$state_file" || die "Failed to persist claimed enrollment response."
     chmod 0600 "$state_file"
 fi
+# The response is durable BEFORE creating an OS account. Explicit
+# --user-group avoids relying on distro-specific USERGROUPS_ENAB defaults.
+# Do not silently adopt an existing account without proven owned state.
+if ! getent passwd "$client_user" >/dev/null; then
+    useradd --system --user-group --no-create-home --home-dir "$state_dir" \
+        --shell /usr/sbin/nologin "$client_user" ||
+        die "Could not create the dedicated non-root tunnel account."
+fi
+[[ "$(id -gn "$client_user")" == "$client_user" ]] ||
+    die "Dedicated tunnel service group does not match its account."
+chown -R "$client_user:$client_user" "$keys_dir"
+chmod 0700 "$keys_dir"
+
 # Parse untrusted JSON as data, NEVER evaluate as shell. Strict fields only.
 params="$state_dir/.parameters.$$"
 python3 - "$state_file" "$params" <<'PYTHON' || die "Invalid Gateway claim response; reconcile with Owner."
@@ -161,9 +181,6 @@ known="$keys_dir/known_hosts"
 printf '[%s]:%s %s\n' "$control_host" "$control_port" "$control_host_key" > "$known"
 chmod 0600 "$known"
 chown -R "$client_user" "$keys_dir"
-if [[ -e "$unit" && $(grep -c '^# Managed by MCP Gateway Reverse SSH$' "$unit" || true) != 1 ]]; then
-    die "Existing systemd unit is not owned by this enrollment; no overwrite."
-fi
 tmp_unit="$state_dir/.service.$$"
 cat > "$tmp_unit" <<EOF
 # Managed by MCP Gateway Reverse SSH
