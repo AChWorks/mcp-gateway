@@ -47,15 +47,15 @@ final class AdminPageConsistencyTest extends TestCase
 
     public function test_invalid_operational_value_remains_in_form_with_associated_error_and_no_setting_write(): void
     {
-        $this->actingAs($this->owner())
+        $result = $this->actingAs($this->owner())
             ->from('/admin/operations')
             ->put('/admin/operations', [
                 'version' => '0',
                 'values' => ['wp_response_kib' => '999999', 'wp_readonly_response_kib' => '256'],
                 'current_password' => 'CorrectHorse!234',
-            ])->assertRedirect('/admin/operations');
+            ])->assertAdminRedirect('/admin/operations');
 
-        $html = $this->get('/admin/operations')->assertOk()->getContent();
+        $html = $this->get((string) $result->headers->get('Location'))->assertOk()->getContent();
         $xpath = $this->xpath($html);
         self::assertSame(1, (int) $xpath->evaluate('count(//input[@id="setting_wp_response_kib"][@value="999999"][@aria-invalid="true"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="setting_wp_response_kib_error"][@role="alert"])'));

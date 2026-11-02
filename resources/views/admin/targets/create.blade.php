@@ -34,13 +34,7 @@
                         <li>{{ $message }}</li>
                     @endforeach
                 </ul>
-                @if (session('diagnostic_code'))
-                    <p><strong>{{ __('Failure category') }}:</strong> <code>{{ session('diagnostic_code') }}</code></p>
-                    <p><strong>{{ __('What to check') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
-                @endif
-                @if (session('diagnostic_reference'))
-                    <p><strong>{{ __('Log reference') }}:</strong> <code>{{ session('diagnostic_reference') }}</code></p>
-                @endif
+                @include('admin.partials.operation-diagnostic', ['embedded' => true])
             </div>
         @endif
         <div class="field">

@@ -64,7 +64,7 @@ final class TargetManagementAdminTest extends TestCase
             'display_name' => 'WordPress blog',
             'ai_guidance' => 'Production WordPress: explain consequences before changing content.',
             'base_url' => 'https://wordpress.example.test/',
-        ])->assertRedirect('/admin/targets/wp-blog');
+        ])->assertAdminRedirect('/admin/targets/wp-blog');
 
         $wp = Target::query()->where('target_id', 'wp-blog')->firstOrFail();
         self::assertSame('wp_ai_bridge', $wp->connector_type);
@@ -135,7 +135,7 @@ final class TargetManagementAdminTest extends TestCase
 
         foreach (['connect', 'reconnect', 'disconnect', 'test'] as $action) {
             $this->post(route('admin.targets.'.$action, ['target' => $target->target_id], false))
-                ->assertRedirect('/admin/targets/'.$target->target_id)
+                ->assertAdminRedirect('/admin/targets/'.$target->target_id)
                 ->assertSessionHasErrors('target');
         }
 
@@ -191,7 +191,7 @@ final class TargetManagementAdminTest extends TestCase
                 GatewayPermission::SshFileWrite->value,
             ],
             'current_password' => 'ThisIsATestSecret!234',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
 
         $admin = User::query()->where('email', 'selected-ssh-admin@example.test')->sole();
         $access = app(AccessControl::class);
@@ -229,7 +229,7 @@ final class TargetManagementAdminTest extends TestCase
         $this->actingAs($admin);
         foreach ($newTargets as $id => $payload) {
             $this->post('/admin/targets', $payload)
-                ->assertRedirect('/admin/targets')->assertSessionHasNoErrors()
+                ->assertAdminRedirect('/admin/targets')->assertSessionHasNoErrors()
                 ->assertSessionHas('status', static fn (string $message): bool => str_contains($message, $id) && str_contains($message, 'Ask an Owner'));
             $created = Target::query()->where('target_id', $id)->sole();
             $this->assertDatabaseMissing('user_target_access', [
@@ -259,7 +259,7 @@ final class TargetManagementAdminTest extends TestCase
             'current_password' => 'ThisIsATestSecret!234',
             'confirm_ssh_target_changes' => '1',
             'target_revision' => app(UserAccessManager::class)->targetRuleRevision($admin, $ssh),
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         $this->assertDatabaseHas('user_target_access', [
             'user_id' => $admin->getKey(),
             'target_record_id' => $ssh->getKey(),
@@ -313,7 +313,7 @@ final class TargetManagementAdminTest extends TestCase
                 'target_id' => str_replace('.', '-', $host),
                 'display_name' => 'Safe metadata diagnostic',
                 'base_url' => 'https://'.$host,
-            ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge')
+            ])->assertAdminRedirect('/admin/targets/create?connector_type=wp_ai_bridge')
                 ->assertSessionHasErrors('base_url')
                 ->assertSessionHas('diagnostic_code', $code)
                 ->assertSessionHas('diagnostic_context', static function (array $context) use ($expectedHttpStatus): bool {
@@ -388,7 +388,7 @@ final class TargetManagementAdminTest extends TestCase
             }
         });
 
-        $this->post('/admin/targets', [
+        $postResult = $this->post('/admin/targets', [
             'connector_type' => 'wp_ai_bridge',
             'target_id' => 'blinko',
             'display_name' => 'Blinko',
@@ -400,7 +400,7 @@ final class TargetManagementAdminTest extends TestCase
                 && ($details['outbound_address_class'] ?? null) === 'loopback'
             );
 
-        $this->get('/admin/targets/create?connector_type=wp_ai_bridge')->assertOk()
+        $this->get((string) $postResult->headers->get('Location'))->assertOk()
             ->assertSee('127.0.0.1')
             ->assertSee('/etc/hosts')
             ->assertSee('Do not bypass SSRF protections.');
@@ -420,13 +420,13 @@ final class TargetManagementAdminTest extends TestCase
             }
         });
 
-        $this->post('/admin/targets/preflight', [
+        $postResult = $this->post('/admin/targets/preflight', [
             'connector_type' => 'wp_ai_bridge',
             'target_id' => 'blinko',
             'display_name' => 'Blinko',
             'base_url' => 'https://blinko.example.test/',
             'ssh_password' => 'NEVER_FLASH_SECRET',
-        ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
+        ])->assertAdminRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
 
         $result = session('target_endpoint_preflight');
         self::assertIsArray($result);
@@ -436,7 +436,7 @@ final class TargetManagementAdminTest extends TestCase
         self::assertTrue(Str::isUuid($result['reference']));
         self::assertArrayNotHasKey('ssh_password', session()->getOldInput());
 
-        $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
+        $this->get((string) $postResult->headers->get('Location'))
             ->assertOk()
             ->assertSee('Gateway endpoint preflight')
             ->assertSee('127.0.0.1')
@@ -452,12 +452,12 @@ final class TargetManagementAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner', 'all'));
 
-        $this->post('/admin/targets/preflight', [
+        $postResult = $this->post('/admin/targets/preflight', [
             'connector_type' => 'wp_ai_bridge',
             'target_id' => 'should-not-register',
             'display_name' => 'A test',
             'base_url' => 'https://wordpress.example.test/',
-        ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
+        ])->assertAdminRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
 
         $result = session('target_endpoint_preflight');
         self::assertIsArray($result);
@@ -466,7 +466,7 @@ final class TargetManagementAdminTest extends TestCase
         self::assertSame('https://wordpress.example.test/', $result['checked_subject']);
         self::assertSame(['base_url' => 'https://wordpress.example.test/'], $result['checked_fields']);
         self::assertStringContainsString('1.1.1.1', $result['message']);
-        $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
+        $this->get((string) $postResult->headers->get('Location'))
             ->assertOk()
             ->assertSee('Actual connections independently recheck DNS');
         Http::assertNothingSent();
@@ -491,12 +491,12 @@ final class TargetManagementAdminTest extends TestCase
         $this->app->instance(DnsResolver::class, $dns);
 
         $url = 'https://8.8.8.8/wordpress';
-        $this->post('/admin/targets/preflight', [
+        $postResult = $this->post('/admin/targets/preflight', [
             'connector_type' => 'wp_ai_bridge',
             'target_id' => 'numeric-https-check',
             'display_name' => 'Public numeric HTTPS',
             'base_url' => $url,
-        ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
+        ])->assertAdminRedirect('/admin/targets/create?connector_type=wp_ai_bridge');
 
         self::assertSame(0, $dns->calls);
         $result = session('target_endpoint_preflight');
@@ -511,7 +511,7 @@ final class TargetManagementAdminTest extends TestCase
         self::assertStringContainsString('remote service identity', $result['limitation']);
         self::assertStringContainsString('authentication', $result['limitation']);
 
-        $this->get('/admin/targets/create?connector_type=wp_ai_bridge')
+        $this->get((string) $postResult->headers->get('Location'))
             ->assertOk()
             ->assertSee('Checked endpoint')
             ->assertSee($url)
@@ -533,7 +533,7 @@ final class TargetManagementAdminTest extends TestCase
         $this->post('/admin/targets/preflight', [
             'connector_type' => 'wp_ai_bridge',
             'base_url' => 'https://wordpress.example.test',
-        ])->assertRedirect('/admin/login');
+        ])->assertAdminRedirect('/admin/login');
 
         $this->actingAs($this->user('viewer', 'all'))->post('/admin/targets/preflight', [
             'connector_type' => 'wp_ai_bridge',
@@ -568,7 +568,7 @@ final class TargetManagementAdminTest extends TestCase
     public function test_ssh_preflight_uses_ssh_policy_without_host_key_login_or_registration(): void
     {
         $this->actingAs($this->user('owner', 'all'));
-        $this->post('/admin/targets/preflight', [
+        $postResult = $this->post('/admin/targets/preflight', [
             'connector_type' => 'ssh_direct',
             'target_id' => 'ssh-check',
             'display_name' => 'SSH check',
@@ -582,7 +582,7 @@ final class TargetManagementAdminTest extends TestCase
             'ssh_password' => 'NEVER_FLASH_SSH_PASSWORD',
             'ssh_passphrase' => 'NEVER_FLASH_SSH_PASSPHRASE',
             'secret_unknown' => 'NEVER_FLASH_UNKNOWN_SECRET',
-        ])->assertRedirect('/admin/targets/create?connector_type=ssh_direct');
+        ])->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct');
 
         $result = session('target_endpoint_preflight');
         self::assertIsArray($result);
@@ -595,7 +595,7 @@ final class TargetManagementAdminTest extends TestCase
         foreach (['ssh_private_key', 'ssh_password', 'ssh_passphrase', 'secret_unknown'] as $secret) {
             self::assertArrayNotHasKey($secret, session()->getOldInput());
         }
-        $this->get('/admin/targets/create?connector_type=ssh_direct')
+        $this->get((string) $postResult->headers->get('Location'))
             ->assertOk()
             ->assertSee('Gateway endpoint preflight')
             ->assertSee('8.8.8.8')
@@ -612,14 +612,14 @@ final class TargetManagementAdminTest extends TestCase
     public function test_ssh_preflight_rejects_loopback_and_records_actionable_shared_diagnostics(): void
     {
         $this->actingAs($this->user('owner', 'all'));
-        $this->post('/admin/targets/preflight', [
+        $postResult = $this->post('/admin/targets/preflight', [
             'connector_type' => 'ssh_direct',
             'target_id' => 'ssh-blocked',
             'display_name' => 'Blocked SSH',
             'ssh_host' => '127.0.0.1',
             'ssh_port' => 22,
             'ssh_private_key' => 'NEVER_FLASH_THIS_PRIVATE_KEY',
-        ])->assertRedirect('/admin/targets/create?connector_type=ssh_direct');
+        ])->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct');
 
         $result = session('target_endpoint_preflight');
         self::assertIsArray($result);
@@ -629,7 +629,7 @@ final class TargetManagementAdminTest extends TestCase
         self::assertTrue(Str::isUuid($result['reference']));
         self::assertArrayNotHasKey('ssh_private_key', session()->getOldInput());
 
-        $this->get('/admin/targets/create?connector_type=ssh_direct')
+        $this->get((string) $postResult->headers->get('Location'))
             ->assertOk()->assertSee('127.0.0.1')->assertSee('What to check');
         Http::assertNothingSent();
         self::assertSame(0, Target::query()->count());
@@ -695,7 +695,7 @@ final class TargetManagementAdminTest extends TestCase
             'display_name' => 'WordPress schema only',
             'base_url' => 'https://wordpress.example.test/',
             'ssh_auth_method' => 'password',
-        ])->assertRedirect('/admin/targets/wp-schema-only');
+        ])->assertAdminRedirect('/admin/targets/wp-schema-only');
 
         self::assertSame(1, Target::query()->count());
         self::assertSame('wp_ai_bridge', Target::query()->firstOrFail()->connector_type);
@@ -721,7 +721,7 @@ A second line.',
             'target_id' => 'hijack',
             'connector_type' => 'ssh_direct',
             'base_url' => 'https://attacker.example.test',
-        ])->assertRedirect('/admin/targets/permanent-id');
+        ])->assertAdminRedirect('/admin/targets/permanent-id');
 
         $target->refresh();
         self::assertSame($recordId, (string) $target->getKey());
@@ -734,13 +734,13 @@ A second line.', $target->ai_guidance);
             ->assertSee('Test production note')
             ->assertSee('Edit Target');
         $this->put('/admin/targets/permanent-id', ['display_name' => 'Keep guidance'])
-            ->assertRedirect('/admin/targets/permanent-id');
+            ->assertAdminRedirect('/admin/targets/permanent-id');
         self::assertSame('Test production note
 A second line.', $target->refresh()->ai_guidance);
         $this->put('/admin/targets/permanent-id', [
             'display_name' => 'Clear guidance',
             'ai_guidance' => '',
-        ])->assertRedirect('/admin/targets/permanent-id');
+        ])->assertAdminRedirect('/admin/targets/permanent-id');
         self::assertNull($target->refresh()->ai_guidance);
     }
 
@@ -762,7 +762,7 @@ A second line.', $target->refresh()->ai_guidance);
         self::assertSame(0, Target::query()->count());
 
         $fields['ai_guidance'] = '  Sensitive <script>alert(1)</script> note  ';
-        $this->post('/admin/targets', $fields)->assertRedirect('/admin/targets/guidance-limits');
+        $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/guidance-limits');
         $target = Target::query()->where('target_id', 'guidance-limits')->sole();
         self::assertSame('Sensitive <script>alert(1)</script> note', $target->ai_guidance);
         $this->get('/admin/targets/guidance-limits')->assertOk()
@@ -797,7 +797,7 @@ A second line.', $target->refresh()->ai_guidance);
         $target->forceFill(['connection_state' => 'disconnected'])->save();
 
         $this->delete('/admin/targets/to-remove', ['confirm_remove' => 'yes'])
-            ->assertRedirect('/admin/targets');
+            ->assertAdminRedirect('/admin/targets');
         self::assertSame(0, Target::query()->where('target_id', 'to-remove')->count());
         self::assertSame(0, DB::table('user_target_access')
             ->where('target_record_id', $target->getKey())->count());
@@ -930,7 +930,7 @@ A second line.', $target->refresh()->ai_guidance);
             'confirm_local_only' => 'yes',
             'confirm_remote_revocation_unknown' => 'yes',
             'current_password' => 'ThisIsATestSecret!234',
-        ])->assertRedirect('/admin/targets')->assertSessionHas('status');
+        ])->assertAdminRedirect('/admin/targets')->assertSessionHas('status');
 
         self::assertSame(0, Target::query()->whereKey($recordId)->count());
         foreach ([
@@ -1039,7 +1039,7 @@ A second line.', $target->refresh()->ai_guidance);
             'confirm_remote_revocation_unknown' => 'yes',
             'current_password' => 'ThisIsATestSecret!234',
         ];
-        $this->delete('/admin/targets/offline-ssh/forget', $input)->assertRedirect('/admin/targets');
+        $this->delete('/admin/targets/offline-ssh/forget', $input)->assertAdminRedirect('/admin/targets');
         self::assertSame(0, Target::query()->whereKey($recordId)->count());
         self::assertSame(0, DB::table('target_credentials')
             ->where('target_record_id', $recordId)->count());
@@ -1051,7 +1051,7 @@ A second line.', $target->refresh()->ai_guidance);
         $this->delete('/admin/targets/offline-paused/forget', [
             ...$input,
             'confirm_target_id' => 'offline-paused',
-        ])->assertRedirect('/admin/targets');
+        ])->assertAdminRedirect('/admin/targets');
         self::assertSame(0, Target::query()->whereKey($paused->getKey())->count());
         self::assertSame(2, DB::table('activity_events')
             ->where('operation', 'target-forget-local')->count());
@@ -1098,7 +1098,7 @@ A second line.', $target->refresh()->ai_guidance);
     public function test_target_admin_lifecycle_routes_remain_authenticated_and_web_csrf_guarded(): void
     {
         foreach (['/admin/targets', '/admin/targets/create', '/admin/activity'] as $path) {
-            $this->get($path)->assertRedirect('/admin/login');
+            $this->get($path)->assertAdminRedirect('/admin/login');
         }
 
         foreach ([
@@ -1131,7 +1131,7 @@ A second line.', $target->refresh()->ai_guidance);
             'target_id' => 'metadata-fail',
             'display_name' => 'Metadata check',
             'base_url' => 'https://wordpress.example.test/',
-        ])->assertRedirect('/admin/targets/metadata-fail');
+        ])->assertAdminRedirect('/admin/targets/metadata-fail');
 
         $target = Target::query()->where('target_id', 'metadata-fail')->sole();
         Http::assertSentCount(2);
@@ -1143,7 +1143,7 @@ A second line.', $target->refresh()->ai_guidance);
         Http::assertNothingSent();
 
         $failure = $this->post(route('admin.targets.test', ['target' => $target->target_id], false))
-            ->assertRedirect('/admin/targets/'.$target->target_id)
+            ->assertAdminRedirect('/admin/targets/'.$target->target_id)
             ->assertSessionHasErrors('target')
             ->assertSessionHas('diagnostic_code', 'missing_bridge');
         self::assertTrue(Str::isUuid((string) session('diagnostic_reference')));

@@ -25,17 +25,17 @@ final class TargetFieldAccessibilityTest extends TestCase
     public function test_invalid_native_enrollment_links_each_error_and_existing_help_to_its_control(): void
     {
         Http::preventStrayRequests();
-        $this->actingAs($this->owner())
+        $result = $this->actingAs($this->owner())
             ->from('/admin/targets/create?connector_type=ssh_direct')
             ->post('/admin/targets', [
                 'connector_type' => 'ssh_direct', 'target_id' => '', 'display_name' => '',
                 'ssh_host' => '', 'ssh_port' => 0, 'ssh_username' => '',
                 'ssh_host_key' => '', 'ssh_auth_method' => 'invalid',
             ])
-            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct')
+            ->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct')
             ->assertSessionHasErrors(['target_id', 'display_name', 'ssh_host', 'ssh_port', 'ssh_host_key', 'ssh_auth_method']);
         $response = $this->withCookie(session()->getName(), session()->getId())
-            ->get('/admin/targets/create?connector_type=ssh_direct')->assertOk();
+            ->get((string) $result->headers->get('Location'))->assertOk();
         $xpath = $this->document((string) $response->getContent());
         foreach (['target_id', 'display_name', 'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key', 'ssh_auth_method', 'ssh_trust_confirmed'] as $id) {
             $this->assertFieldError($xpath, $id);
@@ -56,14 +56,14 @@ final class TargetFieldAccessibilityTest extends TestCase
             'field-editor', 'Field editor', '1.1.1.1', 22, 'deploy', $hostKey,
             'password', 'isolated-test-secret', null,
         );
-        $this->from('/admin/targets/field-editor/edit')
+        $result = $this->from('/admin/targets/field-editor/edit')
             ->put('/admin/targets/field-editor/configuration', [
                 'configuration_revision' => '', 'ssh_host' => '', 'ssh_port' => 0,
                 'ssh_username' => '', 'ssh_host_key' => '',
-            ])->assertRedirect('/admin/targets/field-editor/edit')
+            ])->assertAdminRedirect('/admin/targets/field-editor/edit')
             ->assertSessionHasErrors(['configuration_revision', 'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key']);
         $response = $this->withCookie(session()->getName(), session()->getId())
-            ->get('/admin/targets/field-editor/edit')->assertOk()->assertDontSee('isolated-test-secret');
+            ->get((string) $result->headers->get('Location'))->assertOk()->assertDontSee('isolated-test-secret');
         $xpath = $this->document((string) $response->getContent());
         foreach (['ssh_edit_host', 'ssh_edit_port', 'ssh_edit_username', 'ssh_edit_host_key'] as $id) {
             $this->assertFieldError($xpath, $id);
@@ -91,14 +91,14 @@ final class TargetFieldAccessibilityTest extends TestCase
             'credential_id' => $credential->getKey(), 'generation' => 1, 'attempts' => 1,
             'created_at' => now(), 'updated_at' => now(),
         ]);
-        $this->actingAs($this->owner())->from('/admin/targets/field-recovery')
+        $result = $this->actingAs($this->owner())->from('/admin/targets/field-recovery')
             ->post('/admin/targets/field-recovery/reconcile-refresh', [
                 'intent_id' => $intent, 'confirm_target_id' => 'field-recovery',
                 'wordpress_client_revoked' => 'yes', 'other_clients_affected' => 'yes',
                 'current_password' => 'wrong-password',
-            ])->assertRedirect('/admin/targets/field-recovery')->assertSessionHasErrors('current_password');
+            ])->assertAdminRedirect('/admin/targets/field-recovery')->assertSessionHasErrors('current_password');
         $response = $this->withCookie(session()->getName(), session()->getId())
-            ->get('/admin/targets/field-recovery')->assertOk()->assertDontSee('wrong-password');
+            ->get((string) $result->headers->get('Location'))->assertOk()->assertDontSee('wrong-password');
         $xpath = $this->document((string) $response->getContent());
         $this->assertFieldError($xpath, 'reconcile_refresh_password');
         $this->assertFieldError($xpath, 'forget_owner_password');

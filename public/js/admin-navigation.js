@@ -42,6 +42,16 @@
         });
     }
 
+    // The URL token has already been claimed by the server. Keep the current
+    // history entry (and its Turbo restoration state), but remove the opaque
+    // one-time query after document load; a Back visit cannot replay feedback.
+    function clearFeedbackUrlToken() {
+        const url = new URL(location.href);
+        if (!url.searchParams.has('_admin_feedback')) return;
+        url.searchParams.delete('_admin_feedback');
+        history.replaceState(history.state, '', url.href);
+    }
+
     function failedDraftFields() {
         try {
             const fields = JSON.parse(document.body.dataset.adminDraftFields || '[]');
@@ -279,6 +289,7 @@
         }
         navigating = false;
         revealFeedback();
+        clearFeedbackUrlToken();
     });
 
     document.addEventListener('turbo:fetch-request-error', () => {
@@ -298,6 +309,7 @@
         captureBaselines();
         enhanceLinks();
         revealFeedback();
+        clearFeedbackUrlToken();
     });
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) revealFeedback();
@@ -305,10 +317,12 @@
     document.addEventListener('DOMContentLoaded', () => {
         captureBaselines();
         revealFeedback();
+        clearFeedbackUrlToken();
     }, { once: true });
     if (document.readyState !== 'loading') {
         captureBaselines();
         enhanceLinks();
         revealFeedback();
+        clearFeedbackUrlToken();
     }
 })();

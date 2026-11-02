@@ -185,7 +185,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
         Log::spy();
         $result = $this->post('/admin/targets/alpha/disconnect')
-            ->assertRedirect('/admin/targets/alpha')
+            ->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHasErrors('target')
             ->assertSessionHas('diagnostic_code', 'network_failure')
             ->assertSessionHas('diagnostic_stage', 'tcp_connect');
@@ -201,7 +201,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(TargetConnectionState::Error, $target->fresh()->connection_state);
         self::assertSame('network_failure', $target->fresh()->last_error_code);
 
-        $this->get('/admin/targets/alpha')->assertOk()
+        $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('Credential revocation is pending')
             ->assertSee('network_failure')
             ->assertSee('tcp_connect')
@@ -236,7 +236,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         Log::spy();
         $response = $this->post('/admin/targets/alpha/test', [
             'base_url' => 'https://user:DO_NOT_LOG_PASSWORD@evil.example.test/?token=DO_NOT_LOG_TOKEN',
-        ])->assertRedirect('/admin/targets/alpha')
+        ])->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHasErrors('target')
             ->assertSessionHas('diagnostic_code', 'unsafe_target')
             ->assertSessionHas('diagnostic_stage', 'dns_lookup')
@@ -249,7 +249,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $reference = (string) session('diagnostic_reference');
         self::assertTrue(Str::isUuid($reference));
         $response->assertHeader('X-Correlation-ID', $reference);
-        $html = $this->get('/admin/targets/alpha')->assertOk()
+        $html = $this->get((string) $response->headers->get('Location'))->assertOk()
             ->assertSee('unsafe_target')
             ->assertSee('127.0.0.1')
             ->assertSee('loopback')
@@ -390,7 +390,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
         // The handoff is consumed, and refreshing its GET cannot issue OAuth
         // again or replay the original Admin POST.
-        $this->get($handoffUrl)->assertRedirect('/admin/targets/alpha')
+        $this->get($handoffUrl)->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHasErrors('target');
         self::assertSame(1, DB::table('wp_ai_bridge_oauth_flows')->count());
 
@@ -398,7 +398,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             'state' => $args['state'],
             'code' => 'alpha-code',
             'iss' => 'https://alpha.example.test',
-        ]))->assertRedirect('/admin/targets/alpha');
+        ]))->assertAdminRedirect('/admin/targets/alpha');
 
         $this->get('/admin/targets/alpha')->assertOk()
             ->assertSee('Reauthorize')
@@ -407,7 +407,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(TargetConnectionState::Connected, $alpha->refresh()->connection_state);
         self::assertSame(TargetConnectionState::Disconnected, $beta->refresh()->connection_state);
 
-        $this->post('/admin/targets/alpha/disconnect')->assertRedirect('/admin/targets/alpha');
+        $this->post('/admin/targets/alpha/disconnect')->assertAdminRedirect('/admin/targets/alpha');
         $this->get('/admin/targets/alpha')->assertOk()->assertSee('Authorize WordPress');
         self::assertSame(TargetConnectionState::Disconnected, $alpha->refresh()->connection_state);
     }
@@ -427,13 +427,13 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         // Changing the authenticated principal does not transfer the URL,
         // even if the session still carries the one-time handoff value.
         $this->actingAs($other)->get($first)
-            ->assertRedirect('/admin/targets/alpha')->assertSessionHasErrors('target');
-        $this->actingAs($owner)->get($first)->assertRedirect('/admin/targets/alpha');
+            ->assertAdminRedirect('/admin/targets/alpha')->assertSessionHasErrors('target');
+        $this->actingAs($owner)->get($first)->assertAdminRedirect('/admin/targets/alpha');
 
         $second = (string) $this->post('/admin/targets/alpha/connect')
             ->assertStatus(303)->headers->get('Location');
         $this->travel(121)->seconds();
-        $this->get($second)->assertRedirect('/admin/targets/alpha')
+        $this->get($second)->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHasErrors('target');
         self::assertSame(1, DB::table('wp_ai_bridge_oauth_flows')->count());
     }
@@ -468,7 +468,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
         $this->get('/oauth/targets/callback?'.http_build_query([
             'state' => $secondArgs['state'], 'code' => 'alpha-code', 'iss' => 'https://alpha.example.test',
-        ]))->assertRedirect('/admin/targets/alpha');
+        ]))->assertAdminRedirect('/admin/targets/alpha');
         self::assertSame(TargetConnectionState::Connected, $alpha->fresh()->connection_state);
         self::assertSame(0, DB::table('wp_ai_bridge_oauth_flows')->count());
     }
@@ -495,7 +495,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $owner = $this->user('owner', 'all');
         $this->target('alpha');
         $this->get('/admin/targets/alpha/external-authorization/'.str_repeat('a', 32))
-            ->assertRedirect('/admin/login');
+            ->assertAdminRedirect('/admin/login');
 
         $this->actingAs($owner);
         $handoff = (string) $this->post('/admin/targets/alpha/connect')
@@ -505,7 +505,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         // must not expose the provider URL or bypass the new access policy.
         $owner->forceFill(['role' => 'viewer'])->save();
         $this->get($handoff)->assertForbidden();
-        $this->get($handoff)->assertRedirect('/admin/targets/alpha')
+        $this->get($handoff)->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHasErrors('target');
     }
 
@@ -553,7 +553,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         ]);
 
         $this->actingAs($owner)->post('/admin/targets/ssh-only/connect')
-            ->assertRedirect('/admin/targets/ssh-only')
+            ->assertAdminRedirect('/admin/targets/ssh-only')
             ->assertSessionHasErrors('target');
         self::assertSame(0, DB::table('wp_ai_bridge_oauth_flows')->count());
         self::assertSame(0, DB::table('target_credentials')->count());
@@ -2039,7 +2039,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
         // The remote one-shot recovery window must expire first.
         $this->post('/admin/targets/alpha/reconcile-refresh', $payload)
-            ->assertRedirect('/admin/targets/alpha')
+            ->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHasErrors('target');
         self::assertSame(2, DB::table('target_credentials')->count());
 
@@ -2049,7 +2049,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             ->update(['created_at' => now()->subMinutes(3)]);
         $refreshCallsBefore = $this->refreshCalls;
         $this->post('/admin/targets/alpha/reconcile-refresh', $payload)
-            ->assertRedirect('/admin/targets/alpha')
+            ->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHasNoErrors();
 
         self::assertSame($refreshCallsBefore, $this->refreshCalls);
@@ -2288,7 +2288,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             ->assertOk()->assertSee('Finish disconnect')->assertSee('Cancel pending disconnect');
         $this->revokeFailureMode = null;
         $this->post('/admin/targets/alpha/finish-disconnect', ['intent_id' => $intent->id])
-            ->assertRedirect('/admin/targets/alpha')->assertSessionHas('status');
+            ->assertAdminRedirect('/admin/targets/alpha')->assertSessionHas('status');
         self::assertSame(['alpha-refresh', 'alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
         self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
         $this->post('/admin/targets/alpha/finish-disconnect', ['intent_id' => $intent->id])
@@ -2452,7 +2452,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
         $this->rejectProtectedCatalogProbe = false;
         $this->post('/admin/targets/alpha/cancel-disconnect', $payload)
-            ->assertRedirect('/admin/targets/alpha')->assertSessionHas('status');
+            ->assertAdminRedirect('/admin/targets/alpha')->assertSessionHas('status');
         self::assertSame(1, $this->catalogProbeCalls);
         self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
         self::assertNull($target->last_error_code);
@@ -2564,7 +2564,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(1, DB::table('target_credentials')->count());
         self::assertSame(1, DB::table('wp_ai_bridge_revocation_intents')->count());
         $this->post('/admin/targets/alpha/reconcile-disconnect', $payload)
-            ->assertRedirect('/admin/targets/alpha')->assertSessionHas('status');
+            ->assertAdminRedirect('/admin/targets/alpha')->assertSessionHas('status');
         $this->assertDatabaseHas('activity_events', [
             'operation' => 'wordpress-disconnect-remote-revocation-attested',
             'outcome' => 'operator-attested',
@@ -2600,7 +2600,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             "BEGIN SELECT RAISE(ABORT, 'test required audit unavailable'); END");
         $this->actingAs($this->user('owner', 'all'))
             ->post('/admin/targets/alpha/disconnect')
-            ->assertRedirect('/admin/targets/alpha')
+            ->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHas('diagnostic_code', 'operation_unconfirmed');
         $intent = DB::table('wp_ai_bridge_revocation_intents')->first();
         self::assertSame('confirmed', $intent->phase);
@@ -2611,7 +2611,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             ->assertOk()->assertSee('Finish confirmed disconnect');
         DB::unprepared('DROP TRIGGER fail_confirmed');
         $this->post('/admin/targets/alpha/finish-disconnect', ['intent_id' => $intent->id])
-            ->assertRedirect('/admin/targets/alpha')->assertSessionHas('status');
+            ->assertAdminRedirect('/admin/targets/alpha')->assertSessionHas('status');
         self::assertSame(['alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
         self::assertSame(0, DB::table('target_credentials')->count());
         self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
@@ -2629,7 +2629,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             "BEGIN SELECT RAISE(ABORT, 'test intent audit unavailable'); END");
         $this->actingAs($this->user('owner', 'all'))
             ->post('/admin/targets/alpha/disconnect')
-            ->assertRedirect('/admin/targets/alpha')
+            ->assertAdminRedirect('/admin/targets/alpha')
             ->assertSessionHas('diagnostic_code', 'operation_unconfirmed');
         self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
         self::assertSame(1, DB::table('target_credentials')->count());

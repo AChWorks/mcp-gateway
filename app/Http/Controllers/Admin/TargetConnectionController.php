@@ -351,11 +351,20 @@ final class TargetConnectionController extends Controller
 
     private function unexpected(Target $target, string $operation, Throwable $exception): RedirectResponse
     {
-        // Remote I/O or a required audit may have succeeded before local
-        // persistence failed. Never expose raw exceptions or imply safe retry.
+        // A test only authenticates the endpoint and writes local verification
+        // evidence; no SSH command or remote credential revocation takes place.
+        // Other connector operations can have uncertain side effects.
+        $message = match ($operation) {
+            'target-metadata-test' => $target->connector_type === 'ssh_direct'
+                ? __('SSH verification did not complete reliably. No remote command or credential revocation was requested. The saved verification state may be incomplete; reload Target details and review the diagnostic reference before deciding to verify again.')
+                : __('The remote connection check did not complete reliably. Its saved verification result may be incomplete; reload Target details and inspect diagnostics before deciding whether a fresh check is safe.'),
+            'target-connect', 'target-reconnect' => __('Gateway could not confirm the connection or reconnection result. Inspect current Target authorization and connection status before attempting it again.'),
+            default => __('Gateway could not durably confirm this operation. Reload the Target recovery status. Do not repeat an uncertain remote revoke or restore the old credential.'),
+        };
+
         return $this->failed(
             $target,
-            __('Gateway could not durably confirm this operation. Reload the Target recovery status. Do not repeat an uncertain remote revoke or restore the old credential.'),
+            $message,
             $operation,
             'operation_unconfirmed',
             [

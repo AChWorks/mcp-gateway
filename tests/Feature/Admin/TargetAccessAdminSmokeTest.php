@@ -61,7 +61,7 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'target_scope_mode' => 'selected',
             'access_enabled' => '1',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
 
         $user = User::query()->where('email', 'limited@example.test')->firstOrFail();
         self::assertSame('selected', $user->getRawOriginal('target_scope_mode'));
@@ -75,7 +75,7 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'current_password' => 'CorrectHorse!234',
             'confirm_ssh_target_changes' => '1',
             'target_revision' => app(UserAccessManager::class)->targetRuleRevision($user, $target),
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
 
         $this->assertDatabaseHas('user_target_access', [
             'target_record_id' => $target->getKey(),
@@ -86,7 +86,7 @@ final class TargetAccessAdminSmokeTest extends TestCase
         $this->post('/admin/target-groups', [
             'name' => 'Operations',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $group = TargetGroup::query()->where('name', 'Operations')->firstOrFail();
         $membershipUrl = '/admin/target-groups/'.$group->getKey().'/targets/'.$target->target_id;
         $this->put($membershipUrl, [
@@ -99,7 +99,7 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'assigned' => '1',
             'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
 
         self::assertTrue($group->targets()->whereKey($target->getKey())->exists());
     }
@@ -144,7 +144,7 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'target_revision' => $originalRevision,
             'confirm_ssh_target_changes' => '1',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
 
         $access = app(AccessControl::class);
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
@@ -181,7 +181,7 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'target_revision' => $manager->targetRuleRevision($operator, $target),
             'confirm_ssh_target_changes' => '1',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
     }
 
@@ -221,11 +221,11 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'target_revision' => $h0,
             'confirm_ssh_target_changes' => '1',
         ];
-        $this->from($edit)->put($url, [
+        $result = $this->from($edit)->put($url, [
             ...$oldForm, 'current_password' => 'WrongHorse!234',
-        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
+        ])->assertAdminRedirect($edit)->assertSessionHasErrors('current_password');
 
-        $page = $this->get($edit)->assertOk()
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('name="target_revision" value="'.$h1.'"', false)
             ->assertSee('changed since you opened this form');
         $html = (string) $page->getContent();
@@ -239,7 +239,7 @@ final class TargetAccessAdminSmokeTest extends TestCase
             'target_revision' => $h1,
             'denied_permissions' => [GatewayPermission::SshFileRead->value, GatewayPermission::SshCommandRun->value],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         $this->assertDatabaseHas('user_target_permission_denials', [
             'user_id' => $operator->id,
             'target_record_id' => $target->id,
@@ -253,13 +253,13 @@ final class TargetAccessAdminSmokeTest extends TestCase
             GatewayPermission::SshFileWrite->value,
         ], true, $h1);
         $h2 = $manager->targetRuleRevision($operator, $target);
-        $this->from($edit)->put($url, [
+        $result = $this->from($edit)->put($url, [
             'access_rule' => 'allow',
             'denied_permissions' => [GatewayPermission::SshFileRead->value, GatewayPermission::SshCommandRun->value],
             'target_revision' => $h1,
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect($edit)->assertSessionHasErrors('confirm_ssh_target_changes');
-        $page = $this->get($edit)->assertOk()
+        ])->assertAdminRedirect($edit)->assertSessionHasErrors('confirm_ssh_target_changes');
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('name="target_revision" value="'.$h2.'"', false);
         $html = (string) $page->getContent();
         self::assertTrue($this->formCheckboxChecked($html, 'denied_permissions[]', GatewayPermission::SshFileWrite->value));
@@ -267,13 +267,13 @@ final class TargetAccessAdminSmokeTest extends TestCase
 
         // A missing revision must never let flashed permission values be
         // treated as reviewed against whatever the database contains now.
-        $this->from($edit)->put($url, [
+        $result = $this->from($edit)->put($url, [
             'access_rule' => 'allow',
             'denied_permissions' => [GatewayPermission::SshFileRead->value],
             'current_password' => 'WrongHorse!234',
             'confirm_ssh_target_changes' => '1',
-        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
-        $page = $this->get($edit)->assertOk()
+        ])->assertAdminRedirect($edit)->assertSessionHasErrors('current_password');
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('name="target_revision" value="'.$h2.'"', false);
         $html = (string) $page->getContent();
         self::assertTrue($this->formCheckboxChecked($html, 'denied_permissions[]', GatewayPermission::SshFileWrite->value));
@@ -281,13 +281,13 @@ final class TargetAccessAdminSmokeTest extends TestCase
 
         // A current, matching revision may restore the Owner's intentionally
         // unchecked boxes after an unrelated validation failure.
-        $this->from($edit)->put($url, [
+        $result = $this->from($edit)->put($url, [
             'access_rule' => 'allow',
             'target_revision' => $h2,
             'confirm_ssh_target_changes' => '1',
             'current_password' => 'WrongHorse!234',
-        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
-        $page = $this->get($edit)->assertOk();
+        ])->assertAdminRedirect($edit)->assertSessionHasErrors('current_password');
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk();
         $html = (string) $page->getContent();
         self::assertFalse($this->formCheckboxChecked($html, 'denied_permissions[]', GatewayPermission::SshCommandRun->value));
         self::assertTrue($this->formCheckboxChecked($html, 'confirm_ssh_target_changes', '1'));

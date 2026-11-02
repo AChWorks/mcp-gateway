@@ -357,7 +357,7 @@ final class ClientProfileIsolationTest extends TestCase
 
         $this->actingAs($owner)->delete('/admin/oauth-clients/authorizations/'.$grant->id, [
             'current_password' => 'OwnerSecure!234',
-        ])->assertRedirect('/admin/oauth-clients');
+        ])->assertAdminRedirect('/admin/oauth-clients');
 
         self::assertNotNull(\DB::table('oauth_authorizations')->where('id', $grant->id)->value('revoked_at'));
         self::assertNull(\DB::table('oauth_authorizations')->where('client_id', self::CHATGPT)->value('revoked_at'));
@@ -480,7 +480,7 @@ final class ClientProfileIsolationTest extends TestCase
         $response = $this->actingAs($user)->post('/oauth/authorize', [
             ...$this->parameters($clientId, $redirect),
             'decision' => 'approve',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         parse_str((string) parse_url((string) $response->headers->get('Location'), PHP_URL_QUERY), $query);
         self::assertIsString($query['code'] ?? null);
         self::assertSame((string) config('oauth.issuer'), $query['iss'] ?? null);

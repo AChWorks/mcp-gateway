@@ -408,7 +408,14 @@ async function nativeFormsAndScope(browser) {
         await page.locator('input[name="values[wp_response_kib]"]').fill('999999999');
         await page.locator('input[name="current_password"]').fill('isolated-browser-password');
         await page.locator('form[action$="/admin/operations"]').evaluate(form => form.noValidate = true);
+        const invalidPost = page.waitForResponse(r => r.request().method() === 'POST'
+            && new URL(r.url()).pathname === '/admin/operations');
         await page.getByRole('button', { name: 'Save operational settings', exact: true }).click();
+        const invalidReply = await invalidPost;
+        assert.equal(invalidReply.status(), 302, 'Server validation must keep native POST/redirect/GET.');
+        assert.ok(new URL(invalidReply.headers()['location'], base).searchParams.has('_admin_feedback'),
+            'A framework-generated validation redirect must receive its own result token.');
+        await page.waitForLoadState('networkidle');
         await page.locator('input[name="values[wp_response_kib]"][aria-invalid="true"]').waitFor();
         assert.equal(await page.locator('input[name="values[wp_response_kib]"]').inputValue(), '999999999');
         assert.equal(await page.locator('input[name="current_password"]').inputValue(), '', 'The password was restored after invalid input.');
@@ -1049,7 +1056,8 @@ async function semanticDirtyForms(browser) {
         await page.locator('#ssh_trust_confirmed').check();
         await page.getByRole('button', { name: 'Register Target', exact: true }).click();
         await page.locator('#target-registration-errors').waitFor();
-        assert.match(page.url(), /\/admin\/targets\/create\?connector_type=ssh_direct$/);
+        assert.equal(new URL(page.url()).pathname, '/admin/targets/create');
+        assert.equal(new URL(page.url()).searchParams.get('connector_type'), 'ssh_direct');
         assert.equal(await page.locator('#ssh_password').inputValue(), '', 'Never restore SSH secrets');
         assert.equal(await page.locator('#connector_type').inputValue(), 'ssh_direct');
         assert.equal(await page.locator('#target_id').inputValue(), 'ui-invalid-pin');
@@ -1247,7 +1255,8 @@ async function actionFeedback(browser) {
             const preflight = page.locator('#target-registration-errors');
             await preflight.waitFor();
             assert.match(await preflight.innerText(), /Endpoint check could not be completed/);
-            assert.match(page.url(), /\/admin\/targets\/create\?connector_type=ssh_direct$/);
+            assert.equal(new URL(page.url()).pathname, '/admin/targets/create');
+        assert.equal(new URL(page.url()).searchParams.get('connector_type'), 'ssh_direct');
             if (javaScriptEnabled) {
                 await page.waitForFunction(() => document.activeElement?.id === 'target-registration-errors');
             }

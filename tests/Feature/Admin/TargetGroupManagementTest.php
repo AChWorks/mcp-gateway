@@ -29,7 +29,7 @@ final class TargetGroupManagementTest extends TestCase
             'name' => 'Production',
             'denied_permissions' => [GatewayPermission::WordpressAbilitiesExecuteDestructive->value],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
 
         $group = TargetGroup::query()->where('name', 'Production')->firstOrFail();
 
@@ -57,7 +57,7 @@ final class TargetGroupManagementTest extends TestCase
             'name' => 'Production sites',
             'denied_permissions' => [GatewayPermission::WordpressAbilitiesExecuteMutating->value],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
 
         self::assertSame('Production sites', $group->refresh()->name);
         $this->assertDatabaseMissing('target_group_permission_denials', [
@@ -85,7 +85,7 @@ final class TargetGroupManagementTest extends TestCase
 
         $this->post('/admin/target-groups', [
             ...$fields, 'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $group = TargetGroup::query()->sole();
         $this->assertDatabaseHas('target_group_permission_denials', [
             'target_group_id' => $group->getKey(),
@@ -108,7 +108,7 @@ final class TargetGroupManagementTest extends TestCase
             'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
             'denial_revision' => app(TargetGroupManager::class)->denialRevision($group),
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $this->assertDatabaseMissing('target_group_permission_denials', [
             'target_group_id' => $group->getKey(),
             'permission' => GatewayPermission::SshCommandRun->value,
@@ -163,7 +163,7 @@ final class TargetGroupManagementTest extends TestCase
         ], false), [
             'assigned' => '1',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
 
         $this->actingAs($owner)->put(route('admin.target-groups.users.update', [
             'targetGroup' => $group->id,
@@ -171,7 +171,7 @@ final class TargetGroupManagementTest extends TestCase
         ], false), [
             'assigned' => '1',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
 
         $this->assertDatabaseHas('target_group_targets', [
             'target_group_id' => $group->id,
@@ -197,7 +197,7 @@ final class TargetGroupManagementTest extends TestCase
         ], false), [
             'assigned' => '0',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $this->assertDatabaseMissing('target_group_targets', [
             'target_group_id' => $group->id,
             'target_record_id' => $site->id,
@@ -209,7 +209,7 @@ final class TargetGroupManagementTest extends TestCase
         ], false), [
             'assigned' => '0',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $this->assertDatabaseMissing('target_group_users', [
             'target_group_id' => $group->id,
             'user_id' => $operator->id,
@@ -264,7 +264,7 @@ final class TargetGroupManagementTest extends TestCase
 
         $this->actingAs($owner)->delete('/admin/target-groups/'.$group->id, [
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect('/admin/target-groups');
+        ])->assertAdminRedirect('/admin/target-groups');
 
         self::assertTrue(User::query()->whereKey($operator->id)->exists());
         self::assertTrue(Target::query()->whereKey($site->id)->exists());
@@ -298,7 +298,7 @@ final class TargetGroupManagementTest extends TestCase
         $this->delete('/admin/target-groups/'.$restricted->id, [
             'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect('/admin/target-groups');
+        ])->assertAdminRedirect('/admin/target-groups');
 
         self::assertNull($restricted->fresh());
         self::assertNotNull($alternate->fresh());
@@ -333,7 +333,7 @@ final class TargetGroupManagementTest extends TestCase
         $this->put($userRoute, [
             'assigned' => '0', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
 
         $this->put($userRoute, [
@@ -344,7 +344,7 @@ final class TargetGroupManagementTest extends TestCase
         $this->put($userRoute, [
             'assigned' => '1', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
 
         $this->put($targetRoute, [
@@ -355,7 +355,7 @@ final class TargetGroupManagementTest extends TestCase
         $this->put($targetRoute, [
             'assigned' => '0', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
 
         $this->put($targetRoute, [
@@ -366,13 +366,13 @@ final class TargetGroupManagementTest extends TestCase
         $this->put($targetRoute, [
             'assigned' => '1', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
 
         // No-op membership should not require a new SSH grant acknowledgment.
         $this->put($targetRoute, [
             'assigned' => '1', 'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
     }
 
     public function test_adding_a_user_to_ssh_group_requires_confirmed_owner_scope_assignment(): void
@@ -401,7 +401,7 @@ final class TargetGroupManagementTest extends TestCase
         $this->put($url, [
             'assigned' => '1', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
     }
 
@@ -436,7 +436,7 @@ final class TargetGroupManagementTest extends TestCase
         $this->put($url, [
             'assigned' => '1', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
     }
 
@@ -521,7 +521,7 @@ final class TargetGroupManagementTest extends TestCase
             ...$oldForm,
             'denial_revision' => $manager->denialRevision($group),
             'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         $this->assertDatabaseMissing('target_group_permission_denials', [
             'target_group_id' => $group->id,
             'permission' => GatewayPermission::SshCommandRun->value,
@@ -551,11 +551,11 @@ final class TargetGroupManagementTest extends TestCase
             'denial_revision' => $h0,
             'confirm_ssh_group_changes' => '1',
         ];
-        $this->from($edit)->put($url, [
+        $result = $this->from($edit)->put($url, [
             ...$old, 'current_password' => 'WrongHorse!234',
-        ])->assertRedirect($edit)->assertSessionHasErrors('current_password');
+        ])->assertAdminRedirect($edit)->assertSessionHasErrors('current_password');
 
-        $page = $this->get($edit)->assertOk()
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('name="denial_revision" value="'.$h1.'"', false)
             ->assertSee('changed since you opened this form');
         $html = (string) $page->getContent();
@@ -568,7 +568,7 @@ final class TargetGroupManagementTest extends TestCase
             'denial_revision' => $h1,
             'denied_permissions' => [GatewayPermission::SshFileRead->value, GatewayPermission::SshCommandRun->value],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         $this->assertDatabaseHas('target_group_permission_denials', [
             'target_group_id' => $group->id, 'permission' => GatewayPermission::SshCommandRun->value,
         ]);
@@ -580,32 +580,32 @@ final class TargetGroupManagementTest extends TestCase
             GatewayPermission::SshFileWrite->value,
         ], true, $h1);
         $h2 = $manager->denialRevision($group);
-        $this->from($edit)->put($url, [
+        $result = $this->from($edit)->put($url, [
             ...$old, 'name' => '',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect($edit)->assertSessionHasErrors('name');
-        $page = $this->get($edit)->assertOk()
+        ])->assertAdminRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('name="denial_revision" value="'.$h2.'"', false);
         $html = (string) $page->getContent();
         self::assertTrue($this->formDenialChecked($html, GatewayPermission::SshFileWrite->value));
         self::assertFalse($this->formSshGroupReviewed($html));
 
         // Missing revision after validation error is not a new approval.
-        $this->from($edit)->put($url, [
+        $result = $this->from($edit)->put($url, [
             'name' => '', 'denied_permissions' => [],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect($edit)->assertSessionHasErrors('name');
-        $page = $this->get($edit)->assertOk()
+        ])->assertAdminRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk()
             ->assertSee('name="denial_revision" value="'.$h2.'"', false);
         self::assertTrue($this->formDenialChecked((string) $page->getContent(), GatewayPermission::SshFileWrite->value));
 
         // Matching fresh revision can preserve an intentionally cleared
         // checkbox set while unrelated name validation is corrected.
-        $this->from($edit)->put($url, [
+        $result = $this->from($edit)->put($url, [
             'name' => '', 'denial_revision' => $h2,
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect($edit)->assertSessionHasErrors('name');
-        $page = $this->get($edit)->assertOk();
+        ])->assertAdminRedirect($edit)->assertSessionHasErrors('name');
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk();
         self::assertFalse($this->formDenialChecked((string) $page->getContent(), GatewayPermission::SshFileWrite->value));
         self::assertSame($h2, $manager->denialRevision($group));
     }
@@ -696,7 +696,7 @@ final class TargetGroupManagementTest extends TestCase
             'ssh_permissions_reviewed' => '1',
             'confirm_ssh_permission_changes' => '1',
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
 
         self::assertTrue(app(AccessControl::class)->allows($operator, GatewayPermission::SshCommandRun));
 

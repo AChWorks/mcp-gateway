@@ -1157,7 +1157,7 @@ final class AdminUiPresentationTest extends TestCase
         $xpath = $xpathFor(view('admin.access-batches.index', [
             ...$groupPage->original->getData(), 'errors' => $errors,
         ])->render());
-        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="access-members-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][self::p[contains(concat(" ",normalize-space(@class)," ")," alert ")]]/following-sibling::*[1][self::form])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="access-members-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][self::div[contains(concat(" ",normalize-space(@class)," ")," alert ")]]/following-sibling::*[1][self::form])'));
         Target::query()->create([
             'target_id' => 'heading-table-sibling', 'display_name' => 'Heading table sibling',
             'connector_type' => 'wp_ai_bridge', 'connection_state' => 'error',
