@@ -114,6 +114,9 @@ printf '%s:%s\n' "${fixture_user}" "${password}" | sudo chpasswd
 
 ssh-keygen -q -t ed25519 -N '' -f "${root}/host_ed25519"
 ssh-keygen -q -t rsa -b 3072 -N '' -f "${root}/host_rsa"
+# Separate cryptographic control-channel sshd identity (not the end Target).
+ssh-keygen -q -t ed25519 -N '' -f "${root}/control_host_ed25519"
+ssh-keygen -q -t rsa -b 3072 -N '' -f "${root}/control_host_rsa"
 ssh-keygen -q -t ed25519 -N '' -f "${root}/wrong_ed25519"
 ssh-keygen -q -t rsa -b 3072 -N "${key_passphrase}" -f "${root}/login_rsa"
 # Disposable no-pass key only for the restricted remote-forward control login.
@@ -123,6 +126,8 @@ ssh-keygen -q -t ed25519 -N '' -f "${root}/reverse_tunnel_key"
 # form. ssh-keygen appends a local comment by default, so strip fixture-only
 # comments rather than weakening the production parser.
 awk '{print $1" "$2}' "${root}/host_ed25519.pub" > "${root}/host_ed25519.pin"
+awk '{print $1" "$2}' "${root}/control_host_ed25519.pub" > "${root}/control_host_ed25519.pin"
+! cmp -s "${root}/host_ed25519.pin" "${root}/control_host_ed25519.pin"
 awk '{print $1" "$2}' "${root}/host_rsa.pub" > "${root}/host_rsa.pin"
 awk '{print $1" "$2}' "${root}/wrong_ed25519.pub" > "${root}/wrong_ed25519.pin"
 
@@ -138,18 +143,20 @@ start_daemon() {
   local log="${root}/sshd-${name}.log"
   local pidfile="${root}/sshd-${name}.pid"
 
-  allow_forwarding=no
-  allow_password=yes
+  local allow_forwarding=no
+  local allow_password=yes
+  local host_key_prefix=host
   if [[ "${name}" == "reverse-control" ]]; then
     allow_forwarding=remote
     allow_password=no
+    host_key_prefix=control_host
   fi
   cat > "${config}" <<EOF_CONFIG
 Port ${port}
 ListenAddress 127.0.0.1
 PidFile ${pidfile}
-HostKey ${root}/host_ed25519
-HostKey ${root}/host_rsa
+HostKey ${root}/${host_key_prefix}_ed25519
+HostKey ${root}/${host_key_prefix}_rsa
 AuthorizedKeysFile .ssh/authorized_keys
 PasswordAuthentication ${allow_password}
 PubkeyAuthentication yes
@@ -209,7 +216,7 @@ start_daemon reverse-control "${ports[11]}" \
   "PermitListen 127.0.0.1:46250" "PermitOpen none" "PermitTTY no"
 # Client-initiated OpenSSH -R: listener and actual pinned end-host sshd
 # remain separate SSH authentication and trust domains.
-printf '[127.0.0.1]:%s %s\n' "${ports[11]}" "$(cat "${root}/host_ed25519.pin")" > "${root}/reverse_known_hosts"
+printf '[127.0.0.1]:%s %s\n' "${ports[11]}" "$(cat "${root}/control_host_ed25519.pin")" > "${root}/reverse_known_hosts"
 chmod 600 "${root}/reverse_known_hosts"
 ssh -NT -p "${ports[11]}" -i "${root}/reverse_tunnel_key" \
   -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
@@ -257,6 +264,7 @@ SSH_FIXTURE_MISSING_STAGING=/home/${fixture_user}/.mcp-stream-missing
 SSH_FIXTURE_PORT_MODERN=${ports[0]}
 SSH_FIXTURE_REVERSE_PORT=46250
 SSH_FIXTURE_REVERSE_CONTROL_PORT=${ports[11]}
+SSH_FIXTURE_REVERSE_CONTROL_HOST_PUB=${root}/control_host_ed25519.pin
 SSH_FIXTURE_PORT_LEGACY_RSA=${ports[1]}
 SSH_FIXTURE_PORT_WEAK_KEX=${ports[2]}
 SSH_FIXTURE_PORT_WEAK_CIPHER=${ports[3]}

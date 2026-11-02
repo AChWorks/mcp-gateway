@@ -46,6 +46,11 @@ final class SshReverseRouteFixtureTest extends TestCase
 
     public function test_client_initiated_openssh_r_supports_pinned_login_exec_and_sftp_without_reporting_listener_as_target_ip(): void
     {
+        $controlKey = trim((string) file_get_contents((string) getenv('SSH_FIXTURE_REVERSE_CONTROL_HOST_PUB')));
+        $targetKey = trim((string) file_get_contents((string) getenv('SSH_FIXTURE_ED25519_HOST_PUB')));
+        self::assertNotSame($controlKey, $targetKey,
+            'Tunnel control SSHD host key must differ from pinned remote Target SSHD host key.');
+
         $owner = User::query()->create([
             'name' => 'Reverse route fixture',
             'email' => 'reverse-'.Str::random(12).'@example.test',
