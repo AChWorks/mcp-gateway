@@ -87,7 +87,10 @@ if [[ ! -f "$manifest" ]] && command -v ss >/dev/null &&
     die "Port is already in use; will not displace another service."
 fi
 if ! getent passwd "$control_user" >/dev/null; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin "$control_user"
+    # OpenSSH with UsePAM=no refuses a shadow entry beginning with "!" even
+    # for key-only login. "*" is an impossible password hash (no password
+    # login), while allowing strictly scoped SSH public-key authentication.
+    useradd --system --no-create-home --shell /usr/sbin/nologin --password '*' "$control_user"
 fi
 install -d -m 0755 "$root_dir" "$(dirname "$reader")"
 if [[ ! -f "$host_key" ]]; then
@@ -138,7 +141,7 @@ X11Forwarding no
 PermitTunnel no
 AllowStreamLocalForwarding no
 PermitUserEnvironment no
-UsePAM no
+UsePAM yes
 LogLevel VERBOSE
 EOF
 chown root:root "$config"

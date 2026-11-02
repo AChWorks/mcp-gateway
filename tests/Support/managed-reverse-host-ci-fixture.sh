@@ -43,7 +43,11 @@ sudo systemctl is-active --quiet "$unit"
 # pipefail can SIGPIPE sshd -T and falsely fail an otherwise correct host.
 effective="$(sudo /usr/sbin/sshd -T -f /etc/mcp-gateway-reverse/sshd_config \
     -C user=mcp-reverse,host=localhost,addr=127.0.0.1)"
-printf '%s\n' "$effective" | grep -E '^(allowtcpforwarding|permitlisten|gatewayports|passwordauthentication|permitopen) ' >&2
+printf '%s\n' "$effective" | grep -E '^(allowtcpforwarding|permitlisten|gatewayports|passwordauthentication|permitopen|kbdinteractiveauthentication|usepam) ' >&2
+grep -Fxq 'passwordauthentication no' <<< "$effective" ||
+    { echo "Password login was enabled on restricted SSHD." >&2; exit 1; }
+grep -Fxq 'kbdinteractiveauthentication no' <<< "$effective" ||
+    { echo "Interactive PAM password login was enabled." >&2; exit 1; }
 grep -Fxq 'allowtcpforwarding remote' <<< "$effective" ||
     { echo "Incorrect effective remote-only forwarding policy." >&2; exit 1; }
 grep -Fxq 'permitlisten 127.0.0.1:*' <<< "$effective" ||
