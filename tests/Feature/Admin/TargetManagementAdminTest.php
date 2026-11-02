@@ -10,6 +10,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Http\DnsResolver;
+use App\Infrastructure\Http\OutboundRequestException;
 use App\Models\User;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -297,6 +298,83 @@ final class TargetManagementAdminTest extends TestCase
 
         self::assertSame(0, Target::query()->count());
         self::assertSame(0, WpAiBridgeTargetConfig::query()->count());
+    }
+
+    public function test_wordpress_http_discovery_failures_never_claim_the_request_was_unsent(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+
+        foreach ([
+            ['missing-bridge.example.test', 'missing_bridge', 404],
+            ['invalid-metadata.example.test', 'incompatible_metadata', null],
+        ] as [$host, $code, $expectedHttpStatus]) {
+            $this->post('/admin/targets', [
+                'connector_type' => 'wp_ai_bridge',
+                'target_id' => str_replace('.', '-', $host),
+                'display_name' => 'Safe metadata diagnostic',
+                'base_url' => 'https://'.$host,
+            ])->assertRedirect('/admin/targets/create?connector_type=wp_ai_bridge')
+                ->assertSessionHasErrors('base_url')
+                ->assertSessionHas('diagnostic_code', $code)
+                ->assertSessionHas('diagnostic_context', static function (array $context) use ($expectedHttpStatus): bool {
+                    return ($context['request_not_sent'] ?? null) !== true
+                        && ($expectedHttpStatus === null || ($context['remote_http_status'] ?? null) === $expectedHttpStatus);
+                });
+            $this->get('/admin/targets/create?connector_type=wp_ai_bridge')->assertOk()
+                ->assertDontSee('SECRET_REMOTE_HTTP_BODY');
+        }
+
+        Http::assertSentCount(2);
+        self::assertSame(0, Target::query()->count());
+    }
+
+    public function test_wordpress_pre_dispatch_failure_keeps_true_transport_evidence(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                throw new OutboundRequestException(
+                    'network_failure', 'Synthetic DNS failure before HTTP dispatch.',
+                    ['failure_stage' => 'dns_timeout'], true,
+                );
+            }
+        });
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'wp-pre-dispatch',
+            'display_name' => 'No HTTP request',
+            'base_url' => 'https://wordpress.example.test',
+        ])->assertSessionHasErrors('base_url')
+            ->assertSessionHas('diagnostic_context', static fn (array $context): bool => ($context['request_not_sent'] ?? null) === true
+                && ($context['failure_stage'] ?? null) === 'dns_timeout');
+
+        Http::assertNothingSent();
+    }
+
+    public function test_local_ssh_registration_failure_is_correctly_classified_as_unsent(): void
+    {
+        $this->actingAs($this->user('owner', 'all'));
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'invalid-ssh-host-key',
+            'display_name' => 'No SSH connection',
+            'ssh_host' => '1.1.1.1',
+            'ssh_port' => 22,
+            'ssh_username' => 'deploy',
+            'ssh_host_key' => 'ssh-ed25519 malformed',
+            'ssh_auth_method' => 'password',
+            'ssh_password' => 'SECRET_SSH_LOGIN_CREDENTIAL',
+            'ssh_trust_confirmed' => 'yes',
+        ])->assertSessionHasErrors('ssh_host_key')
+            ->assertSessionHas('diagnostic_context', static fn (array $context): bool => ($context['request_not_sent'] ?? null) === true);
+
+        $this->get('/admin/targets/create?connector_type=ssh_direct')->assertOk()
+            ->assertDontSee('SECRET_SSH_LOGIN_CREDENTIAL');
+        Http::assertNothingSent();
     }
 
     public function test_wordpress_registration_shows_the_actual_blocked_address_and_a_remedy(): void
@@ -1105,6 +1183,15 @@ A second line.', $target->refresh()->ai_guidance);
         $host = (string) parse_url($request->url(), PHP_URL_HOST);
         $base = 'https://'.$host;
         $path = (string) parse_url($request->url(), PHP_URL_PATH);
+
+        if ($path === '/.well-known/oauth-protected-resource'
+            && $host === 'missing-bridge.example.test') {
+            return Http::response(['private' => 'SECRET_REMOTE_HTTP_BODY'], 404);
+        }
+        if ($path === '/.well-known/oauth-protected-resource'
+            && $host === 'invalid-metadata.example.test') {
+            return Http::response(['resource' => '', 'private' => 'SECRET_REMOTE_HTTP_BODY'], 200);
+        }
 
         if ($path === '/.well-known/oauth-protected-resource') {
             return Http::response([

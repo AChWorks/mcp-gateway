@@ -1065,6 +1065,94 @@ async function semanticDirtyForms(browser) {
     }
 }
 
+async function roleSensitiveDirtyForms(browser) {
+    const run = await create(browser);
+    try {
+        const { page } = run;
+        const warnings = [];
+        page.on('dialog', async dialog => { warnings.push(dialog.type()); await dialog.accept(); });
+
+        // Create both accounts through the isolated loopback fixture, then
+        // exercise the actual saved-user editor (not a synthetic DOM fragment).
+        await enter(page, 'viewer');
+        await enter(page, 'owner');
+        await page.goto(base + '/admin/users');
+        await page.getByRole('link', { name: 'Manage UI Fixture Viewer', exact: true }).click();
+
+        const form = page.locator('form[data-user-role-form]');
+        const role = page.locator('#role');
+        const ssh = page.locator('input[name="denied_permissions[]"][value="ssh.file.read"]');
+        assert.equal(await form.getAttribute('data-admin-dirty'), null, 'Viewer begins clean');
+        await role.selectOption('operator');
+        assert.equal(await form.getAttribute('data-admin-dirty'), 'true', 'Real Role change must guard navigation');
+        assert.equal(await ssh.isChecked(), true, 'First promotion retains fail-closed SSH defaults');
+        await role.selectOption('viewer');
+        assert.equal(await form.getAttribute('data-admin-dirty'), null,
+            'Viewer -> Operator -> Viewer must not warn for automatically seeded disabled SSH choices');
+
+        await role.selectOption('operator');
+        await ssh.uncheck();
+        assert.equal(await form.getAttribute('data-admin-dirty'), 'true', 'Deliberate SSH Deny edit is unsaved');
+        await role.selectOption('viewer');
+        assert.equal(await form.getAttribute('data-admin-dirty'), 'true',
+            'Intentionally staged SSH choice must remain guarded while temporarily disabled');
+        await role.selectOption('operator');
+        assert.equal(await ssh.isChecked(), false, 'Staged SSH choice survives Role round-trip');
+        await ssh.check();
+        await role.selectOption('viewer');
+        assert.equal(await form.getAttribute('data-admin-dirty'), null,
+            'Reverting the deliberate SSH edit and Role clears the guard');
+        await nav(page, 'Dashboard', 'Gateway overview');
+        assert.deepEqual(warnings, [], 'Reverted Viewer/Operator role switching must not ask to discard');
+
+        await page.goto(base + '/admin/users');
+        await page.getByRole('link', { name: 'Manage UI Fixture Owner', exact: true }).click();
+        const ownerForm = page.locator('form[data-user-role-form]');
+        assert.equal(await ownerForm.getAttribute('data-admin-dirty'), null, 'Owner begins clean');
+        await page.locator('#role').selectOption('operator');
+        assert.equal(await ownerForm.getAttribute('data-admin-dirty'), 'true');
+        await page.locator('#role').selectOption('owner');
+        assert.equal(await ownerForm.getAttribute('data-admin-dirty'), null,
+            'Owner -> Operator -> Owner must not warn for auto-seeded SSH choices');
+        await nav(page, 'Dashboard', 'Gateway overview');
+        assert.deepEqual(warnings, []);
+
+        // Save establishes a fresh baseline; an unsuccessful subsequent
+        // validation keeps the server-flashed unsaved User draft protected.
+        await page.goto(base + '/admin/users');
+        await page.getByRole('link', { name: 'Manage UI Fixture Viewer', exact: true }).click();
+        const savedName = 'UI Fixture Viewer saved';
+        await page.locator('#name').fill(savedName);
+        await page.locator('#current_password').fill('isolated-browser-password');
+        const waitSave = page.waitForResponse(response => response.request().method() === 'POST'
+            && new URL(response.url()).pathname.startsWith('/admin/users/'));
+        await page.getByRole('button', { name: 'Save user access', exact: true }).click();
+        assert.equal((await waitSave).status(), 302, 'User save must use native POST/redirect/GET');
+        await page.getByRole('heading', { name: savedName, exact: true }).waitFor();
+        assert.equal(await page.locator('form[data-user-role-form]').getAttribute('data-admin-dirty'), null);
+        await page.reload();
+        assert.equal(await page.locator('form[data-user-role-form]').getAttribute('data-admin-dirty'), null,
+            'Saved User must reload with a clean baseline');
+
+        await page.locator('#name').fill(savedName + ' rejected');
+        await page.locator('#current_password').fill('incorrect-browser-password');
+        const waitReject = page.waitForResponse(response => response.request().method() === 'POST'
+            && new URL(response.url()).pathname.startsWith('/admin/users/'));
+        await page.getByRole('button', { name: 'Save user access', exact: true }).click();
+        assert.equal((await waitReject).status(), 302);
+        await page.locator('[data-user-save-failed]').waitFor();
+        assert.equal(await page.locator('form[data-user-role-form]').getAttribute('data-admin-dirty'), 'true',
+            'Server-flashed failed User draft must retain unsaved guard');
+        await nav(page, 'Dashboard', 'Gateway overview');
+        assert.deepEqual(warnings, ['confirm'], 'Only the rejected User draft should warn');
+        assert.deepEqual(run.errors, []);
+        assert.deepEqual(run.external, []);
+        pass('real User Role round trips: auto-seed clean, deliberate SSH draft protected, successful save/reset and failed validation guarded');
+    } finally {
+        await run.context.close();
+    }
+}
+
 (async () => {
     const browser = await chromium.launch({ headless: true });
     try {
@@ -1083,6 +1171,7 @@ async function semanticDirtyForms(browser) {
             await networkFailure(browser);
         }
         if (group === 'all' || group === 'dirty') await semanticDirtyForms(browser);
+        if (group === 'all' || group === 'dirty') await roleSensitiveDirtyForms(browser);
     } finally {
         await browser.close();
     }

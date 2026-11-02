@@ -151,6 +151,8 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
                 ],
             };
             throw new TargetConnectorFailure($message, $field, $code, [
+                'failure_origin' => 'gateway_admission',
+                'pre_dispatch' => true, // Registration never opens an SSH connection.
                 'source_error_code' => $code,
                 'source_error_message' => $cause,
                 'exception_class' => $exception::class,
@@ -166,6 +168,8 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
                 $credential ? ($method === 'password' ? 'ssh_password' : 'ssh_private_key') : 'target_id',
                 $code,
                 [
+                    'failure_origin' => 'gateway_admission',
+                    'pre_dispatch' => true, // Credential/storage validation is local.
                     'source_error_code' => $code,
                     // SQL/vault exceptions may contain parameter values: do not
                     // echo their text into logs or any browser-visible session.

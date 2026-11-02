@@ -51,6 +51,11 @@
             // Session/auth tokens, optimistic revision hashes, and generated
             // hidden metadata are not human-editable form content.
             if (['hidden', 'button', 'submit', 'reset', 'image'].includes(type)) return [];
+            // Out-of-Role Deny choices cannot be submitted. Ignore automatic
+            // SSH safe-default seeding after a Role is reverted, but preserve
+            // deliberate edits staged while the permission was available.
+            if (control.disabled && control.closest('[data-user-role-choice]')
+                && control.dataset.adminStagedEdit !== 'true') return [];
             let value;
             if (type === 'checkbox' || type === 'radio') value = control.checked;
             else if (type === 'file') value = Array.from(control.files || [],
