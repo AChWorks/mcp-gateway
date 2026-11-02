@@ -145,6 +145,25 @@ sha256sum "$tmp/installer-check.sh" | awk '{print $1}' > "$tmp/actual-sha"
 cmp "$tmp/expected-sha" "$tmp/actual-sha" ||
     die "Live HTTPS installer source bytes differ from accepted release."
 
+# A user-writable symlink in Target's login home must be rejected BEFORE
+# consuming even a valid-looking claim. Avoid any privileged writes through
+# the Target user's home and leave the exact OS identity untouched.
+sudo runuser -u mcptargetci -- ln -s /etc /home/mcptargetci/.ssh
+if sudo env CURL_CA_BUNDLE="$tmp/tls.crt" bash bin/managed-reverse-target.sh \
+    --gateway "$APP_URL" --enrollment "$enrollment" \
+    --token "$(printf '0%.0s' {1..64})" \
+    --host-key-b64 "$(awk '{print $1" "$2}' "$tmp/target-host.pub" | base64 -w 0)" \
+    --target-port "$target_port" --target-user mcptargetci \
+    > "$tmp/symlink-preflight.log" 2>&1; then
+    die "Target installer adopted a user-controlled symlink."
+fi
+grep -Fq 'Symlinked Target login SSH key paths are unsafe.' "$tmp/symlink-preflight.log" ||
+    die "Target installer did not specifically block the unsafe login path."
+sudo runuser -u mcptargetci -- rm -f /home/mcptargetci/.ssh
+[[ ! -e "/var/lib/mcp-gateway-reverse/$enrollment/enrollment.json" ]] ||
+    die "Symlink preflight consumed an enrollment unexpectedly."
+echo "PASS: unsafe Target SSH-home symlink is rejected before claim."
+
 # A definitively rejected claim must not create an orphan OS identity. The
 # next valid command may safely reuse the locally staged (unpublished) key.
 bad_host_pin="$(awk '{print $1" "$2}' "$tmp/target-host.pub" | base64 -w 0)"
@@ -152,6 +171,7 @@ if sudo env CURL_CA_BUNDLE="$tmp/tls.crt" bash bin/managed-reverse-target.sh \
     --gateway "$APP_URL" --enrollment "$enrollment" \
     --token "$(printf '0%.0s' {1..64})" \
     --host-key-b64 "$bad_host_pin" --target-port "$target_port" \
+    --target-user mcptargetci \
     > "$tmp/rejected.log" 2>&1; then
     die "Wrong one-use claim was accepted by Laravel."
 fi

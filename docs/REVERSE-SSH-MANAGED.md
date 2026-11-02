@@ -17,7 +17,9 @@ The hosted control SSHD uses a non-root, no-shell user, public-key-only
 authentication, remote-forward-only permission, an exact loopback
 permitlisten per key, an isolated systemd unit and an independent host key.
 The PHP-FPM application writes only an owned restricted public-key file; it
-cannot change root-owned SSHD/systemd settings. Existing Direct SSH, manually
+cannot change root-owned SSHD/systemd settings. Privileged bootstrapping
+delegates writes inside PHP-writable storage to the PHP service identity
+itself (not root) and rejects symlinked storage paths. Existing Direct SSH, manually
 approved Reverse SSH, Target ACLs, SFTP, commands and retained Jobs are not
 converted to a generic SSH proxy or DNS bypass.
 
@@ -66,13 +68,16 @@ web host are not independent provenance.
 
 The installer requires a supported Debian/Ubuntu or RHEL-family Linux with
 systemd, curl, Python3, ssh, ssh-keygen, ssh-keyscan and standard utilities.
-It validates the local SSHD host key against the Owner-entered pin BEFORE
-claim, creates a separate non-root control user and local private key, sends
+It validates the local SSHD host key, existing OS login username/home and
+unsafe SSH symlink paths against the Owner-entered values BEFORE claim,
+creates a separate non-root control user and local private key, sends
 the one-use claim over HTTPS, pins Gateway control SSHD, appends only the
 returned public Target login key to the existing user and installs the
 persistent mcp-gateway-reverse-<ULID>.service (OpenSSH -N -R, strict host pin,
 loopback listener, ExitOnForwardFailure and reconnect policy). It refuses
-unowned symlinks, services and keys instead of adopting them. It does not
+unowned symlinks, services and keys instead of adopting them. Public key
+installation inside the Target login user's home and pinned control-key
+updates execute under those unprivileged OS identities, not root. It does not
 silently alter host firewall or install packages.
 
 Neither claim nor local service start means Connected. The Owner must run

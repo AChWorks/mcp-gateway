@@ -9,12 +9,12 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 notice() { printf '%s\n' "$*" >&2; }
 usage() {
     cat >&2 <<'HELP'
-Usage: bash managed-reverse-target.sh --gateway https://gateway.example --enrollment ULID --token HEX64 --host-key-b64 BASE64 [--target-port N]
+Usage: bash managed-reverse-target.sh --gateway https://gateway.example --enrollment ULID --token HEX64 --host-key-b64 BASE64 --target-user USER [--target-port N]
 Requires explicit root privileges; supports Debian/Ubuntu and RHEL-family with systemd.
 HELP
     exit 2
 }
-gateway="" enrollment="" token="" host_key_b64="" port_override=""
+gateway="" enrollment="" token="" host_key_b64="" port_override="" expected_user=""
 while (($#)); do
     case "$1" in
         --gateway) (($# >= 2)) || usage; gateway="$2"; shift 2 ;;
@@ -22,6 +22,7 @@ while (($#)); do
         --token) (($# >= 2)) || usage; token="$2"; shift 2 ;;
         --host-key-b64) (($# >= 2)) || usage; host_key_b64="$2"; shift 2 ;;
         --target-port) (($# >= 2)) || usage; port_override="$2"; shift 2 ;;
+        --target-user) (($# >= 2)) || usage; expected_user="$2"; shift 2 ;;
         *) usage ;;
     esac
 done
@@ -31,6 +32,8 @@ done
 [[ "$token" =~ ^[a-f0-9]{64}$ ]] || die "Invalid one-use enrollment authorization."
 [[ "$host_key_b64" =~ ^[A-Za-z0-9+/=]+$ ]] || die "Invalid verified Target host key encoding."
 [[ -z "$port_override" || "$port_override" =~ ^[1-9][0-9]{0,4}$ ]] || die "Invalid SSH port override."
+[[ "$expected_user" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.+-]{0,127}$ ]] ||
+    die "The Owner-enrolled SSH login username is required."
 [[ -r /etc/os-release ]] || die "Unsupported host: /etc/os-release missing."
 # shellcheck source=/dev/null
 . /etc/os-release
@@ -39,7 +42,7 @@ case "${ID:-}" in
     *) die "Unsupported distribution ${ID:-unknown}; no changes made." ;;
 esac
 [[ -d /run/systemd/system ]] || die "systemd must be the active init manager; no changes made."
-for program in curl ssh ssh-keygen ssh-keyscan systemctl python3 getent id useradd install chown chmod flock; do
+for program in curl ssh ssh-keygen ssh-keyscan systemctl python3 getent id useradd runuser install chown chmod flock; do
     command -v "$program" >/dev/null 2>&1 || die "Required tool missing: $program (install it before retrying)."
 done
 [[ -x /usr/bin/ssh ]] || die "Supported OpenSSH client must be installed at /usr/bin/ssh."
@@ -66,6 +69,17 @@ scan="$(ssh-keyscan -T 5 -p "$local_port" 127.0.0.1 2>/dev/null || true)"
 if ! printf '%s\n' "$scan" | awk '{print $2" "$3}' | grep -Fxq "$owner_pin"; then
     die "Local SSHD host key does not match the Owner-verified Target pin. No changes made."
 fi
+# Validate the exact Owner-selected OS login before consuming the one-use
+# claim. An absent account or unsafe SSH home must not burn an enrollment.
+getent passwd "$expected_user" >/dev/null ||
+    die "The Owner-enrolled SSH login account does not exist."
+expected_home="$(getent passwd "$expected_user" | awk -F: '{print $6}')"
+[[ "$expected_home" = /* && -d "$expected_home" && ! -L "$expected_home" ]] ||
+    die "The Owner-enrolled SSH login account has an unsafe home."
+[[ ! -L "$expected_home/.ssh" && ! -L "$expected_home/.ssh/authorized_keys" ]] ||
+    die "Symlinked Target login SSH key paths are unsafe."
+[[ ! -e "$expected_home/.ssh/authorized_keys" || -f "$expected_home/.ssh/authorized_keys" ]] ||
+    die "Owner-enrolled SSH login authorized_keys is not a regular file."
 # Local data written after preflight; all managed paths are ownable and
 # reconciled on repeat execution, never adopt an unrelated service/unit.
 if [[ -e "$state_file" ]]; then
@@ -87,7 +101,14 @@ install -d -m 0755 "$base_dir"
 install -d -m 0711 "$state_dir"
 exec 9> "$state_dir/.install.lock"
 flock -n 9 || die "Another installer is already running for this enrollment."
-install -d -m 0700 "$keys_dir"
+if getent passwd "$client_user" >/dev/null; then
+    [[ -f "$control_key" && -f "$control_key.pub" ]] ||
+        die "Existing tunnel account lost its control key; Owner reconciliation required."
+    runuser -u "$client_user" -- install -d -m 0700 "$keys_dir" ||
+        die "Tunnel user cannot access owned private key directory."
+else
+    install -d -m 0700 "$keys_dir"
+fi
 if [[ ! -f "$control_key" ]]; then
     ssh-keygen -q -t ed25519 -N '' -f "$control_key" -C "" || die "SSH key creation failed."
 fi
@@ -160,6 +181,8 @@ control_host="${params_data[0]}" control_port="${params_data[1]}"
 control_user="${params_data[2]}" control_host_key="${params_data[3]}"
 listener_port="${params_data[4]}" registered_port="${params_data[5]}"
 target_user="${params_data[6]}" login_public_key="${params_data[7]}"
+[[ "$target_user" == "$expected_user" ]] ||
+    die "Gateway returned a different SSH login identity than the Owner-selected account."
 [[ "$registered_port" -eq "$local_port" ]] || die "Selected Target SSH port mismatches registered enrollment; use --target-port $registered_port."
 getent passwd "$target_user" >/dev/null || die "The explicitly selected Target login account does not exist: $target_user."
 target_home="$(getent passwd "$target_user" | awk -F: '{print $6}')"
@@ -168,19 +191,34 @@ login_ssh="$target_home/.ssh"
 login_keys="$login_ssh/authorized_keys"
 [[ ! -L "$login_ssh" && ! -L "$login_keys" ]] || die "Refusing symlinked Target authorized_keys path."
 [[ ! -e "$login_keys" || -f "$login_keys" ]] || die "Unexpected authorized_keys type."
-install -d -m 0700 -o "$target_user" "$login_ssh"
-touch "$login_keys"
-chown "$target_user" "$login_keys"
-chmod 0600 "$login_keys"
-if ! grep -Fxq -- "$login_public_key" "$login_keys"; then
-    printf '%s\n' "$login_public_key" >> "$login_keys"
-fi
-# OpenSSH checks this independent pinned Gateway *control* server key.
+# Never create/chmod/append files in an OS login home as root: the login
+# user controls the directory and could swap a symlink between root checks.
+# Use the explicitly chosen login user's own filesystem permissions instead.
+runuser -u "$target_user" -- install -d -m 0700 "$login_ssh" ||
+    die "Target login user cannot protect its SSH directory."
+runuser -u "$target_user" -- touch "$login_keys" ||
+    die "Target login user cannot create its authorized_keys file."
+runuser -u "$target_user" -- chmod 0600 "$login_keys" ||
+    die "Target login user cannot protect authorized_keys."
+runuser -u "$target_user" -- sh -c '
+    key="$1"; keys="$2"
+    if ! grep -Fxq -- "$key" "$keys"; then
+        umask 077
+        printf "%s\n" "$key" >> "$keys"
+    fi
+' _ "$login_public_key" "$login_keys" ||
+    die "Target login user cannot append the approved public key."
+# Never write a user-owned known_hosts file as root: a compromised service
+# user must not be able to turn an update into a privileged symlink write.
 known="$keys_dir/known_hosts"
 [[ ! -L "$known" ]] || die "Symlinked known_hosts path refused."
-printf '[%s]:%s %s\n' "$control_host" "$control_port" "$control_host_key" > "$known"
-chmod 0600 "$known"
-chown -R "$client_user" "$keys_dir"
+runuser -u "$client_user" -- sh -c '
+    umask 077
+    printf "[%s]:%s %s\n" "$1" "$2" "$3" > "$4"
+' _ "$control_host" "$control_port" "$control_host_key" "$known" ||
+    die "Tunnel user cannot write its pinned control host key."
+runuser -u "$client_user" -- chmod 0600 "$known" ||
+    die "Tunnel user cannot protect its pinned control host key."
 tmp_unit="$state_dir/.service.$$"
 cat > "$tmp_unit" <<EOF
 # Managed by MCP Gateway Reverse SSH

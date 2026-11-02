@@ -34,8 +34,21 @@ trap cleanup EXIT
 
 [[ ! -e /etc/mcp-gateway-reverse && ! -e /etc/systemd/system/"$unit" ]] ||
     { echo "The disposable runner already contains a control SSHD. Refusing takeover."; exit 1; }
-mkdir -p "$app/storage"
+mkdir -p "$app/storage/app"
 bootstrap="$PWD/bin/managed-reverse-gateway.sh"
+# Negative root-safety proof: PHP-owned symlinks cannot turn a bootstrap
+# preflight into root chmod/chown of /etc or any other unrelated path.
+protected_state="$(sudo stat -c '%u:%g:%a' /etc)"
+ln -s /etc "$app/storage/app/private"
+if sudo bash "$bootstrap" --preflight --app "$app" --php-user "$php_user" --port "$port" \
+    > "$tmp/symlink-rejected.log" 2>&1; then
+    echo "ERROR: Root bootstrap followed a writable PHP storage symlink."
+    exit 1
+fi
+[[ "$(sudo stat -c '%u:%g:%a' /etc)" == "$protected_state" ]] ||
+    { echo "Root bootstrap changed unrelated /etc metadata."; exit 1; }
+rm -f -- "$app/storage/app/private"
+echo "PASS: privileged bootstrap rejects PHP-owned storage symlink before side effects."
 sudo bash "$bootstrap" --preflight --app "$app" --php-user "$php_user" --port "$port"
 sudo bash "$bootstrap" --apply --app "$app" --php-user "$php_user" --port "$port"
 sudo systemctl is-active --quiet "$unit"
@@ -128,4 +141,19 @@ if timeout 8 ssh -N -T "${common[@]}" -R "127.0.0.1:$listener:127.0.0.1:$http_po
     mcp-reverse@127.0.0.1 >"$tmp/revoked.log" 2>&1; then
     echo "ERROR: Revoked key still authenticated."; exit 1
 fi
+# A disable request with the wrong port must never stop an unrelated
+# listener; exact root-owned manifest identity is required for shutdown.
+if sudo bash "$bootstrap" --disable --app "$app" --php-user "$php_user" \
+    --port "$((port + 1))" > "$tmp/wrong-disable.log" 2>&1; then
+    echo "ERROR: Incorrect Gateway bootstrap identity stopped SSHD."; exit 1
+fi
+sudo systemctl is-active --quiet "$unit" ||
+    { echo "ERROR: Incorrect disable changed control SSHD state."; exit 1; }
+sudo bash "$bootstrap" --disable --app "$app" --php-user "$php_user" \
+    --port "$port" > "$tmp/right-disable.log" 2>&1
+if sudo systemctl is-active --quiet "$unit"; then
+    echo "ERROR: Approved disable left the restricted SSHD running."; exit 1
+fi
+echo "PASS: exact-identity disable stops only the owned control SSHD."
+
 echo "PASS: actual isolated SSHD bootstrap, loopback forwarding, exact port, no shell and new-login revocation."
