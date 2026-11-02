@@ -92,7 +92,10 @@ test can set Connected. This is point-in-time proof, not a heartbeat.
 - Owner can disable managed routing or reconcile an authorized-keys policy
   without host privileges. Host account/service repair still requires a
   separately authorized root bootstrap.
-- Owner-only Target revocation requires exact ID and password. It removes
+- Managed Target SSH endpoint/route/credential updates are rejected until the
+Owner first revokes the live managed enrollment, preventing an authorized
+control-key listener from being orphaned by a silent Direct route edit.
+Owner-only Target revocation requires exact ID and password. It removes
   control key admission, local login credential and bumps the binding
   revision to fence retained Jobs. Normal disconnect/forget cannot silently
   leave a managed control public key authorized.

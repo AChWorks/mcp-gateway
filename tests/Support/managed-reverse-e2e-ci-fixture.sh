@@ -107,6 +107,8 @@ php artisan migrate --force --no-interaction > "$tmp/migrate.log" 2>&1 ||
     { tail -45 "$tmp/migrate.log" >&2; die "Ephemeral SQLite migration failed."; }
 php tests/Support/managed-reverse-e2e.php enroll ||
     die "Could not generate exact Target command from managed service."
+[[ -s "$tmp/one-command.sh" && -s "$tmp/enrollment-id" ]] ||
+    die "Enrollment command/identifier was not produced; stop before any Target effect."
 enrollment="$(cat "$tmp/enrollment-id")"
 [[ "$enrollment" =~ ^[0-9A-HJKMNP-TV-Z]{26}$ ]] ||
     die "Generated enrollment ID is malformed."

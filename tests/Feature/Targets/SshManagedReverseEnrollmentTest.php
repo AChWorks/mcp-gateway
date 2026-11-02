@@ -4,6 +4,8 @@ namespace Tests\Feature\Targets;
 
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetReconfiguration;
+use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
@@ -145,6 +147,42 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         self::assertSame('revoked', $started['enrollment']->fresh()->state);
         $this->expectException(SshTargetConnectionException::class);
         app(SshReverseRoutePolicy::class)->forTarget(Target::query()->sole(), SshTargetConfig::query()->sole());
+    }
+
+    public function test_active_managed_enrollment_cannot_be_silently_reconfigured_to_direct(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        $target = $started['enrollment']->target;
+        $configuration = app(SshTargetReconfiguration::class);
+        $revision = $configuration->revision($target);
+
+        try {
+            $configuration->update($target, [
+                'configuration_revision' => $revision,
+                'ssh_host' => '8.8.8.8',
+                'ssh_port' => 2222,
+                'ssh_username' => 'deployer',
+                'ssh_host_key' => $this->publicKey(52),
+                'ssh_trust_confirmed' => 'yes',
+                'ssh_auth_method' => 'private_key',
+                'ssh_private_key' => null,
+                'ssh_password' => null,
+                'ssh_passphrase' => null,
+                'ssh_route_mode' => 'direct',
+                'ssh_reverse_port' => null,
+                'ssh_tunnel_identity' => null,
+            ]);
+            self::fail('Managed listener was silently changed to Direct.');
+        } catch (TargetConnectorFailure $e) {
+            self::assertSame('managed_reverse_reconfiguration_requires_revocation', $e->reason);
+        }
+
+        self::assertSame('reverse', $target->sshConfig->fresh()->route_mode);
+        self::assertSame('pending', $started['enrollment']->fresh()->state);
+        self::assertSame(1, TargetCredential::query()
+            ->where('target_record_id', $target->getKey())->count());
     }
 
     public function test_one_control_public_key_cannot_be_claimed_for_two_targets(): void

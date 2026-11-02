@@ -35,8 +35,13 @@ if (getenv('GITHUB_ACTIONS') !== 'true' || $root === false || ! is_dir($root)) {
 $targetId = 'ci-managed-reverse';
 $targetPort = (int) getenv('MANAGED_REVERSE_TARGET_PORT');
 $controlPort = (int) getenv('MANAGED_REVERSE_CONTROL_PORT');
-$controlPin = trim((string) file_get_contents('/etc/mcp-gateway-reverse/ssh_host_ed25519_key.pub'));
-$controlPin = implode(' ', array_slice(preg_split('/\s+/', $controlPin), 0, 2));
+// The root-owned manifest deliberately exposes the verified PUBLIC control
+// host identity; the root-only SSHD key files are never opened by Laravel.
+$manifest = json_decode(
+    (string) file_get_contents('/etc/mcp-gateway-reverse/manifest.json'),
+    true, 16, JSON_THROW_ON_ERROR,
+);
+$controlPin = (string) $manifest['control_host_key'];
 
 if ($mode === 'enroll') {
     $pin = trim((string) file_get_contents($root.'/target-host.pub'));
