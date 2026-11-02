@@ -213,7 +213,7 @@ start_daemon unexpected-ids "${ports[8]}" "Subsystem sftp /usr/bin/python3 /home
 start_daemon watch-first-write "${ports[9]}" "Subsystem sftp /usr/bin/python3 /home/${fixture_user}/.mcp-hostile-sftp.py watch-first-write"
 start_daemon elevated-sftp "${ports[10]}" "Subsystem sftp /usr/bin/sudo -n /usr/lib/openssh/sftp-server"
 start_daemon reverse-control "${ports[11]}" \
-  "PermitListen 127.0.0.1:46250" "PermitOpen none" "PermitTTY no"
+  "PermitListen 127.0.0.1:46250" "PermitOpen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
 # Client-initiated OpenSSH -R: listener and actual pinned end-host sshd
 # remain separate SSH authentication and trust domains.
 printf '[127.0.0.1]:%s %s\n' "${ports[11]}" "$(cat "${root}/control_host_ed25519.pin")" > "${root}/reverse_known_hosts"
@@ -242,6 +242,21 @@ timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46250' 2>/dev/null || {
   echo 'OpenSSH -R fixture listener failed to start.' >&2
   exit 1
 }
+
+# A tunnel-control key must NOT provide a shell or execute even a
+# noninteractive command; -N/-R works without asking sshd for a session.
+if ssh -T -p "${ports[11]}" -i "${root}/reverse_tunnel_key" \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${root}/reverse_known_hosts" \
+  "${fixture_user}@127.0.0.1" 'printf REVERSE_CONTROL_EXEC_DENIED_PROOF' \
+  > "${root}/reverse-command-probe.log" 2>&1; then
+  echo 'The restricted remote-forward identity unexpectedly executed a command.' >&2
+  exit 1
+fi
+if grep -Fq 'REVERSE_CONTROL_EXEC_DENIED_PROOF' "${root}/reverse-command-probe.log"; then
+  echo 'The restricted tunnel key exposed remote shell/exec output.' >&2
+  exit 1
+fi
 
 if [[ -n "${env_file}" ]]; then
   cat >> "${env_file}" <<EOF_ENV

@@ -55,12 +55,21 @@ Match User gateway-reverse-example
     GatewayPorts no
     PermitOpen none
     PermitTTY no
+    ForceCommand /bin/false
+    AllowStreamLocalForwarding no
+    PermitUserEnvironment no
     AllowAgentForwarding no
     X11Forwarding no
     PermitTunnel no
 ```
 
 Use a dedicated OS account without privileged interactive shell/sudo access.
+`PermitTTY no` alone is insufficient because noninteractive `ssh user@host command`
+can still run a shell. Enforce `ForceCommand /bin/false` to reject session
+exec/shell/subsystem requests, without rejecting sessionless `ssh -N -R`
+forwarding. Disable Unix-domain StreamLocal forwarding and remote user
+environment injection as well. Verify the installed sshd honors these
+restrictions and explicitly test that command execution is denied.
 Limit the account's `authorized_keys` entry to the single independently
 verified **public** client key, e.g.:
 
