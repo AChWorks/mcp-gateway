@@ -3,7 +3,10 @@
 namespace Tests\Feature\Targets;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Targets\SshCommandRuntime;
+use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\Target;
@@ -115,6 +118,43 @@ final class SshReverseRouteApprovalTest extends TestCase
         self::assertSame('reverse', $failure->baseResponse->getSession()->getOldInput()['ssh_route_mode']);
         self::assertSame(0, Target::query()->count());
         self::assertSame(0, TargetCredential::query()->count());
+    }
+
+    public function test_operator_revocation_stops_verification_commands_and_sftp_before_dialing_any_socket(): void
+    {
+        $owner = $this->user('owner');
+        $this->actingAs($owner);
+        $target = app(SshTargetRegistration::class)->register(
+            'reverse-target', 'Reverse revoked', 'fixture.example.test', 22, 'deploy',
+            $this->hostKey(), 'password', 'password-secret-fixture', null,
+            null, 'reverse', self::PORT, 'fixture-reverse-one',
+        );
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+
+        $this->allow([]);
+        foreach ([
+            'verification' => static fn () => app(SshTargetConnectionService::class)->test($target),
+            'command' => static fn () => app(SshCommandRuntime::class)->run($owner, $target, 'printf must-not-run'),
+            'sftp' => static fn () => app(SshFileRuntime::class)->stat($owner, $target, '/home/deploy'),
+        ] as $path => $attempt) {
+            // Verify failure marks Target health as Error; reset the local
+            // synthetic precondition to independently test each call path.
+            $target->refresh();
+            $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+            $fresh = Target::query()->whereKey($target->getKey())->firstOrFail();
+            self::assertSame(TargetConnectionState::Connected, $fresh->connection_state, 'health for '.$path);
+            $cfg = SshTargetConfig::query()->sole();
+            self::assertSame('password-secret-fixture', app(SshTargetVault::class)->open($fresh, $cfg, TargetCredential::query()->sole())['secret'], 'vault for '.$path);
+            try {
+                $attempt();
+                self::fail('Revoked operator approval unexpectedly permitted SSH transport.');
+            } catch (SshTargetConnectionException $exception) {
+                self::assertSame('reverse_route_not_approved', $exception->reason, $path);
+            }
+        }
+        $config = SshTargetConfig::query()->sole();
+        self::assertNull($config->observed_peer_ip);
+        self::assertNull($config->observed_at);
     }
 
     public function test_owner_route_rotation_fences_credentials_verified_state_and_retained_job_binding(): void

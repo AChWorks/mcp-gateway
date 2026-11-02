@@ -77,6 +77,16 @@ final readonly class SshTargetConnectionService
             throw new SshTargetConnectionException('verification_superseded');
         }
 
+        // Do not report a successful login over a listener revoked during
+        // KEX/login. The end-host pin alone does not grant route ownership.
+        try {
+            $this->reverseRoutes->forTarget($target, $config);
+        } catch (SshTargetConnectionException $exception) {
+            $this->verification->failed($target, $config, $credential, $attemptId, $exception->reason);
+
+            throw $exception;
+        }
+
         // Short state transaction after network I/O; it checks the attempt
         // fence under the same Target row lock used to issue new fences.
         $this->verification->succeeded($target, $config, $credential, $attemptId, $ip);

@@ -37,7 +37,8 @@ URLs, DNS addresses, private ranges or a caller-supplied proxy destination.
    `targets.create` (Administrator) cannot select Reverse.
 
 On every verification, command and SFTP operation the Gateway rechecks the
-operator mapping before the connection. A missing or changed mapping fails
+operator mapping before the connection and at the post-login operation/verification
+authority fence; SFTP staged writes recheck again at each write boundary. A missing or changed mapping fails
 closed; an unavailable listener does **not** trigger a direct retry. The TCP
 socket peer is verified as **127.0.0.1:approved-port**, then the original Target
 server's **pinned public SSH host key is cryptographically verified before

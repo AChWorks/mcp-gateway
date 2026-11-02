@@ -122,6 +122,10 @@ final readonly class SshCommandRuntime
                         || ! $this->dispatchAdmission->allows($currentUser)) {
                         throw new SshTargetConnectionException('target_changed');
                     }
+                    // The NL operator might revoke this listener while the
+                    // pinned end-host KEX/login is in progress. Recheck before
+                    // sending even one effectful command.
+                    $this->reverseRoutes->forTarget($currentTarget, $currentConfig);
 
                     return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started);
                 },

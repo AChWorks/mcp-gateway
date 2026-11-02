@@ -581,7 +581,7 @@ final readonly class SshFileRuntime
         $config = SshTargetConfig::query()->whereKey($configId)->first();
         $credential = TargetCredential::query()->whereKey($credentialId)->first();
 
-        return $config instanceof SshTargetConfig
+        $stillBound = $config instanceof SshTargetConfig
             && $credential instanceof TargetCredential
             && (string) $config->target_record_id === (string) $target->getKey()
             && (string) $credential->target_record_id === (string) $target->getKey()
@@ -589,6 +589,13 @@ final readonly class SshFileRuntime
             && $credential->purpose === SshTargetVault::PURPOSE
             && hash_equals($binding, SshTargetBinding::hash($target, $config))
             && hash_equals($credentialDigest, hash('sha256', (string) $credential->encrypted_payload));
+        if ($stillBound) {
+            // Re-approve at each post-login and staged-write authority fence,
+            // not only before opening the socket. No extra DB reads required.
+            $this->reverseRoutes->forTarget($target, $config);
+        }
+
+        return $stillBound;
     }
 
     /**
