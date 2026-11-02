@@ -105,6 +105,15 @@ final readonly class SshTargetReconfiguration
                 || ($route === null ? 'direct' : 'reverse') !== ($config->route_mode ?? 'direct')
                 || $route?->listenerPort !== $config->reverse_listener_port
                 || $route?->tunnelIdentity !== $config->reverse_tunnel_identity;
+            $currentBindingRevision = (int) ($config->binding_revision ?? 0);
+            if ($bindingChanged && $currentBindingRevision >= 4294967295) {
+                throw new TargetConnectorFailure(
+                    __('The SSH binding revision is exhausted; do not reuse an older route or historical Job identity.'),
+                    'configuration_revision',
+                );
+            }
+            $nextBindingRevision = $currentBindingRevision + ($bindingChanged ? 1 : 0);
+
             $replacement = $method === 'password' ? $password : $key;
             if (! $bindingChanged && $replacement === null && $credential instanceof TargetCredential) {
                 return false;
@@ -151,6 +160,7 @@ final readonly class SshTargetReconfiguration
                 'route_mode' => $route === null ? 'direct' : 'reverse',
                 'reverse_listener_port' => $route?->listenerPort,
                 'reverse_tunnel_identity' => $route?->tunnelIdentity,
+                'binding_revision' => $nextBindingRevision,
             ]);
             try {
                 $encrypted = $this->vault->seal($locked, $next, $secret, $newPassphrase);
@@ -181,6 +191,7 @@ final readonly class SshTargetReconfiguration
                 'route_mode' => $route === null ? 'direct' : 'reverse',
                 'reverse_listener_port' => $route?->listenerPort,
                 'reverse_tunnel_identity' => $route?->tunnelIdentity,
+                'binding_revision' => $nextBindingRevision,
                 'verification_attempt_id' => null,
                 'observed_peer_ip' => null,
                 'observed_at' => null,

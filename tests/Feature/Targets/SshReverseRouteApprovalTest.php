@@ -140,6 +140,7 @@ final class SshReverseRouteApprovalTest extends TestCase
         self::assertSame('disconnected', $target->connection_state->value);
         self::assertNull($config->observed_peer_ip);
         self::assertNotSame($originalCipher, TargetCredential::query()->sole()->encrypted_payload);
+        self::assertSame(1, $config->binding_revision);
         self::assertNotSame($originalJobBinding, SshTargetBinding::hash($target, $config));
         self::assertSame('password-secret-fixture', app(SshTargetVault::class)
             ->open($target, $config, TargetCredential::query()->sole())['secret']);
@@ -156,7 +157,9 @@ final class SshReverseRouteApprovalTest extends TestCase
         $direct = SshTargetConfig::query()->sole();
         self::assertSame('direct', $direct->route_mode);
         self::assertNull($direct->reverse_listener_port);
-        self::assertSame($originalJobBinding, SshTargetBinding::hash($target, $direct));
+        self::assertSame(2, $direct->binding_revision);
+        self::assertNotSame($originalJobBinding, SshTargetBinding::hash($target, $direct),
+            'A Direct->Reverse->Direct round trip must never reactivate old retained Jobs.');
         self::assertSame('password-secret-fixture', app(SshTargetVault::class)
             ->open($target, $direct, TargetCredential::query()->sole())['secret']);
     }

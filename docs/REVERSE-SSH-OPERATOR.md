@@ -162,3 +162,8 @@ any Reverse route or retained Job exists; do not bypass journal protections.
 
 No tunnel/account/systemd/SSHd/firewall modifications are performed by the
 Gateway code or by this development PR.
+
+Every change to the SSH endpoint, pin, username, authentication method, or
+route increments the **monotonic binding revision**. Returning to a previous
+Direct/Reverse configuration cannot resurrect an old Job's binding. Untouched
+legacy Direct Targets keep their original encrypted credential and Job hash.

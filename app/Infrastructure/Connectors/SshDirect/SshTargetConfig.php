@@ -18,12 +18,12 @@ final class SshTargetConfig extends Model
     protected $fillable = [
         'target_record_id', 'host', 'port', 'username', 'auth_method',
         'pinned_host_key', 'observed_peer_ip', 'observed_at',
-        'route_mode', 'reverse_listener_port', 'reverse_tunnel_identity',
+        'route_mode', 'reverse_listener_port', 'reverse_tunnel_identity', 'binding_revision',
     ];
 
     protected function casts(): array
     {
-        return ['port' => 'integer', 'reverse_listener_port' => 'integer', 'observed_at' => 'immutable_datetime'];
+        return ['port' => 'integer', 'reverse_listener_port' => 'integer', 'binding_revision' => 'integer', 'observed_at' => 'immutable_datetime'];
     }
 
     protected static function booted(): void
@@ -32,7 +32,7 @@ final class SshTargetConfig extends Model
             // Endpoint, user, authentication type and trusted key are a
             // single security binding. Rotation requires a separate workflow.
             foreach (['target_record_id', 'host', 'port', 'username', 'auth_method', 'pinned_host_key',
-                'route_mode', 'reverse_listener_port', 'reverse_tunnel_identity'] as $field) {
+                'route_mode', 'reverse_listener_port', 'reverse_tunnel_identity', 'binding_revision'] as $field) {
                 if ($config->exists && $config->isDirty($field)) {
                     throw new DomainException('SSH endpoint or trust binding cannot be silently changed.');
                 }

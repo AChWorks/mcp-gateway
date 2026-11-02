@@ -56,10 +56,11 @@ Sensitive route changes require the existing Owner, password-confirmation,
 transaction and optimistic-revision gates. A change clears old verified
 state and rebinds encrypted credentials to the new route. Synchronous SSH,
 SFTP, whole-file exchange and retained Jobs continue to use the same
-permission, pin, recheck and audit code. Retained Jobs include the route
-in their immutable Target binding so old Jobs cannot be replayed, listed or
-reconciled as if a new tunnel were the original host. Existing **Direct**
-credentials and Job hashes remain bit-for-bit compatible.
+permission, pin, recheck and audit code. Retained Jobs include the route and a monotonically increasing endpoint/trust
+binding revision, so even a Reverse->Direct->Reverse round trip cannot make a
+historical Job's binding valid again. **Unmodified Direct** credentials and
+Job hashes remain bit-for-bit compatible; reconfiguring a trust binding
+advances the revision and re-seals its credentials.
 
 The application never configures sshd, adds OS accounts, writes tunnel keys,
 opens firewall rules, starts systemd or installs an agent. The exact

@@ -67,6 +67,7 @@ final readonly class SshTargetRegistration
                     'route_mode' => $approvedRoute === null ? 'direct' : 'reverse',
                     'reverse_listener_port' => $approvedRoute?->listenerPort,
                     'reverse_tunnel_identity' => $approvedRoute?->tunnelIdentity,
+                    'binding_revision' => 0,
                 ]);
                 TargetCredential::query()->create([
                     'target_record_id' => $target->getKey(),

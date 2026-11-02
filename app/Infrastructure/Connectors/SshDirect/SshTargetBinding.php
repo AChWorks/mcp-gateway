@@ -15,16 +15,19 @@ final class SshTargetBinding
             (string) $config->username, (string) $config->auth_method,
             (string) $config->pinned_host_key,
         ];
-        if (($config->route_mode ?? 'direct') !== 'direct') {
+        $epoch = (int) ($config->binding_revision ?? 0);
+        if ($epoch > 0 || ($config->route_mode ?? 'direct') !== 'direct') {
             $parts = [
-                ...$parts, (string) $config->route_mode,
+                ...$parts, (string) ($config->route_mode ?? 'direct'),
                 (string) $config->reverse_listener_port,
                 (string) $config->reverse_tunnel_identity,
+                (string) $epoch,
             ];
         }
 
-        // Legacy direct bindings intentionally retain their exact previous
-        // digest: migrations must not strand existing encrypted credentials or Jobs.
+        // Untouched legacy Direct bindings (epoch=0) intentionally retain
+        // their exact previous digest. A->B->A route/trust changes NEVER
+        // revive prior Jobs because the epoch cannot decrease.
         return hash('sha256', implode("\0", $parts));
     }
 }

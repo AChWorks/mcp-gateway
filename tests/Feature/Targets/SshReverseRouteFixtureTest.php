@@ -82,7 +82,7 @@ final class SshReverseRouteFixtureTest extends TestCase
         self::assertNull($command['connected_ip']);
         self::assertSame('reverse', $command['route_mode']);
         $file = app(SshFileRuntime::class)->stat($owner, $target, '/home/'.getenv('SSH_FIXTURE_USER'));
-        self::assertSame('directory', $file['type']);
+        self::assertSame('directory', $file['file']['type']);
         self::assertNull($file['connected_ip']);
         self::assertSame('reverse', $file['route_mode']);
     }

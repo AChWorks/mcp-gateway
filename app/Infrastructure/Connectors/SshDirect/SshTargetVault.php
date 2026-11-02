@@ -80,11 +80,13 @@ final class SshTargetVault
             (string) $target->getKey(), $target->target_id, $config->host,
             (string) $config->port, $config->username, $config->auth_method, $pin->canonicalLine(),
         ];
-        if (($config->route_mode ?? 'direct') !== 'direct') {
+        $epoch = (int) ($config->binding_revision ?? 0);
+        if ($epoch > 0 || ($config->route_mode ?? 'direct') !== 'direct') {
             $parts = [
-                ...$parts, (string) $config->route_mode,
+                ...$parts, (string) ($config->route_mode ?? 'direct'),
                 (string) $config->reverse_listener_port,
                 (string) $config->reverse_tunnel_identity,
+                (string) $epoch,
             ];
         }
 
