@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\OAuth;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use InvalidArgumentException;
@@ -22,6 +23,8 @@ final class DcrClientRegistration
     private const UNCONSENTED_GRACE_HOURS = 24;
 
     private const RECLAIM_BATCH_SIZE = 8;
+
+    private const RECLAIM_SNAPSHOT_MAX_ATTEMPTS = 3;
 
     /**
      * RFC 7591 public registration of an authenticated, PKCE-required client.
@@ -79,54 +82,79 @@ final class DcrClientRegistration
         $profileKey = 'dcr_'.bin2hex(random_bytes(16));
         $secret = rtrim(strtr(base64_encode(random_bytes(48)), '+/', '-_'), '=');
 
-        DB::transaction(function () use ($clientId, $profileKey, $secret, $redirectUris, $name): void {
-            // Serialize registrations using one existing durable row on MariaDB.
-            // This makes the global admission limit meaningful under concurrency.
-            $anchor = DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')
-                ->lockForUpdate()->first(['profile_key']);
-            if ($anchor === null) {
-                throw new RuntimeException('OAuth client registration capacity is unavailable.');
+        // MariaDB 11.8+/12.3 may reject a FOR UPDATE after concurrent consent
+        // with ER_CHECKREAD (1020) instead of returning the refreshed row.
+        // Roll back the whole admission attempt and retry from a new snapshot
+        // ONLY when this happens inside the pre-admission orphan reclamation
+        // read. Earlier retirement writes are transactional; no limiter hit,
+        // new identity or external effect has occurred at this point.
+        for ($attempt = 1; $attempt <= self::RECLAIM_SNAPSHOT_MAX_ATTEMPTS; $attempt++) {
+            $reclaiming = false;
+
+            try {
+                DB::transaction(function () use ($clientId, $profileKey, $secret, $redirectUris, $name, &$reclaiming): void {
+                    // Serialize registrations using one existing durable row on MariaDB.
+                    // This makes the global admission limit meaningful under concurrency.
+                    $anchor = DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')
+                        ->lockForUpdate()->first(['profile_key']);
+                    if ($anchor === null) {
+                        throw new RuntimeException('OAuth client registration capacity is unavailable.');
+                    }
+
+                    // Check the shared success budget *before* any capacity-recovery
+                    // effects. Rate-rejected requests must never retire even an orphan.
+                    // The admission anchor serializes the check and subsequent hit.
+                    $this->assertGlobalAdmissionAvailable();
+
+                    if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
+                        $reclaiming = true;
+                        $this->reclaimExpiredNeverAuthorizedRegistrations();
+                        $reclaiming = false;
+                    }
+
+                    if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
+                        throw new RuntimeException('OAuth client registration capacity is unavailable.');
+                    }
+
+                    DB::table('oauth_client_profiles')->insert([
+                        'profile_key' => $profileKey,
+                        'client_id' => $clientId,
+                        'auth_strategy' => 'dcr_client_secret_post',
+                        'generation' => 1,
+                        'disabled_at' => null,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                    DB::table('oauth_dcr_clients')->insert([
+                        'client_id' => $clientId,
+                        'profile_key' => $profileKey,
+                        'secret_hash' => hash('sha256', $secret),
+                        'redirect_uris' => json_encode($redirectUris, JSON_THROW_ON_ERROR),
+                        'display_name' => trim($name),
+                        'ever_authorized_at' => null,
+                        'auto_retirement_eligible' => true,
+                        'retired_at' => null,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+
+                    // A rare DB commit failure may conservatively charge an attempt.
+                    // Never admit uncounted registrations if the limiter store fails.
+                    RateLimiter::hit(self::GLOBAL_ADMISSION_KEY, 3600);
+                });
+                break;
+            } catch (QueryException $exception) {
+                if (! $reclaiming
+                    || (int) ($exception->errorInfo[1] ?? 0) !== 1020
+                    || $attempt === self::RECLAIM_SNAPSHOT_MAX_ATTEMPTS) {
+                    throw $exception;
+                }
+
+                // A committed consent invalidated the snapshot. A fresh
+                // attempt must re-check both the admission limit and current
+                // authorization witness before any orphan can be retired.
             }
-
-            // Check the shared success budget *before* any capacity-recovery
-            // effects. Rate-rejected requests must never retire even an orphan.
-            // The admission anchor serializes the check and subsequent hit.
-            $this->assertGlobalAdmissionAvailable();
-
-            if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
-                $this->reclaimExpiredNeverAuthorizedRegistrations();
-            }
-
-            if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
-                throw new RuntimeException('OAuth client registration capacity is unavailable.');
-            }
-
-            DB::table('oauth_client_profiles')->insert([
-                'profile_key' => $profileKey,
-                'client_id' => $clientId,
-                'auth_strategy' => 'dcr_client_secret_post',
-                'generation' => 1,
-                'disabled_at' => null,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-            DB::table('oauth_dcr_clients')->insert([
-                'client_id' => $clientId,
-                'profile_key' => $profileKey,
-                'secret_hash' => hash('sha256', $secret),
-                'redirect_uris' => json_encode($redirectUris, JSON_THROW_ON_ERROR),
-                'display_name' => trim($name),
-                'ever_authorized_at' => null,
-                'auto_retirement_eligible' => true,
-                'retired_at' => null,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-            // A rare DB commit failure may conservatively charge an attempt.
-            // Never admit uncounted registrations if the limiter store fails.
-            RateLimiter::hit(self::GLOBAL_ADMISSION_KEY, 3600);
-        });
+        }
 
         return [
             'client_id' => $clientId,
