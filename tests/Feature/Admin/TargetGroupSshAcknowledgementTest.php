@@ -39,7 +39,7 @@ final class TargetGroupSshAcknowledgementTest extends TestCase
             ->assertSee('name="current_password"', false);
         foreach (['1', '0'] as $assigned) {
             $this->put($update, ['assigned' => $assigned, 'current_password' => 'CorrectHorse!234'])
-                ->assertRedirect($edit)->assertSessionHasNoErrors();
+                ->assertAdminRedirect($edit)->assertSessionHasNoErrors();
             self::assertSame($assigned === '1', app(TargetGroupManager::class)->targetIsAssigned($group, $target));
         }
     }
@@ -70,10 +70,10 @@ final class TargetGroupSshAcknowledgementTest extends TestCase
             ->assertSessionHasErrors('current_password');
         self::assertFalse(app(TargetGroupManager::class)->userIsAssigned($group, $managed));
         $this->put($update, ['assigned' => '1', 'current_password' => 'CorrectHorse!234'])
-            ->assertRedirect($edit)->assertSessionHasNoErrors();
+            ->assertAdminRedirect($edit)->assertSessionHasNoErrors();
         self::assertTrue(app(TargetGroupManager::class)->userIsAssigned($group, $managed));
         $this->delete($groupUrl, ['current_password' => 'CorrectHorse!234'])
-            ->assertRedirect('/admin/target-groups')->assertSessionHasNoErrors();
+            ->assertAdminRedirect('/admin/target-groups')->assertSessionHasNoErrors();
         self::assertNull($group->fresh());
     }
 
@@ -94,9 +94,9 @@ final class TargetGroupSshAcknowledgementTest extends TestCase
         $this->put($update, $fields)->assertSessionHasErrors('confirm_ssh_group_changes');
         self::assertFalse(app(TargetGroupManager::class)->targetIsAssigned($group, $target));
         $this->put($update, [...$fields, 'confirm_ssh_group_changes' => '1'])
-            ->assertRedirect($edit)->assertSessionHasNoErrors();
+            ->assertAdminRedirect($edit)->assertSessionHasNoErrors();
         self::assertTrue(app(TargetGroupManager::class)->targetIsAssigned($group, $target));
-        $this->put($update, $fields)->assertRedirect($edit)->assertSessionHasNoErrors();
+        $this->put($update, $fields)->assertAdminRedirect($edit)->assertSessionHasNoErrors();
     }
 
     #[DataProvider('sshImpacts')]
@@ -146,11 +146,11 @@ final class TargetGroupSshAcknowledgementTest extends TestCase
         $this->get($edit)->assertOk()->assertSee('name="confirm_ssh_group_changes"', false);
         $this->get($groupUrl.'/edit')->assertOk()->assertSee('id="confirm_ssh_group_delete"', false);
         $this->put($update, [...$fields, 'confirm_ssh_group_changes' => '1'])
-            ->assertRedirect($edit)->assertSessionHasNoErrors();
+            ->assertAdminRedirect($edit)->assertSessionHasNoErrors();
         self::assertTrue(app(TargetGroupManager::class)->userIsAssigned($group, $managed));
         $this->delete($groupUrl, [
             'current_password' => 'CorrectHorse!234', 'confirm_ssh_group_changes' => '1',
-        ])->assertRedirect('/admin/target-groups')->assertSessionHasNoErrors();
+        ])->assertAdminRedirect('/admin/target-groups')->assertSessionHasNoErrors();
         self::assertNull($group->fresh());
     }
 

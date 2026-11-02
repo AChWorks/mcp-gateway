@@ -6,6 +6,8 @@ Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run
 
 **Get started:** [Latest official Release](https://github.com/AChWorks/mcp-gateway/releases) · [Install](#install) · [Connect WordPress](#connect-wordpress) · [Connect SSH](#connect-direct-ssh) · [Connect ChatGPT](#connect-chatgpt-or-another-mcp-client)
 
+> **Browser updates:** only upgrades from the three latest preceding stable releases are supported directly. Older installations need a verified intermediate upgrade or separately approved migration/restore path. See [Deployment](docs/DEPLOYMENT.md#rolling-browser-update-support-window).
+
 ## How it works
 
 1. Install the Gateway on your own HTTPS domain.
@@ -21,7 +23,7 @@ Targets can be **paused** without deleting their configuration or disconnecting 
 
 ## Requirements
 
-- Linux web hosting with **PHP 8.4.1 or newer** and the `curl`, `mbstring`, `openssl`, `pdo_mysql` and `sodium` extensions; cURL must support `CURLOPT_RESOLVE`.
+- Linux web hosting with **PHP 8.5 recommended** (PHP 8.4.1+ remains the Composer minimum) and the `curl`, `mbstring`, `openssl`, `pdo_mysql` and `sodium` extensions; cURL must support `CURLOPT_RESOLVE`.
 - **MariaDB** (10.11 recommended) or **MySQL**, with a dedicated database and user.
 - A stable **HTTPS** domain and a web server that can serve the application's `public/` directory.
 - A compatible **WP AI Bridge** installation for WordPress Targets, or an accessible SSH host and authorized credentials for Direct SSH Targets.
@@ -35,7 +37,7 @@ The official installation ZIP includes PHP dependencies: **Git and Composer are 
 3. Make `storage/` and `bootstrap/cache/` writable by the PHP site worker. Enable HTTPS and working URL rewrites; do not give the whole application `777` permissions.
 4. Open **`https://gateway.example.com/install`** and complete the web installer with the site URL, database connection and first Admin user.
 5. Sign in at **`/admin/login`**, then check **`/up`** and the Admin dashboard.
-6. Configure **one cron job every minute** to execute Laravel `schedule:run` using the site's PHP 8.4 CLI **as the site worker, not root**. Confirm that the cron log shows it actually runs.
+6. Configure **one cron job every minute** to execute Laravel `schedule:run` using the site's matching PHP CLI **as the site worker, not root**. Confirm that the cron log shows it actually runs.
 
 **No control panel?** A regular Linux VPS works too: install Nginx, PHP-FPM 8.4, MariaDB and HTTPS, then use the same ZIP/web installer. Follow the [step-by-step panel-free Linux installation guide](docs/DEPLOYMENT.md#panel-free-linux-vps-nginx-php-fpm-and-mariadb), including Nginx rules for the standalone installer, temporary updater and OAuth endpoints.
 

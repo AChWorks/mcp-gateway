@@ -39,7 +39,7 @@ final class UserAccessManagementTest extends TestCase
 
         $user = User::query()->where('email', 'operator@example.test')->firstOrFail();
 
-        $response->assertRedirect(route('admin.users.edit', ['user' => $user->id], false));
+        $response->assertAdminRedirect(route('admin.users.edit', ['user' => $user->id], false));
         self::assertSame(GatewayRole::Operator, $user->role);
         self::assertSame(TargetScopeMode::Selected, $user->target_scope_mode);
         self::assertTrue($user->access_enabled);
@@ -79,7 +79,7 @@ final class UserAccessManagementTest extends TestCase
             'current_password' => 'CorrectHorse!234',
         ];
         $this->actingAs($owner)->post('/admin/users', $payload)
-            ->assertRedirect()->assertSessionHasNoErrors();
+            ->assertAdminRedirect()->assertSessionHasNoErrors();
         $user = User::query()->where('email', $payload['email'])->sole();
         $access = app(AccessControl::class);
 
@@ -136,7 +136,7 @@ final class UserAccessManagementTest extends TestCase
             // An old form is not a grant-capable form, even if it submits
             // the standalone confirmation flag and omits all SSH denials.
             'confirm_ssh_permission_changes' => '1',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         $newUser = User::query()->where('email', $base['email'])->sole();
         foreach (GatewayPermission::sshCapabilities() as $permission) {
             $this->assertDatabaseHas('user_permission_denials', [
@@ -173,7 +173,7 @@ final class UserAccessManagementTest extends TestCase
             'ssh_permissions_reviewed' => '1',
             'denied_permissions' => [GatewayPermission::SshFileWrite->value],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect()->assertSessionHasNoErrors()
+        ])->assertAdminRedirect()->assertSessionHasNoErrors()
             ->assertSessionHas('status', 'User access updated. All Target scope disables all non-Owner SSH command and SFTP grants.');
 
         self::assertSame(TargetScopeMode::All, $user->fresh()->target_scope_mode);
@@ -212,7 +212,7 @@ final class UserAccessManagementTest extends TestCase
         $this->put('/admin/users/'.$viewer->id, [
             ...$request,
             'confirm_ssh_permission_changes' => '1',
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         self::assertSame(GatewayRole::Operator, $viewer->fresh()->role);
         foreach (GatewayPermission::sshCapabilities() as $permission) {
             $this->assertDatabaseMissing('user_permission_denials', [
@@ -256,7 +256,7 @@ final class UserAccessManagementTest extends TestCase
             'access_rule' => 'allow', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_target_changes' => '1',
             'target_revision' => $ruleManager->targetRuleRevision($operator, $target),
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $target));
 
         $this->put($url, [
@@ -270,7 +270,7 @@ final class UserAccessManagementTest extends TestCase
             'denied_permissions' => [GatewayPermission::SshFileRead->value],
             'confirm_ssh_target_changes' => '1',
             'target_revision' => $ruleManager->targetRuleRevision($operator, $target),
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         self::assertFalse($access->allows($operator, GatewayPermission::SshFileRead, $target));
 
         $this->put($url, [
@@ -281,7 +281,7 @@ final class UserAccessManagementTest extends TestCase
             'access_rule' => 'allow', 'current_password' => 'CorrectHorse!234',
             'confirm_ssh_target_changes' => '1',
             'target_revision' => $ruleManager->targetRuleRevision($operator, $target),
-        ])->assertRedirect()->assertSessionHasNoErrors();
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $target));
     }
 
@@ -318,7 +318,7 @@ final class UserAccessManagementTest extends TestCase
             'current_password' => 'CorrectHorse!234',
             // Missing deny checkboxes alone cannot silently grant SSH command.
         ];
-        $this->actingAs($owner)->put('/admin/users/'.$operator->id, $payload)->assertRedirect();
+        $this->actingAs($owner)->put('/admin/users/'.$operator->id, $payload)->assertAdminRedirect();
         self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
 
         // A legacy/unreviewed form cannot use an isolated confirmation flag
@@ -327,7 +327,7 @@ final class UserAccessManagementTest extends TestCase
             ...$payload,
             'confirm_ssh_permission_changes' => '1',
             'denied_permissions' => [],
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
         self::assertFalse($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
         self::assertFalse($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
@@ -339,7 +339,7 @@ final class UserAccessManagementTest extends TestCase
             // All three SSH tools are visible: this explicitly grants each
             // capability on the selected Target.
             'denied_permissions' => [],
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
@@ -350,7 +350,7 @@ final class UserAccessManagementTest extends TestCase
             'ssh_permissions_reviewed' => '1',
             'confirm_ssh_permission_changes' => '1',
             'denied_permissions' => [GatewayPermission::SshFileWrite->value],
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
         self::assertFalse($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
 
@@ -359,7 +359,7 @@ final class UserAccessManagementTest extends TestCase
             ...$payload,
             'target_scope_mode' => 'all',
             'confirm_ssh_permission_changes' => '1',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertFalse($access->allows($operator->refresh(), GatewayPermission::SshCommandRun, $ssh));
         $this->assertDatabaseHas('user_permission_denials', [
             'user_id' => $operator->id,
@@ -444,7 +444,7 @@ final class UserAccessManagementTest extends TestCase
                 ],
                 'current_password' => 'CorrectHorse!234',
             ])
-            ->assertRedirect();
+            ->assertAdminRedirect();
 
         $access = app(AccessControl::class);
 
@@ -488,7 +488,7 @@ final class UserAccessManagementTest extends TestCase
                 'access_rule' => 'deny',
                 'current_password' => 'CorrectHorse!234',
             ])
-            ->assertRedirect();
+            ->assertAdminRedirect();
 
         $access = app(AccessControl::class);
         self::assertTrue($access->allows($administrator, GatewayPermission::TargetsView, $alpha));

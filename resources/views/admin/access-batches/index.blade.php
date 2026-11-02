@@ -1,6 +1,7 @@
 @extends('admin.layout')
 
 @section('title', __($labels['noun']).' · '.$data['subject']['name'])
+@section('admin-errors-inline', '1')
 
 @section('content')
 <div class="page-heading">
@@ -38,7 +39,16 @@
         @endunless
     </div>
 
-    @error('selection')<p class="alert alert-error" role="alert">{{ $message }}</p>@enderror
+    @if ($errors->any())
+        <div class="alert alert-error" data-admin-feedback tabindex="-1" autofocus role="alert" aria-label="{{ __('Selection feedback') }}">
+            <strong>{{ __('Review the selection before continuing.') }}</strong>
+            <ul>
+                @foreach (array_unique($errors->all()) as $message)
+                    <li>{{ $message }}</li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
 
     <form method="post" action="{{ route('admin.access-batches.selection', ['context' => $context, 'subject' => $subjectId]) }}"
           data-access-selection data-off-page-count="{{ $offPageCount }}" data-selection-count-label="{{ __(':count selected') }}">
@@ -50,7 +60,7 @@
             <div class="field">
                 <label for="access-search">{{ __('Search') }}</label>
                 <input id="access-search" name="search" type="search" maxlength="160" value="{{ $filters['search'] }}" placeholder="{{ __('Name or identifier') }}" @error('search') aria-invalid="true" aria-describedby="access-search-error" @enderror>
-                @error('search')<p class="field-error" id="access-search-error" role="alert">{{ $message }}</p>@enderror
+                @error('search')<p class="field-error" id="access-search-error">{{ $message }}</p>@enderror
             </div>
             <div class="field">
                 <label for="access-membership">{{ __('Show') }}</label>

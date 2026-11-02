@@ -126,7 +126,8 @@ final class TargetController extends Controller
 
             return redirect()->route('admin.targets.create', $query)
                 ->withInput($this->safeOldInput($request, $adapter))
-                ->withErrors($exception->errors());
+                ->withErrors($exception->errors())
+                ->with('target_preflight_validation_failed', true);
         }
 
         try {
@@ -220,10 +221,12 @@ final class TargetController extends Controller
             $target = $adapter->register($validated);
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'registration_rejected';
+            // An adapter can establish whether an outbound request happened;
+            // this connector-neutral boundary cannot. In particular, WP
+            // discovery may have received an HTTP response already.
             $context = [
-                'failure_origin' => 'gateway_admission',
+                'failure_origin' => 'unknown',
                 'failure_stage' => 'operation',
-                'pre_dispatch' => true,
                 ...$exception->diagnostics,
             ];
             $reference = OperationDiagnostics::failure('target-registration', $code, null, $context);

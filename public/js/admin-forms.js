@@ -192,6 +192,13 @@
 
     const permitted = (element, selectedRole) =>
         selectedRole !== 'owner' && (element.dataset.allowedRoles || '').split(' ').includes(selectedRole);
+    // Keep user intent separate from automatic deny-default initialization:
+    // a temporarily disabled deliberate draft survives Role switching.
+    const choiceBaselines = new WeakMap();
+    choices.forEach(choice => {
+        const checkbox = choice.querySelector('input[name="denied_permissions[]"]');
+        choiceBaselines.set(checkbox, checkbox.checked);
+    });
 
     // A Viewer/Owner account has no stored SSH Denies because its Role
     // excludes SSH already. On the FIRST in-form promotion to Operator/Admin,
@@ -203,7 +210,10 @@
         const newlyEligible = sshChoices.filter(choice => permitted(choice, role.value));
         if (!newlyEligible.length) return;
         newlyEligible.forEach(choice => {
-            choice.querySelector('input[name="denied_permissions[]"]').checked = true;
+            const checkbox = choice.querySelector('input[name="denied_permissions[]"]');
+            checkbox.checked = true;
+            // This is a safety default, not an unsaved edit by the user.
+            choiceBaselines.set(checkbox, true);
         });
         sshChoicesInitialized = true;
     };
@@ -257,7 +267,15 @@
     };
     role.addEventListener('change', () => { seedNewSshRole(); sync(true); });
     panel.addEventListener('change', event => {
-        if (event.target.matches('input[name="denied_permissions[]"]')) sync(true);
+        if (event.target.matches('input[name="denied_permissions[]"]')) {
+            const checkbox = event.target;
+            if (checkbox.checked !== choiceBaselines.get(checkbox)) {
+                checkbox.dataset.adminStagedEdit = 'true';
+            } else {
+                delete checkbox.dataset.adminStagedEdit;
+            }
+            sync(true);
+        }
     });
     sync(false);
     }
