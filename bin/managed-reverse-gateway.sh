@@ -143,6 +143,15 @@ LogLevel VERBOSE
 EOF
 chown root:root "$config"
 chmod 0600 "$config"
+# Some clean systemd hosts have OpenSSH installed without ever starting the
+# default ssh.service; OpenSSH still needs its standard privilege separation
+# runtime directory even for a dedicated -f configuration.
+if [[ -L /run/sshd || ( -e /run/sshd && ! -d /run/sshd ) ]]; then
+    die "Unsafe OpenSSH privilege separation runtime directory /run/sshd."
+fi
+install -d -m 0755 -o root -g root /run/sshd
+[[ "$(stat -c '%u:%g:%a' /run/sshd)" = '0:0:755' ]] ||
+    die "Unexpected /run/sshd owner/mode; SSHD was not started."
 "$ssh_bin" -t -f "$config" || die "Isolated sshd syntax invalid; existing host sshd is untouched."
 "$ssh_bin" -T -f "$config" -C "user=$control_user,host=localhost,addr=127.0.0.1" |
     grep -Eq '^allowtcpforwarding remote$' || die "Effective SSHD remote-only forwarding check failed."

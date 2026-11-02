@@ -28,7 +28,7 @@ cleanup() {
         sudo userdel mcp-reverse >/dev/null 2>&1 || true
         sudo systemctl daemon-reload
     fi
-    rm -rf "$tmp"
+    sudo rm -rf -- "$tmp"
 }
 trap cleanup EXIT
 
