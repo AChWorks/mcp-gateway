@@ -28,6 +28,7 @@
 </head>
 <body @class(['admin-app' => auth()->check(), 'auth-page' => ! auth()->check()])
     data-admin-root="{{ route('admin.dashboard') }}"
+    data-admin-draft-fields="{{ json_encode(array_keys(session()->getOldInput()), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) }}"
     data-unsaved-message="{{ __('You have unsaved changes. Leave this page and discard them?') }}"
     data-loading-message="{{ __('Loading page…') }}"
     data-navigation-error-message="{{ __('The page could not be loaded. Use the original link to try again.') }}">

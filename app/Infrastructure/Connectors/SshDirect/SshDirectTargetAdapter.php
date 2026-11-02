@@ -108,9 +108,9 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
 
     public function register(array $input): Target
     {
-        try {
-            $method = (string) $input['ssh_auth_method'];
+        $method = (string) $input['ssh_auth_method'];
 
+        try {
             return $this->container->make(SshTargetRegistration::class)->register(
                 (string) $input['target_id'],
                 (string) $input['display_name'],
@@ -123,10 +123,54 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
                 $method === 'private_key' ? ($input['ssh_passphrase'] ?? null) : null,
                 $input['ai_guidance'] ?? null,
             );
-        } catch (InvalidArgumentException|RuntimeException) {
+        } catch (InvalidArgumentException $exception) {
+            // All of these originate from our deterministic enrollment validators,
+            // not from the remote SSH service. Retain their typed, safe provenance.
+            $cause = $exception->getMessage();
+            [$code, $field, $message] = match (true) {
+                str_contains($cause, 'already registered') => [
+                    'duplicate_target_id', 'target_id',
+                    __('That Target ID already exists. Choose a different stable Target ID.'),
+                ],
+                str_contains($cause, 'host key'), str_contains($cause, 'public-key'),
+                str_contains($cause, 'trusted SSH server') => [
+                    'invalid_ssh_host_key', 'ssh_host_key',
+                    __('The trusted SSH server public key is malformed or has an unsupported algorithm. Paste one independently verified OpenSSH host public key.'),
+                ],
+                str_contains($cause, 'username') => [
+                    'invalid_ssh_username', 'ssh_username', __('Enter a valid Unix SSH login username.'),
+                ],
+                str_contains($cause, 'port') => [
+                    'invalid_ssh_port', 'ssh_port', __('Enter a valid SSH TCP port (1–65535).'),
+                ],
+                str_contains($cause, 'host') => [
+                    'invalid_ssh_host', 'ssh_host', __('Enter a canonical SSH hostname or IP address.'),
+                ],
+                default => [
+                    'invalid_input', 'target_id', __('Check the Target ID and required registration fields.'),
+                ],
+            };
+            throw new TargetConnectorFailure($message, $field, $code, [
+                'source_error_code' => $code,
+                'source_error_message' => $cause,
+                'exception_class' => $exception::class,
+            ]);
+        } catch (RuntimeException $exception) {
+            $credential = $exception->getMessage() === 'SSH authentication material is invalid.';
+            $code = $credential ? 'registration_credential_invalid' : 'registration_storage_failed';
+
             throw new TargetConnectorFailure(
-                __('SSH registration could not be validated. Check the endpoint, trusted host key, authentication material and unique Target ID.'),
-                'ssh_host',
+                $credential
+                    ? __('SSH login credential material is invalid. Enter the password or private key again.')
+                    : __('Gateway could not safely store the new SSH Target. Check the diagnostic reference and Gateway storage/encryption configuration before retrying.'),
+                $credential ? ($method === 'password' ? 'ssh_password' : 'ssh_private_key') : 'target_id',
+                $code,
+                [
+                    'source_error_code' => $code,
+                    // SQL/vault exceptions may contain parameter values: do not
+                    // echo their text into logs or any browser-visible session.
+                    'exception_class' => $exception::class,
+                ],
             );
         }
     }

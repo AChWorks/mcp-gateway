@@ -15,8 +15,86 @@
     let restoringCancelledHistory = false;
     let currentHistoryIndex = history.state?.turbo?.restorationIndex ?? 0;
 
-    function dirtyForms() {
-        return document.querySelector('form[data-admin-dirty="true"]') !== null;
+    // A bounced input/change event is not evidence of an unsaved edit.
+    // Baselines belong to the rendered form instance, including Turbo visits.
+    const formBaselines = new WeakMap();
+
+    function failedDraftFields() {
+        try {
+            const fields = JSON.parse(document.body.dataset.adminDraftFields || '[]');
+            return new Set(Array.isArray(fields) ? fields : []);
+        } catch { return new Set(); }
+    }
+
+    function hasFailedDraft(form) {
+        const fields = failedDraftFields();
+        return fields.size > 0 && Array.from(form.elements).some(control =>
+            control.name && fields.has(control.name)
+                && !['hidden', 'button', 'submit', 'reset'].includes((control.type || '').toLowerCase()));
+    }
+
+    function editableForm(form) {
+        return form instanceof HTMLFormElement && form.method.toLowerCase() !== 'get'
+            && form.dataset.adminDirtyGuard !== 'off'
+            && Array.from(form.elements).some(control => {
+                const type = (control.type || '').toLowerCase();
+                return ['INPUT', 'TEXTAREA', 'SELECT'].includes(control.tagName)
+                    && !['hidden', 'button', 'submit', 'reset', 'image'].includes(type)
+                    && !control.readOnly;
+            });
+    }
+
+    function formValues(form) {
+        return JSON.stringify(Array.from(form.elements).flatMap(control => {
+            if (!control.name || !['INPUT', 'SELECT', 'TEXTAREA'].includes(control.tagName)) return [];
+            const type = (control.type || '').toLowerCase();
+            // Session/auth tokens, optimistic revision hashes, and generated
+            // hidden metadata are not human-editable form content.
+            if (['hidden', 'button', 'submit', 'reset', 'image'].includes(type)) return [];
+            let value;
+            if (type === 'checkbox' || type === 'radio') value = control.checked;
+            else if (type === 'file') value = Array.from(control.files || [],
+                file => [file.name, file.size, file.lastModified]);
+            else if (control.tagName === 'SELECT' && control.multiple) {
+                value = Array.from(control.selectedOptions, option => option.value);
+            } else value = control.value;
+            return [[control.name, type, value]];
+        }));
+    }
+
+    function captureBaselines(root = document) {
+        root.querySelectorAll('form').forEach(form => {
+            if (editableForm(form) && !formBaselines.has(form)) {
+                formBaselines.set(form, {
+                    values: formValues(form),
+                    failedDraft: hasFailedDraft(form),
+                });
+                formDirty(form);
+            }
+        });
+    }
+
+    function formDirty(form) {
+        if (!editableForm(form)) {
+            form?.removeAttribute('data-admin-dirty');
+            return false;
+        }
+        if (!formBaselines.has(form)) {
+            formBaselines.set(form, {
+                values: formValues(form),
+                failedDraft: hasFailedDraft(form),
+            });
+        }
+        const baseline = formBaselines.get(form);
+        const changed = baseline.failedDraft || formValues(form) !== baseline.values;
+        if (changed) form.dataset.adminDirty = 'true';
+        else form.removeAttribute('data-admin-dirty');
+        return changed;
+    }
+
+    function dirtyForms(except = null) {
+        return Array.from(document.querySelectorAll('form')).some(form =>
+            form !== except && formDirty(form));
     }
 
     function canLeave() {
@@ -88,26 +166,36 @@
 
     function markDirty(event) {
         const form = event.target.closest('form');
-        if (form && form.method.toLowerCase() !== 'get') form.dataset.adminDirty = 'true';
+        if (form) formDirty(form);
     }
 
-    // Native validation runs before submit. Never intercept or replay the form.
+    document.addEventListener('reset', event => {
+        const form = event.target;
+        if (form instanceof HTMLFormElement) requestAnimationFrame(() => formDirty(form));
+    });
+
+    // Native validation runs before submit. A successfully submitted form
+    // does not block its own navigation; unrelated unsaved forms still do.
     document.addEventListener('submit', event => {
-        if (!event.defaultPrevented) {
-            submittedDirtyForm = event.target.dataset.adminDirty === 'true' ? event.target : null;
-            event.target.removeAttribute('data-admin-dirty');
-            // Native attachments may keep this document alive. Other drafts
-            // must retain their unload guard after any submitted form.
+        if (!event.defaultPrevented && event.target instanceof HTMLFormElement) {
+            submittedDirtyForm = formDirty(event.target) ? event.target : null;
+            if (submittedDirtyForm) submittedDirtyForm.removeAttribute('data-admin-dirty');
         }
     });
 
     window.addEventListener('beforeunload', event => {
-        if (!allowUnload && dirtyForms()) {
-            // A cancelled departure must also retain the submitted draft.
-            if (submittedDirtyForm?.isConnected) submittedDirtyForm.dataset.adminDirty = 'true';
+        if (!allowUnload && dirtyForms(submittedDirtyForm)) {
+            // A cancelled native departure (including a one-shot download)
+            // must restore this form's guard along with other drafts.
+            // Recompute the submitted form explicitly: dirtyForms() short
+            // circuits at another draft and must not leave its flag cleared.
+            if (submittedDirtyForm?.isConnected) formDirty(submittedDirtyForm);
             submittedDirtyForm = null;
+            dirtyForms();
             event.preventDefault();
             event.returnValue = '';
+        } else {
+            submittedDirtyForm = null;
         }
     });
 
@@ -147,6 +235,7 @@
 
     document.addEventListener('turbo:load', () => {
         window.GatewayAdmin?.init(document);
+        captureBaselines();
         enhanceLinks();
         currentHistoryIndex = history.state?.turbo?.restorationIndex ?? currentHistoryIndex;
         allowUnload = false;
@@ -176,6 +265,13 @@
         }
     });
 
-    document.addEventListener('gateway:admin-ready', enhanceLinks);
-    if (document.readyState !== 'loading') enhanceLinks();
+    document.addEventListener('gateway:admin-ready', () => {
+        captureBaselines();
+        enhanceLinks();
+    });
+    document.addEventListener('DOMContentLoaded', () => captureBaselines(), { once: true });
+    if (document.readyState !== 'loading') {
+        captureBaselines();
+        enhanceLinks();
+    }
 })();

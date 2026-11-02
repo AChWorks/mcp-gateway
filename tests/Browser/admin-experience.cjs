@@ -974,11 +974,102 @@ async function attachmentUnload(browser) {
     }
 }
 
+async function semanticDirtyForms(browser) {
+    const run = await create(browser);
+    try {
+        const { page } = run;
+        await enter(page);
+        const prompts = [];
+        page.on('dialog', async dialog => {
+            prompts.push(dialog.type());
+            await dialog.accept();
+        });
+
+        await page.goto(base + '/admin/targets/ui-ssh-connected/edit');
+        const identityForm = page.locator('form').filter({ has: page.locator('#display_name') });
+        const name = page.locator('#display_name');
+        const original = await name.inputValue();
+        assert.equal(await identityForm.getAttribute('data-admin-dirty'), null, 'Target edit starts pristine');
+        await name.evaluate(element => element.dispatchEvent(new Event('change', { bubbles: true })));
+        assert.equal(await identityForm.getAttribute('data-admin-dirty'), null, 'Synthetic unchanged event is not a draft');
+        await name.fill(original + ' changed');
+        assert.equal(await identityForm.getAttribute('data-admin-dirty'), 'true');
+        await name.fill(original);
+        assert.equal(await identityForm.getAttribute('data-admin-dirty'), null, 'Reverted edit must clear dirty state');
+
+        const sshForm = page.locator('#ssh-reconfiguration');
+        const trust = page.locator('#ssh_edit_trust_confirmed');
+        assert.equal(await sshForm.getAttribute('data-admin-dirty'), null, 'SSH edit initializes clean');
+        await trust.check();
+        assert.equal(await sshForm.getAttribute('data-admin-dirty'), 'true', 'Checkbox change is an unsaved edit');
+        await trust.uncheck();
+        assert.equal(await sshForm.getAttribute('data-admin-dirty'), null, 'Reverted checkbox must clear dirty state');
+
+        await nav(page, 'Dashboard', 'Gateway overview');
+        assert.deepEqual(prompts, [], 'Pristine/reverted forms must not warn during Turbo navigation');
+
+        await page.goto(base + '/admin/users/create');
+        const userForm = page.locator('form[data-user-role-form]');
+        assert.equal(await userForm.getAttribute('data-admin-dirty'), null, 'User create initializes clean');
+        const email = page.locator('#email');
+        await email.evaluate(element => element.dispatchEvent(new Event('input', { bubbles: true })));
+        assert.equal(await userForm.getAttribute('data-admin-dirty'), null);
+        await email.fill('edited@example.test');
+        assert.equal(await userForm.getAttribute('data-admin-dirty'), 'true');
+        await email.fill('');
+        assert.equal(await userForm.getAttribute('data-admin-dirty'), null, 'Reverted User input must clear dirty state');
+        const access = page.locator('#access_enabled');
+        const initialAccess = await access.isChecked();
+        if (initialAccess) await access.uncheck(); else await access.check();
+        assert.equal(await userForm.getAttribute('data-admin-dirty'), 'true', 'User checkbox is meaningful');
+        if (initialAccess) await access.check(); else await access.uncheck();
+        assert.equal(await userForm.getAttribute('data-admin-dirty'), null);
+
+        await page.goto(base + '/admin/targets/ui-ssh-connected/edit');
+        await name.fill(original + ' updated');
+        const update = page.waitForResponse(response => response.request().method() === 'POST'
+            && new URL(response.url()).pathname.endsWith('/admin/targets/ui-ssh-connected'));
+        await page.getByRole('button', { name: 'Save Target details', exact: true }).click();
+        assert.equal((await update).status(), 302);
+        await page.getByRole('heading', { name: original + ' updated', exact: true }).waitFor();
+        await page.goto(base + '/admin/targets/ui-ssh-connected/edit');
+        assert.equal(await name.inputValue(), original + ' updated');
+        assert.equal(await identityForm.getAttribute('data-admin-dirty'), null, 'Saved/redirected form has new clean baseline');
+        await nav(page, 'Dashboard', 'Gateway overview');
+        assert.deepEqual(prompts, [], 'Successful form submission/save does not warn');
+
+        await page.goto(base + '/admin/targets/create?connector_type=ssh_direct');
+        await page.locator('#target_id').fill('ui-invalid-pin');
+        await page.locator('#display_name').fill('Invalid host key fixture');
+        await page.locator('#ssh_host').fill('example.test');
+        await page.locator('#ssh_port').fill('22');
+        await page.locator('#ssh_username').fill('test');
+        await page.locator('#ssh_host_key').fill('ssh-ed25519 malformed');
+        await page.locator('#ssh_password').fill('synthetic-browser-only-secret');
+        await page.locator('#ssh_trust_confirmed').check();
+        await page.getByRole('button', { name: 'Register Target', exact: true }).click();
+        await page.locator('#target-registration-errors').waitFor();
+        assert.match(page.url(), /\/admin\/targets\/create\?connector_type=ssh_direct$/);
+        assert.equal(await page.locator('#ssh_password').inputValue(), '', 'Never restore SSH secrets');
+        assert.equal(await page.locator('#connector_type').inputValue(), 'ssh_direct');
+        assert.equal(await page.locator('#target_id').inputValue(), 'ui-invalid-pin');
+        assert.equal(await page.locator('#target-create-form').getAttribute('data-admin-dirty'), 'true',
+            'A rejected server-rendered draft must still guard genuine data loss');
+
+        await nav(page, 'Dashboard', 'Gateway overview');
+        assert.deepEqual(prompts, ['confirm'], 'Only the retained failed draft must warn');
+        assert.deepEqual(run.errors, []);
+        pass('semantic dirty baseline: synthetic events/reverts/checkboxes clean, save clean, failed registration draft guarded');
+    } finally {
+        await run.context.close();
+    }
+}
+
 (async () => {
     const browser = await chromium.launch({ headless: true });
     try {
         const group = process.env.GATEWAY_UI_TEST_GROUP || 'all';
-        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets', 'attachments'].includes(group), 'Unknown UI test group.');
+        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets', 'attachments', 'dirty'].includes(group), 'Unknown UI test group.');
         if (group === 'all' || group === 'matrix') await matrix(browser);
         if (group === 'all' || group === 'navigation') await navigation(browser);
         if (group === 'all' || group === 'mobile') await mobileAndNative(browser);
@@ -991,6 +1082,7 @@ async function attachmentUnload(browser) {
             await resilience(browser);
             await networkFailure(browser);
         }
+        if (group === 'all' || group === 'dirty') await semanticDirtyForms(browser);
     } finally {
         await browser.close();
     }
