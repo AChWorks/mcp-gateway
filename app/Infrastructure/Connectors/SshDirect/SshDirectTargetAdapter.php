@@ -43,6 +43,10 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
             'ssh_private_key' => ['required_if:ssh_auth_method,private_key', 'nullable', 'string', 'max:16384'],
             'ssh_passphrase' => ['nullable', 'string', 'max:4096'],
             'ssh_trust_confirmed' => ['required', 'in:yes'],
+            'ssh_route_mode' => ['nullable', Rule::in(['direct', 'reverse'])],
+            'ssh_reverse_port' => ['required_if:ssh_route_mode,reverse', 'nullable', 'integer', 'min:1024', 'max:65535'],
+            'ssh_tunnel_identity' => ['required_if:ssh_route_mode,reverse', 'nullable', 'string', 'max:80',
+                'regex:/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/D'],
         ];
     }
 
@@ -51,7 +55,8 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
         // ssh_host_key is the server's PUBLIC pin; no login secrets are flashed.
         return [
             'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
-            'ssh_auth_method', 'ssh_trust_confirmed',
+            'ssh_auth_method', 'ssh_trust_confirmed', 'ssh_route_mode',
+            'ssh_reverse_port', 'ssh_tunnel_identity',
         ];
     }
 
@@ -60,15 +65,60 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
         return [
             'ssh_host' => ['required', 'string', 'max:253'],
             'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
+            'target_id' => ['nullable', 'string', 'max:64'],
+            'ssh_route_mode' => ['nullable', Rule::in(['direct', 'reverse'])],
+            'ssh_reverse_port' => ['nullable', 'integer', 'min:1024', 'max:65535'],
+            'ssh_tunnel_identity' => ['nullable', 'string', 'max:80'],
         ];
     }
 
     public function preflight(array $input): TargetPreflightResult
     {
         try {
+            if (($input['ssh_route_mode'] ?? 'direct') === 'reverse') {
+                // Check static NL approval only; a preflight must not open
+                // tunnel sockets or imply successful remote authentication.
+                $route = $this->container->make(SshReverseRoutePolicy::class)->approve(
+                    (string) ($input['target_id'] ?? ''), 'reverse',
+                    $input['ssh_reverse_port'] ?? null, $input['ssh_tunnel_identity'] ?? null,
+                );
+                $endpoint = SshRegisteredEndpoint::fromInput(
+                    (string) $input['ssh_host'], (int) $input['ssh_port'], 'preflight',
+                );
+
+                return new TargetPreflightResult(
+                    __('The reverse route matches the operator-managed approval for this Target. Listener availability and remote SSH identity have NOT been tested.'),
+                    __('Only the allowlist was checked; confirm the restricted OpenSSH forward independently, then verify the remote host key and login using Target Details.'),
+                    $endpoint->host.':'.$endpoint->port.' via NL 127.0.0.1:'.$route->listenerPort,
+                    [
+                        'ssh_host' => (string) $input['ssh_host'],
+                        'ssh_port' => (string) $input['ssh_port'],
+                        'ssh_route_mode' => 'reverse',
+                        'ssh_reverse_port' => (string) $route->listenerPort,
+                        'ssh_tunnel_identity' => $route->tunnelIdentity,
+                    ],
+                );
+            }
+
             return $this->container->make(TargetEndpointPreflight::class)->publicSshTcpEndpoint(
                 (string) $input['ssh_host'],
                 (int) $input['ssh_port'],
+            );
+        } catch (SshTargetConnectionException $exception) {
+            if ($exception->reason === 'reverse_route_not_approved') {
+                throw new TargetConnectorFailure(
+                    __('No matching NL operator approval exists for this reverse route and Target.'),
+                    'ssh_reverse_port', 'reverse_route_not_approved',
+                );
+            }
+            $context = [
+                'failure_origin' => 'gateway_admission',
+                'failure_stage' => $exception->reason === 'transfer_timed_out' ? 'dns_timeout' : 'dns_lookup',
+                'pre_dispatch' => true,
+            ];
+            throw new TargetConnectorFailure(
+                OperationDiagnostics::summary('network_failure', $context),
+                'ssh_host', 'network_failure', $context,
             );
         } catch (UnsafeOutboundTarget $exception) {
             throw new TargetConnectorFailure(
@@ -79,17 +129,6 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
             throw new TargetConnectorFailure(
                 __('The SSH host or port is invalid. Enter a canonical public hostname or IP address and a valid TCP port.'),
                 'ssh_host', 'invalid_input',
-            );
-        } catch (SshTargetConnectionException $exception) {
-            $context = [
-                'failure_origin' => 'gateway_admission',
-                'failure_stage' => $exception->reason === 'transfer_timed_out' ? 'dns_timeout' : 'dns_lookup',
-                'pre_dispatch' => true,
-            ];
-
-            throw new TargetConnectorFailure(
-                OperationDiagnostics::summary('network_failure', $context),
-                'ssh_host', 'network_failure', $context,
             );
         } catch (RuntimeException $exception) {
             $context = [
@@ -122,6 +161,16 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
                 (string) ($input[$method === 'password' ? 'ssh_password' : 'ssh_private_key'] ?? ''),
                 $method === 'private_key' ? ($input['ssh_passphrase'] ?? null) : null,
                 $input['ai_guidance'] ?? null,
+                (string) ($input['ssh_route_mode'] ?? 'direct'),
+                isset($input['ssh_reverse_port']) ? (int) $input['ssh_reverse_port'] : null,
+                $input['ssh_tunnel_identity'] ?? null,
+            );
+        } catch (SshTargetConnectionException $exception) {
+            throw new TargetConnectorFailure(
+                $exception->reason === 'reverse_listener_conflict'
+                    ? __('The approved local listener port is already enrolled for another SSH Target. Use a different operator-assigned port.')
+                    : __('Reverse SSH requires an exact, independent NL operator approval for the Target, listener port and tunnel identity.'),
+                'ssh_reverse_port', $exception->reason,
             );
         } catch (InvalidArgumentException $exception) {
             // All of these originate from our deterministic enrollment validators,
@@ -195,6 +244,10 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
             'ssh_password' => ['nullable', 'string', 'max:4096'],
             'ssh_private_key' => ['nullable', 'string', 'max:16384'],
             'ssh_passphrase' => ['nullable', 'string', 'max:4096'],
+            'ssh_route_mode' => ['nullable', Rule::in(['direct', 'reverse'])],
+            'ssh_reverse_port' => ['required_if:ssh_route_mode,reverse', 'nullable', 'integer', 'min:1024', 'max:65535'],
+            'ssh_tunnel_identity' => ['required_if:ssh_route_mode,reverse', 'nullable', 'string', 'max:80',
+                'regex:/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/D'],
         ];
     }
 
@@ -292,6 +345,8 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
             'tcp_peer_mismatch', 'host_key_mismatch', 'ssh_handshake_failed' => __('SSH server identity could not be verified. No credentials were sent after a host-key mismatch.'),
             'authentication_failed' => __('SSH authentication failed after server identity verification.'),
             'tcp_unreachable' => __('The approved numeric SSH endpoint could not be reached.'),
+            'reverse_route_not_approved' => __('The operator-approved reverse listener does not match this Target configuration. No connection was attempted.'),
+            'reverse_listener_unavailable' => __('The approved local reverse SSH listener is unavailable on NL. Verify the forward and systemd status on the initiating host; no direct fallback is attempted.'),
             'credential_invalid', 'credential_unavailable' => __('The stored SSH credential is unavailable or invalid.'),
             'connection_busy' => __('Another SSH verification is already in progress for this Target.'),
             'rate_limited' => __('Too many SSH verification attempts were made for this Target. Try again later.'),

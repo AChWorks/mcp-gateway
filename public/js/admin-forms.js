@@ -76,6 +76,20 @@
     const hostKey = form.querySelector('#ssh_host_key');
     const fingerprint = form.querySelector('#host_fingerprint');
     if (!method || !trustedCheckbox || !hostKey || !fingerprint) return;
+    const routeMode = form.querySelector('#ssh_route_mode');
+    const syncReverseRoute = () => {
+        const reverse = routeMode?.value === 'reverse' && connector.value === 'ssh_direct';
+        form.querySelectorAll('[data-ssh-reverse-route] input').forEach(field => {
+            field.disabled = !reverse;
+            field.required = reverse && field.name !== 'current_password' ? true : reverse;
+        });
+    };
+    routeMode?.addEventListener('change', () => {
+        trustedCheckbox.checked = false;
+        syncReverseRoute();
+    });
+    connector.addEventListener('change', syncReverseRoute);
+    syncReverseRoute();
     const syncAuthentication = () => {
         const current = method.value;
         form.querySelectorAll('[data-ssh-secret]').forEach(group => {
@@ -128,6 +142,19 @@
     if (!form || !claim(form, 'SshConfiguration')) return;
     const method = form.querySelector('#ssh_edit_auth_method');
     const trust = form.querySelector('input[name="ssh_trust_confirmed"]');
+    const routeMode = form.querySelector('#ssh_edit_route_mode');
+    const syncRoute = () => {
+        const reverse = routeMode?.value === 'reverse';
+        form.querySelectorAll('[data-ssh-reverse-route] input').forEach(field => {
+            field.disabled = !reverse;
+            field.required = reverse;
+        });
+    };
+    routeMode?.addEventListener('change', () => {
+        trust.checked = false;
+        syncRoute();
+    });
+    syncRoute();
     const sync = () => {
         form.querySelectorAll('[data-edit-ssh-credential]').forEach(group => {
             const active = group.dataset.editSshCredential === method.value;

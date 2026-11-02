@@ -76,10 +76,19 @@ final class SshTargetVault
     {
         $pin = SshHostKeyPin::fromLine($config->pinned_host_key);
 
-        return hash('sha256', implode("\0", [
+        $parts = [
             (string) $target->getKey(), $target->target_id, $config->host,
             (string) $config->port, $config->username, $config->auth_method, $pin->canonicalLine(),
-        ]));
+        ];
+        if (($config->route_mode ?? 'direct') !== 'direct') {
+            $parts = [
+                ...$parts, (string) $config->route_mode,
+                (string) $config->reverse_listener_port,
+                (string) $config->reverse_tunnel_identity,
+            ];
+        }
+
+        return hash('sha256', implode("\0", $parts));
     }
 
     private function validateSecret(string $method, string $secret, ?string $passphrase): void

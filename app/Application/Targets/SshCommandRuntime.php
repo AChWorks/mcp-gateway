@@ -11,6 +11,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshCommandAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
@@ -29,6 +30,7 @@ final readonly class SshCommandRuntime
         private AccessControl $access,
         private OperationalSettings $settings,
         private McpDispatchAdmission $dispatchAdmission,
+        private SshReverseRoutePolicy $reverseRoutes,
     ) {}
 
     /** @return array<string,mixed> */
@@ -83,13 +85,14 @@ final readonly class SshCommandRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
+            $route = $this->reverseRoutes->forTarget($fresh, $config);
             $started = microtime(true);
 
             return $this->transport->withAuthenticatedSession(
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SSH2 $ssh, string $peerIp) use (
-                    $user, $target, $config, $credential, $command, $timeoutSeconds, $started, $expectedTargetBinding,
+                    $user, $target, $fresh, $config, $credential, $command, $timeoutSeconds, $started, $expectedTargetBinding,
                 ): array {
                     // Credential disconnect or permission revocation during KEX/login
                     // must not authorize a NEW exec after the revocation.
@@ -112,6 +115,7 @@ final readonly class SshCommandRuntime
                         || $config->port !== $currentConfig->port
                         || ! hash_equals((string) $config->username, (string) $currentConfig->username)
                         || ! hash_equals((string) $config->auth_method, (string) $currentConfig->auth_method)
+                        || ! hash_equals(SshTargetBinding::hash($fresh, $config), SshTargetBinding::hash($currentTarget, $currentConfig))
                         || ($expectedTargetBinding !== null
                             && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($currentTarget, $currentConfig)))
                         || ! $this->access->allows($currentUser, GatewayPermission::SshCommandRun, $currentTarget)
@@ -121,6 +125,7 @@ final readonly class SshCommandRuntime
 
                     return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started);
                 },
+                $route,
             );
         }, $timeoutSeconds);
     }
@@ -183,7 +188,8 @@ final readonly class SshCommandRuntime
 
         return [
             'status' => $status,
-            'connected_ip' => $peerIp,
+            'connected_ip' => ($config->route_mode ?? 'direct') === 'reverse' ? null : $peerIp,
+            'route_mode' => $config->route_mode ?? 'direct',
             'registered_host' => $config->host,
             'username' => $config->username,
             'port' => $config->port,

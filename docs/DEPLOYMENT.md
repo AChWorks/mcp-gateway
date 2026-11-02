@@ -737,7 +737,10 @@ Treat the database, matching `APP_KEY`, both signing keypairs and required priva
 
 The web installer is **fresh-install only**. Never use `/install` to upgrade an existing Gateway.
 
-### Deployment-ZIP installations
+### Deployment
+
+For optional, separately approved client-initiated SSH RemoteForward on inbound-blocked SSH Targets, see [Reverse SSH operator runbook](REVERSE-SSH-OPERATOR.md). It never grants permission to modify production SSHD, services or accounts as part of repository development.
+-ZIP installations
 
 Each release publishes a separate browser-update artifact named `mcp-gateway-update-vX.Y.Z.zip`. Git, Composer, and SSH are not required for the normal update path.
 

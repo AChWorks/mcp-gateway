@@ -27,6 +27,33 @@
         </div>
     </div>
     <div class="target-subsection">
+        <h3>{{ __('SSH connection route') }}</h3>
+        <p class="field-help">{{ __('Changing the route clears old login verification and rebinds encrypted credentials. Reverse SSH requires a separately provisioned, restricted OpenSSH forward from the remote Target to an NL loopback listener, plus an exact NL operator approval. An old retained Job cannot be moved to the new route.') }}</p>
+        <div class="field">
+            <label for="ssh_edit_route_mode">{{ __('Connection route') }}</label>
+            <select id="ssh_edit_route_mode" name="ssh_route_mode">
+                <option value="direct" @selected(old('ssh_route_mode', $sshConfig->route_mode ?? 'direct') === 'direct')>{{ __('Direct SSH (default)') }}</option>
+                <option value="reverse" @selected(old('ssh_route_mode', $sshConfig->route_mode ?? 'direct') === 'reverse')>{{ __('Owner-approved Reverse SSH') }}</option>
+            </select>
+            @error('ssh_route_mode')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+        </div>
+        <div class="target-field-grid" data-ssh-reverse-route>
+            <div class="field">
+                <label for="ssh_edit_reverse_port">{{ __('Approved NL loopback listener port') }}</label>
+                <input id="ssh_edit_reverse_port" name="ssh_reverse_port" type="number" min="1024" max="65535"
+                    value="{{ old('ssh_reverse_port', $sshConfig->reverse_listener_port) }}">
+                @error('ssh_reverse_port')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+            </div>
+            <div class="field">
+                <label for="ssh_edit_tunnel_identity">{{ __('NL-approved tunnel identity') }}</label>
+                <input id="ssh_edit_tunnel_identity" name="ssh_tunnel_identity" type="text" maxlength="80"
+                    autocomplete="off" spellcheck="false" value="{{ old('ssh_tunnel_identity', $sshConfig->reverse_tunnel_identity) }}">
+                @error('ssh_tunnel_identity')<p class="form-error" role="alert">{{ $message }}</p>@enderror
+            </div>
+        </div>
+        <p class="field-help">{{ __('To switch back to Direct without JavaScript, clear the reverse listener and identity fields before saving.') }}</p>
+    </div>
+    <div class="target-subsection">
         <h3>{{ __('Trusted server identity') }}</h3>
         <p class="field-help" id="ssh-edit-host-key-help">{{ __('This is the server PUBLIC host key, not your PRIVATE login key. Verify any change through an independent server console before confirming.') }}</p>
         <p class="field-help">{{ __('Currently pinned SHA256 fingerprint:') }} <code>{{ $sshFingerprint }}</code></p>

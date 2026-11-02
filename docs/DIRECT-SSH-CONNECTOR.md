@@ -17,6 +17,58 @@ A configured IP can be displayed before connection but is not thereby host-key v
 
 Private/VPN network eligibility is an explicit reviewed egress-policy question, **not** a permission to disable public-address, host-key or SSRF boundaries. SSH host-key identity is independent of WordPress HTTPS/TLS identity and must not be passed through the latter's HTTP-only adapter.
 
+### Owner-enrolled Reverse SSH for inbound-blocked Targets
+
+A Target may choose **Direct (default)** or **Reverse SSH**. Reverse SSH is still the
+built-in, agentless `ssh_direct` connector: a restricted OpenSSH **client on the
+Target** opens one **remote** forward to a loopback-only listener on NL. Gateway
+only dials **127.0.0.1 on the approved NL port**. It never picks arbitrary local
+URLs, DNS addresses, private ranges or a caller-supplied proxy destination.
+
+**Two independent approvals** are mandatory for Reverse:
+1. A NL deployment operator places a strict JSON allowlist entry for the stable
+   `target_id`, one unique high port and an agreed tunnel identity in
+   `SSH_REVERSE_APPROVED_ROUTES`, and provisions a dedicated restricted NL
+   SSH tunnel account and key. The string identity is an **operator mapping and
+   audit label**, not a cryptographic attestation of a listening process.
+2. The Gateway Owner selects Reverse during enrollment or configuration,
+   enters the exact allowlisted port and identity, confirms the pinned **real
+   Target** host key and re-enters their own Admin password. Mere
+   `targets.create` (Administrator) cannot select Reverse.
+
+On every verification, command and SFTP operation the Gateway rechecks the
+operator mapping before the connection. A missing or changed mapping fails
+closed; an unavailable listener does **not** trigger a direct retry. The TCP
+socket peer is verified as **127.0.0.1:approved-port**, then the original Target
+server's **pinned public SSH host key is cryptographically verified before
+transmitting login credentials**. A compromised or misbound local listener
+cannot authenticate as another host without the matching pinned host private
+key. The control-channel NL host key is separately pinned by the remote
+OpenSSH client and is **not** the same as the end Target host key.
+
+A Reverse listener is **not** the Iran Target's observed network address.
+Gateway leaves `observed_peer_ip` empty, records when the end-to-end pinned
+login was verified, and displays the original registered Target endpoint
+separately from the NL loopback route. No listener health is implied by a
+previous successful verification.
+
+Sensitive route changes require the existing Owner, password-confirmation,
+transaction and optimistic-revision gates. A change clears old verified
+state and rebinds encrypted credentials to the new route. Synchronous SSH,
+SFTP, whole-file exchange and retained Jobs continue to use the same
+permission, pin, recheck and audit code. Retained Jobs include the route
+in their immutable Target binding so old Jobs cannot be replayed, listed or
+reconciled as if a new tunnel were the original host. Existing **Direct**
+credentials and Job hashes remain bit-for-bit compatible.
+
+The application never configures sshd, adds OS accounts, writes tunnel keys,
+opens firewall rules, starts systemd or installs an agent. The exact
+operator-managed OpenSSH/systemd procedure, bounded permissions, diagnostics,
+validation and rollback are in [Reverse SSH operator runbook](REVERSE-SSH-OPERATOR.md).
+Without separately approved host-level operations, an installed Gateway
+can only register the route and fail closed until the external forward exists.
+A CI/OpenSSH fixture is not a production acceptance test.
+
 ### Updating registered endpoint or credentials
 
 The Admin separates low-risk display-name editing from sensitive connector reconfiguration. Changes to hostname, port, OS user, pinned server key or authentication material require actual Owner authorization, password confirmation and optimistic revision checks. Secrets are never returned in form fields or flashed after invalid input. A retained unchanged secret is re-encrypted/rebound only when the connector's supported rules make that safe; changing credential method requires a new secret.

@@ -300,6 +300,68 @@ SH;
         self::assertSame(0, DB::table('ssh_command_jobs')->where('id', $id)->count());
     }
 
+    public function test_client_initiated_reverse_route_retained_job_stays_bound_and_completes(): void
+    {
+        $forwardPort = (int) getenv('SSH_FIXTURE_REVERSE_PORT');
+        self::assertSame(46250, $forwardPort, 'Disposable reverse listener required.');
+
+        config()->set('ssh.reverse_approved_routes', json_encode([
+            'reverse-job-fixture' => ['port' => $forwardPort, 'tunnel_identity' => 'job-test-forward'],
+        ], JSON_THROW_ON_ERROR));
+
+        $owner = User::query()->create([
+            'name' => 'Reverse SSH Job fixture',
+            'email' => 'reverse-job-'.bin2hex(random_bytes(5)).'@example.test',
+            'password' => 'CorrectHorse!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $target = app(SshTargetRegistration::class)->register(
+            'reverse-job-fixture', 'Reverse SSH Job fixture', 'fixture.example.test',
+            (int) getenv('SSH_FIXTURE_PORT_MODERN'), (string) getenv('SSH_FIXTURE_USER'),
+            trim((string) file_get_contents((string) getenv('SSH_FIXTURE_ED25519_HOST_PUB'))),
+            'private_key', (string) file_get_contents((string) getenv('SSH_FIXTURE_RSA_LOGIN_KEY')),
+            (string) getenv('SSH_FIXTURE_KEY_PASSPHRASE'),
+            null, 'reverse', $forwardPort, 'job-test-forward',
+        );
+        // Use actual transport login, not merely a fake Connected flag.
+        app(SshTargetConnectionService::class)->test($target);
+        $target->refresh();
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        self::assertNull($config->observed_peer_ip);
+        self::assertNotNull($config->observed_at);
+        $expectedBinding = SshTargetBinding::hash($target, $config);
+        $client = hash('sha256', 'reverse-job-only-fixture-client');
+        $requestId = (string) Str::uuid();
+        $tools = app(SshJobMcpToolHandlers::class);
+        $start = $tools->start(
+            $owner, $target->target_id, $client, $requestId,
+            'printf reverse_retained_job_ok', 60,
+        );
+        self::assertTrue($start['ok'], json_encode($start));
+        $id = $start['result']['job_id'];
+        self::assertSame($expectedBinding, DB::table('ssh_command_jobs')->where('id', $id)->value('target_binding_hash'));
+
+        $status = null;
+        for ($attempt = 0; $attempt < 30; $attempt++) {
+            $status = $tools->status($owner, $target->target_id, $client, $id);
+            if (($status['result']['status'] ?? null) === 'completed'
+                && ($status['result']['exit_code'] ?? null) === 0) {
+                break;
+            }
+            sleep(2);
+        }
+        self::assertSame('completed', $status['result']['status'] ?? null, json_encode($status));
+        self::assertSame(0, $status['result']['exit_code'] ?? null, json_encode($status));
+        $output = $tools->output($owner, $target->target_id, $client, $id, 'stdout', 0, 16384);
+        self::assertTrue($output['ok'], json_encode($output));
+        self::assertSame('reverse_retained_job_ok', base64_decode((string) $output['result']['data'], true));
+        $discovered = $tools->list($owner, $target->target_id, $client);
+        self::assertTrue($discovered['ok'], json_encode($discovered));
+        self::assertNotEmpty($discovered['result']['jobs']);
+    }
+
     public function test_job_longer_than_http_budget_has_bounded_output_durable_exit_and_verified_cancel(): void
     {
         $owner = User::query()->create([

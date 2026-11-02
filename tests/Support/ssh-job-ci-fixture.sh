@@ -47,6 +47,11 @@ php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
   --filter=test_job_can_write_large_regular_files_while_capturing_bounded_stdout_and_stderr
 
+# Real client-initiated OpenSSH remote-forward route, with pinned end-host
+# authentication, retained Job lifecycle and original Target route binding.
+php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
+  --filter=test_client_initiated_reverse_route_retained_job_stays_bound_and_completes
+
 # Credential rotation must invalidate an already authenticated script SFTP
 # session, including both inline and streamed retained Job publication.
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \

@@ -12,6 +12,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshFileAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshSubsystemOnlySftp;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
@@ -44,6 +45,7 @@ final readonly class SshFileRuntime
         private AccessControl $access,
         private OperationalSettings $settings,
         private McpDispatchAdmission $dispatchAdmission,
+        private SshReverseRoutePolicy $reverseRoutes,
     ) {}
 
     /** @return array<string,mixed> */
@@ -482,6 +484,7 @@ final readonly class SshFileRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
+            $route = $this->reverseRoutes->forTarget($fresh, $config);
             $this->ensureFileDeadline($deadlineNs);
 
             return $this->transport->withAuthenticatedSftpSession(
@@ -528,6 +531,7 @@ final readonly class SshFileRuntime
                     );
                 },
                 $deadlineNs,
+                $route,
             );
         }, $deadlineNs);
     }
@@ -760,7 +764,8 @@ final readonly class SshFileRuntime
     private function context(string $ip, SshTargetConfig $config, string $path): array
     {
         return [
-            'connected_ip' => $ip,
+            'connected_ip' => ($config->route_mode ?? 'direct') === 'reverse' ? null : $ip,
+            'route_mode' => $config->route_mode ?? 'direct',
             'registered_host' => $config->host,
             'port' => $config->port,
             'username' => $config->username,

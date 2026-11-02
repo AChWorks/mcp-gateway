@@ -187,6 +187,7 @@ Remote timeout/response settings are **budgets**, not guarantees of response spe
 | `SSH_VERIFY_MAX_ATTEMPTS_PER_MINUTE` | `6` attempts/minute | SSH credential verification admission by Target; not a transfer throughput rate |
 | `SSH_VERIFY_DECAY_SECONDS` | `60` seconds | SSH credential verification admission decay period |
 | `SSH_VERIFY_LEASE_SECONDS` | `30` seconds | SSH verification admission lease |
+| `SSH_REVERSE_APPROVED_ROUTES` | empty (Reverse disabled) | Strict operator-managed JSON map from stable Target ID to unique NL loopback port and tunnel identity. Each selected Reverse route requires independent Owner/password approval; no general private-IP access or arbitrary loopback sockets. See [Reverse SSH runbook](REVERSE-SSH-OPERATOR.md). |
 
 ## Advanced settings (commented examples in the same complete template)
 

@@ -8,6 +8,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
+use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Support\CorrelationId;
@@ -17,12 +18,17 @@ use InvalidArgumentException;
 
 final readonly class SshTargetRegistration
 {
-    public function __construct(private SshTargetVault $vault, private ActivityRecorder $activity) {}
+    public function __construct(
+        private SshTargetVault $vault,
+        private ActivityRecorder $activity,
+        private SshReverseRoutePolicy $reverseRoutes,
+    ) {}
 
     public function register(
         string $targetId, string $displayName, string $host, int $port,
         string $username, string $hostPublicKey, string $authMethod,
         string $secret, ?string $passphrase, ?string $aiGuidance = null,
+        string $routeMode = 'direct', ?int $reversePort = null, ?string $tunnelIdentity = null,
     ): Target {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -34,10 +40,15 @@ final readonly class SshTargetRegistration
         }
         $endpoint = SshRegisteredEndpoint::fromInput($host, $port, $username);
         $pin = SshHostKeyPin::fromLine($hostPublicKey);
+        $approvedRoute = $this->reverseRoutes->approve($targetId, $routeMode, $reversePort, $tunnelIdentity);
+        if ($approvedRoute !== null) {
+            $this->reverseRoutes->assertPortAvailable($approvedRoute);
+        }
 
         try {
             return DB::transaction(function () use (
                 $targetId, $displayName, $aiGuidance, $endpoint, $pin, $authMethod, $secret, $passphrase,
+                $approvedRoute,
             ): Target {
                 $target = Target::query()->create([
                     'target_id' => $targetId,
@@ -53,6 +64,9 @@ final readonly class SshTargetRegistration
                     'username' => $endpoint->username,
                     'auth_method' => $authMethod,
                     'pinned_host_key' => $pin->canonicalLine(),
+                    'route_mode' => $approvedRoute === null ? 'direct' : 'reverse',
+                    'reverse_listener_port' => $approvedRoute?->listenerPort,
+                    'reverse_tunnel_identity' => $approvedRoute?->tunnelIdentity,
                 ]);
                 TargetCredential::query()->create([
                     'target_record_id' => $target->getKey(),
@@ -65,6 +79,12 @@ final readonly class SshTargetRegistration
                 return $target;
             });
         } catch (UniqueConstraintViolationException $exception) {
+            // The DB unique index closes the race left by the friendly
+            // precheck, including if the operator changed port ownership.
+            if ($approvedRoute !== null) {
+                $this->reverseRoutes->assertPortAvailable($approvedRoute);
+            }
+
             throw new InvalidArgumentException('The SSH Target ID is already registered.', previous: $exception);
         }
     }

@@ -8,6 +8,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshConnectionAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
@@ -23,6 +24,7 @@ final readonly class SshTargetConnectionService
         private SshConnectionAdmission $admission,
         private SshVerificationState $verification,
         private ActivityRecorder $activity,
+        private SshReverseRoutePolicy $reverseRoutes,
     ) {}
 
     /** Authenticates a single pinned connection without running any command. */
@@ -50,10 +52,11 @@ final readonly class SshTargetConnectionService
             ): string {
                 $attemptId = $this->verification->begin($target, $config, $credential);
                 $material = $this->vault->open($target, $config, $credential);
+                $route = $this->reverseRoutes->forTarget($target, $config);
 
                 return $this->transport->authenticate(
                     $config->endpoint(), SshHostKeyPin::fromLine($config->pinned_host_key),
-                    $config->auth_method, $material['secret'], $material['passphrase'],
+                    $config->auth_method, $material['secret'], $material['passphrase'], $route,
                 );
             });
         } catch (SshTargetConnectionException $exception) {
