@@ -39,12 +39,15 @@ bootstrap="$PWD/bin/managed-reverse-gateway.sh"
 sudo bash "$bootstrap" --preflight --app "$app" --php-user "$php_user" --port "$port"
 sudo bash "$bootstrap" --apply --app "$app" --php-user "$php_user" --port "$port"
 sudo systemctl is-active --quiet "$unit"
-sudo /usr/sbin/sshd -T -f /etc/mcp-gateway-reverse/sshd_config \
-  -C user=mcp-reverse,host=localhost,addr=127.0.0.1 |
-    grep -qx 'allowtcpforwarding remote'
-sudo /usr/sbin/sshd -T -f /etc/mcp-gateway-reverse/sshd_config \
-  -C user=mcp-reverse,host=localhost,addr=127.0.0.1 |
-    grep -qx 'permitlisten 127.0.0.1:*'
+# Capture the full output before asserting. A grep -q pipeline under
+# pipefail can SIGPIPE sshd -T and falsely fail an otherwise correct host.
+effective="$(sudo /usr/sbin/sshd -T -f /etc/mcp-gateway-reverse/sshd_config \
+    -C user=mcp-reverse,host=localhost,addr=127.0.0.1)"
+printf '%s\n' "$effective" | grep -E '^(allowtcpforwarding|permitlisten|gatewayports|passwordauthentication|permitopen) ' >&2
+grep -Fxq 'allowtcpforwarding remote' <<< "$effective" ||
+    { echo "Incorrect effective remote-only forwarding policy." >&2; exit 1; }
+grep -Fxq 'permitlisten 127.0.0.1:*' <<< "$effective" ||
+    { echo "Incorrect effective per-host loopback listener policy." >&2; exit 1; }
 
 # Host-control secret created only on disposable Test Target side.
 ssh-keygen -q -t ed25519 -N '' -f "$tmp/control.key" -C ''
@@ -80,7 +83,12 @@ for attempt in {1..20}; do
     fi
     sleep 0.5
 done
-[[ "$ready" == true ]] || { cat "$tmp/ssh.log"; echo "Loopback reverse forward never succeeded."; exit 1; }
+[[ "$ready" == true ]] || {
+    cat "$tmp/ssh.log"
+    sudo journalctl -u "$unit" -n 40 --no-pager || true
+    echo "Loopback reverse forward never succeeded."
+    exit 1
+}
 ss -H -lnt | awk '{print $4}' | grep -Eq "127\\.0\\.0\\.1:$listener$"
 
 # A different remote listener must be rejected by the exact authorized_keys
