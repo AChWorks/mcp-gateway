@@ -77,8 +77,11 @@ silently alter host firewall or install packages.
 
 Neither claim nor local service start means Connected. The Owner must run
 the existing Gateway Target Details > Test action, which verifies real Target
-host key and SSH login through the approved listener. Only that verified
-test can set Connected. This is point-in-time proof, not a heartbeat.
+host key and SSH login through the approved listener. A failed first
+verification preserves Pending Setup with its exact error code and timestamp;
+a previously Connected Target retains ordinary Error health reporting when
+its next verification fails. Only a verified test sets Connected. This is
+point-in-time proof, not a heartbeat.
 
 ## Uncertain results, recovery, revocation and rollback
 

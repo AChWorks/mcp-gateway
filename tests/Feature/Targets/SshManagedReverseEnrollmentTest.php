@@ -191,6 +191,26 @@ final class SshManagedReverseEnrollmentTest extends TestCase
             ->where('target_record_id', $target->getKey())->count());
     }
 
+    public function test_failed_first_verify_preserves_pending_setup_with_diagnostics(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        $target = $started['enrollment']->target;
+
+        try {
+            app(SshTargetConnectionService::class)->test($target);
+            self::fail('Unclaimed managed tunnel was unexpectedly verified.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('reverse_route_not_approved', $e->reason);
+        }
+        $reloaded = $target->fresh();
+        self::assertSame('pending', $reloaded->connection_state->value);
+        self::assertSame('reverse_route_not_approved', $reloaded->last_error_code);
+        self::assertSame('reverse_route_not_approved', $reloaded->last_failure_code);
+        self::assertNotNull($reloaded->last_tested_at);
+    }
+
     public function test_active_managed_enrollment_cannot_be_silently_reconfigured_to_direct(): void
     {
         $this->gateway();
