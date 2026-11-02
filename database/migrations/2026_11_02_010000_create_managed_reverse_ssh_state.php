@@ -1,5 +1,6 @@
 <?php
 
+use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -54,11 +55,45 @@ return new class extends Migration
 
     public function down(): void
     {
-        if (DB::table('ssh_reverse_managed_enrollments')->where('state', '!=', 'revoked')->exists()) {
-            throw new RuntimeException('Revoke and retire managed Reverse SSH enrollments before rollback.');
+        // Serialize the final decision and table drops against live Gateway
+        // claim, revocation, settings and authorized_keys publication workers.
+        $rollback = static function (): void {
+            // A revoked database row alone does not prove that the external SSHD
+            // reader was updated. These tables are the durable recovery receipt.
+            if (DB::table('ssh_reverse_managed_enrollments')->where('state', '!=', 'revoked')->exists()) {
+                throw new RuntimeException('Revoke all managed Reverse SSH enrollments before rollback.');
+            }
+            if (DB::table('ssh_reverse_managed_enrollments')->where('publication_pending', true)->exists()) {
+                throw new RuntimeException('Reconcile pending managed Reverse SSH key publication before rollback.');
+            }
+
+            $gateway = DB::table('ssh_reverse_gateway_settings')->where('id', 1)->first();
+            if ($gateway !== null) {
+                if ($gateway->enabled || $gateway->publication_pending) {
+                    throw new RuntimeException('Disable and reconcile Gateway Reverse SSH configuration before rollback.');
+                }
+                if (! app(SshManagedReverseAuthorizedKeys::class)->isReconciled()) {
+                    throw new RuntimeException('Verify that the restricted SSH key reader is empty and reconciled before rollback.');
+                }
+            } elseif (DB::table('ssh_reverse_managed_enrollments')->exists()) {
+                throw new RuntimeException('Managed enrollments lack the Gateway publication receipt; refuse rollback.');
+            }
+
+            // Retired listeners may still be owned by a superseded Target's -R
+            // session. Never discard their collision quarantine silently.
+            if (DB::table('ssh_reverse_managed_retired_ports')->exists()) {
+                throw new RuntimeException('Reconcile retired Reverse SSH listener history before rollback.');
+            }
+
+            Schema::dropIfExists('ssh_reverse_managed_retired_ports');
+            Schema::dropIfExists('ssh_reverse_managed_enrollments');
+            Schema::dropIfExists('ssh_reverse_gateway_settings');
+        };
+        if (DB::table('ssh_reverse_gateway_settings')->exists()) {
+            app(SshManagedReverseAuthorizedKeys::class)->withPolicyLock($rollback);
+        } else {
+            // Fresh, never-configured installs have no external key writer.
+            $rollback();
         }
-        Schema::dropIfExists('ssh_reverse_managed_retired_ports');
-        Schema::dropIfExists('ssh_reverse_managed_enrollments');
-        Schema::dropIfExists('ssh_reverse_gateway_settings');
     }
 };

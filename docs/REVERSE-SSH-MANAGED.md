@@ -158,10 +158,16 @@ point-in-time proof, not a heartbeat.
   bootstrap `--disable` with the exact originally approved arguments
   to stop only the owned control SSHD service. This preserves other SSHD
   services, host firewall rules and system accounts.
-- Rollback of managed state requires all non-revoked enrollments to be
-  revoked and their external policy reconciled. The migration rollback
-  is intentionally blocked while any non-revoked enrollment remains;
-  after an interrupted revocation, reconcile before any local Target deletion.
+- Database migration rollback is deliberately fail-closed: all enrollments
+  must be revoked without pending publication, Gateway routing disabled
+  without pending configuration publication, and the restricted SSHD
+  `authorized_keys` reader independently verified empty and reconciled
+  with the approved host identity. An unavailable reader is not proof of
+  revocation. Superseded Target services and retired listener history also
+  require explicit reconciliation; rollback must not silently erase a port
+  quarantine while an old reverse forward may survive. A fresh unconfigured
+  installation may roll back normally. Reconcile interrupted revocation
+  before local Target deletion or schema rollback.
 
 ## Acceptance gates
 

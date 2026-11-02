@@ -20,6 +20,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 use RuntimeException;
 use Tests\TestCase;
@@ -564,5 +565,124 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         self::assertSame(1, $started['enrollment']->target->sshConfig->fresh()->binding_revision);
         app(SshManagedReverseAuthorizedKeys::class)->sync();
         self::assertSame('', file_get_contents($this->keyFile));
+    }
+
+    public function test_migration_rollback_preserves_a_revoked_but_unpublished_key_recovery_receipt(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $started['enrollment']->id, $started['token'], $this->publicKey(61),
+        );
+        $writer = new class extends SshManagedReverseAuthorizedKeys
+        {
+            protected function publish(string $contents): void
+            {
+                throw new RuntimeException('Injected revocation publication failure');
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+        try {
+            app(SshManagedReverseEnrollmentService::class)->revoke($started['enrollment']);
+            self::fail('Injected failure must leave a durable reconciliation receipt.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('Injected', $exception->getMessage());
+        }
+        self::assertSame('revoked', $started['enrollment']->fresh()->state);
+        self::assertTrue($started['enrollment']->fresh()->publication_pending);
+        self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
+
+        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        try {
+            $migration->down();
+            self::fail('Rollback discarded a pending host-key revocation.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('Reconcile pending', $exception->getMessage());
+        }
+        self::assertTrue(Schema::hasTable('ssh_reverse_managed_enrollments'));
+        self::assertTrue(Schema::hasTable('ssh_reverse_gateway_settings'));
+    }
+
+    public function test_migration_rollback_refuses_enabled_gateway_or_stale_external_reader(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        try {
+            $migration->down();
+            self::fail('Enabled Gateway configuration was discarded.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('Disable and reconcile', $exception->getMessage());
+        }
+
+        SshManagedReverseGateway::query()->whereKey(1)->update(['enabled' => false]);
+        file_put_contents($this->keyFile, 'unexpected SSH authorization'.PHP_EOL);
+        try {
+            $migration->down();
+            self::fail('A mismatched authorized_keys reader was discarded.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('reader is empty and reconciled', $exception->getMessage());
+        }
+        self::assertTrue(Schema::hasTable('ssh_reverse_managed_enrollments'));
+    }
+
+    public function test_migration_rollback_refuses_to_forget_retired_listener_ports(): void
+    {
+        $this->gateway(false);
+        file_put_contents($this->keyFile, '');
+        DB::table('ssh_reverse_managed_retired_ports')->insert([
+            'listener_port' => 42001, 'target_id' => 'retired-target', 'retired_at' => now(),
+        ]);
+        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        try {
+            $migration->down();
+            self::fail('Rollback discarded retired listener quarantine.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('retired Reverse SSH listener', $exception->getMessage());
+        }
+        self::assertTrue(Schema::hasTable('ssh_reverse_managed_retired_ports'));
+    }
+
+    public function test_migration_rollback_allows_fresh_unconfigured_installation(): void
+    {
+        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        $migration->down();
+        try {
+            self::assertFalse(Schema::hasTable('ssh_reverse_managed_enrollments'));
+            self::assertFalse(Schema::hasTable('ssh_reverse_gateway_settings'));
+            self::assertFalse(Schema::hasTable('ssh_reverse_managed_retired_ports'));
+        } finally {
+            $migration->up();
+        }
+        self::assertTrue(Schema::hasTable('ssh_reverse_managed_enrollments'));
+    }
+
+    public function test_migration_rollback_accepts_fully_reconciled_revocation_after_disable(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $started = $this->begin();
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $started['enrollment']->id, $started['token'], $this->publicKey(61),
+        );
+        app(SshManagedReverseEnrollmentService::class)->revoke($started['enrollment']);
+        SshManagedReverseGateway::query()->whereKey(1)->update(['enabled' => false]);
+        app(SshManagedReverseAuthorizedKeys::class)->sync();
+
+        self::assertSame('', file_get_contents($this->keyFile));
+        self::assertTrue(app(SshManagedReverseAuthorizedKeys::class)->isReconciled());
+        self::assertFalse($started['enrollment']->fresh()->publication_pending);
+
+        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        $migration->down();
+        try {
+            self::assertFalse(Schema::hasTable('ssh_reverse_managed_enrollments'));
+            self::assertFalse(Schema::hasTable('ssh_reverse_gateway_settings'));
+            self::assertTrue(Schema::hasTable('targets'), 'Rollback must not destroy unrelated Target records.');
+        } finally {
+            $migration->up();
+        }
+        self::assertTrue(Schema::hasTable('ssh_reverse_managed_enrollments'));
     }
 }
