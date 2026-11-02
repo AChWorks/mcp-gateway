@@ -197,7 +197,7 @@ jobs:
 
           ## Fresh installation
 
-          Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.4 + MariaDB 10.11 (recommended) or MySQL host, point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
+          Download \`$PACKAGE.zip\`, upload/extract it on an HTTPS PHP 8.5 + MariaDB 12.3 host (primary CI-validated runtime; older PHP 8.4.1+/MariaDB or MySQL combinations require separate verification), point the domain document root to the extracted \`public/\` directory, then open \`/install\`.
 
           ## Supported direct upgrade window
 

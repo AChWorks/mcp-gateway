@@ -59,8 +59,28 @@ def read_manifest(root: Path = ROOT) -> tuple[str, ...]:
     return versions
 
 
+def check_release_notes_trigger_owner(content: str) -> None:
+    # This file is the source of the rolling supported-version history.
+    # A release-notes-only PR must run validation; broad CI ignores *.md.
+    for event in ("push", "pull_request"):
+        section = re.search(
+            rf"(?ms)^  {event}:\n(.*?)(?=^  [a-z_]+:|^[a-z_]+:|\Z)", content,
+        )
+        if section is None:
+            raise ValueError(f"Update Package: missing {event} event for release-note parity")
+        paths = re.search(r"(?m)^    paths:\n((?:^      - [^\n]+\n)+)", section.group(1))
+        if paths is None:
+            raise ValueError(f"Update Package: {event} must own explicit paths")
+        included = {line.strip().removeprefix("- ").strip("'\"")
+                    for line in paths.group(1).splitlines()}
+        if "RELEASE_NOTES.md" not in included:
+            raise ValueError(f"Update Package: {event} omits RELEASE_NOTES.md from paths")
+
+
 def check_workflow(root: Path, path: str) -> None:
     content = (root / path).read_text(encoding="utf-8")
+    if path == ".github/workflows/update-package.yml":
+        check_release_notes_trigger_owner(content)
     expected_commands = (
         ("gh release download", "sha256sum --check --strict"),
         ("bash bin/test-update-package.sh",),

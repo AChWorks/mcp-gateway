@@ -33,7 +33,13 @@ class BaselineTest(unittest.TestCase):
                 "bash bin/test-update-package.sh",
                 "bash bin/test-update-backup-integrity.sh",
             )
-            p.write_text("".join(
+            event_owner = (
+                "name: Update Package\non:\n"
+                "  push:\n    paths:\n      - RELEASE_NOTES.md\n"
+                "  pull_request:\n    paths:\n      - RELEASE_NOTES.md\n\n"
+                if wf == ".github/workflows/update-package.yml" else ""
+            )
+            p.write_text(event_owner + "".join(
                 f"      - name: {step}\n        run: |\n"
                 "          mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)\n"
                 "          [[ ${#versions[@]} -eq 3 ]] || exit 1\n"
@@ -74,6 +80,46 @@ class BaselineTest(unittest.TestCase):
                 (root / GUARD.MANIFEST).write_text(
                     "\n".join(versions.split()) + "\n", encoding="utf-8")
                 with self.assertRaises(ValueError):
+                    GUARD.main(root)
+
+    def test_release_notes_only_edits_have_an_owner_and_are_validated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.fixture(root)
+            notes_file = root / "RELEASE_NOTES.md"
+            original = notes_file.read_text(encoding="utf-8")
+            # Only the release-note file changes: the workflow must be routed,
+            # and a harmless prose edit must leave the parity gate green.
+            notes_file.write_text(original + "\n## Clarification\nNo version change.\n", encoding="utf-8")
+            GUARD.main(root)
+
+            # With all other files unchanged, the same parity gate must fail
+            # if a preceding stable heading is omitted or incorrectly ordered.
+            for changed in (
+                original.replace("# MCP Gateway v2.5.3\n", ""),
+                original.replace(
+                    "# MCP Gateway v2.5.4\n\nFixture notes.\n",
+                    "# MCP Gateway v2.5.3\n\nFixture notes.\n",
+                ),
+                notes("2.5.5", "2.5.3", "2.5.4", "2.5.2", "2.5.1"),
+            ):
+                with self.subTest(changed=changed), self.assertRaises(ValueError):
+                    notes_file.write_text(changed, encoding="utf-8")
+                    GUARD.main(root)
+
+    def test_release_notes_only_trigger_must_exist_in_both_event_paths(self):
+        for event in ("push", "pull_request"):
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.fixture(root)
+                workflow = root / ".github/workflows/update-package.yml"
+                contents = workflow.read_text(encoding="utf-8")
+                anchor = f"  {event}:\n    paths:\n      - RELEASE_NOTES.md\n"
+                self.assertIn(anchor, contents)
+                workflow.write_text(contents.replace(anchor, anchor.replace(
+                    "      - RELEASE_NOTES.md\n", "      - VERSION\n",
+                ), 1), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, f"{event} omits RELEASE_NOTES.md"):
                     GUARD.main(root)
 
     def test_all_three_workflow_phases_must_use_complete_selector(self):
