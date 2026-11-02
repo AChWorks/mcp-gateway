@@ -22,6 +22,24 @@
     <h2 id="target-enrollment-title">{{ __('New connection') }}</h2>
     <form id="target-create-form" method="post" action="{{ route('admin.targets.store') }}" class="form-stack">
         @csrf
+        @if ($errors->any())
+            <div id="target-registration-errors" class="alert alert-error" role="alert" tabindex="-1" aria-labelledby="target-registration-errors-title">
+                <h3 id="target-registration-errors-title">{{ __('Target was not registered.') }}</h3>
+                <p>{{ __('Correct the fields below and submit again. Previously entered passwords, private keys and passphrases must be entered again.') }}</p>
+                <ul>
+                    @foreach ($errors->all() as $message)
+                        <li>{{ $message }}</li>
+                    @endforeach
+                </ul>
+                @if (session('diagnostic_code'))
+                    <p><strong>{{ __('Failure category') }}:</strong> <code>{{ session('diagnostic_code') }}</code></p>
+                    <p><strong>{{ __('What to check') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep((string) session('diagnostic_code'), (array) session('diagnostic_context', [])) }}</p>
+                @endif
+                @if (session('diagnostic_reference'))
+                    <p><strong>{{ __('Log reference') }}:</strong> <code>{{ session('diagnostic_reference') }}</code></p>
+                @endif
+            </div>
+        @endif
         <div class="field">
             <label for="connector_type">{{ __('1. Connector type') }}</label>
             <select id="connector_type" name="connector_type" required @error('connector_type') aria-invalid="true" @enderror aria-describedby="connector_type_help{{ $errors->has('connector_type') ? ' connector_type-error' : '' }}">

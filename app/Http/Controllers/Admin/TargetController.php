@@ -174,6 +174,9 @@ final class TargetController extends Controller
         // Validate the actual connector type before its own fields. This avoids
         // making unrelated connector fields mandatory for every new adapter.
         $adapter = null;
+        $selected = $request->input('connector_type');
+        $createQuery = is_string($selected) && in_array($selected, $connectors->types(), true)
+            ? ['connector_type' => $selected] : [];
         try {
             $choice = $request->validate([
                 'connector_type' => ['required', Rule::in($connectors->types())],
@@ -193,19 +196,36 @@ final class TargetController extends Controller
                 throw $exception;
             }
 
-            return back()->withInput($this->safeOldInput($request, $adapter))->withErrors($exception->errors());
+            $context = ['failure_origin' => 'gateway_admission', 'failure_stage' => 'admission', 'pre_dispatch' => true];
+            $reference = OperationDiagnostics::failure('target-registration', 'invalid_input', null, $context);
+
+            return redirect()->route('admin.targets.create', $createQuery)
+                ->withInput($this->safeOldInput($request, $adapter))
+                ->withErrors($exception->errors())
+                ->with('diagnostic_code', 'invalid_input')
+                ->with('diagnostic_context', $context)
+                ->with('diagnostic_reference', $reference);
         }
 
         try {
             $target = $adapter->register($validated);
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'registration_rejected';
-            $reference = OperationDiagnostics::failure('target-registration', $code, null, $exception->diagnostics);
+            // An adapter can establish whether an outbound request happened;
+            // this connector-neutral boundary cannot. In particular, WP
+            // discovery may have received an HTTP response already.
+            $context = [
+                'failure_origin' => 'unknown',
+                'failure_stage' => 'operation',
+                ...$exception->diagnostics,
+            ];
+            $reference = OperationDiagnostics::failure('target-registration', $code, null, $context);
 
-            return back()->withInput($this->safeOldInput($request, $adapter))
+            return redirect()->route('admin.targets.create', $createQuery)
+                ->withInput($this->safeOldInput($request, $adapter))
                 ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()])
                 ->with('diagnostic_code', $code)
-                ->with('diagnostic_context', OperationDiagnostics::safeContext($exception->diagnostics))
+                ->with('diagnostic_context', OperationDiagnostics::safeContext($context))
                 ->with('diagnostic_reference', $reference);
         }
 

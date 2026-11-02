@@ -69,7 +69,7 @@ final class SshTargetRegistrationTest extends TestCase
         self::assertSame(0, Target::query()->count());
         $fields['ssh_trust_confirmed'] = 'yes';
         $fields['ssh_host_key'] = 'ssh-ed25519 malicious';
-        $response = $this->post('/admin/targets', $fields)->assertSessionHasErrors('ssh_host');
+        $response = $this->post('/admin/targets', $fields)->assertSessionHasErrors('ssh_host_key');
         self::assertArrayNotHasKey('ssh_password', $response->baseResponse->getSession()->getOldInput());
         self::assertArrayNotHasKey('ssh_private_key', $response->baseResponse->getSession()->getOldInput());
         self::assertSame(0, Target::query()->count());
@@ -78,6 +78,69 @@ final class SshTargetRegistrationTest extends TestCase
         $fields['target_id'] = '../oops';
         $this->post('/admin/targets', $fields)->assertSessionHasErrors('target_id');
         self::assertSame(0, Target::query()->count());
+    }
+
+    public function test_ssh_registration_errors_return_to_canonical_create_page_not_untrusted_referrer(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $fields = $this->fields();
+        $fields['ssh_host_key'] = 'ssh-ed25519 malformed-host-key';
+
+        $failure = $this->withHeader('Referer', '/admin/targets')->post('/admin/targets', $fields)
+            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct')
+            ->assertSessionHasErrors('ssh_host_key')
+            ->assertSessionHas('diagnostic_code', 'invalid_ssh_host_key');
+        $old = $failure->baseResponse->getSession()->getOldInput();
+        self::assertSame('ssh_direct', $old['connector_type']);
+        self::assertSame('ssh-alpha', $old['target_id']);
+        self::assertSame($fields['ssh_host_key'], $old['ssh_host_key']);
+        self::assertArrayNotHasKey('ssh_password', $old);
+        self::assertArrayNotHasKey('ssh_private_key', $old);
+        self::assertArrayNotHasKey('ssh_passphrase', $old);
+        self::assertArrayNotHasKey('_token', $old);
+
+        $this->followingRedirects()->withHeader('Referer', '/admin/targets')
+            ->post('/admin/targets', $fields)->assertOk()
+            ->assertSee('id="target-registration-errors"', false)
+            ->assertSee('Target was not registered.')
+            ->assertSee('invalid_ssh_host_key')
+            ->assertSee('Log reference')
+            ->assertSee('option value="ssh_direct" selected', false)
+            ->assertDontSee('password-secret-test')
+            ->assertDontSee('malformed-host-key</code>', false);
+        self::assertSame(0, Target::query()->count());
+
+        $fields = $this->fields();
+        $fields['display_name'] = '';
+        $this->withHeader('Referer', '/admin/targets')->post('/admin/targets', $fields)
+            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct')
+            ->assertSessionHasErrors('display_name')
+            ->assertSessionHas('diagnostic_code', 'invalid_input');
+        $this->followingRedirects()->withHeader('Referer', '/admin/targets')
+            ->post('/admin/targets', $fields)->assertOk()
+            ->assertSee('id="target-registration-errors"', false)
+            ->assertSee('display name');
+        self::assertSame(0, Target::query()->count());
+    }
+
+    public function test_duplicate_ssh_target_id_preserves_distinct_safe_error_and_requires_no_network(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $fields = $this->fields();
+        $this->post('/admin/targets', $fields)->assertRedirect('/admin/targets/ssh-alpha');
+
+        $this->withHeader('Referer', '/admin/targets')->post('/admin/targets', $fields)
+            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct')
+            ->assertSessionHasErrors('target_id')
+            ->assertSessionHas('diagnostic_code', 'duplicate_target_id');
+        $this->followingRedirects()->withHeader('Referer', '/admin/targets')
+            ->post('/admin/targets', $fields)->assertOk()
+            ->assertSee('That Target ID already exists.')
+            ->assertSee('duplicate_target_id')
+            ->assertDontSee('password-secret-test');
+        self::assertSame(1, Target::query()->count());
+        self::assertSame(1, SshTargetConfig::query()->count());
+        self::assertSame(1, TargetCredential::query()->count());
     }
 
     public function test_private_key_and_passphrase_are_write_only_and_vault_is_bound_to_exact_record_and_pin(): void
