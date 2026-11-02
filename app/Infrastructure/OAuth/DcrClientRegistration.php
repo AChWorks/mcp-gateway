@@ -85,14 +85,12 @@ final class DcrClientRegistration
         // MariaDB 11.8+/12.3 may reject a FOR UPDATE after concurrent consent
         // with ER_CHECKREAD (1020) instead of returning the refreshed row.
         // Roll back the whole admission attempt and retry from a new snapshot
-        // ONLY when this happens inside the pre-admission orphan reclamation
-        // read. Earlier retirement writes are transactional; no limiter hit,
-        // new identity or external effect has occurred at this point.
+        // ONLY when the reclaim read explicitly identifies this error. Earlier
+        // retirement writes are transactional; no limiter hit, new identity,
+        // or external effect has occurred at this point.
         for ($attempt = 1; $attempt <= self::RECLAIM_SNAPSHOT_MAX_ATTEMPTS; $attempt++) {
-            $reclaiming = false;
-
             try {
-                DB::transaction(function () use ($clientId, $profileKey, $secret, $redirectUris, $name, &$reclaiming): void {
+                DB::transaction(function () use ($clientId, $profileKey, $secret, $redirectUris, $name): void {
                     // Serialize registrations using one existing durable row on MariaDB.
                     // This makes the global admission limit meaningful under concurrency.
                     $anchor = DB::table('oauth_client_profiles')->where('profile_key', 'chatgpt')
@@ -107,9 +105,7 @@ final class DcrClientRegistration
                     $this->assertGlobalAdmissionAvailable();
 
                     if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
-                        $reclaiming = true;
                         $this->reclaimExpiredNeverAuthorizedRegistrations();
-                        $reclaiming = false;
                     }
 
                     if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
@@ -143,16 +139,14 @@ final class DcrClientRegistration
                     RateLimiter::hit(self::GLOBAL_ADMISSION_KEY, 3600);
                 });
                 break;
-            } catch (QueryException $exception) {
-                if (! $reclaiming
-                    || (int) ($exception->errorInfo[1] ?? 0) !== 1020
-                    || $attempt === self::RECLAIM_SNAPSHOT_MAX_ATTEMPTS) {
+            } catch (DcrConcurrentReclaimRead $exception) {
+                if ($attempt === self::RECLAIM_SNAPSHOT_MAX_ATTEMPTS) {
                     throw $exception;
                 }
 
                 // A committed consent invalidated the snapshot. A fresh
-                // attempt must re-check both the admission limit and current
-                // authorization witness before any orphan can be retired.
+                // attempt re-checks the quota and current authorization
+                // witness before any orphan can be retired.
             }
         }
 
@@ -207,10 +201,20 @@ final class DcrClientRegistration
             $profile = DB::table('oauth_client_profiles')
                 ->where('profile_key', $candidate->profile_key)
                 ->lockForUpdate()->first(['client_id', 'auth_strategy', 'generation', 'disabled_at']);
-            $client = DB::table('oauth_dcr_clients')
-                ->where('profile_key', $candidate->profile_key)
-                ->where('created_at', '<=', $cutoff)
-                ->lockForUpdate()->first(['client_id', 'retired_at', 'ever_authorized_at', 'auto_retirement_eligible']);
+            try {
+                $client = DB::table('oauth_dcr_clients')
+                    ->where('profile_key', $candidate->profile_key)
+                    ->where('created_at', '<=', $cutoff)
+                    ->lockForUpdate()->first(['client_id', 'retired_at', 'ever_authorized_at', 'auto_retirement_eligible']);
+            } catch (QueryException $exception) {
+                if ((int) ($exception->errorInfo[1] ?? 0) !== 1020) {
+                    throw $exception;
+                }
+
+                // Only this read, before any admission or limiter mutation,
+                // may restart the complete transaction with a fresh snapshot.
+                throw new DcrConcurrentReclaimRead('DCR reclaim snapshot changed.', 0, $exception);
+            }
 
             if ($profile === null || $client === null
                 || $profile->auth_strategy !== 'dcr_client_secret_post'
