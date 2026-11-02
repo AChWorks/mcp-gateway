@@ -49,7 +49,11 @@ final class SshManagedReverseInstallCommand
         $inner = 'set -eu; d="$(mktemp -d)"; trap \'rm -rf "$d"\' EXIT; '
             .$download.'; '
             .'printf \'%s  %s\\n\' '.escapeshellarg($sha).' "$d/installer.sh" | sha256sum -c -; '
-            .'sudo bash "$d/installer.sh" '.$quoted;
+            // Many servers are administered directly as root and do not ship
+            // sudo. Keep the verified bytes/arguments identical in both paths.
+            .'if [ "$(id -u)" -eq 0 ]; then bash "$d/installer.sh" '.$quoted
+            .'; else command -v sudo >/dev/null 2>&1 || { echo "sudo is required for non-root installation" >&2; exit 1; }; '
+            .'sudo bash "$d/installer.sh" '.$quoted.'; fi';
 
         // Shell history includes a short-lived enrollment token, never a
         // private key. Never show the token again after the one-time response.

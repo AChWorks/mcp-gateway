@@ -130,7 +130,8 @@ final class SshManagedReverseAdminTest extends TestCase
             ->assertOk()
             ->assertSee('Pending Setup created')
             ->assertSee('sha256sum -c -')
-            ->assertSee('sudo bash');
+            ->assertSee('sudo bash')
+            ->assertSee('id -u');
         self::assertStringContainsString('no-store', $reply->headers->get('Cache-Control'));
         self::assertSame('pending', SshManagedReverseEnrollment::query()->sole()->state);
         self::assertSame('pending', SshManagedReverseEnrollment::query()->sole()->target->connection_state->value);

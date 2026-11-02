@@ -57,8 +57,10 @@ enrollment token. The only command is displayed once and contains a sensitive
 short-lived token, never a private key. Do not paste it in shared logs/chat.
 
 The command downloads the fixed installed Target script over HTTPS to a
-temporary file, verifies the exact release-committed SHA256 BEFORE sudo and
-executes the script. Compare the expected digest against an independently
+temporary file, verifies the exact release-committed SHA256 BEFORE any privileged execution and
+executes the script with direct bash when already root or sudo when non-root.
+A root-only server does not need sudo installed. Compare the expected digest
+against an independently
 trusted immutable release manifest: digest and script from the same mutable
 web host are not independent provenance.
 
