@@ -113,7 +113,9 @@ try {
 
                 return $data;
             },
-            null, $route,
+            // Exercise the actual bounded SFTP transport, not a potentially
+            // unbounded debug call that can hang CI on a missing response.
+            hrtime(true) + 30_000_000_000, $route,
         );
         if ($content !== 'bounded-mcp-reverse-e2e') {
             throw new RuntimeException('SFTP roundtrip failed across managed reverse route.');
