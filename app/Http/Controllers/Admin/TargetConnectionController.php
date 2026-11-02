@@ -371,6 +371,10 @@ final class TargetConnectionController extends Controller
                 'retry_safe' => false,
                 'failure_origin' => 'unknown',
                 'failure_stage' => 'operation',
+                // Distinguish read-only SSH authentication verification from
+                // side-effecting remote operations in ALL rendered guidance.
+                'operation_kind' => $operation === 'target-metadata-test'
+                    && $target->connector_type === 'ssh_direct' ? 'ssh_verify' : null,
                 // Only safe type: raw internal errors may contain SQL parameters.
                 'exception_class' => $exception::class,
             ],

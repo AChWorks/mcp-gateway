@@ -10,6 +10,7 @@ use App\Domain\Targets\TargetGroup;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\MessageBag;
 use Illuminate\Support\Str;
 use Illuminate\Support\ViewErrorBag;
@@ -128,7 +129,7 @@ final class AdminActionFeedbackTest extends TestCase
             'connector_type' => 'ssh_direct',
         ]);
         $this->actingAs($this->owner())->withSession([
-            'admin.feedback.routed_until' => time() + 600,
+            'admin.feedback.post_flash_source' => str_repeat('a', 40),
         ]);
         Cache::shouldReceive('put')->once()->andReturn(false);
 
@@ -281,10 +282,88 @@ final class AdminActionFeedbackTest extends TestCase
             ->assertSee('SSH verification did not complete reliably.')
             ->assertSee('No remote command or credential revocation was requested.')
             ->assertSee('operation_unconfirmed')
+            ->assertSee('Diagnostic category')
+            ->assertSee('SSH host-key/login verification could not be confirmed.')
             ->assertSee('Failure stage')
+            ->assertSee('operation')
+            ->assertSee('What to check')
+            ->assertSee('Reload Target Details to inspect current SSH verification status')
+            ->assertSee('no remote-revocation intent needs recovery.')
             ->assertSee('Log reference')
             ->assertDontSee('LOCAL_TEST_SECRET')
+            ->assertDontSee('The remote operation may already have executed.')
+            ->assertDontSee('inspect the durable intent phase')
             ->assertDontSee('Do not repeat an uncertain remote revoke');
+    }
+
+    public function test_cache_write_and_logger_exceptions_do_not_mask_completed_post_operation(): void
+    {
+        $target = Target::query()->create([
+            'target_id' => 'feedback-log-write',
+            'display_name' => 'Logging failure on write',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $this->actingAs($this->owner());
+        Cache::shouldReceive('put')->once()->andThrow(new RuntimeException('hidden-cache-error'));
+        Log::shouldReceive('warning')->once()->andThrow(new RuntimeException('hidden-logger-error'));
+
+        $response = $this->post(route('admin.targets.operations.update', ['target' => $target->target_id]), [
+            'state' => 'paused',
+        ])->assertAdminRedirect(route('admin.targets.show', ['target' => $target->target_id]))
+            ->assertSessionHas('status');
+
+        self::assertStringNotContainsString('_admin_feedback=', (string) $response->headers->get('Location'));
+        self::assertTrue($target->fresh()->operations_paused);
+        $this->get(route('admin.targets.show', ['target' => $target->target_id]))
+            ->assertOk()
+            ->assertSee('Target operations paused.')
+            ->assertDontSee('hidden-cache-error')
+            ->assertDontSee('hidden-logger-error');
+    }
+
+    public function test_cache_claim_and_logger_exceptions_leave_completed_post_unchanged(): void
+    {
+        $target = Target::query()->create([
+            'target_id' => 'feedback-log-claim',
+            'display_name' => 'Logging failure on claim',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $this->actingAs($this->owner());
+        $response = $this->post(route('admin.targets.operations.update', ['target' => $target->target_id]), [
+            'state' => 'paused',
+        ])->assertAdminRedirect(route('admin.targets.show', ['target' => $target->target_id]));
+
+        Cache::shouldReceive('lock')->once()->andThrow(new RuntimeException('hidden-claim-error'));
+        Log::shouldReceive('warning')->once()->andThrow(new RuntimeException('hidden-logger-error'));
+
+        $this->get((string) $response->headers->get('Location'))
+            ->assertOk()
+            ->assertDontSee('hidden-claim-error')
+            ->assertDontSee('hidden-logger-error')
+            ->assertDontSee('Target operations paused.');
+        self::assertTrue($target->fresh()->operations_paused);
+    }
+
+    public function test_get_handoff_failure_is_not_erased_after_prior_correlated_post(): void
+    {
+        $target = Target::query()->create([
+            'target_id' => 'feedback-get-handoff',
+            'display_name' => 'Invalid handoff after POST',
+            'connector_type' => 'ssh_direct',
+        ]);
+        $this->actingAs($this->owner());
+        $post = $this->post(route('admin.targets.operations.update', ['target' => $target->target_id]), [
+            'state' => 'paused',
+        ]);
+        $this->get((string) $post->headers->get('Location'))
+            ->assertOk()->assertSee('Target operations paused.');
+        $handoff = $this->get('/admin/targets/'.$target->target_id
+            .'/external-authorization/'.str_repeat('a', 32))
+            ->assertRedirect(route('admin.targets.show', ['target' => $target->target_id]));
+        $this->get((string) $handoff->headers->get('Location'))
+            ->assertOk()
+            ->assertSee('Authorization handoff expired or was already used.')
+            ->assertDontSee('Target operations paused.');
     }
 
     private function owner(): User

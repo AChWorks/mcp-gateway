@@ -101,7 +101,6 @@ done
 
 if [[ "$mode" == browser || "$mode" == concurrency-only ]]; then
     python3 tests/Support/external_authorization_concurrency.py
-    python3 tests/Support/admin_feedback_http_concurrency.py
 fi
 if [[ "$mode" == browser ]]; then
     node tests/Browser/external-authorization.cjs
@@ -114,4 +113,12 @@ if [[ "$mode" == browser || "$mode" == groups-only ]]; then
 fi
 if [[ "$mode" == browser || "$mode" == user-state-only ]]; then
     node tests/Browser/admin-user-state.cjs
+fi
+
+# The real feedback regression completes a valid OAuth callback and therefore
+# changes the disposable browser-wp Target to connected. Execute after the
+# separate initial authorization browser contract, which needs disconnected
+# browser-wp. The concurrency-only mode remains self-contained.
+if [[ "$mode" == browser || "$mode" == concurrency-only ]]; then
+    python3 tests/Support/admin_feedback_http_concurrency.py
 fi

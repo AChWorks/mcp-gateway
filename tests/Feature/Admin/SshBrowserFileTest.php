@@ -122,7 +122,7 @@ final class SshBrowserFileTest extends TestCase
             'local_file' => UploadedFile::fake()->createWithContent('content.bin', $content),
             'destination' => $path,
             'private_staging_dir' => (string) getenv('SSH_FIXTURE_PRIVATE_STAGING'),
-        ])->assertRedirect(route('admin.targets.show', $target))->assertSessionHasNoErrors();
+        ])->assertAdminRedirect(route('admin.targets.show', $target))->assertSessionHasNoErrors();
 
         $download = $this->post(route('admin.targets.ssh-files.download', $target), [
             'path' => $path,

@@ -31,7 +31,7 @@ final class CorrelatedAdminFeedback
 
     private const LIFETIME_SECONDS = 600;
 
-    private const SESSION_MARKER = 'admin.feedback.routed_until';
+    private const POST_FLASH_SOURCE = 'admin.feedback.post_flash_source';
 
     private const SESSION_BINDING = 'admin.feedback.session_binding';
 
@@ -63,6 +63,7 @@ final class CorrelatedAdminFeedback
         // Old pending notices belong to their previous redirect token. They
         // must not be merged into a second operation's flashed error bag.
         $this->forgetFields($request);
+        $request->session()->forget(self::POST_FLASH_SOURCE);
         try {
             $response = $next($request);
         } catch (ValidationException $exception) {
@@ -84,7 +85,11 @@ final class CorrelatedAdminFeedback
     {
         $token = $request->query(self::PARAMETER);
         $hasToken = is_string($token) && preg_match('/\A[a-f0-9]{40}\z/D', $token) === 1;
-        $routed = (int) $request->session()->get(self::SESSION_MARKER, 0) >= time();
+        // This source tag belongs to the same *one-request* flash generation
+        // as the POST notice. OAuth callback GETs and Admin GET-originated
+        // redirects create fresh flashes without this tag. A long-lived marker
+        // would erase those legitimate later results.
+        $routed = is_string($request->session()->get(self::POST_FLASH_SOURCE));
 
         if (! $hasToken && ! $routed) {
             return $next($request);
@@ -113,9 +118,12 @@ final class CorrelatedAdminFeedback
         try {
             return $next($request);
         } finally {
-            // The result belongs to the rendered response, never to a later
-            // GET or tab. Native one-shot flash and old() still work in view.
-            $this->forgetFields($request);
+            // GET handlers (notably external authorization handoffs) may
+            // generate NEW flash errors while rendering a correlated result.
+            // Keep that new flash generation; remove only the consumed
+            // POST-result fields so reloading cannot replay the feedback.
+            $newFlash = (array) $request->session()->get('_flash.new', []);
+            $request->session()->forget(array_diff(self::FIELDS, $newFlash));
         }
     }
 
@@ -152,22 +160,20 @@ final class CorrelatedAdminFeedback
                 'data' => $data,
             ], JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE));
             if (! Cache::put($key, $ciphertext, self::LIFETIME_SECONDS)) {
-                // Degrade to Laravel's normal flash rather than suppressing it
-                // because an earlier successful operation left a route marker.
-                $request->session()->forget(self::SESSION_MARKER);
-
+                // Degrade to Laravel's normal flash; no POST source tag is
+                // installed if the shared cache cannot retain the result.
                 return;
             }
 
-            $request->session()->put(self::SESSION_MARKER, time() + self::LIFETIME_SECONDS);
+            // Source tagging ages with Laravel flash, never with the cached
+            // result TTL. An intervening GET can suppress stale POST flash,
+            // whereas a later OAuth callback cannot be confused with it.
+            $request->session()->flash(self::POST_FLASH_SOURCE, $token);
             $response->setTargetUrl((string) $destination->withQuery([self::PARAMETER => $token]));
         } catch (Throwable $exception) {
             // The operation may have succeeded already. Feedback transport
             // must never roll it back, expose the input or trigger a retry.
-            $request->session()->forget(self::SESSION_MARKER);
-            Log::warning('Admin feedback transport failed.', [
-                'exception_class' => $exception::class,
-            ]);
+            $this->logTransportFailure('Admin feedback transport failed.', $exception);
         }
     }
 
@@ -199,11 +205,19 @@ final class CorrelatedAdminFeedback
                 return is_array($decoded) ? $decoded : null;
             });
         } catch (Throwable $exception) {
-            Log::warning('Admin feedback claim failed.', [
-                'exception_class' => $exception::class,
-            ]);
+            $this->logTransportFailure('Admin feedback claim failed.', $exception);
 
             return null;
+        }
+    }
+
+    private function logTransportFailure(string $message, Throwable $exception): void
+    {
+        try {
+            Log::warning($message, ['exception_class' => $exception::class]);
+        } catch (Throwable) {
+            // Logging is best-effort. Neither failed storage nor the logging
+            // backend may rewrite the original operation's HTTP outcome.
         }
     }
 

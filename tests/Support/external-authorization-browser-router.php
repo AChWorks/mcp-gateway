@@ -113,6 +113,16 @@ Http::fake(static function (OutboundRequest $request) {
             'scopes_supported' => ['mcp:use', 'offline_access'],
             'bearer_methods_supported' => ['header'],
         ]),
+        '/wp-json/wp-ai-bridge/v1/oauth/token' => Http::response([
+            // Disposable local fixture only; the real production callback
+            // still verifies state, issuer, signed assertion and durable state.
+            'token_type' => 'Bearer',
+            'expires_in' => 3600,
+            'refresh_token_expires_in' => 7200,
+            'access_token' => 'browser-fixture-access',
+            'refresh_token' => 'browser-fixture-refresh',
+            'scope' => 'mcp:use offline_access',
+        ]),
         '/.well-known/oauth-authorization-server' => Http::response([
             'issuer' => 'https://provider.browser.test',
             'authorization_endpoint' => 'https://provider.browser.test/wp-ai-bridge/oauth/authorize',
