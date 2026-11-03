@@ -248,6 +248,10 @@ echo "PASS: exact generated command, HTTPS TLS + release digest, one-use claim a
 prior_unit="$target_unit"
 prior_user="$control_user"
 prior_id="$enrollment"
+# Reissue withdraws the old control authorization. The prior SSH process may
+# exit or be in systemd RestartSec backoff, so is-active is not evidence that
+# the owned unit, OS account or root state survived. Pin actual ownership.
+prior_unit_digest="$(sudo sha256sum "/etc/systemd/system/$prior_unit" | cut -d ' ' -f1)"
 php tests/Support/managed-reverse-e2e.php reissue ||
     die "Owner could not reissue the claimed but unverified enrollment."
 enrollment="$(cat "$tmp/enrollment-id")"
@@ -255,8 +259,16 @@ enrollment="$(cat "$tmp/enrollment-id")"
     die "Reissued Target installer identity was reused or invalid."
 target_unit="mcp-gateway-reverse-$enrollment.service"
 control_user="mcp-r-$(printf '%s' "$enrollment" | cut -c15-26)"
-sudo systemctl is-active --quiet "$prior_unit" ||
-    die "Previous Target unit was unexpectedly destroyed during Owner reissue."
+[[ "$(sudo systemctl show "$prior_unit" --property=LoadState --value)" == loaded ]] ||
+    die "Previous Target unit no longer exists after Owner reissue."
+sudo test -f "/etc/systemd/system/$prior_unit" ||
+    die "Previous Target unit file was removed during Owner reissue."
+[[ "$(sudo sha256sum "/etc/systemd/system/$prior_unit" | cut -d ' ' -f1)" == "$prior_unit_digest" ]] ||
+    die "Previous Target unit content changed during Owner reissue."
+sudo test -f "/var/lib/mcp-gateway-reverse/$prior_id/enrollment.json" ||
+    die "Previous Target enrollment's root-owned claim state was removed during Owner reissue."
+getent passwd "$prior_user" >/dev/null ||
+    die "Previous Target tunnel account was removed during Owner reissue."
 sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \
     > "$tmp/reissued.log" 2>&1 || {
         sed -E 's/[a-f0-9]{64}/[REDACTED]/g' "$tmp/reissued.log" >&2
