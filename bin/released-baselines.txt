@@ -1,6 +1,6 @@
 # Rolling direct-browser-upgrade support window: three most recent prior
 # published stable releases (oldest to newest). Older direct upgrades are
 # unsupported and are not accepted as tested by the release gate.
-2.5.2
 2.5.3
 2.5.4
+2.5.5
