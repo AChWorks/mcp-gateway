@@ -111,13 +111,13 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertSame(0, SshManagedReverseGateway::query()->count());
 
         $fields = $this->settings(true);
-        $this->put('/admin/settings/reverse-ssh', $fields)->assertRedirect('/admin/settings/reverse-ssh');
+        $this->put('/admin/settings/reverse-ssh', $fields)->assertAdminRedirect('/admin/settings/reverse-ssh');
         self::assertTrue(SshManagedReverseGateway::active());
         self::assertSame(1, SshManagedReverseGateway::query()->sole()->revision);
         $this->put('/admin/settings/reverse-ssh', $fields)->assertSessionHasErrors('revision');
         $fields['revision'] = 1;
         $fields['enabled'] = '0';
-        $this->put('/admin/settings/reverse-ssh', $fields)->assertRedirect('/admin/settings/reverse-ssh');
+        $this->put('/admin/settings/reverse-ssh', $fields)->assertAdminRedirect('/admin/settings/reverse-ssh');
         self::assertFalse(SshManagedReverseGateway::active());
     }
 
@@ -197,7 +197,7 @@ final class SshManagedReverseAdminTest extends TestCase
         $this->post($url, [
             'confirm_target_id' => $target->target_id,
             'current_password' => 'StrongPassword!234',
-        ])->assertRedirect('/admin/targets/'.$target->target_id);
+        ])->assertAdminRedirect('/admin/targets/'.$target->target_id);
         self::assertSame('revoked', $row->fresh()->state);
         self::assertSame('', file_get_contents($this->keyFile));
         self::assertSame('disconnected', $target->fresh()->connection_state->value);
