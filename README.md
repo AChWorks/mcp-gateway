@@ -4,14 +4,14 @@
 
 Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run authorized SSH commands, inspect or transfer files with SFTP, and manage longer-running SSH Jobs. The Gateway does not grant more access than the configured WordPress user or remote SSH account already has.
 
-**Get started:** [Latest official Release](https://github.com/AChWorks/mcp-gateway/releases) · [Install](#install) · [Connect WordPress](#connect-wordpress) · [Connect SSH](#connect-direct-ssh) · [Connect ChatGPT](#connect-chatgpt-or-another-mcp-client)
+**Get started:** [Latest official Release](https://github.com/AChWorks/mcp-gateway/releases) · [Install](#install) · [Connect WordPress](#connect-wordpress) · [Connect SSH](#connect-direct-ssh) · [Managed Reverse SSH](#connect-an-inbound-blocked-server-with-reverse-ssh) · [Connect ChatGPT](#connect-chatgpt-or-another-mcp-client)
 
 > **Browser updates:** only upgrades from the three latest preceding stable releases are supported directly. Older installations need a verified intermediate upgrade or separately approved migration/restore path. See [Deployment](docs/DEPLOYMENT.md#rolling-browser-update-support-window).
 
 ## How it works
 
 1. Install the Gateway on your own HTTPS domain.
-2. Add a **WordPress** or **Direct SSH** Target in the Admin panel.
+2. Add a **WordPress** or **Direct SSH** Target in the Admin panel; inbound-blocked SSH hosts may use optional, Owner-approved **Reverse SSH**.
 3. Authorize the Target and grant specific Gateway users or Target Groups access.
 4. Connect your MCP client using Gateway OAuth, then choose a Target and use its permitted tools.
 
@@ -67,6 +67,17 @@ A Gateway “Connected” status is not a guarantee that a remotely revoked or e
 **SSH transfer setting:** fresh-install templates enable `SSH_FILE_TRANSFER_ENABLED=true`; an existing installation retains its private `.env` and an **absent key means OFF**. Enable whole-file mode on an existing installation only after checking hosting limits and Target permissions. The Admin **Operational Settings** page provides bounded command and Job controls (including independent configurable SSH byte windows up to **512 KiB** and a selectable synchronous command timeout up to **600 seconds**, not guaranteed by every host/client); the remote account's actual OS privileges still apply. Detached Jobs require a compatible `systemd-run` environment, and an uncertain Job start must **not** be repeated with a new request UUID.
 
 See [Direct SSH and Jobs](docs/DIRECT-SSH-CONNECTOR.md) and [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) for prerequisites, limits, integrity checks and recovery.
+
+## Connect an inbound-blocked server with Reverse SSH
+
+Reverse SSH is an **optional** route for the same `ssh_direct` Target when the real SSH host cannot accept inbound connections but can reach Gateway's separately approved OpenSSH control listener. The Gateway still verifies the **real Target's pinned SSH host key and login** before marking it Connected; a tunnel session or registration alone does not prove trust. There is no automatic Direct fallback or public reverse-forward listener.
+
+1. **Check actual installed release and host prerequisites.** Managed Reverse SSH starts **OFF** and requires an independently verified public release containing the two pinned installer scripts, compatible Linux/OpenSSH/systemd, and a separately authorized **one-time, privileged Gateway host bootstrap**. Ordinary PHP/aaPanel installations do not gain root privileges. The host installer provisions a restricted control SSHD service/account, owned host manifest and key reader; verify effective restrictions. Existing SSH services and firewall must remain untouched.
+2. In Owner Admin, open **Reverse SSH** (`/admin/settings/reverse-ssh`), verify the Gateway control endpoint and host key independently, and configure/enable it after host readiness is proved. A page reporting `Ready` describes **local** control-host readiness, not public reachability from the Target.
+3. Open **Targets → Add Target → Managed Reverse SSH**. Register the original Target SSH host/port/account and independently checked **Target host key**. The Gateway creates a **Pending Setup** enrollment and a short-lived **one-use** Target-side installation command; execute it on that **approved Target** only after verifying the pinned script provenance. Never post the token or private keys in logs/chat.
+4. On Target Details, with a stored SSH login credential, an unpaused Target and permission to test that Target, select **Verify SSH host and login**. Only the actual pinned end-to-end SSH login changes Pending Setup to **Connected**. If the claim is uncertain, expired, or revoked, use Owner-authorized reissue/reconcile rather than blindly repeating commands. Stop the owned remote service separately when revoking an already established tunnel.
+
+The [Managed Reverse SSH operator guide](docs/REVERSE-SSH-MANAGED.md) has one-time host preflight, enrollment, restrictions, diagnostics, rollback and release provenance. The [manual Reverse SSH runbook](docs/REVERSE-SSH-OPERATOR.md) remains supported for independently operator-managed routes. **Source changes, CI and publishing a GitHub Release do not deploy or test your installed NL/IR hosts.**
 
 ## Connect ChatGPT or another MCP client
 

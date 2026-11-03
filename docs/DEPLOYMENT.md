@@ -6,9 +6,31 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## Rolling browser-update support window
 
-**Direct browser updates are supported only from the three most recent preceding published stable MCP Gateway releases to the current release.** The exact supported source versions are recorded in the tagged repository source's `bin/released-baselines.txt` manifest, validated by CI; this source-only manifest is **not** included in the production deployment ZIP. The operator release notes describe the three-release policy. For example, the current v2.5.5 release's supported sources are v2.5.2, v2.5.3 and v2.5.4. Older direct-upgrade attempts are **unsupported and unverified**, even if the updater does not actively reject them.
+**Direct browser updates are supported only from the three most recent preceding published stable MCP Gateway releases to the current release.** The exact supported source versions are recorded in the tagged repository source's `bin/released-baselines.txt` manifest, validated by CI; this source-only manifest is **not** included in the production deployment ZIP. The operator release notes describe the three-release policy. For v2.5.6, the three tagged predecessor sources are v2.5.3, v2.5.4 and v2.5.5; use that window only after v2.5.6 is actually published as an official Release. Older direct-upgrade attempts are **unsupported and unverified**, even if the updater does not actively reject them.
 
 For an older installation, do not skip blindly to the newest release. Preserve an independently restorable full code/database/secret backup, inspect each archived official intermediate version's supported upgrade window, and plan a sequential supported hop to a version within the current three-release window. Verify SHA256/signatures, installation health, schema and recovery after each hop. If the exact hop or old installed runtime cannot be verified, use a tested migration/reinstall/restore plan with operator approval rather than assuming a direct update is safe. Existing browser-updater authorization, maintenance, pre-migration backup validation and fail-closed recovery behavior still apply; narrowing the support window does not weaken these controls.
+
+### Optional Managed Reverse SSH installation and upgrade
+
+The optional Owner-controlled [Managed Reverse SSH](REVERSE-SSH-MANAGED.md)
+capability is **OFF by default**. Only a separately approved, one-time
+privileged Gateway host bootstrap can create its isolated control SSHD
+service. The PHP web application itself cannot configure privileged
+systemd/SSHD state. Do not open the control port, change existing SSH
+services, or run the generated Target command without the exact Owner
+host/Target approval and independent host-key verification.
+
+The released v2.5.5 artifact does **not** contain the managed scripts.
+For an approved upgrade to a subsequently published v2.5.6 Release,
+verify official ZIP/checksum provenance and a restorable code/database/secret
+backup first. Browser Update must deliver the **exact two pinned managed
+scripts** without overwriting unrelated `bin/` content; incomplete updates
+retain protected recovery evidence. Independently verify installed
+`VERSION`, the Admin reverse-SSH readiness state, and actual Target
+end-host login after upgrade; a local control-host `Ready` status, green
+CI or published Release never proves a live reverse route or reboot
+persistence. The independent [manual Reverse SSH route](REVERSE-SSH-OPERATOR.md)
+remains available.
 
 ## Releases, supported host profile and migration safety
 

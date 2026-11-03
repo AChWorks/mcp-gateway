@@ -19,13 +19,24 @@ Private/VPN network eligibility is an explicit reviewed egress-policy question, 
 
 ### Owner-enrolled Reverse SSH for inbound-blocked Targets
 
+**Two supported enrollment paths:** The existing **manual operator-managed**
+route uses the explicit `SSH_REVERSE_APPROVED_ROUTES` allowlist and host
+operator provisioning documented below. The separately approved, optional
+[Managed Reverse SSH](REVERSE-SSH-MANAGED.md) path instead uses an isolated
+one-time Gateway host bootstrap, Owner-authenticated durable enrollment,
+per-Target loopback listener and one-use Target installer. It **does not**
+require per-Target `.env` allowlist edits or manual key/port allocation.
+Both paths preserve the same end-to-end Target SSH host-key pin, login,
+Target permissions and retained Job revision fencing; neither is a public
+proxy or automatic Direct fallback.
+
 A Target may choose **Direct (default)** or **Reverse SSH**. Reverse SSH is still the
 built-in, agentless `ssh_direct` connector: a restricted OpenSSH **client on the
 Target** opens one **remote** forward to a loopback-only listener on NL. Gateway
 only dials **127.0.0.1 on the approved NL port**. It never picks arbitrary local
 URLs, DNS addresses, private ranges or a caller-supplied proxy destination.
 
-**Two independent approvals** are mandatory for Reverse:
+**In the manual allowlist path, two independent approvals** are mandatory:
 1. A NL deployment operator places a strict JSON allowlist entry for the stable
    `target_id`, one unique high port and an agreed tunnel identity in
    `SSH_REVERSE_APPROVED_ROUTES`, and provisions a dedicated restricted NL
@@ -63,10 +74,13 @@ historical Job's binding valid again. **Unmodified Direct** credentials and
 Job hashes remain bit-for-bit compatible; reconfiguring a trust binding
 advances the revision and re-seals its credentials.
 
-The application never configures sshd, adds OS accounts, writes tunnel keys,
-opens firewall rules, starts systemd or installs an agent. The exact
-operator-managed OpenSSH/systemd procedure, bounded permissions, diagnostics,
-validation and rollback are in [Reverse SSH operator runbook](REVERSE-SSH-OPERATOR.md).
+The PHP application itself never obtains root access, changes SSHD,
+opens firewall rules or starts privileged systemd services. The **managed**
+path has a separately approved, narrow, root-executed host installer with
+owned service/account boundaries; it is not a general privileged web agent.
+The **manual** operator-managed OpenSSH/systemd procedure, bounded
+permissions, diagnostics, validation and rollback are in the
+[Reverse SSH operator runbook](REVERSE-SSH-OPERATOR.md).
 Without separately approved host-level operations, an installed Gateway
 can only register the route and fail closed until the external forward exists.
 A CI/OpenSSH fixture is not a production acceptance test.
