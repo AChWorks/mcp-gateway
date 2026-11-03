@@ -1012,12 +1012,31 @@ async function semanticDirtyForms(browser) {
         await trust.uncheck();
         assert.equal(await sshForm.getAttribute('data-admin-dirty'), null, 'Reverted checkbox must clear dirty state');
 
+        // A browser/password manager can fill the confirmation-only password
+        // after the form's initial baseline, without any user configuration edit.
+        await page.goto(base + '/admin/targets/ui-ssh-connected');
+        const forgetPassword = page.locator('#forget_owner_password');
+        await forgetPassword.evaluate(input => {
+            input.value = 'synthetic-autofill-not-a-target-edit';
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        assert.equal(await forgetPassword.locator('xpath=ancestor::form').getAttribute('data-admin-dirty'), null,
+            'Autofilled confirmation-only password must not mark Target details dirty');
+        await page.getByRole('link', { name: 'Edit Target', exact: true }).click();
+        assert.equal(prompts.length, 0, 'Edit Target must not warn for a background password fill');
+
         await nav(page, 'Dashboard', 'Gateway overview');
         assert.deepEqual(prompts, [], 'Pristine/reverted forms must not warn during Turbo navigation');
 
         await page.goto(base + '/admin/users/create');
         const userForm = page.locator('form[data-user-role-form]');
         assert.equal(await userForm.getAttribute('data-admin-dirty'), null, 'User create initializes clean');
+        await page.locator('#current_password').evaluate(input => {
+            input.value = 'synthetic-autofill-not-a-user-edit';
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        assert.equal(await userForm.getAttribute('data-admin-dirty'), null,
+            'Autofilled current password must not appear as an unsaved User change');
         const email = page.locator('#email');
         await email.evaluate(element => element.dispatchEvent(new Event('input', { bubbles: true })));
         assert.equal(await userForm.getAttribute('data-admin-dirty'), null);
@@ -1108,6 +1127,12 @@ async function roleSensitiveDirtyForms(browser) {
         const role = page.locator('#role');
         const ssh = page.locator('input[name="denied_permissions[]"][value="ssh.file.read"]');
         assert.equal(await form.getAttribute('data-admin-dirty'), null, 'Viewer begins clean');
+        await page.locator('#current_password').evaluate(input => {
+            input.value = 'synthetic-autofill-not-an-account-edit';
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        assert.equal(await form.getAttribute('data-admin-dirty'), null,
+            'Account Edit must ignore background confirmation-password autofill');
         await role.selectOption('operator');
         assert.equal(await form.getAttribute('data-admin-dirty'), 'true', 'Real Role change must guard navigation');
         assert.equal(await ssh.isChecked(), true, 'First promotion retains fail-closed SSH defaults');

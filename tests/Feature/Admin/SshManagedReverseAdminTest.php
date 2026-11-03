@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -303,6 +304,21 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertFalse($started['enrollment']->fresh()->publication_pending);
         self::assertSame('', file_get_contents($this->keyFile));
         self::assertSame(1, $started['enrollment']->target->sshConfig->fresh()->binding_revision);
+    }
+
+    #[RunInSeparateProcess]
+    public function test_owner_settings_fail_closed_when_php_open_basedir_blocks_the_root_owned_manifest(): void
+    {
+        $this->actingAs($this->user('owner'));
+        self::assertNotFalse(ini_set('open_basedir', base_path().PATH_SEPARATOR.sys_get_temp_dir()));
+        config()->set('ssh.managed_reverse.host_manifest_file', '/etc/mcp-gateway-reverse/manifest.json');
+
+        $this->get('/admin/settings/reverse-ssh')->assertOk()
+            ->assertSee('Needs host setup')->assertSee('Trusted host manifest missing or invalid')
+            ->assertSee('open_basedir');
+        $this->put('/admin/settings/reverse-ssh', $this->settings(true))
+            ->assertSessionHasErrors('enabled');
+        self::assertSame(0, SshManagedReverseGateway::query()->count());
     }
 
     public function test_owner_settings_truthfully_distinguish_host_absence_and_stopped_local_sshd(): void

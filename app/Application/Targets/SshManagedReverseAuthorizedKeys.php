@@ -28,16 +28,25 @@ class SshManagedReverseAuthorizedKeys
     public function hostManifest(): ?array
     {
         $file = (string) config('ssh.managed_reverse.host_manifest_file');
-        if (! is_file($file) || is_link($file) || ! is_readable($file)) {
+        // On shared/aaPanel PHP-FPM, open_basedir may exclude this root-owned
+        // manifest. An unavailable host bootstrap is a fail-closed readiness
+        // state, not an unhandled Laravel ErrorException or a reason to relax
+        // the PHP restriction. Suppress filesystem warnings at this boundary;
+        // every failed check is treated as an unavailable manifest.
+        if (! @is_file($file) || @is_link($file) || ! @is_readable($file)) {
             return null;
         }
-        $owner = fileowner($file);
-        $mode = fileperms($file);
+        $owner = @fileowner($file);
+        $mode = @fileperms($file);
         if (! app()->environment('testing') && ($owner !== 0 || ! is_int($mode)
             || ($mode & 0022) !== 0)) {
             return null;
         }
-        $decoded = json_decode((string) file_get_contents($file), true, 8);
+        $contents = @file_get_contents($file);
+        if (! is_string($contents)) {
+            return null;
+        }
+        $decoded = json_decode($contents, true, 8);
         if (! is_array($decoded)
             || ($decoded['version'] ?? null) !== 1
             || ($decoded['authorized_keys_file'] ?? null) !== $this->filePath()

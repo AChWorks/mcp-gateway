@@ -84,6 +84,11 @@
             // Session/auth tokens, optimistic revision hashes, and generated
             // hidden metadata are not human-editable form content.
             if (['hidden', 'button', 'submit', 'reset', 'image'].includes(type)) return [];
+            // The existing Owner's current password confirms a later POST;
+            // it is not persistent form content. Browser password managers
+            // may fill it after the baseline without an operator edit.
+            // Keep new passwords and SSH credentials protected as real drafts.
+            if (type === 'password' && control.name === 'current_password') return [];
             // Out-of-Role Deny choices cannot be submitted. Ignore automatic
             // SSH safe-default seeding after a Role is reverted, but preserve
             // deliberate edits staged while the permission was available.

@@ -28,7 +28,7 @@ final class SshManagedReverseHostReadiness
         $manifest = $this->keys->hostManifest();
         if ($manifest === null) {
             return $result($gateway?->enabled ? 'Degraded' : 'Needs host setup',
-                'Trusted host manifest missing or invalid. Run the verified bootstrap --preflight on the Gateway host.');
+                'Trusted host manifest missing or invalid, or unreadable under PHP open_basedir. Verify the approved host bootstrap and PHP path restrictions without disabling PHP isolation.');
         }
         if (! $this->keys->canPublish()) {
             return $result('Degraded',
