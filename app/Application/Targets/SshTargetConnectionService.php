@@ -8,6 +8,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshConnectionAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
@@ -102,6 +103,11 @@ final readonly class SshTargetConnectionService
         }
         DB::transaction(function () use ($target): void {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+            if (SshManagedReverseEnrollment::query()
+                ->where('target_record_id', $locked->getKey())
+                ->where('state', '!=', 'revoked')->exists()) {
+                throw new SshTargetConnectionException('reverse_route_not_approved');
+            }
             TargetCredential::query()->where('target_record_id', $locked->getKey())
                 ->where('connector_type', 'ssh_direct')->delete();
             SshTargetConfig::query()->where('target_record_id', $locked->getKey())

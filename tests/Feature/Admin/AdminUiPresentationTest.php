@@ -20,6 +20,34 @@ final class AdminUiPresentationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_managed_reverse_owner_settings_and_recovery_use_accessible_shared_admin_forms(): void
+    {
+        $owner = $this->owner();
+        $html = $this->actingAs($owner)
+            ->get('/admin/settings/reverse-ssh')->assertOk()
+            ->assertSee('Gateway host readiness')
+            ->assertSee('Remote Target reachability')
+            ->getContent();
+        $dom = new \DOMDocument;
+        $dom->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($dom);
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//main/section[contains(@class,"panel")][@aria-labelledby="reverse-status"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//main/section[contains(@class,"panel")][@aria-labelledby="reverse-config"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//form[@method="post"]//label[@for="reverse_owner_password"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//form//label[@for="reverse_repair_password"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//form//div[contains(@class,"target-field-grid")]/div[@class="field"]/input[@id="reverse_control_host"])',
+        ));
+    }
+
     public function test_light_control_boundaries_meet_non_text_contrast_on_shared_surfaces(): void
     {
         $css = (string) file_get_contents(public_path('css/admin.css'));

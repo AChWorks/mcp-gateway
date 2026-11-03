@@ -1,5 +1,9 @@
 # Owner-enrolled Reverse SSH — operator runbook (Issue #267)
 
+For optional one-time host setup and one-command Target enrollment, see
+[Managed Reverse SSH (Issue #270)](REVERSE-SSH-MANAGED.md). The manual
+operator-managed allowlist path below remains independently supported.
+
 **Deployment is a separate approval gate.** This document contains illustrative
 configuration ONLY: do not execute on production or a live target without a
 specific Owner-approved change plan, measured impact, rollback and evidence.

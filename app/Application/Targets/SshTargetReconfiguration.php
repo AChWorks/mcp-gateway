@@ -7,6 +7,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
@@ -78,6 +79,20 @@ final readonly class SshTargetReconfiguration
         ): bool {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
             $config = SshTargetConfig::query()->where('target_record_id', $locked->getKey())->lockForUpdate()->firstOrFail();
+            // Managed route authorization is an independent security binding,
+            // not merely editable form fields. Switching it to Direct or
+            // swapping Target login credentials while the control key is live
+            // would orphan the authorized SSHD listener/key or silently
+            // invalidate a managed install. Require explicit Owner revocation
+            // before using the existing audited credential rotation path.
+            if (SshManagedReverseEnrollment::query()
+                ->where('target_record_id', $locked->getKey())
+                ->where('state', '!=', 'revoked')->exists()) {
+                throw new TargetConnectorFailure(
+                    __('Revoke the managed Reverse SSH enrollment before editing the SSH endpoint, trust, route or login credentials.'),
+                    'configuration', 'managed_reverse_reconfiguration_requires_revocation',
+                );
+            }
             if ($route !== null) {
                 try {
                     $this->reverseRoutes->assertPortAvailable($route, (string) $locked->getKey());

@@ -8,6 +8,9 @@ use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\OAuthClientAuthorizationsController;
 use App\Http\Controllers\Admin\OperationalSettingsController;
 use App\Http\Controllers\Admin\SshBrowserFileController;
+use App\Http\Controllers\Admin\SshManagedReverseController;
+use App\Http\Controllers\Admin\SshManagedReverseRevocationController;
+use App\Http\Controllers\Admin\SshManagedReverseTargetController;
 use App\Http\Controllers\Admin\TargetConfigurationController;
 use App\Http\Controllers\Admin\TargetConnectionController;
 use App\Http\Controllers\Admin\TargetController;
@@ -116,6 +119,22 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
         ->name('oauth-clients.index');
     Route::delete('/oauth-clients/authorizations/{authorization}', [OAuthClientAuthorizationsController::class, 'revoke'])
         ->name('oauth-clients.revoke');
+
+    Route::get('/targets/create/managed-reverse', [SshManagedReverseTargetController::class, 'create'])
+        ->name('reverse-ssh.targets.create');
+    Route::post('/targets/{target:target_id}/reverse-ssh/revoke', SshManagedReverseRevocationController::class)
+        ->name('reverse-ssh.targets.revoke');
+    Route::post('/targets/{target:target_id}/reverse-ssh/reissue', [SshManagedReverseTargetController::class, 'reissue'])
+        ->name('reverse-ssh.targets.reissue');
+    Route::post('/targets/managed-reverse', [SshManagedReverseTargetController::class, 'store'])
+        ->name('reverse-ssh.targets.store');
+
+    Route::get('/settings/reverse-ssh', [SshManagedReverseController::class, 'index'])
+        ->name('reverse-ssh.index');
+    Route::put('/settings/reverse-ssh', [SshManagedReverseController::class, 'save'])
+        ->name('reverse-ssh.save');
+    Route::post('/settings/reverse-ssh/repair', [SshManagedReverseController::class, 'repair'])
+        ->name('reverse-ssh.repair');
 
     Route::get('/operations', [OperationalSettingsController::class, 'index'])
         ->name('operations.index');

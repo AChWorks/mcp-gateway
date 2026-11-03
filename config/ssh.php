@@ -21,4 +21,16 @@ return [
     // JSON object: {"target-id":{"port":22023,"tunnel_identity":"owner-approved-id"}}
     // Missing/invalid/multi-owner allowlists fail closed. No secret in this key.
     'reverse_approved_routes' => (string) env('SSH_REVERSE_APPROVED_ROUTES', ''),
+    // Fixed private path provisioned once by an independently authorized
+    // host installer. Never interpreted as a per-Target arbitrary file path.
+    'managed_reverse' => [
+        'authorized_keys_file' => storage_path('app/private/ssh-reverse/authorized_keys'),
+        'host_manifest_file' => '/etc/mcp-gateway-reverse/manifest.json',
+        'installer_path' => base_path('bin/managed-reverse-target.sh'),
+        // Committed digest from the exact installer delivered by the package.
+        // The release/distribution process must independently verify this.
+        'installer_sha256' => 'c159f54787503df9e56cb5abc2002e1dc16ae9f31759cee4c2b401e4dd9a13ef',
+        // The separately privileged Gateway bootstrap is also release-pinned.
+        'gateway_script_sha256' => 'eaf5960e16c27393b08b66afbfcb48d94a77e073dee57f7e3bc5ec8631632f28',
+    ],
 ];

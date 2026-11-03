@@ -31,6 +31,13 @@ final class WebUpdater
         'vendor',
     ];
 
+    // The release owns exactly these two files, NEVER the surrounding bin/
+    // directory. Other operator-maintained files must survive updates/restore.
+    private const MANAGED_BIN_PINS = [
+        'managed-reverse-target.sh' => 'installer_sha256',
+        'managed-reverse-gateway.sh' => 'gateway_script_sha256',
+    ];
+
     private const MANAGED_PUBLIC_PATHS_FILE = 'MANAGED_PUBLIC_PATHS';
 
     private const BACKUP_MANIFEST_FILE = 'BACKUP_MANIFEST.sha256';
@@ -730,7 +737,10 @@ final class WebUpdater
 
         $this->assertPackageIntegrity();
         $this->assertBackupCredible($backup, $from, $to);
-        $this->assertManagedMutationPreflight();
+        // A partially published update may contain a mixture of old and new
+        // script bytes. The authenticated backup is the only extra accepted
+        // source of prior script identity during Owner-only recovery.
+        $this->assertManagedMutationPreflight($backup);
 
         // The original source's migration files define the exact pre-upgrade
         // ledger. If DDL may have begun without ledger completion, the
@@ -801,6 +811,13 @@ final class WebUpdater
                 throw new RuntimeException('Restored Gateway-managed files do not match the authenticated pre-upgrade code snapshot.');
             }
         }
+        foreach (array_keys(self::MANAGED_BIN_PINS) as $script) {
+            $relative = 'bin/'.$script;
+            if (! is_file($backup.'/files/'.$relative)
+                && (file_exists($this->basePath.'/'.$relative) || is_link($this->basePath.'/'.$relative))) {
+                throw new RuntimeException('A newly introduced Managed Reverse SSH installer was not removed by restore: '.$relative.'.');
+            }
+        }
     }
 
     private function assertBaseLayout(): void
@@ -822,11 +839,13 @@ final class WebUpdater
         }
     }
 
-    private function assertManagedMutationPreflight(): void
+    private function assertManagedMutationPreflight(?string $verifiedBackup = null): void
     {
         foreach (self::MANAGED_ROOT as $entry) {
             $this->assertManagedRootPathPreflight($this->basePath.'/'.$entry, $entry);
         }
+
+        $this->assertManagedBinPathPreflight($verifiedBackup);
 
         foreach ($this->managedPublicPaths($this->packagePath.'/'.self::MANAGED_PUBLIC_PATHS_FILE) as $relative) {
             $this->assertManagedPublicPathPreflight($relative);
@@ -868,6 +887,96 @@ final class WebUpdater
             }
             $childRelative = $relative.'/'.$item;
             $this->assertManagedRootPathPreflight($path.'/'.$item, $childRelative);
+        }
+    }
+
+    /** @return array<string,string> */
+    private function pinnedManagedBinHashes(string $config, bool $required): array
+    {
+        $source = @file_get_contents($config);
+        if (! is_string($source)) {
+            throw new RuntimeException('Managed Reverse SSH installer identity configuration is unreadable.');
+        }
+
+        $hashes = [];
+        foreach (self::MANAGED_BIN_PINS as $script => $setting) {
+            $pattern = "/'".preg_quote($setting, '/')."'\s*=>\s*'([a-f0-9]{64})'/";
+            $count = preg_match_all($pattern, $source, $matches);
+            if ($count !== 1) {
+                if ($required) {
+                    throw new RuntimeException('Release is missing a single pinned Managed Reverse SSH script SHA256: '.$script.'.');
+                }
+
+                continue;
+            }
+            $hashes[$script] = $matches[1][0];
+        }
+
+        return $hashes;
+    }
+
+    private function assertManagedBinPathPreflight(?string $verifiedBackup = null): void
+    {
+        $dir = $this->basePath.'/bin';
+        if (is_link($dir) || (file_exists($dir) && ! is_dir($dir))) {
+            throw new RuntimeException('Gateway-managed bin/ has an unsafe parent type or symlink.');
+        }
+        if (is_dir($dir)) {
+            if (! is_readable($dir) || ! is_writable($dir) || (fileperms($dir) & 0002) !== 0) {
+                throw new RuntimeException('Gateway-managed bin/ is not safely readable/writable (or is world-writable).');
+            }
+            // Do not follow even an unrelated symlink within this shared
+            // privileged-script namespace. Preserve ordinary operator files.
+            $items = scandir($dir);
+            if ($items === false) {
+                throw new RuntimeException('Gateway-managed bin/ cannot be inspected.');
+            }
+            foreach ($items as $item) {
+                if ($item !== '.' && $item !== '..' && is_link($dir.'/'.$item)) {
+                    throw new RuntimeException('Gateway-managed bin/ contains an unexpected symbolic link: '.$item.'.');
+                }
+            }
+        } elseif (! is_writable($this->basePath)) {
+            throw new RuntimeException('Gateway-managed bin/ cannot be created in the installed application root.');
+        }
+
+        // Normal Browser Update must trust and validate the current live
+        // config. On an authenticated interrupted restore, however, config/
+        // may have been removed between unlink and backup copy. Never trust
+        // that partially published live tree: only the verified original
+        // backup and the separately authenticated staged package provide
+        // installer identities during Owner-local pre-migration recovery.
+        $oldHashes = $verifiedBackup === null
+            ? $this->pinnedManagedBinHashes($this->basePath.'/config/ssh.php', false)
+            : [];
+        $newHashes = $this->pinnedManagedBinHashes($this->packagePath.'/payload/config/ssh.php', true);
+        $backupHashes = $verifiedBackup !== null
+            ? $this->pinnedManagedBinHashes($verifiedBackup.'/files/config/ssh.php', false)
+            : [];
+        foreach (array_keys(self::MANAGED_BIN_PINS) as $script) {
+            $path = $dir.'/'.$script;
+            if (is_link($path)) {
+                throw new RuntimeException('Gateway-managed script is a symbolic link: bin/'.$script.'.');
+            }
+            if (! file_exists($path)) {
+                continue;
+            }
+            if (! is_file($path) || ! is_readable($path)) {
+                throw new RuntimeException('Gateway-managed script has an unsafe file type or permissions: bin/'.$script.'.');
+            }
+            $actual = hash_file('sha256', $path);
+            $old = $oldHashes[$script] ?? null;
+            $backupPin = $backupHashes[$script] ?? null;
+            $backupFile = $verifiedBackup !== null ? $verifiedBackup.'/files/bin/'.$script : null;
+            $matchesBackup = is_string($backupFile) && is_file($backupFile)
+                && hash_equals((string) hash_file('sha256', $backupFile), (string) $actual)
+                && is_string($backupPin) && hash_equals($backupPin, (string) $actual);
+            if (! is_string($actual)
+                || (! hash_equals($newHashes[$script], $actual)
+                    && (! is_string($old) || ! hash_equals($old, $actual))
+                    && ! $matchesBackup)) {
+                throw new RuntimeException('Existing bin/ script is not an approved prior or current release artifact: bin/'.$script.'.');
+            }
         }
     }
 
@@ -953,7 +1062,7 @@ final class WebUpdater
         }
 
         $expectedTop = [
-            '.env.example', 'LICENSE', 'VERSION', 'app', 'artisan', 'bootstrap', 'composer.json',
+            '.env.example', 'LICENSE', 'VERSION', 'app', 'artisan', 'bin', 'bootstrap', 'composer.json',
             'config', 'database', 'public', 'resources', 'routes', 'vendor',
         ];
         $actualTop = $this->directoryNames($this->packagePath.'/payload');
@@ -967,6 +1076,26 @@ final class WebUpdater
         }
         if (! is_file($this->packagePath.'/payload/vendor/autoload.php')) {
             throw new RuntimeException('Update payload is missing production Composer dependencies.');
+        }
+
+        $bin = $this->packagePath.'/payload/bin';
+        if (! is_dir($bin) || is_link($bin)) {
+            throw new RuntimeException('Update payload is missing approved Managed Reverse SSH installers.');
+        }
+        $actualScripts = $this->directoryNames($bin);
+        $expectedScripts = array_keys(self::MANAGED_BIN_PINS);
+        sort($actualScripts);
+        sort($expectedScripts);
+        if ($actualScripts !== $expectedScripts) {
+            throw new RuntimeException('Update payload contains missing or unexpected bin/ scripts.');
+        }
+        $pinned = $this->pinnedManagedBinHashes($this->packagePath.'/payload/config/ssh.php', true);
+        foreach ($pinned as $script => $digest) {
+            $file = $bin.'/'.$script;
+            if (! is_file($file) || is_link($file)
+                || ! hash_equals($digest, (string) hash_file('sha256', $file))) {
+                throw new RuntimeException('Update payload script does not match its immutable release-pinned SHA256: '.$script.'.');
+            }
         }
 
         $lines = file($this->packagePath.'/manifest.sha256', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
@@ -1090,6 +1219,20 @@ final class WebUpdater
             throw new RuntimeException('Pre-migration recovery backup public ownership manifest does not match the update.');
         }
 
+        if (is_link($backup.'/files/bin')
+            || (file_exists($backup.'/files/bin') && ! is_dir($backup.'/files/bin'))) {
+            throw new RuntimeException('Pre-migration backup bin/ has an unsafe type.');
+        }
+        if (is_dir($backup.'/files/bin')) {
+            $allowedBin = array_fill_keys(array_keys(self::MANAGED_BIN_PINS), true);
+            foreach ($this->directoryNames($backup.'/files/bin') as $name) {
+                if (! isset($allowedBin[$name]) || ! is_file($backup.'/files/bin/'.$name)
+                    || is_link($backup.'/files/bin/'.$name)) {
+                    throw new RuntimeException('Pre-migration backup includes an unowned bin/ path.');
+                }
+            }
+        }
+
         if (is_dir($backup.'/files/public')) {
             $allowed = array_fill_keys($backupPublicPaths, true);
             foreach ($this->recursiveFiles($backup.'/files/public', '') as $relative) {
@@ -1140,6 +1283,20 @@ final class WebUpdater
             $this->copyPath($this->packagePath.'/payload/'.$entry, $target);
         }
 
+        // Only two application-owned script leaves. Never replace bin/ itself:
+        // it may contain unrelated operator tools and pre-existing state.
+        $bin = $this->basePath.'/bin';
+        if (is_link($bin) || (file_exists($bin) && ! is_dir($bin))) {
+            throw new RuntimeException('Managed Reverse SSH bin/ parent became unsafe before replacement.');
+        }
+        foreach (array_keys(self::MANAGED_BIN_PINS) as $script) {
+            $target = $bin.'/'.$script;
+            if (file_exists($target) || is_link($target)) {
+                $this->removePath($target);
+            }
+            $this->copyPath($this->packagePath.'/payload/bin/'.$script, $target);
+        }
+
         $this->replaceManagedPublicFiles();
     }
 
@@ -1188,6 +1345,12 @@ final class WebUpdater
                 $source = $this->basePath.'/'.$entry;
                 if (file_exists($source) || is_link($source)) {
                     $this->copyPath($source, $backup.'/files/'.$entry);
+                }
+            }
+            foreach (array_keys(self::MANAGED_BIN_PINS) as $script) {
+                $source = $this->basePath.'/bin/'.$script;
+                if (file_exists($source) || is_link($source)) {
+                    $this->copyPath($source, $backup.'/files/bin/'.$script);
                 }
             }
 
@@ -1246,6 +1409,23 @@ final class WebUpdater
             $this->removePath($this->basePath.'/'.$entry);
             if (file_exists($backup.'/files/'.$entry)) {
                 $this->copyPath($backup.'/files/'.$entry, $this->basePath.'/'.$entry);
+            }
+        }
+
+        $bin = $this->basePath.'/bin';
+        if (is_link($bin) || (file_exists($bin) && ! is_dir($bin))) {
+            throw new RuntimeException('Restoring owned scripts would traverse an unsafe bin/ path.');
+        }
+        foreach (array_keys(self::MANAGED_BIN_PINS) as $script) {
+            $target = $bin.'/'.$script;
+            if (file_exists($target) || is_link($target)) {
+                if (! is_file($target) || is_link($target)) {
+                    throw new RuntimeException('Cannot restore managed script over an unsafe path: bin/'.$script.'.');
+                }
+                $this->removePath($target);
+            }
+            if (is_file($backup.'/files/bin/'.$script)) {
+                $this->copyPath($backup.'/files/bin/'.$script, $target);
             }
         }
 

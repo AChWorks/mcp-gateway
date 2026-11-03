@@ -781,6 +781,7 @@ Before mutation, the browser updater verifies its private manifest and temporary
 - preserves `.env` and the entire persistent `storage/` tree;
 - replaces all application-managed release paths rather than overlaying them, preventing deleted old files from lingering;
 - replaces only explicitly Gateway-owned public files and preserves unknown/host-managed files under `public/`;
+- installs **only** `bin/managed-reverse-target.sh` and `bin/managed-reverse-gateway.sh` in the shared `bin/` directory. Both must match release-pinned SHA256 values in `config/ssh.php`. A missing old `bin/` may be created, but unrelated operator files remain untouched; a symlink, unexpected existing installer bytes or unsafe directory blocks preflight **before mutation**. Code backup captures only pre-existing owned scripts, and pre-migration recovery removes those newly introduced by the update without deleting the shared directory;
 - verifies the complete installed managed runtime against the package hashes before crossing the migration boundary;
 - runs `php artisan optimize:clear` through Laravel;
 - runs migrations with `--force`;

@@ -41,6 +41,7 @@ LICENSE
 VERSION
 app
 artisan
+bin
 bootstrap
 composer.json
 config
@@ -61,6 +62,9 @@ required_entries=(
   "$package/LICENSE"
   "$package/VERSION"
   "$package/artisan"
+  "$package/bin/"
+  "$package/bin/managed-reverse-target.sh"
+  "$package/bin/managed-reverse-gateway.sh"
   "$package/composer.json"
   "$package/app/"
   "$package/bootstrap/"
@@ -96,6 +100,25 @@ if find "$root" -type l -print | grep . >/dev/null; then
   echo "Deployment ZIP must not contain symbolic links." >&2
   exit 1
 fi
+
+# Privileged host-facing scripts are fixed, content-addressed release
+# resources. A mismatched build must never issue a root install command.
+[[ $(find "$root/bin" -maxdepth 1 -type f | wc -l) -eq 2 ]] || {
+  echo "Only the two approved Reverse SSH host scripts may be shipped under bin/." >&2
+  exit 1
+}
+bash -n "$root/bin/managed-reverse-target.sh"
+bash -n "$root/bin/managed-reverse-gateway.sh"
+php -r '
+$cfg = file_get_contents($argv[1]);
+foreach (["installer_sha256" => "managed-reverse-target.sh", "gateway_script_sha256" => "managed-reverse-gateway.sh"] as $setting => $script) {
+    if (!preg_match("/\x27".preg_quote($setting, "/")."\x27\s*=>\s*\x27([a-f0-9]{64})\x27/", $cfg, $m)
+        || !hash_equals($m[1], hash_file("sha256", $argv[2]."/".$script))) {
+        fwrite(STDERR, "Managed Reverse SSH installer sha256 mismatches immutable release identity: ".$script."\n");
+        exit(1);
+    }
+}
+' "$root/config/ssh.php" "$root/bin"
 
 [[ ! -e "$root/composer.lock" ]] || { echo "Source composer.lock must not be shipped in the deployment artifact." >&2; exit 1; }
 [[ ! -e "$root/vendor/bin" ]] || { echo "vendor/bin must not be shipped in the deployment artifact." >&2; exit 1; }

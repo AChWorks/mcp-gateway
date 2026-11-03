@@ -39,6 +39,11 @@ cp -a \
   "$repo_root/routes" \
   "$destination/"
 
+# Ship only the two reviewed managed-Reverse host installers. General
+# development tooling under bin/ is never part of runtime releases.
+mkdir -p "$destination/bin"
+cp -a "$repo_root/bin/managed-reverse-target.sh" "$repo_root/bin/managed-reverse-gateway.sh" "$destination/bin/"
+
 cp -a \
   "$repo_root/artisan" \
   "$repo_root/.env.example" \

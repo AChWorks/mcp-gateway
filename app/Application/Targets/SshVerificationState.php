@@ -6,6 +6,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
@@ -94,8 +95,19 @@ final readonly class SshVerificationState
 
             $currentConfig->forceFill(['verification_attempt_id' => null])->save();
             $now = now();
+            // A newly enrolled managed Target is still Pending Setup when its
+            // first handshake fails (e.g. the outbound tunnel is not up).
+            // Preserve the actionable diagnostic, but do not claim the
+            // onboarding was completed. Previously connected Targets retain
+            // the existing Error health semantics on later failures.
+            $pendingSetup = $locked->getAttribute('connection_state') === TargetConnectionState::Pending
+                && SshManagedReverseEnrollment::query()
+                    ->where('target_record_id', $locked->getKey())
+                    ->where('state', '!=', 'revoked')
+                    ->exists();
             $locked->forceFill([
-                'connection_state' => TargetConnectionState::Error,
+                'connection_state' => $pendingSetup
+                    ? TargetConnectionState::Pending : TargetConnectionState::Error,
                 'last_error_code' => $reason,
                 'last_tested_at' => $now,
                 'last_failure_at' => $now,
