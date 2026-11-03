@@ -1,3 +1,17 @@
+# MCP Gateway v2.5.7
+
+**Stable v2.5.7 — fix installed Admin false-unsaved warnings and Reverse SSH Settings 500 on restricted PHP hosts.**
+
+This is the **source candidate**, not a published Release or an installed Gateway upgrade. The immutable public v2.5.6 ZIPs and tag remain unchanged. v2.5.7 publication requires a separately approved exact-main-SHA release workflow; upgrading NL and any privileged Reverse SSH host bootstrap require their own Owner approvals and operational checks.
+
+- **Reverse SSH Settings no longer fails on aaPanel `open_basedir`:** If the root-owned host manifest is outside the PHP-FPM allowed paths, the Owner page reports `Needs host setup` (or `Degraded` when enabled) with a useful explanation rather than Laravel HTTP 500. Filesystem checks fail closed: root ownership, safe file modes, symlink rejection, manifest schema, key-reader admission and Owner confirmation remain intact. PHP restrictions and host SSHD configuration are **not** relaxed or changed by this release.
+- **Clean User/Target navigation without false unsaved prompts:** A browser/password-manager fill of the reauthentication-only `current_password` input no longer counts as an edited form. Actual User/Target field or checkbox changes, new passwords, SSH credentials and server-returned unsaved drafts remain guarded. The installed owner's precise browser/extension combination still requires post-upgrade verification.
+- **Exact source evidence:** [PR #280](https://github.com/AChWorks/mcp-gateway/pull/280) merged after independent HIGH_ASSURANCE `APPROVE`, with exact-head PHP 8.5 CI, Admin Chromium, OpenSSH/systemd, MariaDB Concurrency, WordPress Bridge and Commit Attribution checks successful. The isolated source tests do **not** prove that the patched code is deployed on NL.
+- **Compatibility and upgrade:** This patch introduces no database migration, dependency, public API/route, account grant, connector contract, host-level permission or mandatory service change. Direct Browser Update to an **officially published** v2.5.7 is supported only from the three most recent preceding stable releases, **v2.5.4, v2.5.5 and v2.5.6**, once the release's exact-source archive/upgrade gates pass. Verify the release ZIP and SHA256 and an independently restorable code/database/secret backup; do not run repeated upgrade stages after an uncertain result.
+- **Delivery gates remain separate:** After authorized NL upgrade, validate the authenticated Owner `/admin/settings/reverse-ssh` page and fail-closed host-readiness explanation, plus clean Target Details → Edit/Verify and User Edit navigation with intentional/reverted edits. Registration diagnostics and real Iran↔NL Reverse SSH pin/login, Command/SFTP/Jobs, reconnect/reboot and revocation remain open in [#266](https://github.com/AChWorks/mcp-gateway/issues/266), [#267](https://github.com/AChWorks/mcp-gateway/issues/267) and [#270](https://github.com/AChWorks/mcp-gateway/issues/270). Production SSHD/firewall/systemd changes are never implicit.
+
+Operator references: [Deployment and updater recovery](docs/DEPLOYMENT.md), [Managed Reverse SSH](docs/REVERSE-SSH-MANAGED.md), [Admin access workflows](docs/ADMIN-ACCESS-WORKFLOWS.md).
+
 # MCP Gateway v2.5.6
 
 **Stable v2.5.6 — optional managed Reverse SSH and actionable Admin feedback.**
