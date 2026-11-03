@@ -940,7 +940,15 @@ final class WebUpdater
             throw new RuntimeException('Gateway-managed bin/ cannot be created in the installed application root.');
         }
 
-        $oldHashes = $this->pinnedManagedBinHashes($this->basePath.'/config/ssh.php', false);
+        // Normal Browser Update must trust and validate the current live
+        // config. On an authenticated interrupted restore, however, config/
+        // may have been removed between unlink and backup copy. Never trust
+        // that partially published live tree: only the verified original
+        // backup and the separately authenticated staged package provide
+        // installer identities during Owner-local pre-migration recovery.
+        $oldHashes = $verifiedBackup === null
+            ? $this->pinnedManagedBinHashes($this->basePath.'/config/ssh.php', false)
+            : [];
         $newHashes = $this->pinnedManagedBinHashes($this->packagePath.'/payload/config/ssh.php', true);
         $backupHashes = $verifiedBackup !== null
             ? $this->pinnedManagedBinHashes($verifiedBackup.'/files/config/ssh.php', false)

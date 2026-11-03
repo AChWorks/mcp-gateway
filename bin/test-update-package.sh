@@ -18,6 +18,7 @@ done
 tmp="$(mktemp -d)"
 server_pid=""
 recovery_server_pid=""
+crash_server_pid=""
 needs_sudo_cleanup=0
 protected_public_enforced=0
 cleanup() {
@@ -28,6 +29,10 @@ cleanup() {
   if [[ -n "$recovery_server_pid" ]]; then
     kill "$recovery_server_pid" >/dev/null 2>&1 || true
     wait "$recovery_server_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$crash_server_pid" ]]; then
+    kill "$crash_server_pid" >/dev/null 2>&1 || true
+    wait "$crash_server_pid" 2>/dev/null || true
   fi
   if [[ "$needs_sudo_cleanup" -eq 1 ]] && command -v sudo >/dev/null 2>&1; then
     sudo -n rm -rf "$tmp" >/dev/null 2>&1 || true
@@ -458,6 +463,127 @@ if [[ "$needs_sudo_cleanup" -eq 1 ]]; then
   sudo -n rm -rf "$rollback_target"
 else
   rm -rf "$rollback_target"
+fi
+
+# REQUIRED-01-R2: a verified Owner pre-migration restore can crash after
+# removing config/ but before its backup copy. Exercise this on the newest
+# actually published supported baseline, with both CLI modes and real HTTP.
+latest_supported="$(awk 'NF && $1 !~ /^#/ {last=$1} END {print last}' "$(dirname "$0")/released-baselines.txt")"
+if [[ "$old_version" == "$latest_supported" ]]; then
+  crash_root="$tmp/interrupted-config-restore"
+  cp -a "$target" "$crash_root"
+  mkdir -p "$crash_root/bin"
+  printf 'unrelated operator script\n' > "$crash_root/bin/operator.sh"
+  (cd "$crash_root" && sha256sum .env config/ssh.php artisan bin/operator.sh \
+    storage/app/private/oauth/private.key storage/app/private/bridge-client/private.key) > "$tmp/crash-original-files.sha256"
+  crash_ledger="$(cd "$crash_root" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')"
+  cp "$update_zip" "$crash_root/mcp-gateway-update-v$new_version.zip"
+  unzip -q "$update_zip" -d "$crash_root"
+
+  # Current-config validation remains mandatory on the normal upgrade path.
+  mv "$crash_root/config/ssh.php" "$tmp/crash-ssh-config"
+  if (cd "$crash_root" && php -r '
+    require "vendor/autoload.php"; require "update/WebUpdater.php";
+    (new McpGatewayUpdate\WebUpdater(getcwd(),getcwd()."/update"))->inspect();
+  ' > "$tmp/crash-normal-preflight.log" 2>&1); then
+    echo "Normal Browser Update accepted missing config/ssh.php" >&2; exit 1;
+  fi
+  grep -F 'installer identity configuration is unreadable' "$tmp/crash-normal-preflight.log" >/dev/null || {
+    cat "$tmp/crash-normal-preflight.log" >&2; exit 1;
+  }
+  mv "$tmp/crash-ssh-config" "$crash_root/config/ssh.php"
+
+  # Stage using the real old Laravel runtime. Save both authenticated
+  # backups and persist recovery-restoring BEFORE simulating the crash.
+  php -r '
+    $root=$argv[1]; chdir($root); require "vendor/autoload.php";
+    $app=require "bootstrap/app.php";
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    require "update/WebUpdater.php";
+    $u=new McpGatewayUpdate\WebUpdater($root,$root."/update");
+    $stage=$u->stage(str_repeat("b",64));
+    $archive=(new ReflectionMethod($u,"createBackup"))->invoke($u,$stage["to"],$stage["from"]);
+    $state=json_decode(file_get_contents($root."/storage/app/private/update-state.json"),true,512,JSON_THROW_ON_ERROR);
+    $state["phase"]="recovery-restoring"; $state["recovery_origin"]="owner-local";
+    $state["recovery_started_at"]=time(); $state["recovery_archive"]=$archive;
+    (new ReflectionMethod($u,"writeState"))->invoke($u,$state);
+  ' "$crash_root"
+  crash_state="$crash_root/storage/app/private/update-state.json"
+  [[ "$crash_root" == "$tmp/"* && -f "$crash_root/storage/framework/down" ]] || exit 1
+  rm -rf "$crash_root/config"
+  (cd "$crash_root" && php update/Recover.php --check) > "$tmp/crash-check.log" 2>&1 || {
+    cat "$tmp/crash-check.log" >&2; exit 1;
+  }
+  grep -F 'PRE_MIGRATION_PROOF=PASS phase=recovery-restoring' "$tmp/crash-check.log" >/dev/null || exit 1
+
+  # The interrupted-recovery exception never permits unknown script bytes.
+  printf '\n# forged script\n' >> "$crash_root/bin/managed-reverse-target.sh"
+  if (cd "$crash_root" && php update/Recover.php --check > "$tmp/crash-forged.log" 2>&1); then
+    echo "Unknown privileged installer bytes accepted by recovery" >&2; exit 1;
+  fi
+  grep -F 'not an approved prior or current release artifact' "$tmp/crash-forged.log" >/dev/null || {
+    cat "$tmp/crash-forged.log" >&2; exit 1;
+  }
+  cp "$crash_root/update/payload/bin/managed-reverse-target.sh" "$crash_root/bin/managed-reverse-target.sh"
+  (cd "$crash_root" && php update/Recover.php --check) > "$tmp/crash-recheck.log" 2>&1 || {
+    cat "$tmp/crash-recheck.log" >&2; exit 1;
+  }
+
+  # Restore succeeds but missing HTTP readiness must retain the journal.
+  if (cd "$crash_root" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:18759" \
+    php update/Recover.php --recover > "$tmp/crash-http-failed.log" 2>&1); then
+    echo "Recovery declared success without HTTP readiness" >&2; exit 1;
+  fi
+  grep -F RECOVERY_NOT_VERIFIED "$tmp/crash-http-failed.log" >/dev/null || {
+    cat "$tmp/crash-http-failed.log" >&2; exit 1;
+  }
+  php -r '
+    $s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
+    if (($s["phase"]??"")!=="recovery-http-unverified"
+      || ($s["migration_started"]??null)!==false
+      || !is_file(($s["backup"]??"")."/BACKUP_MANIFEST.sha256")
+      || !is_file(($s["recovery_archive"]??"")."/BACKUP_MANIFEST.sha256")) exit(1);
+  ' "$crash_state" || { echo "Recovery lost journal or backup before HTTP readiness" >&2; exit 1; }
+
+  cat > "$tmp/crash-router.php" <<'PHP_CRASH_ROUTER'
+<?php
+$public=$_SERVER['DOCUMENT_ROOT'];
+$path=parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
+$file=rtrim($public,'/').$path;
+if ($path!=='/' && (is_file($file) || is_dir($file))) return false;
+require $public.'/index.php';
+PHP_CRASH_ROUTER
+  crash_port=18758
+  php -S "127.0.0.1:$crash_port" -t "$crash_root/public" "$tmp/crash-router.php" > "$tmp/crash-server.log" 2>&1 &
+  crash_server_pid=$!
+  for attempt in $(seq 1 35); do
+    curl -fsS "http://127.0.0.1:$crash_port/up" >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+  curl -fsS "http://127.0.0.1:$crash_port/up" >/dev/null || { cat "$tmp/crash-server.log" >&2; exit 1; }
+  (cd "$crash_root" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:$crash_port" \
+    php update/Recover.php --recover) > "$tmp/crash-completed.log" 2>&1 || {
+    cat "$tmp/crash-completed.log" >&2; exit 1;
+  }
+  grep -F 'RECOVERY_COMPLETE=PASS' "$tmp/crash-completed.log" >/dev/null || {
+    cat "$tmp/crash-completed.log" >&2; exit 1;
+  }
+  kill "$crash_server_pid" >/dev/null 2>&1 || true
+  wait "$crash_server_pid" 2>/dev/null || true
+  crash_server_pid=""
+  [[ "$(tr -d '[:space:]' < "$crash_root/VERSION")" == "$old_version" ]] || exit 1
+  (cd "$crash_root" && sha256sum --check --strict "$tmp/crash-original-files.sha256" >/dev/null) || {
+    echo "Recovery changed protected .env/credential/config or unrelated bin files" >&2; exit 1;
+  }
+  [[ "$(cd "$crash_root" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')" == "$crash_ledger" ]] || exit 1
+  php -r '
+    $s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
+    if (($s["phase"]??"")!=="recovery-completed"
+      || ($s["migration_started"]??null)!==false
+      || !is_file(($s["backup"]??"")."/BACKUP_MANIFEST.sha256")
+      || !is_file(($s["recovery_archive"]??"")."/BACKUP_MANIFEST.sha256")) exit(1);
+  ' "$crash_state" || { echo "Recovered backup/journal was discarded" >&2; exit 1; }
+  echo "PASS: crash after config/ removal, exact old code restoration, denied unknown installer, journal and HTTP readiness verified."
 fi
 
 # Owner-local recovery of a stranded v2.1.2 -> candidate update uses the
