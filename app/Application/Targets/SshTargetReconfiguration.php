@@ -8,6 +8,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
+use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Support\CorrelationId;
@@ -22,6 +23,7 @@ final readonly class SshTargetReconfiguration
     public function __construct(
         private SshTargetVault $vault,
         private ActivityRecorder $activity,
+        private SshReverseRoutePolicy $reverseRoutes,
     ) {}
 
     public function revision(Target $target): string
@@ -43,6 +45,18 @@ final readonly class SshTargetReconfiguration
             throw new TargetConnectorFailure(__('Check the SSH host, port, user and independently verified server public host key.'), 'ssh_host');
         }
 
+        try {
+            $route = $this->reverseRoutes->approve(
+                (string) $target->target_id, (string) ($input['ssh_route_mode'] ?? 'direct'),
+                $input['ssh_reverse_port'] ?? null, $input['ssh_tunnel_identity'] ?? null,
+            );
+        } catch (SshTargetConnectionException) {
+            throw new TargetConnectorFailure(
+                __('The selected reverse route is not in the NL operator approval list for this exact Target, port and tunnel identity.'),
+                'ssh_reverse_port', 'reverse_route_not_approved',
+            );
+        }
+
         $method = (string) $input['ssh_auth_method'];
         if (! in_array($method, ['password', 'private_key'], true)
             || ($input['ssh_trust_confirmed'] ?? null) !== 'yes') {
@@ -60,9 +74,20 @@ final readonly class SshTargetReconfiguration
 
         return DB::transaction(function () use (
             $target, $input, $endpoint, $pin, $method, $password, $key, $passphrase,
+            $route,
         ): bool {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
             $config = SshTargetConfig::query()->where('target_record_id', $locked->getKey())->lockForUpdate()->firstOrFail();
+            if ($route !== null) {
+                try {
+                    $this->reverseRoutes->assertPortAvailable($route, (string) $locked->getKey());
+                } catch (SshTargetConnectionException) {
+                    throw new TargetConnectorFailure(
+                        __('The approved NL reverse listener is already enrolled for another Target. Assign a distinct loopback port and operator identity.'),
+                        'ssh_reverse_port', 'reverse_listener_conflict',
+                    );
+                }
+            }
             $credential = $this->credential($locked, lock: true);
             if ($locked->connector_type !== 'ssh_direct'
                 || ! hash_equals(
@@ -76,7 +101,19 @@ final readonly class SshTargetReconfiguration
                 || $endpoint->port !== $config->port
                 || $endpoint->username !== $config->username
                 || $pin->canonicalLine() !== $config->pinned_host_key
-                || $method !== $config->auth_method;
+                || $method !== $config->auth_method
+                || ($route === null ? 'direct' : 'reverse') !== ($config->route_mode ?? 'direct')
+                || $route?->listenerPort !== $config->reverse_listener_port
+                || $route?->tunnelIdentity !== $config->reverse_tunnel_identity;
+            $currentBindingRevision = (int) ($config->binding_revision ?? 0);
+            if ($bindingChanged && $currentBindingRevision >= 4294967295) {
+                throw new TargetConnectorFailure(
+                    __('The SSH binding revision is exhausted; do not reuse an older route or historical Job identity.'),
+                    'configuration_revision',
+                );
+            }
+            $nextBindingRevision = $currentBindingRevision + ($bindingChanged ? 1 : 0);
+
             $replacement = $method === 'password' ? $password : $key;
             if (! $bindingChanged && $replacement === null && $credential instanceof TargetCredential) {
                 return false;
@@ -120,6 +157,10 @@ final readonly class SshTargetReconfiguration
                 'username' => $endpoint->username,
                 'auth_method' => $method,
                 'pinned_host_key' => $pin->canonicalLine(),
+                'route_mode' => $route === null ? 'direct' : 'reverse',
+                'reverse_listener_port' => $route?->listenerPort,
+                'reverse_tunnel_identity' => $route?->tunnelIdentity,
+                'binding_revision' => $nextBindingRevision,
             ]);
             try {
                 $encrypted = $this->vault->seal($locked, $next, $secret, $newPassphrase);
@@ -147,6 +188,10 @@ final readonly class SshTargetReconfiguration
                 'username' => $endpoint->username,
                 'auth_method' => $method,
                 'pinned_host_key' => $pin->canonicalLine(),
+                'route_mode' => $route === null ? 'direct' : 'reverse',
+                'reverse_listener_port' => $route?->listenerPort,
+                'reverse_tunnel_identity' => $route?->tunnelIdentity,
+                'binding_revision' => $nextBindingRevision,
                 'verification_attempt_id' => null,
                 'observed_peer_ip' => null,
                 'observed_at' => null,

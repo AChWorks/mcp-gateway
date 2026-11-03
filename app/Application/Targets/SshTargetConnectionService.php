@@ -8,6 +8,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshConnectionAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
@@ -23,6 +24,7 @@ final readonly class SshTargetConnectionService
         private SshConnectionAdmission $admission,
         private SshVerificationState $verification,
         private ActivityRecorder $activity,
+        private SshReverseRoutePolicy $reverseRoutes,
     ) {}
 
     /** Authenticates a single pinned connection without running any command. */
@@ -50,10 +52,11 @@ final readonly class SshTargetConnectionService
             ): string {
                 $attemptId = $this->verification->begin($target, $config, $credential);
                 $material = $this->vault->open($target, $config, $credential);
+                $route = $this->reverseRoutes->forTarget($target, $config);
 
                 return $this->transport->authenticate(
                     $config->endpoint(), SshHostKeyPin::fromLine($config->pinned_host_key),
-                    $config->auth_method, $material['secret'], $material['passphrase'],
+                    $config->auth_method, $material['secret'], $material['passphrase'], $route,
                 );
             });
         } catch (SshTargetConnectionException $exception) {
@@ -72,6 +75,16 @@ final readonly class SshTargetConnectionService
 
         if (! is_string($attemptId)) {
             throw new SshTargetConnectionException('verification_superseded');
+        }
+
+        // Do not report a successful login over a listener revoked during
+        // KEX/login. The end-host pin alone does not grant route ownership.
+        try {
+            $this->reverseRoutes->forTarget($target, $config);
+        } catch (SshTargetConnectionException $exception) {
+            $this->verification->failed($target, $config, $credential, $attemptId, $exception->reason);
+
+            throw $exception;
         }
 
         // Short state transaction after network I/O; it checks the attempt

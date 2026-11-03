@@ -16,4 +16,9 @@ return [
         'decay_seconds' => (int) env('SSH_VERIFY_DECAY_SECONDS', 60),
         'lease_seconds' => (int) env('SSH_VERIFY_LEASE_SECONDS', 30),
     ],
+    // Explicit per-Target, per-loopback-port, per-tunnel-identity allowlist
+    // configured by the NL operator, not editable through a Target form.
+    // JSON object: {"target-id":{"port":22023,"tunnel_identity":"owner-approved-id"}}
+    // Missing/invalid/multi-owner allowlists fail closed. No secret in this key.
+    'reverse_approved_routes' => (string) env('SSH_REVERSE_APPROVED_ROUTES', ''),
 ];

@@ -15,6 +15,15 @@ stop_fixture() {
     return 0
   fi
 
+  # Stop the task-owned reverse client before stopping the isolated daemons.
+  # This must never select a process by name or touch another runner's SSH.
+  if [[ -f "${root}/reverse-client.pid" ]]; then
+    reverse_pid="$(cat "${root}/reverse-client.pid")"
+    if [[ "${reverse_pid}" =~ ^[0-9]+$ ]]; then
+      kill "${reverse_pid}" 2>/dev/null || true
+    fi
+  fi
+
   shopt -s nullglob
   for pidfile in "${root}"/*.pid; do
     pid="$(cat "${pidfile}" 2>/dev/null || true)"
@@ -65,7 +74,7 @@ fixture_user="${fixture_user:0:30}"
 root="${RUNNER_TEMP:-/tmp}/mcp-gateway-ssh-fixture-${run_id}"
 password='GatewaySshFixture!234'
 key_passphrase='fixture-key-passphrase'
-ports=(46231 46232 46233 46234 46235 46236 46237 46238 46239 46240 46241)
+ports=(46231 46232 46233 46234 46235 46236 46237 46238 46239 46240 46241 46242)
 
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   printf '::add-mask::%s\n' "${password}"
@@ -105,18 +114,26 @@ printf '%s:%s\n' "${fixture_user}" "${password}" | sudo chpasswd
 
 ssh-keygen -q -t ed25519 -N '' -f "${root}/host_ed25519"
 ssh-keygen -q -t rsa -b 3072 -N '' -f "${root}/host_rsa"
+# Separate cryptographic control-channel sshd identity (not the end Target).
+ssh-keygen -q -t ed25519 -N '' -f "${root}/control_host_ed25519"
+ssh-keygen -q -t rsa -b 3072 -N '' -f "${root}/control_host_rsa"
 ssh-keygen -q -t ed25519 -N '' -f "${root}/wrong_ed25519"
 ssh-keygen -q -t rsa -b 3072 -N "${key_passphrase}" -f "${root}/login_rsa"
+# Disposable no-pass key only for the restricted remote-forward control login.
+ssh-keygen -q -t ed25519 -N '' -f "${root}/reverse_tunnel_key"
 
 # Registration intentionally accepts only the canonical two-field public-key
 # form. ssh-keygen appends a local comment by default, so strip fixture-only
 # comments rather than weakening the production parser.
 awk '{print $1" "$2}' "${root}/host_ed25519.pub" > "${root}/host_ed25519.pin"
+awk '{print $1" "$2}' "${root}/control_host_ed25519.pub" > "${root}/control_host_ed25519.pin"
+! cmp -s "${root}/host_ed25519.pin" "${root}/control_host_ed25519.pin"
 awk '{print $1" "$2}' "${root}/host_rsa.pub" > "${root}/host_rsa.pin"
 awk '{print $1" "$2}' "${root}/wrong_ed25519.pub" > "${root}/wrong_ed25519.pin"
 
 sudo install -d -m 700 -o "${fixture_user}" -g "${fixture_user}" "/home/${fixture_user}/.ssh"
 sudo install -m 600 -o "${fixture_user}" -g "${fixture_user}"   "${root}/login_rsa.pub" "/home/${fixture_user}/.ssh/authorized_keys"
+awk '{print "restrict,port-forwarding,permitlisten=\"127.0.0.1:46250\" "$1" "$2}' "${root}/reverse_tunnel_key.pub" | sudo tee -a "/home/${fixture_user}/.ssh/authorized_keys" >/dev/null
 
 start_daemon() {
   local name="$1"
@@ -126,14 +143,22 @@ start_daemon() {
   local log="${root}/sshd-${name}.log"
   local pidfile="${root}/sshd-${name}.pid"
 
+  local allow_forwarding=no
+  local allow_password=yes
+  local host_key_prefix=host
+  if [[ "${name}" == "reverse-control" ]]; then
+    allow_forwarding=remote
+    allow_password=no
+    host_key_prefix=control_host
+  fi
   cat > "${config}" <<EOF_CONFIG
 Port ${port}
 ListenAddress 127.0.0.1
 PidFile ${pidfile}
-HostKey ${root}/host_ed25519
-HostKey ${root}/host_rsa
+HostKey ${root}/${host_key_prefix}_ed25519
+HostKey ${root}/${host_key_prefix}_rsa
 AuthorizedKeysFile .ssh/authorized_keys
-PasswordAuthentication yes
+PasswordAuthentication ${allow_password}
 PubkeyAuthentication yes
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
@@ -142,7 +167,7 @@ PermitRootLogin no
 UsePAM no
 AllowUsers ${fixture_user}
 AllowAgentForwarding no
-AllowTcpForwarding no
+AllowTcpForwarding ${allow_forwarding}
 GatewayPorts no
 PermitTunnel no
 X11Forwarding no
@@ -187,7 +212,51 @@ start_daemon delay-write "${ports[7]}" "Subsystem sftp /usr/bin/python3 /home/${
 start_daemon unexpected-ids "${ports[8]}" "Subsystem sftp /usr/bin/python3 /home/${fixture_user}/.mcp-hostile-sftp.py unexpected-ids"
 start_daemon watch-first-write "${ports[9]}" "Subsystem sftp /usr/bin/python3 /home/${fixture_user}/.mcp-hostile-sftp.py watch-first-write"
 start_daemon elevated-sftp "${ports[10]}" "Subsystem sftp /usr/bin/sudo -n /usr/lib/openssh/sftp-server"
+start_daemon reverse-control "${ports[11]}" \
+  "PermitListen 127.0.0.1:46250" "PermitOpen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
+# Client-initiated OpenSSH -R: listener and actual pinned end-host sshd
+# remain separate SSH authentication and trust domains.
+printf '[127.0.0.1]:%s %s\n' "${ports[11]}" "$(cat "${root}/control_host_ed25519.pin")" > "${root}/reverse_known_hosts"
+chmod 600 "${root}/reverse_known_hosts"
+ssh -NT -p "${ports[11]}" -i "${root}/reverse_tunnel_key" \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${root}/reverse_known_hosts" \
+  -o ExitOnForwardFailure=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+  -R "127.0.0.1:46250:127.0.0.1:${ports[0]}" \
+  "${fixture_user}@127.0.0.1" > "${root}/reverse-client.log" 2>&1 &
+reverse_pid="$!"
+printf '%s\n' "${reverse_pid}" > "${root}/reverse-client.pid"
+for _ in $(seq 1 50); do
+  if ! kill -0 "${reverse_pid}" 2>/dev/null; then
+    cat "${root}/reverse-client.log" >&2
+    echo 'OpenSSH -R client exited before opening the local fixture listener.' >&2
+    exit 1
+  fi
+  if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46250' 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46250' 2>/dev/null || {
+  cat "${root}/reverse-client.log" >&2
+  echo 'OpenSSH -R fixture listener failed to start.' >&2
+  exit 1
+}
 
+# A tunnel-control key must NOT provide a shell or execute even a
+# noninteractive command; -N/-R works without asking sshd for a session.
+if ssh -T -p "${ports[11]}" -i "${root}/reverse_tunnel_key" \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${root}/reverse_known_hosts" \
+  "${fixture_user}@127.0.0.1" 'printf REVERSE_CONTROL_EXEC_DENIED_PROOF' \
+  > "${root}/reverse-command-probe.log" 2>&1; then
+  echo 'The restricted remote-forward identity unexpectedly executed a command.' >&2
+  exit 1
+fi
+if grep -Fq 'REVERSE_CONTROL_EXEC_DENIED_PROOF' "${root}/reverse-command-probe.log"; then
+  echo 'The restricted tunnel key exposed remote shell/exec output.' >&2
+  exit 1
+fi
 
 if [[ -n "${env_file}" ]]; then
   cat >> "${env_file}" <<EOF_ENV
@@ -208,6 +277,9 @@ SSH_FIXTURE_FOREIGN_STAGING=/home/${fixture_user}/.mcp-stream-foreign
 SSH_FIXTURE_SYMLINK_STAGING=/home/${fixture_user}/.mcp-stream-symlink
 SSH_FIXTURE_MISSING_STAGING=/home/${fixture_user}/.mcp-stream-missing
 SSH_FIXTURE_PORT_MODERN=${ports[0]}
+SSH_FIXTURE_REVERSE_PORT=46250
+SSH_FIXTURE_REVERSE_CONTROL_PORT=${ports[11]}
+SSH_FIXTURE_REVERSE_CONTROL_HOST_PUB=${root}/control_host_ed25519.pin
 SSH_FIXTURE_PORT_LEGACY_RSA=${ports[1]}
 SSH_FIXTURE_PORT_WEAK_KEX=${ports[2]}
 SSH_FIXTURE_PORT_WEAK_CIPHER=${ports[3]}

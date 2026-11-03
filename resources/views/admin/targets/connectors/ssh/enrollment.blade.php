@@ -22,6 +22,43 @@
     </div>
 
     <div class="target-subsection">
+        <h3>{{ __('SSH connection route') }}</h3>
+        <p class="field-help">{{ __('Direct uses the public SSH TCP endpoint. Reverse uses only an NL operator-approved 127.0.0.1 listener created by the Target-initiated OpenSSH remote forward. The original registered server and host-key pin remain the authenticated identity.') }}</p>
+        <div class="field">
+            <label for="ssh_route_mode">{{ __('Connection route') }}</label>
+            <select id="ssh_route_mode" name="ssh_route_mode">
+                <option value="direct" @selected(old('ssh_route_mode', 'direct') === 'direct')>{{ __('Direct SSH (default)') }}</option>
+                @can('security.manage')
+                    <option value="reverse" @selected(old('ssh_route_mode') === 'reverse')>{{ __('Owner-approved Reverse SSH') }}</option>
+                @endcan
+            </select>
+            @error('ssh_route_mode')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+        </div>
+        @can('security.manage')
+            <div class="target-field-grid" data-ssh-reverse-route>
+                <div class="field">
+                    <label for="ssh_reverse_port">{{ __('Approved NL loopback listener port (1024–65535)') }}</label>
+                    <input id="ssh_reverse_port" name="ssh_reverse_port" type="number" min="1024" max="65535"
+                        value="{{ old('ssh_reverse_port') }}" @error('ssh_reverse_port') aria-invalid="true" @enderror>
+                    @error('ssh_reverse_port')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                </div>
+                <div class="field">
+                    <label for="ssh_tunnel_identity">{{ __('NL-approved tunnel identity') }}</label>
+                    <input id="ssh_tunnel_identity" name="ssh_tunnel_identity" type="text" maxlength="80"
+                        autocomplete="off" spellcheck="false" value="{{ old('ssh_tunnel_identity') }}">
+                    @error('ssh_tunnel_identity')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                </div>
+                <div class="field target-span-all">
+                    <label for="ssh_reverse_owner_password">{{ __('Current Owner password (Reverse SSH only)') }}</label>
+                    <input id="ssh_reverse_owner_password" name="current_password" type="password"
+                        maxlength="255" autocomplete="current-password">
+                    @error('current_password')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                    <p class="field-help">{{ __('No actual forward is installed or started by Gateway registration. Enter the password for Reverse enrollment, then independently start the restricted tunnel and verify SSH on Target Details.') }}</p>
+                </div>
+            </div>
+        @endcan
+    </div>
+    <div class="target-subsection">
         <h3>{{ __('Server identity') }}</h3>
         <p class="field-help" id="ssh-host-key-help">{{ __('The public HOST key identifies the server. This is different from your private LOGIN key. A verified host-key pin is required even when logging in with only a password.') }}</p>
         <div class="field">

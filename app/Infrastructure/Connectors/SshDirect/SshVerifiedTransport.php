@@ -26,10 +26,12 @@ final readonly class SshVerifiedTransport
     public function authenticate(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
+        ?SshReverseRoute $route = null,
     ): string {
         return $this->withAuthenticatedSession(
             $endpoint, $pin, $authMethod, $secret, $passphrase,
             static fn (SSH2 $ssh, string $peerIp): string => $peerIp,
+            $route,
         );
     }
 
@@ -43,10 +45,11 @@ final readonly class SshVerifiedTransport
     public function withAuthenticatedSession(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        Closure $operation,
+        Closure $operation, ?SshReverseRoute $route = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase, $operation, false,
+            null, $route,
         );
     }
 
@@ -54,7 +57,7 @@ final readonly class SshVerifiedTransport
     public function withAuthenticatedSftpSession(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        Closure $operation, ?int $deadlineNs = null,
+        Closure $operation, ?int $deadlineNs = null, ?SshReverseRoute $route = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase,
@@ -65,7 +68,7 @@ final readonly class SshVerifiedTransport
 
                 return $operation($ssh, $peerIp);
             },
-            true, $deadlineNs,
+            true, $deadlineNs, $route,
         );
     }
 
@@ -74,6 +77,7 @@ final readonly class SshVerifiedTransport
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
         Closure $operation, bool $requireSftp, ?int $deadlineNs = null,
+        ?SshReverseRoute $route = null,
     ): mixed {
         $privateKey = null;
         $rsaClientAuthentication = false;
@@ -93,40 +97,45 @@ final readonly class SshVerifiedTransport
         }
 
         $this->assertDeadline($deadlineNs);
-        try {
-            $approved = $this->policy->approvedDialAddresses($endpoint, $deadlineNs);
-        } catch (SshTargetConnectionException $exception) {
-            // A DNS deadline must retain its typed timeout, not turn into a
-            // misleading network policy denial.
-            throw $exception;
-        } catch (UnsafeOutboundTarget $exception) {
-            $this->assertDeadline($deadlineNs);
+        if ($route !== null) {
+            // Only an independently owner/operator-approved route may dial
+            // loopback. Never accept arbitrary local addresses or fallback
+            // to the remote endpoint if the forward disappears.
+            $approved = ['127.0.0.1'];
+            $dialPort = $route->listenerPort;
+        } else {
+            try {
+                $approved = $this->policy->approvedDialAddresses($endpoint, $deadlineNs);
+            } catch (SshTargetConnectionException $exception) {
+                throw $exception;
+            } catch (UnsafeOutboundTarget $exception) {
+                $this->assertDeadline($deadlineNs);
 
-            // Keep verified local address provenance; never infer a peer
-            // identity, send a credential, or change SSH retry semantics.
-            throw new SshTargetConnectionException('egress_denied', $exception->diagnostics());
-        } catch (Throwable) {
-            $this->assertDeadline($deadlineNs);
+                throw new SshTargetConnectionException('egress_denied', $exception->diagnostics());
+            } catch (Throwable) {
+                $this->assertDeadline($deadlineNs);
 
-            throw new SshTargetConnectionException('egress_denied');
+                throw new SshTargetConnectionException('egress_denied');
+            }
+            $dialPort = $endpoint->port;
         }
 
         $this->assertDeadline($deadlineNs);
 
-        // One approved connection attempt. In particular, never retry a key
-        // mismatch against a different DNS answer or silently rebind a Target.
+        // One approved numeric connection attempt, no fallback after key
+        // mismatch or loss of a specific reverse listener.
         $ip = $approved[0];
         if (@inet_pton($ip) === false) {
             throw new SshTargetConnectionException('egress_denied');
         }
-        $address = 'tcp://'.(str_contains($ip, ':') ? '['.$ip.']' : $ip).':'.$endpoint->port;
+        $address = 'tcp://'.(str_contains($ip, ':') ? '['.$ip.']' : $ip).':'.$dialPort;
         $errno = 0;
         $error = '';
         $socket = @stream_socket_client(
             $address, $errno, $error, $this->boundedTimeout(5, $deadlineNs), STREAM_CLIENT_CONNECT,
         );
         if (! is_resource($socket)) {
-            throw new SshTargetConnectionException('tcp_unreachable');
+            throw new SshTargetConnectionException($route === null ? 'tcp_unreachable' : 'reverse_listener_unavailable');
         }
 
         $ssh = null;
@@ -136,15 +145,15 @@ final readonly class SshVerifiedTransport
             $peerHost = is_string($peer) ? parse_url('tcp://'.$peer, PHP_URL_HOST) : false;
             $peerPort = is_string($peer) ? parse_url('tcp://'.$peer, PHP_URL_PORT) : false;
             $peerIp = is_string($peerHost) ? trim($peerHost, '[]') : '';
-            if ($peerPort !== $endpoint->port || @inet_pton($peerIp) === false
+            if ($peerPort !== $dialPort || @inet_pton($peerIp) === false
                 || ! hash_equals((string) inet_pton($ip), (string) inet_pton($peerIp))) {
                 throw new SshTargetConnectionException('tcp_peer_mismatch');
             }
 
             try {
                 $ssh = $requireSftp
-                    ? new SshSubsystemOnlySftp($socket, $endpoint->port, $this->boundedTimeout(8, $deadlineNs))
-                    : new SSH2($socket, $endpoint->port, 8);
+                    ? new SshSubsystemOnlySftp($socket, $dialPort, $this->boundedTimeout(8, $deadlineNs))
+                    : new SSH2($socket, $dialPort, 8);
                 $ssh->setTimeout($this->boundedTimeout(8, $deadlineNs));
                 if ($ssh instanceof SshSubsystemOnlySftp && $deadlineNs !== null) {
                     $ssh->startOperationDeadline($deadlineNs);

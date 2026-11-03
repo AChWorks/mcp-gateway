@@ -167,6 +167,7 @@ final class TargetController extends Controller
         Request $request,
         TargetConnectorRegistry $connectors,
         AccessControl $access,
+        AdministratorPasswordConfirmation $confirmation,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
         $user = $request->user();
@@ -190,6 +191,14 @@ final class TargetController extends Controller
                     'not_regex:/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/'],
                 ...$adapter->registrationRules(),
             ]);
+            if ($adapter->type() === 'ssh_direct'
+                && ($validated['ssh_route_mode'] ?? 'direct') === 'reverse') {
+                // Enrollment over an inbound-blocked route is an explicit
+                // Owner/password-gated act, not an Administrator's ordinary
+                // TargetsCreate permission.
+                Gate::authorize(GatewayPermission::SecurityManage->value);
+                $confirmation->confirm($request);
+            }
         } catch (ValidationException $exception) {
             // No SSH private key, password or passphrase in session old input.
             // Preserve JSON validation behavior for API-shaped requests.

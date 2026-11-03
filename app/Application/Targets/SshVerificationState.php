@@ -6,6 +6,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Support\CorrelationId;
@@ -60,7 +61,8 @@ final readonly class SshVerificationState
             $now = now();
             $currentConfig->forceFill([
                 'verification_attempt_id' => null,
-                'observed_peer_ip' => $peerIp,
+                // A local reverse listener is not the remote host IP.
+                'observed_peer_ip' => ($currentConfig->route_mode ?? 'direct') === 'reverse' ? null : $peerIp,
                 'observed_at' => $now,
             ])->save();
             $locked->forceFill([
@@ -116,6 +118,10 @@ final readonly class SshVerificationState
             && $currentCredential->purpose === SshTargetVault::PURPOSE
             && (string) $currentConfig->target_record_id === (string) $target->getKey()
             && hash_equals((string) $credential->encrypted_payload, (string) $currentCredential->encrypted_payload)
-            && hash_equals((string) $config->pinned_host_key, (string) $currentConfig->pinned_host_key);
+            && hash_equals((string) $config->pinned_host_key, (string) $currentConfig->pinned_host_key)
+            && hash_equals(
+                SshTargetBinding::hash($target, $config),
+                SshTargetBinding::hash($locked, $currentConfig),
+            );
     }
 }
