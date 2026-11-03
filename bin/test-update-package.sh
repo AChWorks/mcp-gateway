@@ -9,7 +9,7 @@ fi
 update_zip="$1"
 old_zip="$2"
 
-for command in unzip php curl find sha256sum mktemp cp rm grep awk sed; do
+for command in unzip php curl find sha256sum mktemp cp rm grep awk sed python3 cmp ln mv; do
   command -v "$command" >/dev/null 2>&1 || { echo "Required test command is unavailable: $command" >&2; exit 1; }
 done
 [[ -f "$update_zip" ]] || { echo "Missing update ZIP: $update_zip" >&2; exit 1; }
@@ -67,6 +67,14 @@ old_root_name="$(awk -F/ 'NF && $1 != "" {print $1; exit}' "$tmp/old-zip-list.tx
 unzip -q "$old_zip" -d "$tmp/old"
 target="$tmp/old/$old_root_name"
 [[ -d "$target" ]] || { echo "Old package root is missing." >&2; exit 1; }
+# Current released baselines predate this feature. Future supported rolling
+# baselines may already contain both scripts: verify BOTH old forms.
+old_managed_bin_present=0
+if [[ -f "$target/bin/managed-reverse-target.sh" && -f "$target/bin/managed-reverse-gateway.sh" ]]; then
+  old_managed_bin_present=1
+elif [[ -e "$target/bin/managed-reverse-target.sh" || -e "$target/bin/managed-reverse-gateway.sh" ]]; then
+  echo "Old release contains an incomplete managed bin/ contract." >&2; exit 1
+fi
 
 DB_HOST_VALUE="${UPDATE_TEST_DB_HOST:-127.0.0.1}"
 DB_PORT_VALUE="${UPDATE_TEST_DB_PORT:-3306}"
@@ -374,6 +382,11 @@ unzip -q "$update_zip" -d "$candidate"
 new_version="$(tr -d '[:space:]' < "$candidate/update/UPDATE_VERSION")"
 [[ -f "$candidate/public/update/index.php" && -f "$candidate/update/WebUpdater.php" ]] || { echo "Browser updater files are missing after extraction." >&2; exit 1; }
 [[ -f "$candidate/update/MANAGED_PUBLIC_PATHS" ]] || { echo "Gateway-owned public path manifest is missing after extraction." >&2; exit 1; }
+for script in managed-reverse-target.sh managed-reverse-gateway.sh; do
+  [[ -f "$candidate/update/payload/bin/$script" && ! -L "$candidate/update/payload/bin/$script" ]] || {
+    echo "Update ZIP is missing approved bin/$script." >&2; exit 1;
+  }
+done
 
 # Regression for the production incident: an unknown public/.user.ini is made
 # non-deletable by the updater user while Gateway-owned public files remain
@@ -385,6 +398,9 @@ protect_host_public_state "$rollback_target"
 rollback_user_ini_hash="$(sha256sum "$rollback_target/public/.user.ini" | awk '{print $1}')"
 rollback_host_file_hash="$(sha256sum "$rollback_target/public/css/host-managed.txt" | awk '{print $1}')"
 rollback_artisan_hash="$(sha256sum "$rollback_target/artisan" | awk '{print $1}')"
+if [[ "$old_managed_bin_present" -eq 1 ]]; then
+  (cd "$rollback_target" && sha256sum bin/managed-reverse-target.sh bin/managed-reverse-gateway.sh) > "$tmp/old-managed-bin.sha256"
+fi
 rollback_migrations_before="$(cd "$rollback_target" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')"
 rollback_zip="$rollback_target/mcp-gateway-update-v$new_version.zip"
 cp "$update_zip" "$rollback_zip"
@@ -423,6 +439,15 @@ php -r '
 
 [[ "$(tr -d '[:space:]' < "$rollback_target/VERSION")" == "$old_version" ]] || { echo "Pre-migration restore did not restore the previous VERSION." >&2; exit 1; }
 [[ "$(sha256sum "$rollback_target/artisan" | awk '{print $1}')" == "$rollback_artisan_hash" ]] || { echo "Pre-migration restore did not restore managed application files." >&2; exit 1; }
+if [[ "$old_managed_bin_present" -eq 1 ]]; then
+  (cd "$rollback_target" && sha256sum --check --strict "$tmp/old-managed-bin.sha256" >/dev/null) || {
+    echo "Pre-migration restore did not restore original managed scripts." >&2; exit 1;
+  }
+else
+  [[ ! -e "$rollback_target/bin/managed-reverse-target.sh" && ! -e "$rollback_target/bin/managed-reverse-gateway.sh" ]] || {
+    echo "Pre-migration restore left newly introduced Managed Reverse SSH scripts." >&2; exit 1;
+  }
+fi
 [[ "$(sha256sum "$rollback_target/public/.user.ini" | awk '{print $1}')" == "$rollback_user_ini_hash" ]] || { echo "Pre-migration restore changed host-managed public/.user.ini." >&2; exit 1; }
 [[ "$(sha256sum "$rollback_target/public/css/host-managed.txt" | awk '{print $1}')" == "$rollback_host_file_hash" ]] || { echo "Pre-migration restore changed an unknown file inside a shared public directory." >&2; exit 1; }
 [[ "$(cd "$rollback_target" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')" == "$rollback_migrations_before" ]] || { echo "Database migration state changed during the forced pre-migration restore regression." >&2; exit 1; }
@@ -702,6 +727,84 @@ inspect_package() {
       exit(1);
     }
   ' "$base" "$package" "$target/vendor/autoload.php"
+}
+
+# Keep an unrelated bin/ script while rejecting unsafe/adopted paths
+# BEFORE staging or any mutation of the old release. The update owns only its
+# two scripts, not this directory or the operator's other contents.
+mkdir -p "$target/bin"
+printf 'preserve-operator-owned-bin-file\n' > "$target/bin/operator-owned.sh"
+operator_bin_hash="$(sha256sum "$target/bin/operator-owned.sh" | awk '{print $1}')"
+if [[ "$old_managed_bin_present" -eq 1 ]]; then
+  cp -a "$target/bin/managed-reverse-target.sh" "$tmp/old-managed-target-script.sh"
+fi
+
+printf 'untrusted-host-script\n' > "$target/bin/managed-reverse-target.sh"
+if inspect_package "$target" "$target/update" >"$tmp/bin-collision.out" 2>&1; then
+  echo "Updater adopted an unrelated preexisting privileged script." >&2; exit 1;
+fi
+grep -F 'not an approved prior or current release artifact' "$tmp/bin-collision.out" >/dev/null || {
+  cat "$tmp/bin-collision.out" >&2; echo "Unowned bin/ conflict was not diagnosed." >&2; exit 1;
+}
+rm -f "$target/bin/managed-reverse-target.sh"
+
+ln -s "$target/VERSION" "$target/bin/managed-reverse-target.sh"
+if inspect_package "$target" "$target/update" >"$tmp/bin-symlink.out" 2>&1; then
+  echo "Updater accepted a symlinked managed script." >&2; exit 1;
+fi
+grep -F 'unexpected symbolic link' "$tmp/bin-symlink.out" >/dev/null || {
+  cat "$tmp/bin-symlink.out" >&2; echo "Unsafe bin/ symlink was not rejected." >&2; exit 1;
+}
+rm -f "$target/bin/managed-reverse-target.sh"
+if [[ "$old_managed_bin_present" -eq 1 ]]; then
+  cp -a "$tmp/old-managed-target-script.sh" "$target/bin/managed-reverse-target.sh"
+fi
+
+mv "$target/bin" "$tmp/owned-bin"
+ln -s "$tmp/owned-bin" "$target/bin"
+if inspect_package "$target" "$target/update" >"$tmp/bin-parent-symlink.out" 2>&1; then
+  echo "Updater followed a symlinked bin/ parent." >&2; exit 1;
+fi
+grep -F 'unsafe parent type or symlink' "$tmp/bin-parent-symlink.out" >/dev/null || {
+  cat "$tmp/bin-parent-symlink.out" >&2; echo "Unsafe bin/ parent was not rejected." >&2; exit 1;
+}
+rm -f "$target/bin"
+mv "$tmp/owned-bin" "$target/bin"
+
+bin_original_mode="$(stat -c '%a' "$target/bin")"
+chmod 0777 "$target/bin"
+if inspect_package "$target" "$target/update" >"$tmp/bin-mode.out" 2>&1; then
+  echo "Updater accepted world-writable bin/ parent." >&2; exit 1;
+fi
+grep -F 'world-writable' "$tmp/bin-mode.out" >/dev/null || {
+  cat "$tmp/bin-mode.out" >&2; echo "Unsafe bin/ mode was not diagnosed." >&2; exit 1;
+}
+chmod "$bin_original_mode" "$target/bin"
+
+# A forged package whose ordinary manifest was recomputed must STILL fail
+# the independently pinned privileged-script SHA256 check before mutation.
+cp -a "$target/update" "$tmp/forged-installer-update"
+printf '\n# unapproved privileged script mutation\n' >> "$tmp/forged-installer-update/payload/bin/managed-reverse-target.sh"
+(
+  cd "$tmp/forged-installer-update"
+  sha256sum payload/bin/managed-reverse-target.sh > "$tmp/new-target-sha-entry"
+  python3 - "$tmp/new-target-sha-entry" <<'PY_FIX_MANIFEST'
+from pathlib import Path
+import sys
+p=Path("manifest.sha256")
+entries=p.read_text().splitlines()
+replacement=Path(sys.argv[1]).read_text().rstrip()
+matches=[i for i,e in enumerate(entries) if e.endswith("  payload/bin/managed-reverse-target.sh")]
+assert len(matches)==1
+entries[matches[0]]=replacement
+p.write_text("\n".join(entries)+"\n")
+PY_FIX_MANIFEST
+)
+if inspect_package "$target" "$tmp/forged-installer-update" >"$tmp/forged-installer.out" 2>&1; then
+  echo "Updater accepted a modified installer with a recomputed package manifest." >&2; exit 1;
+fi
+grep -F 'immutable release-pinned SHA256' "$tmp/forged-installer.out" >/dev/null || {
+  cat "$tmp/forged-installer.out" >&2; echo "Pinned privileged installer SHA was not enforced." >&2; exit 1;
 }
 
 # Browser preflight must reject same-version and downgrade targets before mutation.
@@ -1339,6 +1442,34 @@ if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[0-2])$ ]]; then
   echo "Target-era $old_version upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant intact; published 2.1.2 also proves legacy revocation fencing, metadata unknown and rollback guard."
 fi
 [[ ! -e "$target/app/obsolete-update-test.txt" ]] || { echo "Stale managed file survived update." >&2; exit 1; }
+# Verify the supported Browser Update, not just a full deployment archive,
+# installed both scripts without changing unrelated operator bin/ entries.
+for script in managed-reverse-target.sh managed-reverse-gateway.sh; do
+  [[ -f "$target/bin/$script" && ! -L "$target/bin/$script" ]] || { echo "Browser Update did not install bin/$script." >&2; exit 1; }
+  cmp "$candidate/update/payload/bin/$script" "$target/bin/$script" || { echo "Browser Update changed bin/$script bytes." >&2; exit 1; }
+done
+[[ "$(sha256sum "$target/bin/operator-owned.sh" | awk '{print $1}')" == "$operator_bin_hash" ]] || {
+  echo "Browser Update modified an unrelated bin/ operator script." >&2; exit 1;
+}
+(
+  cd "$target"
+  php -r '
+    require "vendor/autoload.php";
+    $app = require "bootstrap/app.php";
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    $digest = app(App\Application\Targets\SshManagedReverseInstallCommand::class)->scriptDigest();
+    if (!hash_equals($digest, hash_file("sha256", "bin/managed-reverse-target.sh"))) {
+      throw new RuntimeException("Installed managed installer digest disagrees with its immutable configuration.");
+    }
+    echo "Installed Managed Reverse SSH scriptDigest PASS.\n";
+  '
+)
+installer_code="$(curl -sS -H "$https_header" -o "$tmp/served-installer.sh" -w '%{http_code}' "$base_url/reverse-ssh/installer/v1")"
+[[ "$installer_code" == 200 ]] || { echo "Installed managed installer endpoint was unavailable (HTTP $installer_code)." >&2; exit 1; }
+cmp "$candidate/update/payload/bin/managed-reverse-target.sh" "$tmp/served-installer.sh" || {
+  echo "Installed managed installer endpoint returned incorrect bytes." >&2; exit 1;
+}
+echo "Browser Update managed script delivery, immutable SHA and live installer HTTP endpoint PASS."
 [[ "$(sha256sum "$target/.env" | awk '{print $1}')" == "$env_hash_before" ]] || { echo ".env changed during update." >&2; exit 1; }
 [[ "$(sha256sum "$target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')" == "$private_hash_before" ]] || { echo "Persistent private state changed during update." >&2; exit 1; }
 (cd "$target" && sha256sum --check --strict "$tmp/signing-keys.before.sha256" >/dev/null) || { echo "Gateway OAuth or Bridge signing key changed during update." >&2; exit 1; }

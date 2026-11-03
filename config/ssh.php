@@ -30,5 +30,7 @@ return [
         // Committed digest from the exact installer delivered by the package.
         // The release/distribution process must independently verify this.
         'installer_sha256' => 'c159f54787503df9e56cb5abc2002e1dc16ae9f31759cee4c2b401e4dd9a13ef',
+        // The separately privileged Gateway bootstrap is also release-pinned.
+        'gateway_script_sha256' => 'eaf5960e16c27393b08b66afbfcb48d94a77e073dee57f7e3bc5ec8631632f28',
     ],
 ];

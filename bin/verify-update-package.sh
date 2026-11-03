@@ -121,6 +121,7 @@ LICENSE
 VERSION
 app
 artisan
+bin
 bootstrap
 composer.json
 config
@@ -132,6 +133,28 @@ vendor
 EOF_PAYLOAD
 find "$root/update/payload" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort > "$tmp/actual-payload-top.txt"
 diff -u "$tmp/expected-payload-top.txt" "$tmp/actual-payload-top.txt"
+
+# The Browser Update must ship exactly the two signed-off host scripts, not
+# development tooling. Validate both payload identity and pinned release SHA.
+bin_dir="$root/update/payload/bin"
+[[ -d "$bin_dir" && ! -L "$bin_dir" ]] || { echo "Update payload bin/ is missing or unsafe." >&2; exit 1; }
+for script in managed-reverse-target.sh managed-reverse-gateway.sh; do
+  [[ -f "$bin_dir/$script" && ! -L "$bin_dir/$script" ]] || { echo "Update payload is missing approved host script: $script" >&2; exit 1; }
+  bash -n "$bin_dir/$script"
+done
+[[ "$(find "$bin_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" == "$(printf '%s\n' managed-reverse-gateway.sh managed-reverse-target.sh)" ]] || {
+  echo "Update payload contains unexpected bin/ content." >&2; exit 1;
+}
+php -r '
+$cfg=file_get_contents($argv[1]);
+foreach (["installer_sha256"=>"managed-reverse-target.sh", "gateway_script_sha256"=>"managed-reverse-gateway.sh"] as $setting=>$file) {
+  if (!preg_match("/\x27".preg_quote($setting, "/")."\x27\s*=>\s*\x27([a-f0-9]{64})\x27/", $cfg, $m)
+      || !hash_equals($m[1], hash_file("sha256", $argv[2]."/".$file))) {
+    fwrite(STDERR, "Managed Reverse SSH script does not match the release-pinned digest: ".$file."\n");
+    exit(1);
+  }
+}
+' "$root/update/payload/config/ssh.php" "$bin_dir"
 
 [[ ! -e "$root/update/payload/.env" ]] || { echo "Update payload must not contain .env." >&2; exit 1; }
 [[ ! -e "$root/update/payload/storage" ]] || { echo "Update payload must not contain storage." >&2; exit 1; }

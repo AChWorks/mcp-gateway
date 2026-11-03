@@ -37,6 +37,15 @@ for entry in .env.example LICENSE VERSION app artisan bootstrap composer.json co
   cp -a "$runtime_tree/$entry" "$stage/update/payload/"
 done
 
+# Only two vetted privileged installers are Gateway-managed in bin/. Never
+# publish the full developer bin/ tree or claim ownership of operator files.
+mkdir -p "$stage/update/payload/bin"
+for script in managed-reverse-target.sh managed-reverse-gateway.sh; do
+  source="$runtime_tree/bin/$script"
+  [[ -f "$source" && ! -L "$source" ]] || { echo "Runtime is missing a regular managed Reverse SSH script: $script" >&2; exit 1; }
+  cp -a "$source" "$stage/update/payload/bin/$script"
+done
+
 cp -a "$repo_root/bin/mcp-gateway-web-updater.php" "$stage/update/WebUpdater.php"
 cp -a "$repo_root/bin/mcp-gateway-web-recovery.php" "$stage/update/Recover.php"
 cp -a "$repo_root/bin/update-managed-public-paths.txt" "$stage/update/MANAGED_PUBLIC_PATHS"

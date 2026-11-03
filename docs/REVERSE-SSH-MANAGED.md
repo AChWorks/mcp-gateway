@@ -26,7 +26,17 @@ converted to a generic SSH proxy or DNS bypass.
 ## One-time host bootstrap (separate privileged approval)
 
 Obtain and independently verify an immutable MCP Gateway release package.
-The package ships bin/managed-reverse-gateway.sh, not a mutable script fetched
+The full-install package and the supported Browser Update ZIP both ship **exactly**
+`bin/managed-reverse-target.sh` and `bin/managed-reverse-gateway.sh`.
+`config/ssh.php` pins SHA256 identities of **both** scripts; the update
+manifest and installed-runtime verification cover the same files. Browser
+Update creates `bin/` on older installations if missing, but owns only those
+two names, not unrelated operator content. Existing unverified files,
+symlinks or unsafe directory types block mutation. On an update failure
+before migration, verified code restoration removes newly installed scripts
+that did not exist previously (or restores old approved bytes), without
+removing unrelated `bin/` files. The package ships
+`bin/managed-reverse-gateway.sh`, not a mutable script fetched
 from main. With separately approved NL host changes, preflight first:
 
     sudo bash /path/to/verified-release/bin/managed-reverse-gateway.sh --preflight --app /real/gateway/path --php-user www --port 7770

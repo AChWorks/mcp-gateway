@@ -111,12 +111,14 @@ bash -n "$root/bin/managed-reverse-target.sh"
 bash -n "$root/bin/managed-reverse-gateway.sh"
 php -r '
 $cfg = file_get_contents($argv[1]);
-if (!preg_match("/.installer_sha256. => .([a-f0-9]{64})./", $cfg, $m)
- || !hash_equals($m[1], hash_file("sha256", $argv[2]))) {
-    fwrite(STDERR, "Target installer sha256 mismatches its immutable release manifest.\n");
-    exit(1);
+foreach (["installer_sha256" => "managed-reverse-target.sh", "gateway_script_sha256" => "managed-reverse-gateway.sh"] as $setting => $script) {
+    if (!preg_match("/\x27".preg_quote($setting, "/")."\x27\s*=>\s*\x27([a-f0-9]{64})\x27/", $cfg, $m)
+        || !hash_equals($m[1], hash_file("sha256", $argv[2]."/".$script))) {
+        fwrite(STDERR, "Managed Reverse SSH installer sha256 mismatches immutable release identity: ".$script."\n");
+        exit(1);
+    }
 }
-' "$root/config/ssh.php" "$root/bin/managed-reverse-target.sh"
+' "$root/config/ssh.php" "$root/bin"
 
 [[ ! -e "$root/composer.lock" ]] || { echo "Source composer.lock must not be shipped in the deployment artifact." >&2; exit 1; }
 [[ ! -e "$root/vendor/bin" ]] || { echo "vendor/bin must not be shipped in the deployment artifact." >&2; exit 1; }
