@@ -1185,13 +1185,39 @@ final class AdminUiPresentationTest extends TestCase
         $xpath = $xpathFor(view('admin.access-batches.index', [
             ...$groupPage->original->getData(), 'errors' => $errors,
         ])->render());
-        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="access-members-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][self::p[contains(concat(" ",normalize-space(@class)," ")," alert ")]]/following-sibling::*[1][self::form])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="access-members-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][self::div[contains(concat(" ",normalize-space(@class)," ")," alert ")]]/following-sibling::*[1][self::form])'));
         Target::query()->create([
             'target_id' => 'heading-table-sibling', 'display_name' => 'Heading table sibling',
             'connector_type' => 'wp_ai_bridge', 'connection_state' => 'error',
         ]);
         $xpath = $xpathFor($this->withSession(['errors' => new ViewErrorBag])->get('/admin')->assertOk()->getContent());
         self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-labelledby="needs-review-title"]/div[contains(concat(" ",normalize-space(@class)," ")," section-heading ")]/following-sibling::*[1][contains(concat(" ",normalize-space(@class)," ")," table-wrap ")])'));
+    }
+
+    public function test_shared_operation_feedback_has_one_accessible_shell_across_admin_sections(): void
+    {
+        $this->actingAs($this->owner());
+
+        foreach (['/admin/targets', '/admin/users', '/admin/target-groups', '/admin/operations'] as $url) {
+            $html = $this->withSession(['status' => 'The fixture operation was saved.'])
+                ->get($url)->assertOk()
+                ->assertSee('The fixture operation was saved.')
+                ->getContent();
+
+            $document = new \DOMDocument;
+            $previous = libxml_use_internal_errors(true);
+            $document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            $xpath = new \DOMXPath($document);
+            self::assertSame(1, (int) $xpath->evaluate('count(//main[@id="main-content"]/*[@id="admin-feedback"][@role="group"][@tabindex="-1"][@autofocus])'), $url);
+            self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="admin-feedback"]/div[@role="status"])'), $url);
+            self::assertSame(0, (int) $xpath->evaluate('count(//*[@id="admin-feedback"]//div[@role="alert"])'), $url);
+        }
+
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+        self::assertStringContainsString('.admin-feedback {', $css);
+        self::assertStringContainsString('[data-admin-feedback]:focus {', $css);
     }
 
     public function test_user_create_and_edit_rejections_expose_shared_unsaved_alert(): void

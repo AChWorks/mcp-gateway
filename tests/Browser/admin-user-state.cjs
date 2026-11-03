@@ -146,7 +146,12 @@ async function run(browser, javaScriptEnabled) {
         await page.locator('#current_password').fill(ownerPassword);
         await post(page, 'Create user');
         await page.getByRole('heading', { name, exact: true }).waitFor();
-        const editUrl = page.url();
+        // Native PRG can temporarily expose a one-time result query until
+        // deferred navigation JS removes it. A saved canonical edit link must
+        // never reuse that consumed token or turn preview_role into its value.
+        const canonicalEdit = new URL(page.url());
+        canonicalEdit.searchParams.delete('_admin_feedback');
+        const editUrl = canonicalEdit.href;
         await state(page, { role: 'operator', scope: 'selected', enabled: true, ai: true, denials: saved });
         await assertRestrictionSummary(page, 'Saved', saved.length);
         await reopen(page, name);

@@ -33,7 +33,7 @@ final class OperationalSettingsAdminTest extends TestCase
 
     public function test_guest_and_nonowner_cannot_view_or_change_gateway_operational_settings(): void
     {
-        $this->get('/admin/operations')->assertRedirect('/admin/login');
+        $this->get('/admin/operations')->assertAdminRedirect('/admin/login');
 
         foreach (['administrator', 'operator', 'viewer'] as $role) {
             $this->actingAs($this->account($role))
@@ -101,7 +101,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '0',
             'values' => ['wp_response_kib' => '192', 'wp_readonly_response_kib' => '512'],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect(route('admin.operations.index'));
+        ])->assertAdminRedirect(route('admin.operations.index'));
 
         self::assertSame(192 * 1024, (new OperationalSettings)->responseLimitBytes(false));
         self::assertSame(512 * 1024, (new OperationalSettings)->responseLimitBytes(true));
@@ -126,7 +126,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '1',
             'values' => ['wp_response_kib' => '', 'wp_readonly_response_kib' => ''],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect(route('admin.operations.index'));
+        ])->assertAdminRedirect(route('admin.operations.index'));
 
         self::assertSame(65537, (new OperationalSettings)->responseLimitBytes(false));
         self::assertSame(262144, (new OperationalSettings)->responseLimitBytes(true));
@@ -142,7 +142,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '0',
             'values' => ['wp_response_kib' => '192', 'wp_readonly_response_kib' => '512'],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
 
         $body = str_repeat('a', 130 * 1024);
         Http::fake(fn (Request $request) => Http::response($body, 200));
@@ -198,7 +198,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '0',
             'values' => ['wp_response_kib' => '128', 'wp_readonly_response_kib' => '512'],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $this->put('/admin/operations', [
             'version' => '0',
             'values' => ['wp_response_kib' => '256', 'wp_readonly_response_kib' => '512'],
@@ -233,7 +233,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'wp_request_timeout_seconds' => '18',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect(route('admin.operations.index'));
+        ])->assertAdminRedirect(route('admin.operations.index'));
 
         self::assertSame(['connect' => 6, 'request' => 18],
             (new OperationalSettings)->httpTimeoutsSeconds());
@@ -254,7 +254,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '1',
             'values' => ['wp_response_kib' => '128', 'wp_readonly_response_kib' => ''],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['connect' => 6, 'request' => 18],
             (new OperationalSettings)->httpTimeoutsSeconds());
         self::assertSame(128 * 1024, (new OperationalSettings)->responseLimitBytes(false));
@@ -269,7 +269,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'wp_request_timeout_seconds' => '',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['connect' => 2, 'request' => 5],
             (new OperationalSettings)->httpTimeoutsSeconds());
         self::assertSame([], (new OperationalSettings)->state()['overrides']);
@@ -353,7 +353,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'wp_request_timeout_seconds' => '',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect(route('admin.operations.index'));
+        ])->assertAdminRedirect(route('admin.operations.index'));
         self::assertSame(128 * 1024, (new OperationalSettings)->responseLimitBytes(false));
         self::assertSame(['connect' => 12, 'request' => 12],
             (new OperationalSettings)->httpTimeoutsSeconds());
@@ -388,7 +388,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'wp_request_timeout_seconds' => '2',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
 
         $resolver = new class implements DnsResolver
         {
@@ -424,7 +424,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'wp_request_timeout_seconds' => '',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame('ready', app(SafeHttpClient::class)
             ->get('https://wp.example.test/metadata')->body);
         Http::assertSentCount(1);
@@ -456,7 +456,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'ssh_transfer_max_seconds' => '20',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['max_bytes' => 2097152, 'max_seconds' => 20],
             (new OperationalSettings)->sshTransferLimits());
         $row = DB::table('operational_settings')->first();
@@ -478,7 +478,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'wp_request_timeout_seconds' => '',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['max_bytes' => 2097152, 'max_seconds' => 20],
             (new OperationalSettings)->sshTransferLimits());
 
@@ -508,7 +508,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'ssh_transfer_max_seconds' => '',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['max_bytes' => 8388608, 'max_seconds' => 30],
             (new OperationalSettings)->sshTransferLimits());
         self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
@@ -527,7 +527,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $this->put('/admin/operations', [
             'version' => '0', 'values' => $values,
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(3600, (new OperationalSettings)->sshTransferLimits()['max_seconds']);
         self::assertSame(600, (new OperationalSettings)->sshCommandLimits()['max_seconds']);
         self::assertSame(3600, (int) DB::table('operational_settings')->value('ssh_transfer_max_seconds'));
@@ -538,7 +538,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '1',
             'values' => array_slice($values, 0, 4, true),
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(3600, (new OperationalSettings)->sshTransferLimits()['max_seconds']);
         self::assertSame(600, (new OperationalSettings)->sshCommandLimits()['max_seconds']);
 
@@ -600,7 +600,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'ssh_command_max_kib' => '64',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['max_bytes' => 65536, 'max_seconds' => 30],
             (new OperationalSettings)->sshCommandLimits());
         self::assertSame([], json_decode((string) DB::table('operational_settings')->value('overrides'), true));
@@ -621,7 +621,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'ssh_transfer_max_seconds' => '',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['max_bytes' => 65536, 'max_seconds' => 30],
             (new OperationalSettings)->sshCommandLimits());
 
@@ -647,7 +647,7 @@ final class OperationalSettingsAdminTest extends TestCase
                 'ssh_command_max_kib' => '',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['max_bytes' => 8192, 'max_seconds' => 15],
             (new OperationalSettings)->sshCommandLimits());
         self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
@@ -673,7 +673,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $this->put('/admin/operations', [
             'version' => '0', 'values' => $blank,
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         $changed = [
             'max_active_per_user' => 25, 'max_runtime_seconds' => 86400,
             'retention_hours' => 168, 'preparing_grace_seconds' => 240,
@@ -687,7 +687,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '1',
             'values' => array_fill_keys(array_slice(array_keys(OperationalSettings::allowed()), 0, 8), ''),
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
         self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
 
@@ -697,7 +697,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $this->put('/admin/operations', [
             'version' => '1', 'values' => $preScriptForm,
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame($changed, (new OperationalSettings)->sshJobLimits());
         self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
 
@@ -721,7 +721,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '1',
             'values' => array_fill_keys(array_keys(OperationalSettings::allowed()), ''),
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame($defaults, (new OperationalSettings)->sshJobLimits());
     }
 
@@ -752,7 +752,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $this->put('/admin/operations', [
             'version' => '0', 'values' => $values,
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
 
         $limits = new OperationalSettings;
         self::assertSame(['max_bytes' => 524288, 'max_seconds' => 360], $limits->sshCommandLimits());
@@ -771,7 +771,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $this->put('/admin/operations', [
             'version' => '1', 'values' => $legacy,
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(524288, (new OperationalSettings)->sshFileLimits()['read_bytes']);
         self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
 
@@ -784,7 +784,7 @@ final class OperationalSettingsAdminTest extends TestCase
         $this->put('/admin/operations', [
             'version' => '1', 'values' => array_fill_keys(array_keys(OperationalSettings::allowed()), ''),
             'current_password' => 'CorrectHorse!234',
-        ])->assertRedirect();
+        ])->assertAdminRedirect();
         self::assertSame(['max_bytes' => 8192, 'max_seconds' => 15],
             (new OperationalSettings)->sshCommandLimits());
         self::assertSame(['stdout_bytes' => 16384, 'stderr_bytes' => 8192],

@@ -18,6 +18,39 @@
     // A bounced input/change event is not evidence of an unsaved edit.
     // Baselines belong to the rendered form instance, including Turbo visits.
     const formBaselines = new WeakMap();
+    const presentedFeedback = new WeakSet();
+
+    // Native POSTs deliberately use server redirects, not an AJAX toast queue.
+    // Their response can restore the previous scroll position below a message
+    // rendered at the top of the page. Bring only new, server-rendered results
+    // into view, and never resurrect a consumed flash from browser storage.
+    function revealFeedback(root = document) {
+        const feedback = root.querySelector('[data-admin-feedback]');
+        if (!feedback || presentedFeedback.has(feedback) || feedback.hidden) return;
+        if (location.hash && location.hash !== '#' + feedback.id) {
+            // Respect an explicit, valid in-document anchor.
+            try {
+                if (document.getElementById(decodeURIComponent(location.hash.slice(1)))) return;
+            } catch { /* An invalid fragment does not suppress operation feedback. */ }
+        }
+        if (document.hidden) return;
+        presentedFeedback.add(feedback);
+        requestAnimationFrame(() => {
+            if (!feedback.isConnected || feedback.hidden) return;
+            feedback.focus({ preventScroll: true });
+            feedback.scrollIntoView({ block: 'start', behavior: 'auto' });
+        });
+    }
+
+    // The URL token has already been claimed by the server. Keep the current
+    // history entry (and its Turbo restoration state), but remove the opaque
+    // one-time query after document load; a Back visit cannot replay feedback.
+    function clearFeedbackUrlToken() {
+        const url = new URL(location.href);
+        if (!url.searchParams.has('_admin_feedback')) return;
+        url.searchParams.delete('_admin_feedback');
+        history.replaceState(history.state, '', url.href);
+    }
 
     function failedDraftFields() {
         try {
@@ -51,6 +84,11 @@
             // Session/auth tokens, optimistic revision hashes, and generated
             // hidden metadata are not human-editable form content.
             if (['hidden', 'button', 'submit', 'reset', 'image'].includes(type)) return [];
+            // Out-of-Role Deny choices cannot be submitted. Ignore automatic
+            // SSH safe-default seeding after a Role is reverted, but preserve
+            // deliberate edits staged while the permission was available.
+            if (control.disabled && control.closest('[data-user-role-choice]')
+                && control.dataset.adminStagedEdit !== 'true') return [];
             let value;
             if (type === 'checkbox' || type === 'radio') value = control.checked;
             else if (type === 'file') value = Array.from(control.files || [],
@@ -250,6 +288,8 @@
             message(document.title, false);
         }
         navigating = false;
+        revealFeedback();
+        clearFeedbackUrlToken();
     });
 
     document.addEventListener('turbo:fetch-request-error', () => {
@@ -268,10 +308,21 @@
     document.addEventListener('gateway:admin-ready', () => {
         captureBaselines();
         enhanceLinks();
+        revealFeedback();
+        clearFeedbackUrlToken();
     });
-    document.addEventListener('DOMContentLoaded', () => captureBaselines(), { once: true });
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) revealFeedback();
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+        captureBaselines();
+        revealFeedback();
+        clearFeedbackUrlToken();
+    }, { once: true });
     if (document.readyState !== 'loading') {
         captureBaselines();
         enhanceLinks();
+        revealFeedback();
+        clearFeedbackUrlToken();
     }
 })();

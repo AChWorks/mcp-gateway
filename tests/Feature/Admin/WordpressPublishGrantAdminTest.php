@@ -28,18 +28,18 @@ final class WordpressPublishGrantAdminTest extends TestCase
         $this->post($url, [...$input, 'current_password' => 'wrong'])->assertSessionHasErrors('current_password');
         self::assertSame(0, DB::table('wordpress_publish_group_grants')->count());
 
-        $this->post($url, $input)->assertRedirect($url)->assertSessionHasNoErrors();
+        $this->post($url, $input)->assertAdminRedirect($url)->assertSessionHasNoErrors();
         $this->assertDatabaseHas('wordpress_publish_group_grants', [
             'user_id' => $publisher->id, 'target_group_id' => $group->id,
         ]);
-        $this->post($url, $input)->assertRedirect($url);
+        $this->post($url, $input)->assertAdminRedirect($url);
         self::assertSame(1, DB::table('wordpress_publish_group_grants')->count());
 
         $id = DB::table('wordpress_publish_group_grants')->value('id');
         $delete = route('admin.users.publishing.destroy', ['user' => $publisher->id, 'grant' => $id]);
         $this->delete($delete, ['current_password' => 'wrong'])->assertSessionHasErrors('current_password');
         self::assertSame(1, DB::table('wordpress_publish_group_grants')->count());
-        $this->delete($delete, ['current_password' => 'CorrectHorse!234'])->assertRedirect($url);
+        $this->delete($delete, ['current_password' => 'CorrectHorse!234'])->assertAdminRedirect($url);
         self::assertSame(0, DB::table('wordpress_publish_group_grants')->count());
         $this->assertDatabaseHas('activity_events', ['operation' => 'wordpress-publish-grant-revoke']);
     }

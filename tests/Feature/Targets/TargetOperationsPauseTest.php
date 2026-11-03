@@ -51,9 +51,9 @@ final class TargetOperationsPauseTest extends TestCase
         $this->actingAs($owner)->get('/admin/targets')->assertOk()
             ->assertSee('Pause')->assertSee('Gateway operations');
         $this->post(route('admin.targets.operations.update', $wp), ['state' => 'paused'])
-            ->assertRedirect(route('admin.targets.show', $wp));
+            ->assertAdminRedirect(route('admin.targets.show', $wp));
         $this->post(route('admin.targets.operations.update', $wp), ['state' => 'paused'])
-            ->assertRedirect(route('admin.targets.show', $wp));
+            ->assertAdminRedirect(route('admin.targets.show', $wp));
 
         self::assertTrue($wp->fresh()->operations_paused);
         self::assertFalse($ssh->fresh()->operations_paused);
@@ -65,7 +65,7 @@ final class TargetOperationsPauseTest extends TestCase
             ->assertSee('Resume Target operations')->assertSee('New Gateway operations against this Target are blocked');
 
         $this->post(route('admin.targets.operations.update', $wp), ['state' => 'enabled'])
-            ->assertRedirect(route('admin.targets.show', $wp));
+            ->assertAdminRedirect(route('admin.targets.show', $wp));
         self::assertFalse($wp->fresh()->operations_paused);
         self::assertSame('opaque-fixture-not-a-real-token', $credential->fresh()->encrypted_payload);
         self::assertSame(1, DB::table('activity_events')->where('operation', 'target-operations-resume')->count());
@@ -171,7 +171,7 @@ final class TargetOperationsPauseTest extends TestCase
         config()->set('ssh.file_transfer.enabled', true);
         $this->actingAs($owner)->post(route('admin.targets.ssh-files.download', $ssh), [
             'path' => '/no-remote',
-        ])->assertRedirect()->assertSessionHasErrors('file_exchange');
+        ])->assertAdminRedirect()->assertSessionHasErrors('file_exchange');
     }
 
     public function test_pause_migration_rollback_refuses_fail_open_when_a_target_is_paused(): void

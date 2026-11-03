@@ -21,14 +21,23 @@ return new class extends Migration
 
     public function down(): void
     {
-        // Removing the route columns from an active Reverse Target strands
-        // route-bound encrypted secrets. Retained Job rows (including unknown
-        // results) may still reference a prior Reverse binding after rotation.
-        // Require explicit migration retirement/reconciliation, never silently
-        // reinterpret a Reverse host as a Direct one.
-        if (DB::table('ssh_direct_target_configs')->where('route_mode', 'reverse')->exists()
-            || DB::table('ssh_command_jobs')->exists()) {
-            throw new RuntimeException('Reconcile all SSH Jobs and rotate all Reverse SSH Targets to Direct before rollback.');
+        // Both active Reverse routes AND reconfigured Direct routes can have
+        // credentials sealed to a positive binding revision. Dropping that
+        // revision would make the legitimate ciphertext unreadable by the
+        // legacy Direct binding, even if no Reverse route or Job remains.
+        // Retained Jobs also require explicit no-replay reconciliation.
+        // Refuse BEFORE dropping any columns; never silently reset revisions
+        // or attempt an unverified secret conversion during schema rollback.
+        if (DB::table('ssh_direct_target_configs')
+            ->where('route_mode', 'reverse')
+            ->orWhere('binding_revision', '>', 0)
+            ->exists() || DB::table('ssh_command_jobs')->exists()) {
+            throw new RuntimeException(
+                'SSH route schema rollback refused: active Reverse routes, positive SSH binding revisions, '
+                .'or retained SSH Jobs remain. Reconcile Jobs and routes; keep the current schema for '
+                .'revision-bound encrypted credentials until an independently verified downgrade '
+                .'conversion and recovery plan is available.'
+            );
         }
         Schema::table('ssh_direct_target_configs', static function (Blueprint $table): void {
             $table->dropUnique('ssh_reverse_unique_port');

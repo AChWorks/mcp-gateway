@@ -158,7 +158,10 @@ final class DcrRegistrationConcurrencyTest extends TestCase
         // Consent holds the profile lock while creating its authorization.
         // Registration may have selected the orphan under MariaDB's older
         // transaction snapshot, but MUST re-read grants after acquiring the
-        // profile lock. This test proves that exact race under two PDO sessions.
+        // profile lock. MariaDB 12.3 can also raise ER_CHECKREAD 1020 on the
+        // stale locking read: registration must retry from a fresh transaction,
+        // without retiring the freshly authorized client or admitting a new one.
+        // This test proves that exact race under two PDO sessions.
         $consent = $this->newDatabaseConnection();
         $consent->beginTransaction();
         $locked = $consent->prepare('SELECT profile_key FROM oauth_client_profiles WHERE profile_key=? FOR UPDATE');

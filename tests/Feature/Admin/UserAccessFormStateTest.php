@@ -35,7 +35,7 @@ final class UserAccessFormStateTest extends TestCase
         ];
         $response = $this->actingAs($owner)->post('/admin/users', $payload)->assertSessionHasNoErrors();
         $user = User::query()->where('email', $payload['email'])->sole();
-        $response->assertRedirect(route('admin.users.edit', ['user' => $user->id], false));
+        $response->assertAdminRedirect(route('admin.users.edit', ['user' => $user->id], false));
         $page = $this->get('/admin/users/'.$user->id.'/edit')->assertOk();
         $this->assertControls($page, 'operator', 'selected', false, true);
         self::assertSame($this->storedDenials($user), $this->checkedDenials($page));
@@ -50,7 +50,7 @@ final class UserAccessFormStateTest extends TestCase
             ...$this->fields(), 'target_scope_mode' => 'all',
             'access_enabled' => '0', 'ai_access_enabled' => '1',
             'denied_permissions' => [GatewayPermission::ActivityView->value],
-        ])->assertSessionHasNoErrors()->assertRedirect('/admin/users/'.$user->id.'/edit');
+        ])->assertSessionHasNoErrors()->assertAdminRedirect('/admin/users/'.$user->id.'/edit');
         $page = $this->get('/admin/users/'.$user->id.'/edit')->assertOk();
         $this->assertControls($page, 'viewer', 'all', false, true);
         self::assertSame([GatewayPermission::ActivityView->value], $this->checkedDenials($page));
@@ -71,12 +71,12 @@ final class UserAccessFormStateTest extends TestCase
 
         // Removing the SSH read Deny would be a high-trust grant; without
         // Owner acknowledgement the POST fails and returns an unsaved draft.
-        $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
+        $result = $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
             ...$this->fields('operator'), 'name' => $user->name, 'email' => $user->email,
             'denied_permissions' => $attempted,
-        ])->assertRedirect($url)->assertSessionHasErrors('confirm_ssh_permission_changes');
+        ])->assertAdminRedirect($url)->assertSessionHasErrors('confirm_ssh_permission_changes');
 
-        $draft = $this->get($url)->assertOk()->assertSee('User changes were not saved.');
+        $draft = $this->get((string) $result->headers->get('Location'))->assertOk()->assertSee('User changes were not saved.');
         self::assertSame($attempted, $this->checkedDenials($draft));
         self::assertSame(1, $this->document($draft)->query('//*[@data-user-save-failed]')->length);
         self::assertSame(1, $this->document($draft)->query('//*[@data-user-permission-state="submitted"]')->length);
@@ -161,14 +161,14 @@ final class UserAccessFormStateTest extends TestCase
         $user = $this->viewer();
         $url = '/admin/users/'.$user->id.'/edit';
 
-        $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
+        $result = $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
             ...$this->fields(), 'denied_permissions' => [
                 GatewayPermission::TargetsView->value,
                 GatewayPermission::UsersManage->value,
             ],
-        ])->assertRedirect($url)->assertSessionHasErrors('denied_permissions');
+        ])->assertAdminRedirect($url)->assertSessionHasErrors('denied_permissions');
 
-        $draft = $this->get($url)->assertOk()->assertSee('User changes were not saved.')
+        $draft = $this->get((string) $result->headers->get('Location'))->assertOk()->assertSee('User changes were not saved.')
             ->assertSee('users.manage');
         self::assertSame(2, count($this->checkedDenials($draft)));
         self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($user));
@@ -190,7 +190,7 @@ final class UserAccessFormStateTest extends TestCase
         $this->actingAs($owner)->put('/admin/users/'.$user->id, [
             ...$this->fields('viewer'), 'name' => $user->name, 'email' => $user->email,
             'denied_permissions' => [GatewayPermission::TargetsView->value, ...$ssh],
-        ])->assertSessionHasNoErrors()->assertRedirect($url);
+        ])->assertSessionHasNoErrors()->assertAdminRedirect($url);
         self::assertSame('viewer', $user->fresh()->role->value);
         // The role itself blocks SSH; explicit active Deny storage is
         // normalized to the new ceiling without granting any capability.
@@ -219,7 +219,7 @@ final class UserAccessFormStateTest extends TestCase
             ...$this->fields('owner'),
             'name' => $operator->name, 'email' => $operator->email,
             'target_scope_mode' => 'all', 'denied_permissions' => $oldDenials,
-        ])->assertSessionHasNoErrors()->assertRedirect($url);
+        ])->assertSessionHasNoErrors()->assertAdminRedirect($url);
 
         $updated = $operator->fresh();
         self::assertSame('owner', $updated->role->value);
@@ -239,13 +239,13 @@ final class UserAccessFormStateTest extends TestCase
         $owner = $this->owner();
         $url = '/admin/users/'.$owner->id.'/edit';
 
-        $this->actingAs($owner)->from($url)->put('/admin/users/'.$owner->id, [
+        $result = $this->actingAs($owner)->from($url)->put('/admin/users/'.$owner->id, [
             ...$this->fields('owner'), 'name' => $owner->name, 'email' => $owner->email,
             'target_scope_mode' => 'all',
             'denied_permissions' => [GatewayPermission::TargetsView->value],
-        ])->assertRedirect($url)->assertSessionHasErrors('denied_permissions');
+        ])->assertAdminRedirect($url)->assertSessionHasErrors('denied_permissions');
 
-        $this->get($url)->assertOk()->assertSee('User changes were not saved.');
+        $this->get((string) $result->headers->get('Location'))->assertOk()->assertSee('User changes were not saved.');
         self::assertSame([], $this->storedDenials($owner));
     }
 
@@ -254,12 +254,12 @@ final class UserAccessFormStateTest extends TestCase
         $owner = $this->owner();
         $user = $this->viewer();
         $url = '/admin/users/'.$user->id.'/edit';
-        $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
+        $result = $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
             ...$this->fields(), 'name' => '', 'target_scope_mode' => 'all',
             'access_enabled' => '0', 'ai_access_enabled' => '1',
             // Browsers omit the array when every Deny checkbox is unchecked.
-        ])->assertRedirect($url)->assertSessionHasErrors('name');
-        $page = $this->get($url)->assertOk();
+        ])->assertAdminRedirect($url)->assertSessionHasErrors('name');
+        $page = $this->get((string) $result->headers->get('Location'))->assertOk();
         $this->assertControls($page, 'viewer', 'all', false, true);
         self::assertSame([], $this->checkedDenials($page));
         self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($user));
@@ -270,32 +270,32 @@ final class UserAccessFormStateTest extends TestCase
         $owner = $this->owner();
         $user = $this->viewer();
         $url = '/admin/users/'.$user->id.'/edit';
-        $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
+        $result = $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
             ...$this->fields(), 'current_password' => 'WrongHorse!234',
-        ])->assertRedirect($url)->assertSessionHasErrors('current_password');
-        self::assertSame([], $this->checkedDenials($this->get($url)->assertOk()));
+        ])->assertAdminRedirect($url)->assertSessionHasErrors('current_password');
+        self::assertSame([], $this->checkedDenials($this->get((string) $result->headers->get('Location'))->assertOk()));
         self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($user));
     }
 
     public function test_create_validation_error_does_not_restore_default_ssh_checks_to_an_empty_choice(): void
     {
         $owner = $this->owner();
-        $this->actingAs($owner)->from('/admin/users/create')->post('/admin/users', [
+        $result = $this->actingAs($owner)->from('/admin/users/create')->post('/admin/users', [
             ...$this->fields(), 'name' => '',
             'password' => 'DifferentHorse!234', 'password_confirmation' => 'DifferentHorse!234',
-        ])->assertRedirect('/admin/users/create')->assertSessionHasErrors('name');
-        self::assertSame([], $this->checkedDenials($this->get('/admin/users/create')->assertOk()));
+        ])->assertAdminRedirect('/admin/users/create')->assertSessionHasErrors('name');
+        self::assertSame([], $this->checkedDenials($this->get((string) $result->headers->get('Location'))->assertOk()));
         $this->assertDatabaseMissing('users', ['email' => 'managed-viewer@example.test']);
     }
 
     public function test_create_password_error_does_not_restore_default_ssh_checks_to_an_empty_choice(): void
     {
         $owner = $this->owner();
-        $this->actingAs($owner)->from('/admin/users/create')->post('/admin/users', [
+        $result = $this->actingAs($owner)->from('/admin/users/create')->post('/admin/users', [
             ...$this->fields(), 'current_password' => 'WrongHorse!234',
             'password' => 'DifferentHorse!234', 'password_confirmation' => 'DifferentHorse!234',
-        ])->assertRedirect('/admin/users/create')->assertSessionHasErrors('current_password');
-        self::assertSame([], $this->checkedDenials($this->get('/admin/users/create')->assertOk()));
+        ])->assertAdminRedirect('/admin/users/create')->assertSessionHasErrors('current_password');
+        self::assertSame([], $this->checkedDenials($this->get((string) $result->headers->get('Location'))->assertOk()));
         $this->assertDatabaseMissing('users', ['email' => 'managed-viewer@example.test']);
     }
 
@@ -322,7 +322,7 @@ final class UserAccessFormStateTest extends TestCase
         $owner = $this->owner();
         $user = $this->viewer();
         $this->actingAs($owner)->put('/admin/users/'.$user->id, $this->fields())
-            ->assertSessionHasNoErrors()->assertRedirect('/admin/users/'.$user->id.'/edit');
+            ->assertSessionHasNoErrors()->assertAdminRedirect('/admin/users/'.$user->id.'/edit');
         $page = $this->get('/admin/users/'.$user->id.'/edit')->assertOk();
         $xpath = $this->document($page);
         self::assertSame([], $this->checkedDenials($page));
@@ -341,10 +341,10 @@ final class UserAccessFormStateTest extends TestCase
         $user = $this->viewer();
         $url = '/admin/users/'.$user->id.'/edit';
         $requested = [GatewayPermission::ActivityView->value, GatewayPermission::DashboardView->value];
-        $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
+        $result = $this->actingAs($owner)->from($url)->put('/admin/users/'.$user->id, [
             ...$this->fields(), 'name' => '', 'denied_permissions' => $requested,
         ])->assertSessionHasErrors('name');
-        $draft = $this->get($url)->assertOk();
+        $draft = $this->get((string) $result->headers->get('Location'))->assertOk();
         self::assertSame($requested, $this->checkedDenials($draft));
         $xpath = $this->document($draft);
         self::assertStringContainsString('Unsaved: 2 checked', $xpath->evaluate('string(//details[@id="user-permission-restrictions"]/summary)'));
