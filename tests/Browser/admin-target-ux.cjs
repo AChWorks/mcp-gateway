@@ -41,6 +41,13 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     await page.keyboard.press('Home');
     assert.equal((await summary(page)).route,'direct');
     assert.equal((await summary(page)).dirty,false);
+    // Playwright's selectOption dispatches an untrusted change; a selected
+    // semantic option must nevertheless guard the form, unlike silent
+    // browser autofill into a technical text identity.
+    await page.locator('#ssh_mode').selectOption('managed');
+    assert.equal((await summary(page)).dirty,true);
+    await page.locator('#ssh_mode').selectOption('direct');
+    assert.equal((await summary(page)).dirty,false);
     pass('SSH mode, action, visibility, ready gate, true edit and revert');
     await page.locator('#target_id').fill('real-draft');
     assert.equal((await summary(page)).dirty,true);

@@ -91,8 +91,19 @@
 
     function deliberate(event) {
         const control = event.target;
-        if (!editableInputs(control) || !control.form || !event.isTrusted) return;
-        if (document.activeElement !== control) return;
+        if (!editableInputs(control) || !control.form) return;
+        // Selects have discrete semantic choices, and some browser-driving
+        // mechanisms emit a non-trusted change after selecting a real option.
+        // Protect that changed choice regardless of event trust; an untouched
+        // or reverted selection still compares clean with the baseline.
+        // Technical identity and Owner-password inputs continue to require
+        // deliberate native interaction rather than a synthetic event.
+        if (event.type === 'change' && control instanceof HTMLSelectElement) {
+            deliberateFields.add(control);
+            deliberateValues.set(control, control.value);
+            return;
+        }
+        if (!event.isTrusted || document.activeElement !== control) return;
         if (event.type === 'paste' || event.type === 'cut' || event.type === 'compositionstart') {
             deliberateFields.add(control);
             return;

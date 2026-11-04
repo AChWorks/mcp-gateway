@@ -27,7 +27,10 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
                 await page.getByRole('heading', { name: 'Gateway host readiness' }).waitFor();
                 assert.equal(await page.getByRole('heading', { name: 'Configure Reverse SSH' }).count(), 1);
                 assert.equal(await page.getByText('Remote Target reachability', { exact: true }).count(), 1);
-                assert.equal(await page.locator('input[name="current_password"]').count(), 2);
+                // Fresh unconfigured host needs configuration confirmation,
+                // not an inactive/misleading repair password form.
+                assert.equal(await page.locator('input[name="current_password"]').count(), 1);
+                assert.equal(await page.locator('form[action$="/settings/reverse-ssh/repair"]').count(), 0);
                 await page.goto(base + '/__browser__/managed-reverse-pending');
                 await page.getByRole('heading', { name: 'Retry Pending Setup without deleting this Target' }).waitFor();
                 const reissue = page.locator('form[action$="/reverse-ssh/reissue"]');
