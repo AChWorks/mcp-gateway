@@ -40,14 +40,16 @@ class ConnectionRelayHostReadiness
         $raw = @file_get_contents($path);
         $policy = @file_get_contents($policyPath);
         $boot = @file_get_contents('/proc/sys/kernel/random/boot_id');
-        if (! is_string($raw) || ! is_string($policy) || ! is_string($boot)) {
+        $uptime = @file_get_contents('/proc/uptime');
+        $bootSeconds = ConnectionRelayHostEvidence::bootSecondsFromUptime(is_string($uptime) ? $uptime : null);
+        if (! is_string($raw) || ! is_string($policy) || ! is_string($boot) || $bootSeconds === null) {
             return false;
         }
         $document = json_decode($raw, true, 8);
 
         return is_array($document)
             && ConnectionRelayHostEvidence::matches(
-                $document, $relay, $uid, trim($boot), trim($policy), time(),
+                $document, $relay, $uid, trim($boot), trim($policy), time(), $bootSeconds,
             );
     }
 

@@ -70,6 +70,47 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertSessionHas('_old_input.connection_relay_id', 'iran-1');
     }
 
+    public function test_relay_create_and_edit_validation_report_the_actual_invalid_field(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $invalid = [
+            'control_host' => 'invalid host.example',
+            'control_user' => 'invalid user',
+            'control_port' => 70000,
+            'control_host_key' => 'not a public host key',
+        ];
+
+        foreach ($invalid as $field => $value) {
+            $this->post('/admin/settings/connection-relays', [
+                ...$this->relayFields(), $field => $value,
+                'current_password' => self::PASSWORD,
+            ])->assertSessionHasErrors($field)
+                ->assertSessionDoesntHaveErrors(array_values(array_diff(array_keys($invalid), [$field])))
+                ->assertSessionHas('_old_input.'.$field, $value)
+                ->assertSessionMissing('_old_input.current_password');
+            self::assertSame(0, ConnectionRelay::query()->count(), 'Invalid Relay metadata must never persist.');
+        }
+
+        $this->post('/admin/settings/connection-relays', [
+            ...$this->relayFields(), 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        $relay = ConnectionRelay::query()->sole();
+        $before = $relay->only(['control_host', 'control_user', 'control_host_key']);
+
+        foreach ($invalid as $field => $value) {
+            $this->put('/admin/settings/connection-relays/'.$relay->getKey(), [
+                ...$this->relayFields(), $field => $value,
+                'relay_revision' => $relay->lifecycle_revision,
+                'edit_relay_id' => (string) $relay->getKey(),
+                'current_password' => self::PASSWORD,
+            ])->assertSessionHasErrors($field)
+                ->assertSessionDoesntHaveErrors(array_values(array_diff(array_keys($invalid), [$field])))
+                ->assertSessionHas('_old_input.'.$field, $value)
+                ->assertSessionMissing('_old_input.current_password');
+            self::assertSame($before, $relay->fresh()->only(array_keys($before)), 'Invalid edit must not rotate persisted Relay identity.');
+        }
+    }
+
     public function test_only_owner_can_manage_relay_or_attach_target_to_it(): void
     {
         $this->actingAs($this->user('operator'));

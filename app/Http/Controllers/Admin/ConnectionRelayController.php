@@ -50,17 +50,7 @@ final class ConnectionRelayController extends Controller
         $this->authorizeOwner($request);
         $fields = $request->validate($this->rules());
         $password->confirm($request);
-        try {
-            $endpoint = SshRegisteredEndpoint::fromInput(
-                (string) $fields['control_host'], (int) $fields['control_port'],
-                (string) $fields['control_user'],
-            );
-            $pin = SshHostKeyPin::fromLine((string) $fields['control_host_key']);
-        } catch (InvalidArgumentException) {
-            throw ValidationException::withMessages([
-                'control_host_key' => __('Verify the Relay SSH endpoint and independently obtain its exact public server host key.'),
-            ]);
-        }
+        [$endpoint, $pin] = $this->validatedEndpointAndPin($fields);
         if (ConnectionRelay::query()->where('relay_id', $fields['relay_id'])
             ->orWhere('local_socks_port', (int) $fields['local_socks_port'])->exists()) {
             throw ValidationException::withMessages(['relay_id' => __('Relay ID or local listener port is already registered.')]);
@@ -181,13 +171,7 @@ final class ConnectionRelayController extends Controller
         $this->authorizeOwner($request);
         $fields = $request->validate([...$this->rules(), 'relay_revision' => ['required', 'integer', 'min:1']]);
         $password->confirm($request);
-        try {
-            $endpoint = SshRegisteredEndpoint::fromInput((string) $fields['control_host'],
-                (int) $fields['control_port'], (string) $fields['control_user']);
-            $pin = SshHostKeyPin::fromLine((string) $fields['control_host_key']);
-        } catch (InvalidArgumentException) {
-            throw ValidationException::withMessages(['control_host_key' => __('Verify the trusted Relay SSH endpoint and its public host key.')]);
-        }
+        [$endpoint, $pin] = $this->validatedEndpointAndPin($fields);
         DB::transaction(function () use ($relay, $fields, $endpoint, $pin, $activity): void {
             $current = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
             if ($current->enabled || (int) $current->lifecycle_revision !== (int) $fields['relay_revision']
@@ -220,6 +204,34 @@ final class ConnectionRelayController extends Controller
             ->with('status', __('Relay identity updated while disabled. Reprovision the root-owned host attestation before enabling.'));
     }
 
+    /** @param array<string,mixed> $fields
+     * @return array{SshRegisteredEndpoint,SshHostKeyPin}
+     */
+    private function validatedEndpointAndPin(array $fields): array
+    {
+        // Laravel validates port bounds and the identical SSH username
+        // grammar first. Endpoint failures therefore belong to control_host.
+        try {
+            $endpoint = SshRegisteredEndpoint::fromInput(
+                (string) $fields['control_host'], (int) $fields['control_port'], (string) $fields['control_user'],
+            );
+        } catch (InvalidArgumentException) {
+            throw ValidationException::withMessages([
+                'control_host' => __('Enter a valid, canonical Relay SSH hostname or IP address.'),
+            ]);
+        }
+
+        try {
+            $pin = SshHostKeyPin::fromLine((string) $fields['control_host_key']);
+        } catch (InvalidArgumentException) {
+            throw ValidationException::withMessages([
+                'control_host_key' => __('Independently obtain and verify the exact SSH server public host key.'),
+            ]);
+        }
+
+        return [$endpoint, $pin];
+    }
+
     private function authorizeOwner(Request $request): void
     {
         Gate::authorize(GatewayPermission::SecurityManage->value);
@@ -234,7 +246,7 @@ final class ConnectionRelayController extends Controller
             'display_name' => ['required', 'string', 'max:160'],
             'control_host' => ['required', 'string', 'max:253'],
             'control_port' => ['required', 'integer', 'min:1', 'max:65535'],
-            'control_user' => ['required', 'string', 'max:128'],
+            'control_user' => ['required', 'string', 'max:128', 'regex:/^[a-zA-Z0-9_][a-zA-Z0-9_.+-]{0,127}$/D'],
             'control_host_key' => ['required', 'string', 'max:4096'],
             // This range does not overlap the existing managed Reverse
             // listener allocation (42000-45000), or Gateway control SSHD.
