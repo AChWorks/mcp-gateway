@@ -73,7 +73,7 @@ final class OperationDiagnostics
         if (is_string($stage) && in_array($stage, [
             'dns_lookup', 'dns_timeout', 'deadline_before_dispatch',
             'tcp_connect', 'tls_handshake', 'request_timeout',
-            'connection_setup', 'response_transfer', 'response_body',
+            'connection_setup', 'relay_socks_connect', 'response_transfer', 'response_body',
             'remote_http', 'operation', 'admission', 'unknown',
         ], true)) {
             $safe['failure_stage'] = $stage;
@@ -252,6 +252,7 @@ final class OperationDiagnostics
             'reverse_route_not_approved' => __('No exact, operator-approved Reverse SSH loopback route exists for this Target, port and tunnel identity.'),
             'reverse_listener_conflict' => __('The approved reverse listener is already owned by another registered SSH Target.'),
             'reverse_listener_unavailable' => __('The approved NL loopback listener was not reachable; no direct fallback or SSH authentication was attempted.'),
+            'relay_unavailable' => __('The selected Connection Relay could not establish the approved SOCKS5 route. The Gateway did not fall back to Direct.'),
             'invalid_input' => __('Some input fields or tool arguments are invalid.'),
             'forbidden', 'target_not_found' => __('This operation or Target is not available to the current user.'),
             'target_paused' => __('Gateway operations on this Target are temporarily paused by the Owner.'),
@@ -302,6 +303,7 @@ final class OperationDiagnostics
             'reverse_route_not_approved' => __('Check the installed NL operator allowlist against the exact Target ID, listener port and tunnel identity. Do not enable arbitrary loopback access.'),
             'reverse_listener_conflict' => __('Choose an independent NL loopback port per Target and update the separate operator approval before registration or reconfiguration.'),
             'reverse_listener_unavailable' => __('On the approved test host, inspect the restricted outbound OpenSSH tunnel, local loopback port, systemd status and logs; do not switch to an unverified listener or retry an effectful Job.'),
+            'relay_unavailable' => __('Inspect the approved Relay identity, restricted OpenSSH -D process, loopback SOCKS5 listener and Relay egress policy. Verify host isolation before enabling; never bypass the Relay with Direct on failure.'),
             'invalid_input' => __('Correct the indicated input or tool parameters.'),
             'forbidden', 'target_not_found' => __('Ask the Owner to review user capability and selected Target scope; do not expose an unauthorized Target.'),
             'target_paused' => __('Ask the Owner to resume this Target. Stored connection and permissions are unchanged.'),
