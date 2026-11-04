@@ -129,7 +129,12 @@ final class ConnectionRelayOpenSshFixtureTest extends TestCase
                 }
                 self::fail('Restricted forwarding accepted an unapproved destination.');
             } catch (RuntimeException $exception) {
-                self::assertSame('relay_connect_denied', $exception->getMessage());
+                // OpenSSH can either send a SOCKS5 refusal or close the
+                // forwarded channel before completing its response. Both
+                // outcomes must fail closed; neither permits Direct fallback.
+                self::assertContains($exception->getMessage(), [
+                    'relay_connect_denied', 'relay_handshake_failed',
+                ]);
             }
         }
     }
