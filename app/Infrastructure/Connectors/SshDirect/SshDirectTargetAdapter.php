@@ -315,7 +315,13 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
         try {
             $this->container->make(SshTargetConnectionService::class)->test($target);
 
-            return new TargetConnectorResult(statusMessage: __('SSH TCP peer, pinned host key and login verified.'));
+            $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
+            $tunneled = $target->getAttribute('relay_record_id') !== null
+                || ($config instanceof SshTargetConfig && $config->route_mode === 'reverse');
+
+            return new TargetConnectorResult(statusMessage: $tunneled
+                ? __('SSH end-host pinned key and login verified through the selected tunnel. The remote TCP peer IP was not independently observed.')
+                : __('SSH TCP peer, pinned host key and login verified.'));
         } catch (SshTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
