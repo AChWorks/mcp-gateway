@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Fail-closed GitHub stable-release identity guard.
 
+"policy" independently verifies the administration-only asset-immutability
+setting before Owner dispatch, using a read-only request with an admin token.
 "before" refuses any existing tag or Release; no implicit idempotent success.
 "reserve" creates the approved Git tag *atomically if absent*, then verifies
 its exact target. A competing writer/ambiguous outcome is never auto-retried.
@@ -114,6 +116,45 @@ def api_release(tag: str, token: str) -> dict | None:
         raise PublicationStateError("Release API response malformed.") from error
     require(isinstance(result, dict), "Release API returned a non-object.")
     return result
+
+
+def api_release_immutability(token: str) -> dict:
+    """Read the independent GitHub Release asset-immutability setting.
+
+    Stable-tag rulesets protect refs but not published release assets.
+    Fail closed on missing permissions, network ambiguity or invalid payloads.
+    """
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{REPOSITORY}/immutable-releases",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2026-03-10",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            require(response.status == 200, "Unexpected immutable-releases API status.")
+            body = response.read(512 * 1024)
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError) as error:
+        raise PublicationStateError(
+            "GitHub Release asset immutability could not be verified; refuse publication."
+        ) from error
+    try:
+        state = json.loads(body)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise PublicationStateError("GitHub immutable-releases API returned invalid JSON.") from error
+    require(isinstance(state, dict), "GitHub immutable-releases API returned a non-object.")
+    return state
+
+
+def require_immutable_release_assets_policy(token: str) -> None:
+    """Require immutability for all FUTURE releases before creating a tag."""
+    state = api_release_immutability(token)
+    require(isinstance(state, dict), "GitHub Release asset immutability state is malformed.")
+    require(state.get("enabled") is True,
+            "GitHub Release asset immutability is not enabled. Repository Owner must enable "
+            "Settings > Releases > Enable release immutability before creating a release tag.")
 
 
 # GitHub must enforce one-time creation but forbid ordinary writers from
@@ -318,6 +359,9 @@ def execute(phase: str) -> None:
     require(phase in ("before", "reserve", "after"), "Expected release guard phase: before | reserve | after.")
     version, approved, repo, token = source_envelope()
     tag = f"v{version}"
+    # The workflow token cannot read the administration-only immutable-releases
+    # setting. Owner MUST complete the separate read-only "policy" preflight
+    # before dispatch; never give Actions a repository-admin credential.
     require_immutable_release_tag_policy(tag, token)
     raw, peeled = remote_tag(tag)
     release = api_release(tag, token)
@@ -350,14 +394,24 @@ def execute(phase: str) -> None:
     require(release.get("name") == f"MCP Gateway {tag}", "Release title differs from approved identity.")
     require(release.get("draft") is False and release.get("prerelease") is False
             and bool(release.get("published_at")), "Release not fully published as stable.")
+    require(release.get("immutable") is True,
+            "Published Release assets are not GitHub-platform immutable; verify repository policy.")
     verify_remote_assets(release, tag, version, repo)
     print(f"PASS: published {tag} resolves to approved source with four byte-verified official assets.")
 
 
 def main() -> None:
     try:
-        require(len(sys.argv) == 2, "Usage: release_publication_guard.py before|reserve|after")
-        execute(sys.argv[1])
+        require(len(sys.argv) == 2, "Usage: release_publication_guard.py policy|before|reserve|after")
+        if sys.argv[1] == "policy":
+            # Owner-side pre-dispatch step using an admin-read token; no ref,
+            # release, package, repository setting or other mutation occurs.
+            token = os.environ.get("GH_TOKEN", "")
+            require(bool(token), "Owner policy preflight requires an authenticated admin-read GH_TOKEN.")
+            require_immutable_release_assets_policy(token)
+            print("PASS: GitHub Release immutability is enabled for future publications.")
+        else:
+            execute(sys.argv[1])
     except (PublicationStateError, OSError) as error:
         print(f"Release publication guard FAILED: {error}", file=sys.stderr)
         raise SystemExit(1) from error

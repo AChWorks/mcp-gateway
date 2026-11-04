@@ -316,10 +316,41 @@ mcp-gateway-vX.Y.Z.zip
 
 Do not use GitHub's generic **Source code (zip)** archive; that archive does not contain production `vendor/` dependencies. The named deployment ZIP contains only the application/runtime files required for installation and operation.
 
-### Stable GitHub Release tag immutability (Owner/admin gate)
+### GitHub Release asset immutability and stable tag protection (Owner/admin gate)
 
 Before attempting the manual stable Release workflow, the repository
-Owner/admin must establish a **GitHub-enforced** tag policy in
+Owner/admin must enable **Settings → Releases → Enable release immutability**
+for this repository (or an enforced organization policy). This is **separate**
+from stable-tag rules: it prevents changing published Release assets and
+protects the tag once the new Release is published. The official release
+Owner must independently verify the **administration-only** read endpoint
+`GET /repos/AChWorks/mcp-gateway/immutable-releases` immediately **before**
+dispatching the official Release workflow. From the reviewed source on an
+authenticated Owner/admin workstation (with a token held only in that
+protected session), execute:
+
+`GH_TOKEN="$(gh auth token)" python3 bin/release_publication_guard.py policy`
+
+This is read-only and must print a successful policy preflight; a denied API
+call or missing/false `enabled` fails closed. The normal GitHub Actions
+`GITHUB_TOKEN` has `contents: write` but **does not have**
+`Administration: read` needed by this endpoint, so do not weaken the
+preflight or give the release runner a broad repository-admin token to make
+it appear successful. The separate official workflow still checks protected
+tag identity before reserving and publishing, then its postpublication
+guard independently requires `immutable: true` from the published Release
+API plus exact tag identity and four downloaded checksummed artifact bytes.
+Neither a protected tag nor successful checksum validation alone proves
+asset-level immutability.
+
+**Historical qualification:** v2.5.5, v2.5.6 and v2.5.7 were published before
+this policy was enabled. Their stable tags and independently checked asset
+hashes remain useful, but GitHub reports `immutable: false` for those
+historic Releases. Do not claim enabling the new setting retroactively
+locked their assets. This new protection applies to future Releases,
+including v2.5.8 once published.
+
+The repository Owner/admin must also establish a **GitHub-enforced** tag policy in
 `AChWorks/mcp-gateway` (GitHub **Settings → Rulesets → New tag ruleset**):
 
 - **Enforcement status:** `Active`.
