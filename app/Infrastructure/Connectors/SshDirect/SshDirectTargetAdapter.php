@@ -14,6 +14,7 @@ use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetPreflightResult;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Support\OperationDiagnostics;
 use Illuminate\Contracts\Container\Container;
@@ -34,6 +35,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
     public function registrationRules(): array
     {
         return [
+            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
             'ssh_host' => ['required', 'string', 'max:253'],
             'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'ssh_username' => ['required', 'string', 'max:128'],
@@ -63,6 +65,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
     public function preflightRules(): array
     {
         return [
+            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
             'ssh_host' => ['required', 'string', 'max:253'],
             'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'target_id' => ['nullable', 'string', 'max:64'],
@@ -164,13 +167,18 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
                 (string) ($input['ssh_route_mode'] ?? 'direct'),
                 isset($input['ssh_reverse_port']) ? (int) $input['ssh_reverse_port'] : null,
                 $input['ssh_tunnel_identity'] ?? null,
+                $input['connection_relay_id'] ?? null,
             );
+        } catch (ConnectionRelayUnavailable) {
+            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or lacks verified host isolation. Configure it in System first.'), 'connection_relay_id', 'relay_unavailable');
         } catch (SshTargetConnectionException $exception) {
             throw new TargetConnectorFailure(
-                $exception->reason === 'reverse_listener_conflict'
+                $exception->reason === 'relay_reverse_conflict'
+                    ? __('A shared Connection Relay cannot be combined with existing Reverse SSH.')
+                    : ($exception->reason === 'reverse_listener_conflict'
                     ? __('The approved local listener port is already enrolled for another SSH Target. Use a different operator-assigned port.')
-                    : __('Reverse SSH requires an exact, independent Gateway operator approval for the Target, listener port and tunnel identity.'),
-                'ssh_reverse_port', $exception->reason,
+                    : __('Reverse SSH requires an exact, independent Gateway operator approval for the Target, listener port and tunnel identity.')),
+                $exception->reason === 'relay_reverse_conflict' ? 'connection_relay_id' : 'ssh_reverse_port', $exception->reason,
             );
         } catch (InvalidArgumentException $exception) {
             // All of these originate from our deterministic enrollment validators,

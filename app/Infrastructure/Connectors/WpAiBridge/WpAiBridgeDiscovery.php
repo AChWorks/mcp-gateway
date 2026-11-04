@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Connectors\WpAiBridge;
 
+use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\SafeHttpClient;
@@ -14,12 +15,12 @@ final class WpAiBridgeDiscovery
         private readonly SafeHttpClient $http,
     ) {}
 
-    public function discover(string $baseUrl): BridgeDiscovery
+    public function discover(string $baseUrl, ?LocalSocks5Route $relay = null): BridgeDiscovery
     {
         try {
             $baseUrl = $this->targets->canonicalBaseUrl($baseUrl);
             $protectedUrl = $this->targets->appendPath($baseUrl, '/.well-known/oauth-protected-resource');
-            $protected = $this->http->get($protectedUrl);
+            $protected = $this->http->get($protectedUrl, relay: $relay);
         } catch (UnsafeOutboundTarget $exception) {
             throw new BridgeDiscoveryException('unsafe_target', 'The WordPress site is not a safe public HTTPS target.', $exception->diagnostics());
         } catch (OutboundRequestException $exception) {
@@ -67,7 +68,7 @@ final class WpAiBridgeDiscovery
 
         try {
             $serverUrl = $this->targets->appendPath($issuer, '/.well-known/oauth-authorization-server');
-            $server = $this->http->get($serverUrl);
+            $server = $this->http->get($serverUrl, relay: $relay);
         } catch (UnsafeOutboundTarget $exception) {
             throw new BridgeDiscoveryException('unsafe_target', 'WP AI Bridge authorization metadata target is unsafe.', $exception->diagnostics());
         } catch (OutboundRequestException $exception) {

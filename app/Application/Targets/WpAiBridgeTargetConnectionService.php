@@ -7,6 +7,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
@@ -38,16 +39,26 @@ final readonly class WpAiBridgeTargetConnectionService
         private WpAiBridgeTargetVault $vault,
         private OperationalSettings $settings,
         private ActivityRecorder $activity,
+        private ConnectionRelayRoutes $relays,
     ) {}
 
     public function begin(Target $target): string
     {
         $this->requireWordpress($target);
-        $configuration = $this->configuration((string) $target->getKey());
+        $recordId = (string) $target->getKey();
+        $configuration = $this->configuration($recordId);
+        $initial = Target::query()->findOrFail($recordId);
+        $routeEpoch = (int) ($initial->getAttribute('relay_binding_revision') ?? 0);
 
         // Discovery is untrusted remote I/O: never hold a database row lock.
         try {
-            $discovery = $this->discovery->discover($configuration->base_url);
+            $discovery = $this->discovery->discover(
+                $configuration->base_url, $this->relays->httpRouteAtEpoch($recordId, $routeEpoch),
+            );
+        } catch (OutboundRequestException $exception) {
+            $this->recordDiscoveryFailure((string) $target->getKey(), $exception->reason);
+            throw new WpAiBridgeTargetConnectionException('relay_unavailable',
+                'The selected Connection Relay was not available for WordPress discovery.');
         } catch (BridgeDiscoveryException $exception) {
             $this->recordDiscoveryFailure((string) $target->getKey(), $exception->reason);
             throw new WpAiBridgeTargetConnectionException($exception->reason, 'WordPress metadata could not be verified safely.', $exception->diagnostics);
@@ -62,12 +73,13 @@ final readonly class WpAiBridgeTargetConnectionService
         $expiresAt = now()->addSeconds(max(60, (int) config('bridge.oauth.flow_ttl_seconds', 600)));
 
         $this->withLockedTarget((string) $target->getKey(), function (Target $locked) use (
-            $configuration, $discovery, $clientId, $redirect, $stateHash, $verifier, $expiresAt,
+            $configuration, $discovery, $clientId, $redirect, $stateHash, $verifier, $expiresAt, $routeEpoch,
         ): void {
             $this->ensureReadyForConnect($locked);
             $current = $this->configuration((string) $locked->getKey());
 
-            if ((string) $current->base_url !== (string) $configuration->base_url
+            if ((int) ($locked->getAttribute('relay_binding_revision') ?? 0) !== $routeEpoch
+                || (string) $current->base_url !== (string) $configuration->base_url
                 || ! hash_equals((string) $current->base_url, $discovery->baseUrl)) {
                 throw new WpAiBridgeTargetConnectionException('target_changed', 'The WordPress Target origin changed during discovery.');
             }
@@ -141,7 +153,7 @@ final readonly class WpAiBridgeTargetConnectionService
         }
         $recordId = (string) $flow->target_record_id;
 
-        /** @var array{context:array{client_id:string,redirect_uri:string,resource_url:string,issuer_url:string,token_url:string,revocation_url:string,code_verifier:string},denied:bool} $claim */
+        /** @var array{context:array{client_id:string,redirect_uri:string,resource_url:string,issuer_url:string,token_url:string,revocation_url:string,code_verifier:string},denied:bool,route_epoch:int} $claim */
         $claim = $this->withLockedTarget($recordId, function (Target $locked) use ($stateHash, $issuer, $error, $code): array {
             $pending = DB::table('wp_ai_bridge_oauth_flows')
                 ->where('target_record_id', $locked->getKey())
@@ -176,10 +188,12 @@ final readonly class WpAiBridgeTargetConnectionService
                 $reason = $error !== null && $error !== '' ? 'oauth_'.$this->safeError($error) : 'invalid_callback';
                 $this->setFailure($locked, $reason, TargetConnectionState::Disconnected);
 
-                return ['context' => $context, 'denied' => true];
+                return ['context' => $context, 'denied' => true,
+                    'route_epoch' => (int) ($locked->getAttribute('relay_binding_revision') ?? 0)];
             }
 
-            return ['context' => $context, 'denied' => false];
+            return ['context' => $context, 'denied' => false,
+                'route_epoch' => (int) ($locked->getAttribute('relay_binding_revision') ?? 0)];
         });
 
         if ($claim['denied']) {
@@ -198,7 +212,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 'resource' => $claim['context']['resource_url'],
                 'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
                 'client_assertion' => $this->identity->assertion($claim['context']['token_url']),
-            ]);
+            ], relay: $this->relays->httpRouteAtEpoch($recordId, $claim['route_epoch']));
             if ($response->status !== 200) {
                 throw new WpAiBridgeTargetConnectionException('token_exchange_failed', 'WP AI Bridge rejected authorization.');
             }
@@ -218,6 +232,7 @@ final readonly class WpAiBridgeTargetConnectionService
             if ($pending === null || $pending->consumed_at === null
                 || $locked->getAttribute('connection_state') !== TargetConnectionState::Pending
                 || $this->hasRevocationIntent($locked)
+                || (int) ($locked->getAttribute('relay_binding_revision') ?? 0) !== $claim['route_epoch']
                 || ! hash_equals((string) $config->oauth_token_url, $claim['context']['token_url'])
                 || ! hash_equals((string) $config->mcp_resource_url, $claim['context']['resource_url'])) {
                 throw new WpAiBridgeTargetConnectionException('callback_conflict', 'Target state changed during the remote token exchange.');
@@ -313,7 +328,11 @@ final readonly class WpAiBridgeTargetConnectionService
             $dueAt = $metadata->refresh_due_at === null ? null : strtotime((string) $metadata->refresh_due_at);
             if ($intent === null && $accessStillValid
                 && (! $renewIfDue || ($dueAt !== null && $dueAt > time()))) {
-                return ['ready' => true, 'resource_url' => $secret['resource_url'], 'access_token' => $secret['access_token']];
+                return [
+                    'ready' => true, 'resource_url' => $secret['resource_url'],
+                    'access_token' => $secret['access_token'],
+                    'route_epoch' => (int) ($locked->getAttribute('relay_binding_revision') ?? 0),
+                ];
             }
 
             if ($intent === null && $metadata->refresh_expires_at !== null
@@ -387,6 +406,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 'database_session_id' => $this->databaseSessionId(),
                 'is_recovery' => $isRecovery,
                 'refresh_started_at' => $refreshStartedAt,
+                'route_epoch' => (int) ($locked->getAttribute('relay_binding_revision') ?? 0),
             ];
         });
 
@@ -395,10 +415,22 @@ final readonly class WpAiBridgeTargetConnectionService
                 'WordPress offline authorization has expired and requires fresh consent.');
         }
         if (($plan['ready'] ?? false) === true) {
-            return ['resource_url' => $plan['resource_url'], 'access_token' => $plan['access_token']];
+            return [
+                'resource_url' => $plan['resource_url'], 'access_token' => $plan['access_token'],
+                'relay' => $this->relays->httpRouteAtEpoch($recordId, $plan['route_epoch']),
+                'target_record_id' => $recordId,
+                'relay_binding_revision' => $plan['route_epoch'],
+            ];
         }
 
-        return $this->exchangeRefresh($recordId, $plan);
+        $context = $this->exchangeRefresh($recordId, $plan);
+
+        return [
+            ...$context,
+            'relay' => $this->relays->httpRouteAtEpoch($recordId, $plan['route_epoch']),
+            'target_record_id' => $recordId,
+            'relay_binding_revision' => $plan['route_epoch'],
+        ];
     }
 
     /**
@@ -502,7 +534,7 @@ final readonly class WpAiBridgeTargetConnectionService
     }
 
     /**
-     * @param  array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int}  $plan
+     * @param  array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int,route_epoch:int}  $plan
      * @return array{resource_url:string,access_token:string}
      */
     private function exchangeRefresh(string $recordId, array $plan): array
@@ -531,7 +563,7 @@ final readonly class WpAiBridgeTargetConnectionService
                     'resource' => $plan['resource_url'],
                     'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
                     'client_assertion' => $assertion,
-                ]);
+                ], relay: $this->relays->httpRouteAtEpoch($recordId, $plan['route_epoch']));
             } catch (UnsafeOutboundTarget) {
                 // SafeHttpClient validates the entire destination before any
                 // HTTP dispatch; a fail-closed SSRF decision cannot consume a
@@ -652,6 +684,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 || $credential?->getKey() !== $plan['credential_id']
                 || $metadata === null || (int) $metadata->generation !== $plan['generation']
                 || $this->hasRevocationIntent($locked)
+                || (int) ($locked->getAttribute('relay_binding_revision') ?? 0) !== $plan['route_epoch']
                 || ! hash_equals((string) $config->mcp_resource_url, $plan['resource_url'])
                 || ! hash_equals((string) $config->oauth_token_url, $plan['token_url'])) {
                 throw new WpAiBridgeTargetConnectionException('refresh_conflict',
@@ -703,7 +736,7 @@ final readonly class WpAiBridgeTargetConnectionService
      * BEFORE any refresh exchange, including temporary JWKS/metadata outages.
      * Recheck every live binding before clearing only this unconsumed intent.
      *
-     * @param  array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int}  $plan
+     * @param  array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int,route_epoch:int}  $plan
      */
     private function deferUnconsumedRefresh(string $recordId, array $plan): void
     {
@@ -766,7 +799,7 @@ final readonly class WpAiBridgeTargetConnectionService
         });
     }
 
-    /** @param array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int} $plan */
+    /** @param array{intent_id:string,credential_id:string,generation:int,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int,route_epoch:int} $plan */
     private function recordRefreshFailure(string $recordId, array $plan, string $reason, bool $terminal = false): void
     {
         $this->withLockedTarget($recordId, function (Target $locked) use ($plan, $reason, $terminal): void {
@@ -853,7 +886,7 @@ final readonly class WpAiBridgeTargetConnectionService
     {
         $this->requireWordpress($target);
         $id = (string) $target->getKey();
-        /** @var array{intent_id:?string,credential_id:?string,generation:?int,tokens:list<string>,revocation_url:?string,confirmed:int,session_id:?int} $plan */
+        /** @var array{intent_id:?string,credential_id:?string,generation:?int,tokens:list<string>,revocation_url:?string,confirmed:int,session_id:?int,route_epoch:int} $plan */
         $plan = $this->withLockedTarget($id, function (Target $locked) use ($expectedIntentId): array {
             if ($this->hasRefreshIntent($locked)) {
                 throw new WpAiBridgeTargetConnectionException('refresh_pending',
@@ -927,7 +960,9 @@ final readonly class WpAiBridgeTargetConnectionService
 
                 return [
                     'intent_id' => null, 'credential_id' => null, 'generation' => null,
-                    'tokens' => [], 'revocation_url' => null, 'confirmed' => 0, 'session_id' => null,
+                    'tokens' => [], 'revocation_url' => null, 'confirmed' => 0,
+                    'session_id' => null,
+                    'route_epoch' => (int) ($locked->getAttribute('relay_binding_revision') ?? 0),
                 ];
             } else {
                 $intentId = (string) Str::ulid();
@@ -967,6 +1002,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 'revocation_url' => $url,
                 'confirmed' => $confirmed,
                 'session_id' => $this->databaseSessionId(),
+                'route_epoch' => (int) ($locked->getAttribute('relay_binding_revision') ?? 0),
             ];
         });
 
@@ -980,7 +1016,7 @@ final readonly class WpAiBridgeTargetConnectionService
                     'token' => $plan['tokens'][$index],
                     'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
                     'client_assertion' => $this->identity->assertion((string) $plan['revocation_url']),
-                ]);
+                ], relay: $this->relays->httpRouteAtEpoch($id, $plan['route_epoch']));
                 if ($response->status !== 200) {
                     throw new WpAiBridgeTargetConnectionException('revocation_failed',
                         'WordPress did not confirm credential revocation.', ['http_status' => $response->status]);
@@ -1128,11 +1164,18 @@ final readonly class WpAiBridgeTargetConnectionService
                 'generation' => (int) $metadata->generation,
                 'resource_url' => (string) $secret['resource_url'],
                 'access_token' => (string) $secret['access_token'],
+                'route_epoch' => (int) ($locked->getAttribute('relay_binding_revision') ?? 0),
             ];
         });
 
         try {
-            $verifyCatalog(['resource_url' => $snapshot['resource_url'], 'access_token' => $snapshot['access_token']]);
+            $verifyCatalog([
+                'resource_url' => $snapshot['resource_url'],
+                'access_token' => $snapshot['access_token'],
+                'relay' => $this->relays->httpRouteAtEpoch($id, $snapshot['route_epoch']),
+                'target_record_id' => $id,
+                'relay_binding_revision' => $snapshot['route_epoch'],
+            ]);
         } catch (\Throwable $exception) {
             $this->withLockedTarget($id, function (Target $locked) use ($intentId): void {
                 DB::table('wp_ai_bridge_revocation_intents')
@@ -1153,7 +1196,8 @@ final readonly class WpAiBridgeTargetConnectionService
                 || $intent->phase !== 'verify_in_flight' || (int) $intent->token_confirmed !== 0
                 || $credential === null || (string) $credential->getKey() !== $snapshot['credential_id']
                 || $meta === null || (int) $meta->generation !== $snapshot['generation']
-                || $this->hasRefreshIntent($locked)) {
+                || $this->hasRefreshIntent($locked)
+                || (int) ($locked->getAttribute('relay_binding_revision') ?? 0) !== $snapshot['route_epoch']) {
                 throw new WpAiBridgeTargetConnectionException('revocation_conflict', 'Authorization changed during verification.');
             }
 
@@ -1212,20 +1256,30 @@ final readonly class WpAiBridgeTargetConnectionService
     public function testConnection(Target $target): void
     {
         $this->requireWordpress($target);
-        $configuration = $this->configuration((string) $target->getKey());
+        $recordId = (string) $target->getKey();
+        $configuration = $this->configuration($recordId);
+        $initial = Target::query()->findOrFail($recordId);
+        $routeEpoch = (int) ($initial->getAttribute('relay_binding_revision') ?? 0);
         try {
-            $found = $this->discovery->discover($configuration->base_url);
+            $found = $this->discovery->discover(
+                $configuration->base_url, $this->relays->httpRouteAtEpoch($recordId, $routeEpoch),
+            );
             if (! hash_equals((string) $configuration->base_url, $found->baseUrl)) {
                 throw new BridgeDiscoveryException('target_changed', 'Canonical WordPress origin changed.');
             }
+        } catch (OutboundRequestException $exception) {
+            $this->recordDiscoveryFailure((string) $target->getKey(), $exception->reason);
+            throw new WpAiBridgeTargetConnectionException('relay_unavailable',
+                'The selected Connection Relay was not available for WordPress discovery.');
         } catch (BridgeDiscoveryException $exception) {
             $this->recordDiscoveryFailure((string) $target->getKey(), $exception->reason);
             throw new WpAiBridgeTargetConnectionException($exception->reason, 'WordPress metadata check failed.', $exception->diagnostics);
         }
 
-        $this->withLockedTarget((string) $target->getKey(), function (Target $locked) use ($configuration): void {
+        $this->withLockedTarget($recordId, function (Target $locked) use ($configuration, $routeEpoch): void {
             $current = $this->configuration((string) $locked->getKey());
-            if ($current->base_url !== $configuration->base_url) {
+            if ((int) ($locked->getAttribute('relay_binding_revision') ?? 0) !== $routeEpoch
+                || $current->base_url !== $configuration->base_url) {
                 throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress Target changed during the test.');
             }
             // Discovery proof applies only to public metadata. The OAuth

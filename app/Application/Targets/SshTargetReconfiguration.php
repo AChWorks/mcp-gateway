@@ -93,6 +93,12 @@ final readonly class SshTargetReconfiguration
                     'configuration', 'managed_reverse_reconfiguration_requires_revocation',
                 );
             }
+            if ($route !== null && $locked->getAttribute('relay_record_id') !== null) {
+                throw new TargetConnectorFailure(
+                    __('A shared Connection Relay and an existing Reverse SSH route cannot be active together. Unbind the Relay first.'),
+                    'ssh_route_mode', 'relay_reverse_conflict',
+                );
+            }
             if ($route !== null) {
                 try {
                     $this->reverseRoutes->assertPortAvailable($route, (string) $locked->getKey());

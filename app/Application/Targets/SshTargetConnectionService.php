@@ -6,6 +6,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\SshDirect\SshConnectionAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
@@ -26,6 +27,7 @@ final readonly class SshTargetConnectionService
         private SshVerificationState $verification,
         private ActivityRecorder $activity,
         private SshReverseRoutePolicy $reverseRoutes,
+        private ConnectionRelayRoutes $relayRoutes,
     ) {}
 
     /** Authenticates a single pinned connection without running any command. */
@@ -54,10 +56,11 @@ final readonly class SshTargetConnectionService
                 $attemptId = $this->verification->begin($target, $config, $credential);
                 $material = $this->vault->open($target, $config, $credential);
                 $route = $this->reverseRoutes->forTarget($target, $config);
+                $relay = $this->relayRoutes->sshRouteForTarget($target);
 
                 return $this->transport->authenticate(
                     $config->endpoint(), SshHostKeyPin::fromLine($config->pinned_host_key),
-                    $config->auth_method, $material['secret'], $material['passphrase'], $route,
+                    $config->auth_method, $material['secret'], $material['passphrase'], $route, $relay,
                 );
             });
         } catch (SshTargetConnectionException $exception) {
@@ -82,6 +85,7 @@ final readonly class SshTargetConnectionService
         // KEX/login. The end-host pin alone does not grant route ownership.
         try {
             $this->reverseRoutes->forTarget($target, $config);
+            $this->relayRoutes->sshRouteForTarget($target);
         } catch (SshTargetConnectionException $exception) {
             $this->verification->failed($target, $config, $credential, $attemptId, $exception->reason);
 

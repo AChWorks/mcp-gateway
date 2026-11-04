@@ -25,6 +25,12 @@ final class SshTargetBinding
             ];
         }
 
+        $relayEpoch = (int) ($target->getAttribute('relay_binding_revision') ?? 0);
+        $relayId = $target->getAttribute('relay_record_id');
+        if ($relayEpoch > 0 || $relayId !== null) {
+            $parts = [...$parts, 'connection_relay', (string) $relayId, (string) $relayEpoch];
+        }
+
         // Untouched legacy Direct bindings (epoch=0) intentionally retain
         // their exact previous digest. A->B->A route/trust changes NEVER
         // revive prior Jobs because the epoch cannot decrease.

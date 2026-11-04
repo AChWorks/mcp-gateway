@@ -424,7 +424,8 @@ final class AdminUiPresentationTest extends TestCase
 
         $targetEditor = file_get_contents(resource_path('views/admin/targets/edit.blade.php'));
         self::assertIsString($targetEditor);
-        self::assertSame(2, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
+        self::assertSame(3, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
+        self::assertStringContainsString('aria-labelledby="target-route-heading"', $targetEditor);
     }
 
     public function test_forms_share_the_same_inherited_admin_frame_without_an_outer_width_variant(): void

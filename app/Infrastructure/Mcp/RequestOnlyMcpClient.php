@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Mcp;
 
 use App\Domain\Targets\Target;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
@@ -26,7 +27,10 @@ final readonly class RequestOnlyMcpClient
 
     public const MAX_CATALOG_PAGE_TOOLS = 128;
 
-    public function __construct(private SafeHttpClient $http) {}
+    public function __construct(
+        private SafeHttpClient $http,
+        private ConnectionRelayRoutes $relays,
+    ) {}
 
     /** @return array<string, mixed> */
     public function discover(Target $target, BoundMcpTarget $bound, string $correlationId): array
@@ -195,7 +199,10 @@ final readonly class RequestOnlyMcpClient
         try {
             // SafeHttpClient provides canonical HTTPS, public DNS pinning,
             // TLS validation, no redirects, timeouts and a bounded body.
-            $response = $this->http->postJson($bound->resourceUrl, $payload, $headers, self::MAX_RESPONSE_BYTES);
+            $response = $this->http->postJson(
+                $bound->resourceUrl, $payload, $headers, self::MAX_RESPONSE_BYTES,
+                relay: $this->relays->httpRouteForTarget($target),
+            );
         } catch (UnsafeOutboundTarget $exception) {
             throw new OutboundMcpFailure(
                 'unsafe_target', 'not_executed', 'egress',

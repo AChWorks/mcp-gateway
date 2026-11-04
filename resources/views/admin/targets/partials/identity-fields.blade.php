@@ -24,4 +24,27 @@
                     @error('ai_guidance')<p class="field-error" role="alert" id="ai_guidance-error">{{ $message }}</p>@enderror
                 </div>
             </div>
+            @if(auth()->user()?->getRawOriginal('role') === 'owner')
+                <div class="target-subsection">
+                    <h3>{{ __('Connection route') }}</h3>
+                    <div class="field">
+                        <label for="connection_relay_id">{{ __('Route through Connection Relay (optional)') }}</label>
+                        <select id="connection_relay_id" name="connection_relay_id" aria-describedby="connection-relay-help"
+                            @if($selected === 'ssh_direct' && $selectedSshMode !== 'direct') disabled @endif>
+                            <option value="">{{ __('Direct (default)') }}</option>
+                            @foreach($connectionRelays as $relay)
+                                <option value="{{ $relay->relay_id }}" @selected(old('connection_relay_id') === $relay->relay_id)>{{ $relay->display_name }}</option>
+                            @endforeach
+                        </select>
+                        <p id="connection-relay-help" class="field-help">{{ __('Choose an enabled and host-verified Relay for SSH/SFTP or WordPress. Existing Managed/Manual Reverse SSH is a separate mode and cannot be combined. No unapproved local proxy address can be entered.') }}</p>
+                        @error('connection_relay_id')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                    </div>
+                    <div class="field" data-relay-owner-group>
+                        <label for="target-relay-owner-password">{{ __('Current Owner password (required when using a Relay)') }}</label>
+                        <input id="target-relay-owner-password" type="password" name="current_password" data-admin-requires-intent
+                            data-relay-owner-password maxlength="255" autocomplete="current-password"
+                            @if($selected === 'ssh_direct' && $selectedSshMode !== 'direct') disabled @endif>
+                    </div>
+                </div>
+            @endif
         </fieldset>

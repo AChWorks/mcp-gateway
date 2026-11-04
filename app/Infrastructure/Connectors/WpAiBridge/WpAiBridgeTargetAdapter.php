@@ -15,6 +15,7 @@ use App\Application\Targets\WpAiBridgeTargetReconfiguration;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Support\OperationDiagnostics;
@@ -43,17 +44,21 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, 
     {
         return [
             'base_url' => ['required', 'string', 'url:https', 'max:2048'],
+            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
         ];
     }
 
     public function safeOldInputFields(): array
     {
-        return ['base_url'];
+        return ['base_url', 'connection_relay_id'];
     }
 
     public function preflightRules(): array
     {
-        return ['base_url' => ['required', 'string', 'url:https', 'max:2048']];
+        return [
+            'base_url' => ['required', 'string', 'url:https', 'max:2048'],
+            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
+        ];
     }
 
     public function preflight(array $input): TargetPreflightResult
@@ -83,7 +88,10 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, 
                 (string) $input['display_name'],
                 (string) $input['base_url'],
                 $input['ai_guidance'] ?? null,
+                $input['connection_relay_id'] ?? null,
             );
+        } catch (ConnectionRelayUnavailable) {
+            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or lacks verified host isolation.'), 'connection_relay_id', 'relay_unavailable');
         } catch (BridgeDiscoveryException $exception) {
             throw new TargetConnectorFailure(
                 OperationDiagnostics::summary($exception->reason, $exception->diagnostics),

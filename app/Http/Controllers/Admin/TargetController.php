@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Admin\TargetConnectorAdmin;
+use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
@@ -18,6 +19,9 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Models\User;
@@ -78,8 +82,10 @@ final class TargetController extends Controller
         ]);
     }
 
-    public function create(Request $request, TargetConnectorAdmin $connectorAdmin, SshManagedReverseHostReadiness $readiness): View
-    {
+    public function create(
+        Request $request, TargetConnectorAdmin $connectorAdmin, SshManagedReverseHostReadiness $readiness,
+        ConnectionRelayRoutes $relays,
+    ): View {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
         $options = $connectorAdmin->options();
@@ -110,6 +116,8 @@ final class TargetController extends Controller
             'sshMode' => $sshMode,
             'managedReady' => $managedState === 'Ready',
             'managedReadinessState' => $managedState,
+            'connectionRelays' => $request->user()?->getRawOriginal('role') === GatewayRole::Owner->value
+                ? $relays->selectable() : collect(),
         ]);
     }
 
@@ -118,7 +126,7 @@ final class TargetController extends Controller
      * families. Each adapter opts in and owns its protocol validation; neither
      * submitted field names nor a connector label can choose an arbitrary probe.
      */
-    public function preflight(Request $request, TargetConnectorRegistry $connectors): RedirectResponse
+    public function preflight(Request $request, TargetConnectorRegistry $connectors, ConnectionRelayRoutes $relays): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
@@ -144,6 +152,18 @@ final class TargetController extends Controller
                 ]);
             }
             $validated = $request->validate($adapter->preflightRules());
+            $selectedRelay = $validated['connection_relay_id'] ?? null;
+            if (is_string($selectedRelay) && $selectedRelay !== '') {
+                Gate::authorize(GatewayPermission::SecurityManage->value);
+                abort_unless($request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
+                try {
+                    $relays->selected($selectedRelay);
+                } catch (ConnectionRelayUnavailable) {
+                    throw ValidationException::withMessages([
+                        'connection_relay_id' => __('Selected Relay is unavailable or missing verified host isolation.'),
+                    ]);
+                }
+            }
         } catch (ValidationException $exception) {
             if ($request->expectsJson()) {
                 throw $exception;
@@ -160,10 +180,18 @@ final class TargetController extends Controller
             $result = [
                 'ok' => true,
                 'message' => $checked->message,
-                'limitation' => $checked->limitation,
+                'limitation' => is_string($validated['connection_relay_id'] ?? null)
+                    && $validated['connection_relay_id'] !== ''
+                    ? $checked->limitation.' '.__('This check does not verify the selected Relay control tunnel or remote Target authentication.')
+                    : $checked->limitation,
                 'checked_subject' => $checked->checkedSubject,
                 'checked_connector' => $adapter->type(),
-                'checked_fields' => $checked->checkedFields,
+                'checked_fields' => [
+                    ...$checked->checkedFields,
+                    ...(is_string($validated['connection_relay_id'] ?? null)
+                        && $validated['connection_relay_id'] !== ''
+                        ? ['connection_relay_id' => $validated['connection_relay_id']] : []),
+                ],
             ];
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'invalid_input';
@@ -227,6 +255,12 @@ final class TargetController extends Controller
                     'not_regex:/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/'],
                 ...$adapter->registrationRules(),
             ]);
+            if (($validated['connection_relay_id'] ?? null) !== null
+                && ($validated['connection_relay_id'] ?? '') !== '') {
+                Gate::authorize(GatewayPermission::SecurityManage->value);
+                abort_unless($user->getRawOriginal('role') === GatewayRole::Owner->value, 403);
+                $confirmation->confirm($request);
+            }
             if ($adapter->type() === 'ssh_direct'
                 && ($validated['ssh_route_mode'] ?? 'direct') === 'reverse') {
                 // Enrollment over an inbound-blocked route is an explicit
@@ -318,8 +352,10 @@ final class TargetController extends Controller
         ]);
     }
 
-    public function edit(Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin): View
-    {
+    public function edit(
+        Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin,
+        ConnectionRelayRoutes $relays, ConnectionRelayTargetBinding $relayBindings,
+    ): View {
         Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
 
         $adapter = Gate::allows(GatewayPermission::SecurityManage->value)
@@ -333,6 +369,11 @@ final class TargetController extends Controller
             'target' => $target,
             'configurationRevision' => $hasConfig ? $adapter?->configurationRevision($target) : null,
             'connectorUi' => $presenter?->definition(),
+            'connectionRelays' => $relays->selectable(),
+            'selectedRelay' => $target->getAttribute('relay_record_id') === null ? null
+                : ConnectionRelay::query()
+                    ->find($target->getAttribute('relay_record_id')),
+            'routeRevision' => $relayBindings->revision($target),
             ...$details,
         ]);
     }

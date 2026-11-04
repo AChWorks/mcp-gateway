@@ -132,6 +132,19 @@
                 field.required = managed;
             });
         }
+        // One credential-confirmation field at a time. A switched Managed or
+        // Manual Reverse mode owns its own Owner confirmation and must not
+        // submit the shared Relay password or an old Relay choice.
+        const relaySelector = form.querySelector('#connection_relay_id');
+        const relayPassword = form.querySelector('[data-relay-owner-password]');
+        const relayPasswordGroup = form.querySelector('[data-relay-owner-group]');
+        const relayChosen = !managed && !manual && Boolean(relaySelector?.value);
+        if (relaySelector) relaySelector.disabled = manual || managed;
+        if (relayPasswordGroup) relayPasswordGroup.hidden = !relayChosen;
+        if (relayPassword) {
+            relayPassword.disabled = !relayChosen;
+            relayPassword.required = relayChosen;
+        }
         if (standardFields) standardFields.hidden = managed;
         if (routeValue) {
             routeValue.disabled = managed || !ssh;
@@ -157,6 +170,7 @@
         syncAuthentication();
     });
     connector.addEventListener('change', syncRoute);
+    form.querySelector('#connection_relay_id')?.addEventListener('change', syncRoute);
     syncRoute();
     const syncAuthentication = () => {
         const current = method.value;

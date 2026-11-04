@@ -1637,6 +1637,7 @@ td input[type="checkbox"] {
 [data-target-preflight][hidden],
 [data-target-ssh-shortcuts][hidden],
 [data-target-preflight-help][hidden],
+[data-relay-owner-group][hidden],
 [data-edit-ssh-credential][hidden],
 [data-target-actions][hidden],
 .operations-reset[hidden] {

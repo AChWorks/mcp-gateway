@@ -4,6 +4,7 @@ use App\Http\Controllers\Admin\AccessBatchController;
 use App\Http\Controllers\Admin\ActivityController;
 use App\Http\Controllers\Admin\AdministrationAccessController;
 use App\Http\Controllers\Admin\AuthenticatedSessionController;
+use App\Http\Controllers\Admin\ConnectionRelayController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\OAuthClientAuthorizationsController;
 use App\Http\Controllers\Admin\OperationalSettingsController;
@@ -13,6 +14,7 @@ use App\Http\Controllers\Admin\SshManagedReverseRevocationController;
 use App\Http\Controllers\Admin\SshManagedReverseTargetController;
 use App\Http\Controllers\Admin\TargetConfigurationController;
 use App\Http\Controllers\Admin\TargetConnectionController;
+use App\Http\Controllers\Admin\TargetConnectionRelayController;
 use App\Http\Controllers\Admin\TargetController;
 use App\Http\Controllers\Admin\TargetGroupController;
 use App\Http\Controllers\Admin\TargetGroupTargetController;
@@ -49,6 +51,7 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
     Route::post('/targets/{target:target_id}/operations', [TargetOperationsController::class, 'update'])->name('targets.operations.update');
     Route::put('/targets/{target:target_id}', [TargetController::class, 'update'])->name('targets.update');
     Route::put('/targets/{target:target_id}/configuration', [TargetConfigurationController::class, 'update'])->name('targets.configuration.update');
+    Route::put('/targets/{target:target_id}/relay-route', [TargetConnectionRelayController::class, 'update'])->name('targets.relay-route.update');
     Route::delete('/targets/{target:target_id}', [TargetController::class, 'destroy'])->name('targets.destroy');
     Route::delete('/targets/{target:target_id}/forget', [TargetController::class, 'forget'])->name('targets.forget');
     Route::post('/targets/{target:target_id}/connect', [TargetConnectionController::class, 'connect'])->name('targets.connect');
@@ -128,6 +131,13 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
         ->name('reverse-ssh.targets.reissue');
     Route::post('/targets/managed-reverse', [SshManagedReverseTargetController::class, 'store'])
         ->name('reverse-ssh.targets.store');
+
+    Route::get('/settings/connection-relays', [ConnectionRelayController::class, 'index'])->name('connection-relays.index');
+    Route::post('/settings/connection-relays', [ConnectionRelayController::class, 'store'])->name('connection-relays.store');
+    Route::put('/settings/connection-relays/{relay}', [ConnectionRelayController::class, 'update'])->name('connection-relays.update');
+    Route::post('/settings/connection-relays/{relay}/toggle', [ConnectionRelayController::class, 'toggle'])->name('connection-relays.toggle');
+    Route::post('/settings/connection-relays/{relay}/test', [ConnectionRelayController::class, 'test'])
+        ->middleware('throttle:10,1')->name('connection-relays.test');
 
     Route::get('/settings/reverse-ssh', [SshManagedReverseController::class, 'index'])
         ->name('reverse-ssh.index');

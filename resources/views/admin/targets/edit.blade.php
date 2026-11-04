@@ -46,6 +46,40 @@
 </section>
 
 @can('security.manage')
+@if(auth()->user()?->getRawOriginal('role') === 'owner' && in_array($target->connector_type, ['ssh_direct','wp_ai_bridge'], true))
+<section class="panel panel-wide target-enrollment" aria-labelledby="target-route-heading">
+    <h2 id="target-route-heading">{{ __('Connection route') }}</h2>
+    <p class="field-help">{{ __('This route is shared by the Target’s SSH/SFTP or WordPress/OAuth/MCP operations. A change fences retained SSH Jobs and requires reconnection. Switch only after finishing pending authentication, revocation and remote operations.') }}</p>
+    <form class="form-stack" method="post" action="{{ route('admin.targets.relay-route.update', ['target' => $target->target_id]) }}">
+        @csrf
+        @method('PUT')
+        <input type="hidden" name="route_revision" value="{{ $routeRevision }}">
+        <div class="field">
+            <label for="target-edit-connection-relay">{{ __('Route via') }}</label>
+            <select id="target-edit-connection-relay" name="connection_relay_id">
+                <option value="" @selected($selectedRelay === null)>{{ __('Direct (default)') }}</option>
+                @foreach ($connectionRelays as $relay)
+                    <option value="{{ $relay->relay_id }}" @selected($selectedRelay?->getKey() === $relay->getKey())>{{ $relay->display_name }}</option>
+                @endforeach
+            </select>
+            @if ($selectedRelay !== null && ! $connectionRelays->contains(fn($relay) => $relay->getKey() === $selectedRelay->getKey()))
+                <p class="field-help">{{ __('Saved Relay :name is disabled or not host-ready. Its route remains blocked until repaired or explicitly changed.', ['name' => $selectedRelay->display_name]) }}</p>
+            @endif
+            @error('connection_relay_id')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+            @error('route_revision')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+        </div>
+        <div class="field">
+            <label for="target-edit-route-password">{{ __('Current Owner password') }}</label>
+            <input id="target-edit-route-password" type="password" name="current_password" maxlength="255"
+                data-admin-requires-intent autocomplete="current-password" required>
+        </div>
+        <button class="button button-primary" type="submit">{{ __('Save connection route and require re-verification') }}</button>
+    </form>
+</section>
+@endif
+@endcan
+
+@can('security.manage')
 @if (! empty($configurationRevision))
     <section class="panel panel-wide target-enrollment" aria-label="{{ __('Connector settings') }}">
         <h2>{{ __('Connection settings') }}</h2>
