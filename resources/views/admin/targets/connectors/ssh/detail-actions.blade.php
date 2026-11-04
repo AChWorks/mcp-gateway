@@ -46,7 +46,7 @@
                 </div>
                 <div class="field">
                     <label for="reverse_reissue_password">{{ __('Current Owner password') }}</label>
-                    <input id="reverse_reissue_password" type="password" name="current_password" required autocomplete="current-password">
+                    <input id="reverse_reissue_password" type="password" name="current_password" data-admin-requires-intent required autocomplete="current-password">
                 </div>
                 <button class="button button-secondary" type="submit">{{ __('Reissue one-use install command') }}</button>
             </form>
@@ -67,7 +67,7 @@
             </div>
             <div class="field">
                 <label for="reverse_revoke_password">{{ __('Current Owner password') }}</label>
-                <input id="reverse_revoke_password" type="password" name="current_password" required autocomplete="current-password">
+                <input id="reverse_revoke_password" type="password" name="current_password" data-admin-requires-intent required autocomplete="current-password">
             </div>
             <div class="target-create-actions">
                 <button class="button button-danger" type="submit">{{ $managedReverse->state === 'revoked' ? __('Retry host key revocation') : __('Revoke managed Reverse SSH access') }}</button>

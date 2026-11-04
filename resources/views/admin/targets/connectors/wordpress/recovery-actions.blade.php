@@ -34,7 +34,7 @@
                                     </label>
                                     @error('confirm_target_id')<p class="field-error" id="cancel_disconnect_target_id-error" role="alert">{{ $message }}</p>@enderror
                                     <label>{{ __('Your current Gateway password') }}
-                                        <input type="password" name="current_password" required maxlength="255" autocomplete="current-password" id="cancel_disconnect_password" @error('current_password') aria-invalid="true" aria-describedby="cancel_disconnect_password-error" @enderror>
+                                        <input type="password" name="current_password" data-admin-requires-intent required maxlength="255" autocomplete="current-password" id="cancel_disconnect_password" @error('current_password') aria-invalid="true" aria-describedby="cancel_disconnect_password-error" @enderror>
                                     </label>
                                     @error('current_password')<p class="field-error" id="cancel_disconnect_password-error" role="alert">{{ $message }}</p>@enderror
                                     <button class="button button-secondary" type="submit">{{ __('Verify WordPress authorization and cancel') }}</button>
@@ -71,7 +71,7 @@
                                 </label>
                                 @error('other_clients_affected')<p class="field-error" id="reconcile_disconnect_other_clients-error" role="alert">{{ $message }}</p>@enderror
                                 <label>{{ __('Your current Gateway password') }}
-                                    <input type="password" name="current_password" required maxlength="255" autocomplete="current-password" id="reconcile_disconnect_password" @error('current_password') aria-invalid="true" aria-describedby="reconcile_disconnect_password-error" @enderror>
+                                    <input type="password" name="current_password" data-admin-requires-intent required maxlength="255" autocomplete="current-password" id="reconcile_disconnect_password" @error('current_password') aria-invalid="true" aria-describedby="reconcile_disconnect_password-error" @enderror>
                                 </label>
                                 @error('current_password')<p class="field-error" id="reconcile_disconnect_password-error" role="alert">{{ $message }}</p>@enderror
                                 <button class="button button-danger" type="submit">{{ __('Clear Gateway credential after WordPress-side revocation') }}</button>

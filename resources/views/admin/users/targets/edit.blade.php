@@ -75,7 +75,7 @@
 
             <div class="field">
                 <label for="current_password">{{ __('Your current password') }}</label>
-                <input id="current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" @enderror aria-describedby="current_password-help{{ $errors->has('current_password') ? ' current_password-error' : '' }}">
+                <input id="current_password" name="current_password" data-admin-requires-intent type="password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" @enderror aria-describedby="current_password-help{{ $errors->has('current_password') ? ' current_password-error' : '' }}">
                 <p class="field-help" id="current_password-help">{{ __('Required to confirm this security-sensitive change.') }}</p>
                 @error('current_password')<p class="field-error" id="current_password-error" role="alert">{{ $message }}</p>@enderror
             </div>

@@ -121,8 +121,16 @@ final class UserController extends Controller
             );
         } catch (DomainException $exception) {
             if ($exception->getMessage() === 'last_owner') {
+                // Explicit withInput() bypasses Laravel's exception-handler
+                // dontFlash filter. Keep only non-secret User draft controls:
+                // the Admin one-use feedback middleware also transports old
+                // input, so passwords must never enter session flash.
                 return back()
-                    ->withInput()
+                    ->withInput($request->only([
+                        'name', 'email', 'role', 'target_scope_mode',
+                        'access_enabled', 'ai_access_enabled', 'denied_permissions',
+                        'ssh_permissions_reviewed', 'confirm_ssh_permission_changes',
+                    ]))
                     ->withErrors([
                         'access_enabled' => __('Create or enable another owner before disabling or demoting the last recoverable owner.'),
                     ]);

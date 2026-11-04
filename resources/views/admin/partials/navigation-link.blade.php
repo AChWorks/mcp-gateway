@@ -2,6 +2,7 @@
     // Finite local workflow aliases keep review pages in their existing section.
     $navigationRoute = request()->attributes->get('admin.navigation.route');
     $current = request()->routeIs($activePattern)
+        || ($destination === 'admin.targets.index' && request()->routeIs('admin.reverse-ssh.targets.*'))
         || (in_array($navigationRoute, ['admin.target-groups.targets.index', 'admin.users.targets.index'], true)
             && \Illuminate\Support\Str::is($activePattern, $navigationRoute));
 @endphp

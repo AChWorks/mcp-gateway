@@ -39,7 +39,7 @@
                                     @method('DELETE')
                                     <div class="field">
                                         <label for="revoke-password-{{ $grant->id }}">{{ __('Current Owner password') }}</label>
-                                        <input id="revoke-password-{{ $grant->id }}" name="current_password" type="password" required maxlength="255" autocomplete="current-password"
+                                        <input id="revoke-password-{{ $grant->id }}" name="current_password" type="password" data-admin-requires-intent required maxlength="255" autocomplete="current-password"
                                             @error('current_password') aria-invalid="true" aria-describedby="revoke-password-{{ $grant->id }}-error" @enderror>
                                         @error('current_password')<p class="field-error" id="revoke-password-{{ $grant->id }}-error" role="alert">{{ $message }}</p>@enderror
                                     </div>
@@ -74,7 +74,7 @@
             </div>
             <div class="field">
                 <label for="current_password">{{ __('Current Owner password') }}</label>
-                <input id="current_password" type="password" name="current_password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="current_password-error" @enderror>
+                <input id="current_password" type="password" name="current_password" data-admin-requires-intent maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="current_password-error" @enderror>
                 @error('current_password')<p class="field-error" id="current_password-error" role="alert">{{ $message }}</p>@enderror
             </div>
             <button class="button button-primary" type="submit">{{ __('Grant scoped publication') }}</button>

@@ -141,7 +141,7 @@
                                     @csrf
                                     @method('DELETE')
                                     <label for="password-{{ $grant->id }}">{{ __('Current Owner password') }}</label>
-                                    <input id="password-{{ $grant->id }}" name="current_password" type="password" autocomplete="current-password" required maxlength="255"
+                                    <input id="password-{{ $grant->id }}" name="current_password" type="password" data-admin-requires-intent autocomplete="current-password" required maxlength="255"
                                         @error('current_password') aria-invalid="true" aria-describedby="password-{{ $grant->id }}-error" @enderror>
                                     @error('current_password')<p class="field-error" id="password-{{ $grant->id }}-error" role="alert">{{ $message }}</p>@enderror
                                     <button class="button button-danger" type="submit">{{ __('Revoke this grant') }}</button>

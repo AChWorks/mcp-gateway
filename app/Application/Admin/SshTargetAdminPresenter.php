@@ -12,7 +12,7 @@ final class SshTargetAdminPresenter implements TargetConnectorAdminPresenter
     {
         return new TargetConnectorAdminDefinition(
             type: 'ssh_direct',
-            label: __('Direct SSH'),
+            label: __('SSH'),
             enrollmentView: 'admin.targets.connectors.ssh.enrollment',
             configurationView: 'admin.targets.connectors.ssh.configuration',
             inventoryIdentityView: 'admin.targets.connectors.ssh.inventory-identity',

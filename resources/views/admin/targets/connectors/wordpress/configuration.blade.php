@@ -24,7 +24,7 @@
         </div>
         <div class="field">
             <label for="wp_config_owner_password">{{ __('Current Owner password') }}</label>
-            <input id="wp_config_owner_password" type="password" name="current_password" required maxlength="255"
+            <input id="wp_config_owner_password" type="password" name="current_password" data-admin-requires-intent required maxlength="255"
                 autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="wp_config_owner_password-error" @enderror>
             @error('current_password')<p class="form-error" role="alert" id="wp_config_owner_password-error">{{ $message }}</p>@enderror
         </div>

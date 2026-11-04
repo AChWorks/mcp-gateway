@@ -207,7 +207,7 @@
             <p class="field-help">{{ __('Editing these limits does not grant any new Target permission, unlock binary transfer, or replace an external server setting. Changes are version-checked and audited.') }}</p>
             <div class="field">
                 <label for="current_password">{{ __('Current Owner password') }}</label>
-                <input id="current_password" type="password" name="current_password" required
+                <input id="current_password" type="password" name="current_password" data-admin-requires-intent required
                     autocomplete="current-password" maxlength="255"
                     aria-describedby="current-password-help{{ $errors->has('current_password') ? ' current-password-error' : '' }}"
                     @error('current_password') aria-invalid="true" @enderror>

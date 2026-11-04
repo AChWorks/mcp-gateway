@@ -7,6 +7,7 @@
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
@@ -101,6 +102,44 @@ Route::middleware('web')->get('/__browser__/experience/{role}', static function 
     Auth::login($user);
 
     return redirect()->route('admin.dashboard');
+});
+
+// Seed the two real Owner-only revocation pages on this disposable browser DB.
+// The tests use actual Admin Blade forms and POST/redirect actions, not a
+// synthetic duplicate password field or a production account.
+Route::middleware(['web', 'auth'])->get('/__browser__/owner-revocation-forms', static function () {
+    $owner = Auth::user();
+    abort_unless($owner instanceof User && $owner->getRawOriginal('role') === 'owner', 403);
+    $grantId = '01JABBBBBBBBBBBBBBBBBBBBBB';
+    DB::table('oauth_authorizations')->updateOrInsert(['id' => $grantId], [
+        'user_id' => $owner->getKey(),
+        'client_id' => 'ui-revocation-only-client',
+        'client_profile_key' => 'chatgpt',
+        'client_profile_generation' => 1,
+        'resource' => 'https://ui-provider.browser.test/resource',
+        'resource_hash' => hash('sha256', 'https://ui-provider.browser.test/resource'),
+        'scopes' => json_encode(['mcp:read'], JSON_THROW_ON_ERROR),
+        'revoked_at' => null,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $publisher = User::query()->firstOrCreate(['email' => 'ui-publisher@example.test'], [
+        'name' => 'UI Browser Publisher',
+        'password' => 'isolated-browser-publisher-password',
+        'role' => 'operator',
+        'target_scope_mode' => 'selected',
+        'access_enabled' => true,
+    ]);
+    $group = TargetGroup::query()->firstOrCreate(['name' => 'UI browser publication group']);
+    DB::table('wordpress_publish_group_grants')->updateOrInsert([
+        'user_id' => $publisher->getKey(),
+        'target_group_id' => $group->getKey(),
+    ], ['created_at' => now(), 'updated_at' => now()]);
+
+    return response()->json([
+        'oauth' => route('admin.oauth-clients.index'),
+        'publishing' => route('admin.users.publishing.index', ['user' => $publisher->getKey()]),
+    ]);
 });
 
 Route::middleware(['web', 'auth'])->post('/__browser__/experience-expire', static function (Request $request) {

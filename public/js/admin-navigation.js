@@ -77,23 +77,151 @@
             });
     }
 
-    function formValues(form) {
-        return JSON.stringify(Array.from(form.elements).flatMap(control => {
-            if (!control.name || !['INPUT', 'SELECT', 'TEXTAREA'].includes(control.tagName)) return [];
+    // Password managers may fill unrelated technical fields after DOMContentLoaded.
+    // A field value alone, focus alone, or an arbitrary input/change event alone
+    // does not prove an intentional edit. Preserve server-rendered values for
+    // technical identities and recognize actual typing/selection/paste.
+    const deliberateFields = new WeakSet();
+    // A passive later replacement must not override an actual operator value.
+    // This also covers a field that the operator edited and then reverted.
+    const deliberateValues = new WeakMap();
+    // Browser autofill and deliberate password-manager selection can both
+    // generate trusted input/change. Consent is a separate explicit control,
+    // never inferred from credential events or focus/click on the password.
+    const ownerApprovals = new WeakMap();
+    const editableInputs = control => control instanceof HTMLInputElement
+        || control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement;
+
+    function deliberate(event) {
+        const control = event.target;
+        if (!editableInputs(control) || !control.form) return;
+        if (control.name === 'current_password' && control.dataset.adminRequiresIntent !== undefined) return;
+        // Only native trusted selection events qualify as a human edit.
+        // A preceding click/focus does not grant a later synthetic event
+        // authority over this field. App-owned shortcut actions explicitly
+        // stage their own edits, rather than faking a trusted select event.
+        if (control instanceof HTMLSelectElement) {
+            if ((event.type === 'change' || event.type === 'input')
+                && event.isTrusted && document.activeElement === control) {
+                deliberateFields.add(control);
+                deliberateValues.set(control, control.value);
+            }
+            return;
+        }
+        if (!event.isTrusted || document.activeElement !== control) return;
+        if (event.type === 'paste' || event.type === 'cut' || event.type === 'compositionstart') {
+            deliberateFields.add(control);
+            return;
+        }
+        if (event.type === 'beforeinput' || event.type === 'input') {
+            const inputType = event.inputType || '';
+            // Chrome autofill/password-manager replacement is not typed text.
+            // Native typing, paste, deletion, undo/redo and IME are edits.
+            if (inputType.startsWith('insertText')
+                || inputType.startsWith('insertComposition')
+                || inputType.startsWith('insertFromPaste')
+                || inputType.startsWith('delete')
+                || inputType.startsWith('history')) {
+                deliberateFields.add(control);
+                if (event.type === 'input') deliberateValues.set(control, control.value);
+            }
+        } else if (event.type === 'change'
+            && (control instanceof HTMLSelectElement
+                || control.type === 'checkbox' || control.type === 'radio'
+                || control.type === 'file')) {
+                deliberateFields.add(control);
+                deliberateValues.set(control, control.value);
+            }
+    }
+
+    ['beforeinput', 'input', 'change', 'paste', 'cut', 'compositionstart'].forEach(type =>
+        document.addEventListener(type, deliberate, true));
+
+    // One shared explicit decision per rendered Owner credential field.
+    // It is intentionally distinct from any browser-generated fill event.
+    function ensureOwnerApprovals(root = document) {
+        root.querySelectorAll('input[name="current_password"][data-admin-requires-intent]').forEach(field => {
+            if (ownerApprovals.has(field)) return;
+            const label = document.createElement('label');
+            label.className = 'checkbox-option admin-owner-approval';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.dataset.adminOwnerApprovalInput = '';
+            // No name, so this never enters the POST and changes no backend contract.
+            const copy = document.createElement('span');
+            copy.textContent = document.body.dataset.ownerPasswordApprovalLabel || '';
+            label.append(checkbox, copy);
+            const error = document.createElement('p');
+            error.className = 'field-error';
+            error.role = 'alert';
+            error.hidden = true;
+            error.textContent = document.body.dataset.ownerPasswordApprovalError || '';
+            field.insertAdjacentElement('afterend', label);
+            label.insertAdjacentElement('afterend', error);
+            const approval = { checkbox, error, value: null };
+            ownerApprovals.set(field, approval);
+
+            // A trusted click/keyboard activation on this SEPARATE control
+            // is proof of the Owner's decision. Password input/change never is.
+            checkbox.addEventListener('click', event => {
+                if (!event.isTrusted || !checkbox.checked || field.disabled || field.value === '') {
+                    checkbox.checked = false;
+                    approval.value = null;
+                    if (event.isTrusted && field.value === '') field.focus();
+                    return;
+                }
+                approval.value = field.value;
+                error.hidden = true;
+            });
+        });
+    }
+
+    function invalidateOwnerApproval(form) {
+        form.querySelectorAll('input[name="current_password"][data-admin-requires-intent]').forEach(field => {
+            const approval = ownerApprovals.get(field);
+            if (!approval) return;
+            approval.value = null;
+            approval.checkbox.checked = false;
+            approval.error.hidden = true;
+        });
+    }
+
+    // App-managed controls stage edits through genuine clicks. Semantic
+    // comparisons still detect reverts; synthetic events alone do not.
+    document.addEventListener('click', event => {
+        if (!event.isTrusted) return;
+        const clear = event.target.closest('[data-clear-setting]');
+        if (clear) {
+            const field = document.getElementById(clear.dataset.clearSetting);
+            if (field) deliberateFields.add(field);
+        }
+        const selectPage = event.target.closest('[data-select-page]');
+        if (selectPage) {
+            selectPage.closest('form')?.querySelectorAll('input[data-selectable][name="selected_ids[]"]')
+                .forEach(field => { if (!field.disabled) deliberateFields.add(field); });
+        }
+    }, true);
+
+    function reconcilePassiveIdentity(form) {
+        form.querySelectorAll('[data-admin-manual-entry][data-admin-server-value]').forEach(control => {
+            const intended = deliberateValues.has(control)
+                ? deliberateValues.get(control) : control.dataset.adminServerValue;
+            if (control.value !== intended) control.value = intended;
+        });
+    }
+
+    function fieldValues(form) {
+        const entries = new Map();
+        Array.from(form.elements).forEach(control => {
+            if (!control.name || !['INPUT', 'SELECT', 'TEXTAREA'].includes(control.tagName)) return;
             const type = (control.type || '').toLowerCase();
-            // Session/auth tokens, optimistic revision hashes, and generated
-            // hidden metadata are not human-editable form content.
-            if (['hidden', 'button', 'submit', 'reset', 'image'].includes(type)) return [];
-            // The existing Owner's current password confirms a later POST;
-            // it is not persistent form content. Browser password managers
-            // may fill it after the baseline without an operator edit.
-            // Keep new passwords and SSH credentials protected as real drafts.
-            if (type === 'password' && control.name === 'current_password') return [];
-            // Out-of-Role Deny choices cannot be submitted. Ignore automatic
-            // SSH safe-default seeding after a Role is reverted, but preserve
-            // deliberate edits staged while the permission was available.
+            if (['hidden', 'button', 'submit', 'reset', 'image'].includes(type)) return;
+            // Owner reauthentication is not a persisted draft. Other new
+            // credentials are protected when deliberately entered.
+            if (type === 'password' && control.name === 'current_password') return;
+            if (control.dataset.adminOwnerApprovalInput !== undefined) return;
             if (control.disabled && control.closest('[data-user-role-choice]')
-                && control.dataset.adminStagedEdit !== 'true') return [];
+                && control.dataset.adminStagedEdit !== 'true') return;
             let value;
             if (type === 'checkbox' || type === 'radio') value = control.checked;
             else if (type === 'file') value = Array.from(control.files || [],
@@ -101,15 +229,18 @@
             else if (control.tagName === 'SELECT' && control.multiple) {
                 value = Array.from(control.selectedOptions, option => option.value);
             } else value = control.value;
-            return [[control.name, type, value]];
-        }));
+            entries.set(control, JSON.stringify([control.name, type, value]));
+        });
+        return entries;
     }
 
     function captureBaselines(root = document) {
+        ensureOwnerApprovals(root);
         root.querySelectorAll('form').forEach(form => {
             if (editableForm(form) && !formBaselines.has(form)) {
+                reconcilePassiveIdentity(form);
                 formBaselines.set(form, {
-                    values: formValues(form),
+                    values: fieldValues(form),
                     failedDraft: hasFailedDraft(form),
                 });
                 formDirty(form);
@@ -122,14 +253,26 @@
             form?.removeAttribute('data-admin-dirty');
             return false;
         }
+        reconcilePassiveIdentity(form);
         if (!formBaselines.has(form)) {
             formBaselines.set(form, {
-                values: formValues(form),
+                values: fieldValues(form),
                 failedDraft: hasFailedDraft(form),
             });
         }
         const baseline = formBaselines.get(form);
-        const changed = baseline.failedDraft || formValues(form) !== baseline.values;
+        const current = fieldValues(form);
+        let changed = baseline.failedDraft;
+        current.forEach((value, control) => {
+            if (deliberateFields.has(control) && value === baseline.values.get(control)) {
+                // A fully reverted edit cannot grant future passive autofill
+                // authority over a server-authored technical identity field.
+                deliberateFields.delete(control);
+                deliberateValues.delete(control);
+            }
+            if ((deliberateFields.has(control) || control.dataset.adminStagedEdit === 'true')
+                && baseline.values.get(control) !== value) changed = true;
+        });
         if (changed) form.dataset.adminDirty = 'true';
         else form.removeAttribute('data-admin-dirty');
         return changed;
@@ -206,10 +349,21 @@
 
     document.addEventListener('input', markDirty);
     document.addEventListener('change', markDirty);
+    document.addEventListener('focusin', event => {
+        const form = event.target.closest?.('form');
+        if (form) reconcilePassiveIdentity(form);
+    });
 
     function markDirty(event) {
         const form = event.target.closest('form');
-        if (form) formDirty(form);
+        if (form) {
+            // Editing any submitted field changes the action's precise
+            // meaning or credential; require a fresh explicit approval.
+            if (event.target.dataset.adminOwnerApprovalInput === undefined) {
+                invalidateOwnerApproval(form);
+            }
+            formDirty(form);
+        }
     }
 
     document.addEventListener('reset', event => {
@@ -221,7 +375,31 @@
     // does not block its own navigation; unrelated unsaved forms still do.
     document.addEventListener('submit', event => {
         if (!event.defaultPrevented && event.target instanceof HTMLFormElement) {
-            submittedDirtyForm = formDirty(event.target) ? event.target : null;
+            const form = event.target;
+            // An explicit separate Owner decision is required regardless of
+            // whether the password was typed, pasted or manager-filled.
+            // Compare the value captured at that decision: even an autofill
+            // without DOM events cannot substitute a different credential.
+            const unapproved = Array.from(form.querySelectorAll(
+                'input[name="current_password"][data-admin-requires-intent]')).find(field => {
+                if (field.disabled) return false;
+                const approval = ownerApprovals.get(field);
+                return !approval || !approval.checkbox.checked || !field.value
+                    || approval.value !== field.value;
+            });
+            if (unapproved) {
+                event.preventDefault();
+                const approval = ownerApprovals.get(unapproved);
+                if (approval) {
+                    approval.checkbox.checked = false;
+                    approval.value = null;
+                    approval.error.hidden = false;
+                    approval.checkbox.focus();
+                }
+                return;
+            }
+            reconcilePassiveIdentity(form);
+            submittedDirtyForm = formDirty(form) ? form : null;
             if (submittedDirtyForm) submittedDirtyForm.removeAttribute('data-admin-dirty');
         }
     });

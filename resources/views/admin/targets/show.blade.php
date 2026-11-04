@@ -142,7 +142,7 @@
                         @error('confirm_remote_revocation_unknown')<p class="form-error" role="alert" id="forget_remote_revocation_unknown-error">{{ $message }}</p>@enderror
                         <div class="field">
                             <label for="forget_owner_password">{{ __('Current Owner password') }}</label>
-                            <input id="forget_owner_password" name="current_password" type="password" required maxlength="255" autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="forget_owner_password-error" @enderror>
+                            <input id="forget_owner_password" name="current_password" data-admin-requires-intent type="password" required maxlength="255" autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="forget_owner_password-error" @enderror>
                             @error('current_password')<p class="form-error" role="alert" id="forget_owner_password-error">{{ $message }}</p>@enderror
                         </div>
                         <div class="filter-actions">

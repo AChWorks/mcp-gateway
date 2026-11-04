@@ -110,6 +110,7 @@ if [[ "$mode" == browser || "$mode" == experience-only ]]; then
 fi
 if [[ "$mode" == browser || "$mode" == experience-only ]]; then
     node tests/Browser/managed-reverse.cjs
+    node tests/Browser/admin-target-ux.cjs
 fi
 if [[ "$mode" == browser || "$mode" == groups-only ]]; then
     node tests/Browser/admin-group-workflows.cjs

@@ -26,7 +26,7 @@
             </div>
             <div class="field">
                 <label for="display_name">{{ __('Display name') }}</label>
-                <input id="display_name" name="display_name" type="text" required maxlength="160"
+                <input id="display_name" name="display_name" type="text" required maxlength="160" autocomplete="off" data-admin-manual-entry data-admin-server-value="{{ old('display_name', $target->display_name) }}"
                     value="{{ old('display_name', $target->display_name) }}" @error('display_name') aria-invalid="true" aria-describedby="display_name-error" @enderror>
                 @error('display_name')<p class="form-error" role="alert" id="display_name-error">{{ $message }}</p>@enderror
             </div>

@@ -12,7 +12,7 @@ use Throwable;
  * systemctl execution, public egress, credentials or mutable host effects.
  * This is local readiness, NOT proof of remote Target network reachability.
  */
-final class SshManagedReverseHostReadiness
+class SshManagedReverseHostReadiness
 {
     public function __construct(private SshManagedReverseAuthorizedKeys $keys) {}
 

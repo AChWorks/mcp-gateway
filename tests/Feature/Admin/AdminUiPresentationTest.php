@@ -20,6 +20,31 @@ final class AdminUiPresentationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_all_admin_owner_reauthentication_fields_share_the_explicit_intent_guard(): void
+    {
+        $covered = 0;
+        $directory = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator(resource_path('views/admin')),
+        );
+        foreach ($directory as $file) {
+            if (! $file->isFile() || ! str_ends_with($file->getFilename(), '.blade.php')) {
+                continue;
+            }
+            $contents = (string) file_get_contents($file->getPathname());
+            // Blade interpolation can contain PHP object arrows, which are
+            // not HTML tag boundaries. Mask those before scanning inputs.
+            $source = preg_replace('/\{\{.*?\}\}/s', 'BLADE', $contents);
+            preg_match_all('/<input\b[^>]*\bname="current_password"[^>]*>/s', $source, $matches);
+            foreach ($matches[0] as $input) {
+                $covered++;
+                self::assertStringContainsString('data-admin-requires-intent', $input,
+                    'Missing shared Owner password protection in '.$file->getPathname());
+            }
+        }
+        self::assertGreaterThanOrEqual(25, $covered,
+            'The Admin Owner field inventory unexpectedly shrank; inspect the actual forms.');
+    }
+
     public function test_managed_reverse_owner_settings_and_recovery_use_accessible_shared_admin_forms(): void
     {
         $owner = $this->owner();
@@ -40,7 +65,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate(
             'count(//form[@method="post"]//label[@for="reverse_owner_password"])',
         ));
-        self::assertSame(1, (int) $xpath->evaluate(
+        self::assertSame(0, (int) $xpath->evaluate(
             'count(//form//label[@for="reverse_repair_password"])',
         ));
         self::assertSame(1, (int) $xpath->evaluate(
@@ -775,7 +800,7 @@ final class AdminUiPresentationTest extends TestCase
         };
 
         self::assertSame(['Unsupported connector', 'unrecognized_connector'], $connectorLabelFor('legacy-unsupported'));
-        self::assertSame(['Direct SSH', 'ssh_direct'], $connectorLabelFor('supported-ssh'));
+        self::assertSame(['SSH', 'ssh_direct'], $connectorLabelFor('supported-ssh'));
         self::assertSame(['WordPress (WP AI Bridge)', 'wp_ai_bridge'], $connectorLabelFor('supported-wordpress'));
         self::assertSame('unrecognized_connector', DB::table('targets')->where('id', $legacy->getKey())->value('connector_type'));
     }

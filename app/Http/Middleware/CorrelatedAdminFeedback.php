@@ -42,6 +42,7 @@ final class CorrelatedAdminFeedback
         'status', 'errors', '_old_input', 'target_connection_failed',
         'target_endpoint_preflight', 'target_preflight_validation_failed',
         'diagnostic_code', 'diagnostic_stage', 'diagnostic_context', 'diagnostic_reference',
+        'reverse_ssh_operation',
     ];
 
     public function handle(Request $request, Closure $next): Response

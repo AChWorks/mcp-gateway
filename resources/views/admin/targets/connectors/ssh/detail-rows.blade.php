@@ -4,7 +4,7 @@
     <dd>
         @if (($sshConfig->route_mode ?? 'direct') === 'reverse')
             {{ __('Owner-approved Reverse SSH') }} — <code class="small-code">127.0.0.1:{{ $sshConfig->reverse_listener_port }}</code>
-            <small>{{ __('NL loopback forward; tunnel identity:') }} {{ $sshConfig->reverse_tunnel_identity }}</small>
+            <small>{{ __('Gateway host loopback forward; tunnel identity:') }} {{ $sshConfig->reverse_tunnel_identity }}</small>
             <small>{{ __('This local address is NOT the Target server IP. The server host-key pin is verified across the forward.') }}</small>
         @else
             {{ __('Direct public SSH TCP') }}

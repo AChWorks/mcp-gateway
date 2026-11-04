@@ -21,7 +21,7 @@
                     @error('other_clients_affected')<p class="field-error" id="reconcile_refresh_other_clients-error" role="alert">{{ $message }}</p>@enderror
                     <label>
                         {{ __('Your current Gateway password') }}
-                        <input type="password" name="current_password" required maxlength="255" autocomplete="current-password" id="reconcile_refresh_password" @error('current_password') aria-invalid="true" aria-describedby="reconcile_refresh_password-error" @enderror>
+                        <input type="password" name="current_password" data-admin-requires-intent required maxlength="255" autocomplete="current-password" id="reconcile_refresh_password" @error('current_password') aria-invalid="true" aria-describedby="reconcile_refresh_password-error" @enderror>
                     </label>
                     @error('current_password')<p class="field-error" id="reconcile_refresh_password-error" role="alert">{{ $message }}</p>@enderror
                     <button type="submit" class="button button-danger">{{ __('Clear local credential after confirmed WordPress revocation') }}</button>

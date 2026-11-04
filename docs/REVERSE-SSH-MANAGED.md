@@ -56,7 +56,7 @@ restrictions independently. The resulting public control SSHD host key must
 be verified by a trusted channel. An HTTPS-only CDN proxy is NOT a TCP/SSH
 forwarder; the control port needs separate egress reachability from Target.
 
-In Admin > Reverse SSH settings, Owner configures the reachable control host,
+In Admin > System > Reverse SSH, Owner configures the reachable control host,
 port, dedicated control user and verified SSHD public host key, with password
 confirmation. The PHP configuration is bound to a root-owned manifest at
 /etc/mcp-gateway-reverse/manifest.json. Its Owner page distinguishes
@@ -69,16 +69,18 @@ Target route, or a completed Target login. Where PHP lacks OS privileges,
 the page displays separately approved `systemctl status`, `ss -lntp`
 and the immutable host installer `--preflight` commands rather than
 silently claiming privileged host inspection. The separate host approval is
-required only once, not per added Target.
+required only once, not per added Target. When settings are saved, the Admin page shows a read-only summary and an explicit Edit action. Local Ready status never proves a connected remote Target.
 
 ## Adding a Target in one command
 
-Admin > Targets > Add Target > Managed Reverse SSH collects stable ID, real
+Targets > Add Target > SSH > Managed Reverse SSH collects stable ID, real
 Target host/SSH port/login and the independently verified Target SSHD public
 host key. After Owner password verification it creates a Pending Target,
 reserves a unique Gateway loopback port and generates a 10-minute, one-use
 enrollment token. The only command is displayed once and contains a sensitive
 short-lived token, never a private key. Do not paste it in shared logs/chat.
+
+The one-time installation command appears as the next step of the shared Add Target flow. Failed validation returns to that same flow, restoring only safe non-secret fields. The legacy Managed creation URL redirects to Add Target.
 
 The command downloads the fixed installed Target script over HTTPS to a
 temporary file, verifies the exact release-committed SHA256 BEFORE any privileged execution and

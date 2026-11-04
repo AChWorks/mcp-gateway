@@ -45,6 +45,14 @@ async function enter(page, role = 'owner') {
     return response.json();
 }
 async function post(page, button) {
+    const consent = button.locator('xpath=ancestor::form')
+        .locator('[data-admin-owner-approval-input]');
+    if (await consent.count() && await consent.isVisible()
+        && await button.locator('xpath=ancestor::form')
+            .locator('input[name="current_password"]').inputValue()) {
+        await consent.check();
+        assert.equal(await consent.isChecked(),true,'Owner action approval did not remain checked.');
+    }
     const response = page.waitForResponse(r => r.request().method() === 'POST'
         && new URL(r.url()).origin === base);
     await button.click();
