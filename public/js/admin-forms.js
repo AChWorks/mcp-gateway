@@ -81,6 +81,9 @@
             connector.value = 'ssh_direct';
             connector.dispatchEvent(new Event('change', { bubbles: true }));
             sshMode.value = link.dataset.targetSshShortcut;
+            // The trusted shortcut click intentionally stages this select.
+            // A bare script-driven select/change elsewhere must remain inert.
+            if (event.isTrusted) sshMode.dataset.adminStagedEdit = 'true';
             sshMode.dispatchEvent(new Event('change', { bubbles: true }));
             form.querySelector('#target_id')?.focus();
         });
@@ -136,7 +139,7 @@
         }
         if (submit) {
             submit.textContent = managed ? managedSubmitLabel : (submit.dataset.standardLabel || initialSubmitLabel);
-            submit.disabled = managed && form.dataset.managedConfigured !== 'true';
+            submit.disabled = managed && form.dataset.managedReady !== 'true';
         }
         if (preflightAction) {
             preflightAction.hidden = managed;

@@ -34,7 +34,16 @@ final readonly class SshManagedReverseEnrollmentService
         private SshTargetVault $vault,
         private ActivityRecorder $activity,
         private SshManagedReverseAuthorizedKeys $authorizedKeys,
+        private SshManagedReverseHostReadiness $readiness,
     ) {}
+
+    private function requireLocalReady(): void
+    {
+        $gateway = SshManagedReverseGateway::query()->find(1);
+        if ($this->readiness->assess($gateway)['state'] !== 'Ready') {
+            throw new RuntimeException('Managed Reverse SSH local host is not Ready; inspect Gateway host readiness before enrollment.');
+        }
+    }
 
     /** @return array{enrollment:SshManagedReverseEnrollment,token:string} */
     public function begin(
@@ -50,6 +59,11 @@ final readonly class SshManagedReverseEnrollmentService
             || ($aiGuidance !== null && mb_strlen($aiGuidance) > Target::AI_GUIDANCE_MAX_LENGTH)) {
             throw new InvalidArgumentException('Invalid managed Reverse SSH Target details.');
         }
+        // GET presentation may be stale. A bounded local SSHD/pin check at
+        // POST admission is required BEFORE minting any key or Pending Target.
+        // The transaction still verifies current enabled/publication policy;
+        // no point-in-time probe can guarantee future network availability.
+        $this->requireLocalReady();
         // No shelling out from PHP-FPM and no private key transfer to the Target
         // through URLs/logs. The login key is stored only in the existing vault.
         $loginKey = EC::createKey('Ed25519');
@@ -192,6 +206,8 @@ final readonly class SshManagedReverseEnrollmentService
      */
     public function reissue(SshManagedReverseEnrollment $original): array
     {
+        $this->requireLocalReady();
+
         return $this->authorizedKeys->withPolicyLock(function () use ($original): array {
             $token = bin2hex(random_bytes(32));
             $enrollment = DB::transaction(function () use ($original, $token): SshManagedReverseEnrollment {

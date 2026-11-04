@@ -25,7 +25,7 @@
     <form id="target-create-form" method="post" action="{{ route($selectedSshMode === 'managed' ? 'admin.reverse-ssh.targets.store' : 'admin.targets.store') }}"
         data-standard-action="{{ route('admin.targets.store') }}"
         data-managed-action="{{ route('admin.reverse-ssh.targets.store') }}"
-        data-managed-configured="{{ $managedConfigured ? 'true' : 'false' }}" class="form-stack" autocomplete="off">
+        data-managed-ready="{{ $managedReady ? 'true' : 'false' }}" class="form-stack" autocomplete="off">
         @csrf
         @if ($errors->any())
             <div id="target-registration-errors" class="alert alert-error" data-admin-feedback role="alert" tabindex="-1" autofocus aria-labelledby="target-registration-errors-title">
@@ -79,7 +79,7 @@
         @endforeach
 
         <div class="target-create-actions" data-target-actions @if($selected === '') hidden @endif>
-            <button class="button button-primary" type="submit" data-target-submit @disabled($selected === 'ssh_direct' && $selectedSshMode === 'managed' && ! $managedConfigured)>{{ $selectedSshMode === 'managed' ? __('Create Pending Setup and installer command') : __('Register Target') }}</button>
+            <button class="button button-primary" type="submit" data-target-submit @disabled($selected === 'ssh_direct' && $selectedSshMode === 'managed' && ! $managedReady)>{{ $selectedSshMode === 'managed' ? __('Create Pending Setup and installer command') : __('Register Target') }}</button>
             <button class="button button-secondary" type="submit" data-target-preflight @if($selectedSshMode === 'managed') hidden disabled @endif
                 formaction="{{ route('admin.targets.preflight') }}" formnovalidate>
                 {{ __('Check endpoint from Gateway (no registration)') }}

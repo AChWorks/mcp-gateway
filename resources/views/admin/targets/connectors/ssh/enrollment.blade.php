@@ -65,9 +65,9 @@
             </div>
             <div class="target-route-mode-details" data-ssh-managed @if($selectedSshMode !== 'managed') hidden @endif>
                 <h4>{{ __('One-command Managed Reverse SSH') }}</h4>
-                @if (! $managedConfigured)
+                @if (! $managedReady)
                     <div class="alert alert-info" role="status">
-                        {{ __('Managed Reverse SSH is not enabled. Configure and verify the Gateway host before issuing an installer command.') }}
+                        {{ __('Managed Reverse SSH local host is not Ready (:state). Configure the Gateway, reconcile its restricted policy and verify the pinned local control SSHD before issuing an installer command.', ['state' => $managedReadinessState]) }}
                         <a href="{{ route('admin.reverse-ssh.index') }}">{{ __('Open System Reverse SSH settings') }}</a>
                     </div>
                 @else

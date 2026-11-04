@@ -4,6 +4,7 @@ namespace Tests\Feature\Targets;
 
 use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
+use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\SshManagedReverseInstallCommand;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
@@ -66,6 +67,16 @@ final class SshManagedReverseEnrollmentTest extends TestCase
             'control_user' => 'mcp-reverse',
             'control_host_key' => $this->publicKey(41),
         ]);
+        // These tests exercise durable enrollment/claim/revoke semantics.
+        // A separate readiness matrix tests the real local gate; do not
+        // require a privileged OpenSSH daemon for data-layer unit fixtures.
+        $ready = \Mockery::mock(SshManagedReverseHostReadiness::class);
+        $ready->shouldReceive('assess')->andReturnUsing(static fn ($gateway) => [
+            'state' => $gateway?->enabled ? 'Ready' : 'Disabled',
+            'reason' => 'Isolated data-layer fixture',
+            'external' => 'Not verified',
+        ]);
+        app()->instance(SshManagedReverseHostReadiness::class, $ready);
     }
 
     private function publicKey(int $byte): string

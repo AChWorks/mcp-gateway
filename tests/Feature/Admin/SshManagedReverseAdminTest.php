@@ -5,6 +5,7 @@ namespace Tests\Feature\Admin;
 use App\Application\Access\UserAccessManager;
 use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
+use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
@@ -63,6 +64,17 @@ final class SshManagedReverseAdminTest extends TestCase
             'target_scope_mode' => $role === 'owner' ? 'all' : 'selected',
             'access_enabled' => true,
         ], []);
+    }
+
+    private function fixtureLocalReady(): void
+    {
+        $ready = \Mockery::mock(SshManagedReverseHostReadiness::class);
+        $ready->shouldReceive('assess')->andReturnUsing(static fn ($gateway) => [
+            'state' => $gateway?->enabled ? 'Ready' : 'Disabled',
+            'reason' => 'Isolated enabled-host data fixture',
+            'external' => 'Not verified',
+        ]);
+        app()->instance(SshManagedReverseHostReadiness::class, $ready);
     }
 
     private function settings(bool $enabled): array
@@ -221,6 +233,74 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertFalse(SshManagedReverseGateway::active());
     }
 
+    public function test_managed_enrollment_requires_local_ready_at_post_not_only_saved_enabled_configuration(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $payload = $this->enrollmentFields();
+
+        // Unconfigured and explicitly disabled do not create Pending state.
+        $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
+            ->assertOk()->assertSee('data-managed-ready="false"', false)
+            ->assertSee('Open System Reverse SSH settings');
+        $this->post('/admin/targets/managed-reverse', $payload)->assertSessionHasErrors('site');
+        $this->put('/admin/settings/reverse-ssh', $this->settings(false))->assertRedirect();
+        $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
+            ->assertOk()->assertSee('data-managed-ready="false"', false);
+        $this->post('/admin/targets/managed-reverse', $payload)->assertSessionHasErrors('site');
+
+        // An enabled Gateway with no local listener is Degraded, not Ready.
+        $enabled = $this->settings(true);
+        $enabled['revision'] = 1;
+        $this->put('/admin/settings/reverse-ssh', $enabled)->assertRedirect();
+        $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
+            ->assertOk()->assertSee('data-managed-ready="false"', false)
+            ->assertSee('not Ready (Degraded)');
+        $this->post('/admin/targets/managed-reverse', $payload)->assertSessionHasErrors('site');
+        self::assertSame(0, SshManagedReverseEnrollment::query()->count());
+
+        // A publication receipt or missing manifest independently closes
+        // admission without creating a Target or one-time installer token.
+        $gateway = SshManagedReverseGateway::query()->sole();
+        $gateway->forceFill(['publication_pending' => true])->save();
+        $this->post('/admin/targets/managed-reverse', $payload)->assertSessionHasErrors('site');
+        $gateway->forceFill(['publication_pending' => false])->save();
+        $manifest = dirname($this->keyFile).'/manifest.json';
+        $savedManifest = file_get_contents($manifest);
+        unlink($manifest);
+        $this->post('/admin/targets/managed-reverse', $payload)->assertSessionHasErrors('site');
+        file_put_contents($manifest, $savedManifest);
+
+        // A root-owned manifest describing a different pinned control host
+        // must also fail closed before any Target/credential is written.
+        $mismatched = json_decode($savedManifest, true, 8, JSON_THROW_ON_ERROR);
+        $mismatched['control_host_key'] = $this->publicKey(42);
+        file_put_contents($manifest, json_encode($mismatched, JSON_THROW_ON_ERROR));
+        $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
+            ->assertOk()->assertSee('data-managed-ready="false"', false);
+        $this->post('/admin/targets/managed-reverse', $payload)->assertSessionHasErrors('site');
+        file_put_contents($manifest, $savedManifest);
+
+        self::assertSame(0, SshManagedReverseEnrollment::query()->count());
+        self::assertSame(0, DB::table('targets')->count());
+
+        // Simulate an actual Ready GET, followed by degraded local host state
+        // before the next POST. Presentation is never authorization.
+        $this->fixtureLocalReady();
+        $ready = $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
+            ->assertOk()->assertSee('data-managed-ready="true"', false);
+        self::assertStringNotContainsString('disabled data-target-submit', $ready->getContent());
+        $lost = \Mockery::mock(SshManagedReverseHostReadiness::class);
+        $lost->shouldReceive('assess')->andReturn([
+            'state' => 'Degraded',
+            'reason' => 'Pinned local control SSHD handshake failed after page render.',
+            'external' => 'Not verified',
+        ]);
+        app()->instance(SshManagedReverseHostReadiness::class, $lost);
+        $this->post('/admin/targets/managed-reverse', $payload)->assertSessionHasErrors('site');
+        self::assertSame(0, SshManagedReverseEnrollment::query()->count());
+        self::assertSame(0, DB::table('targets')->count());
+    }
+
     public function test_owner_generates_one_command_only_after_approved_bootstrap_and_real_pin(): void
     {
         $this->actingAs($this->user('owner'));
@@ -229,6 +309,7 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertSame(0, SshManagedReverseEnrollment::query()->count());
 
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $this->fixtureLocalReady();
         $reply = $this->post('/admin/targets/managed-reverse', $this->enrollmentFields())
             ->assertOk()
             ->assertSee('Pending Setup created')
@@ -251,6 +332,7 @@ final class SshManagedReverseAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $this->fixtureLocalReady();
         $started = app(SshManagedReverseEnrollmentService::class)->begin(
             'target-claim', 'Claim Target', '8.8.8.8', 22, 'deploy', $this->publicKey(52),
         );
@@ -279,6 +361,7 @@ final class SshManagedReverseAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $this->fixtureLocalReady();
         $started = app(SshManagedReverseEnrollmentService::class)->begin(
             'managed-revoked', 'Revoke Target', '8.8.8.8', 22, 'deploy', $this->publicKey(52),
         );
@@ -312,6 +395,7 @@ final class SshManagedReverseAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $this->fixtureLocalReady();
         $started = app(SshManagedReverseEnrollmentService::class)->begin(
             'managed-forget', 'Forget Target', '8.8.8.8', 22, 'deploy', $this->publicKey(52),
         );
@@ -329,6 +413,7 @@ final class SshManagedReverseAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $this->fixtureLocalReady();
         $started = app(SshManagedReverseEnrollmentService::class)->begin(
             'retry-target', 'Retry Target', '8.8.8.8', 22, 'deploy.prod', $this->publicKey(52),
         );
@@ -365,6 +450,7 @@ final class SshManagedReverseAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $this->fixtureLocalReady();
         $started = app(SshManagedReverseEnrollmentService::class)->begin(
             'partial-revoke', 'Partial Revoke', '8.8.8.8', 22, 'deploy', $this->publicKey(52),
         );
@@ -451,6 +537,7 @@ final class SshManagedReverseAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
+        $this->fixtureLocalReady();
         $started = app(SshManagedReverseEnrollmentService::class)->begin(
             'global-receipt', 'Global Receipt', '8.8.8.8', 22, 'deploy', $this->publicKey(52),
         );
@@ -471,8 +558,24 @@ final class SshManagedReverseAdminTest extends TestCase
         app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
         $enable = $this->settings(true);
         $enable['revision'] = 2;
-        $this->put('/admin/settings/reverse-ssh', $enable)->assertSessionHasErrors('site');
+        $failedSave = $this->put('/admin/settings/reverse-ssh', $enable)
+            ->assertSessionHasErrors('site')
+            ->assertSessionHas('reverse_ssh_operation', 'save_publication_failed');
         self::assertTrue(SshManagedReverseGateway::query()->sole()->publication_pending);
+        self::assertSame(3, SshManagedReverseGateway::query()->sole()->revision);
+        $this->get((string) $failedSave->headers->get('Location'))
+            ->assertOk()->assertSee('Configuration Save could not complete key publication.')
+            ->assertSee('Current saved revision: 3')
+            ->assertSee('Pending reconciliation')
+            ->assertSee('Reconcile restricted public keys')
+            ->assertDontSee('The host repair did not complete.');
+        $failedRepair = $this->post('/admin/settings/reverse-ssh/repair', [
+            'current_password' => 'StrongPassword!234',
+        ])->assertSessionHasErrors('site')
+            ->assertSessionHas('reverse_ssh_operation', 'repair_failed');
+        $this->get((string) $failedRepair->headers->get('Location'))
+            ->assertOk()->assertSee('Owner Repair could not complete key publication.')
+            ->assertSee('Current saved revision: 3');
         self::assertFalse(SshManagedReverseGateway::active());
         self::assertSame('', file_get_contents($this->keyFile));
         app()->forgetInstance(SshManagedReverseAuthorizedKeys::class);

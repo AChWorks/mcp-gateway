@@ -51,12 +51,22 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     await page.keyboard.press('Home');
     assert.equal((await summary(page)).route,'direct');
     assert.equal((await summary(page)).dirty,false);
-    // Playwright's selectOption dispatches an untrusted change; a selected
-    // semantic option must nevertheless guard the form, unlike silent
-    // browser autofill into a technical text identity.
-    await page.locator('#ssh_mode').selectOption('managed');
-    assert.equal((await summary(page)).dirty,true);
-    await page.locator('#ssh_mode').selectOption('direct');
+    // An untrusted select change without preceding human interaction must
+    // not manufacture an unsaved-change warning (R4).
+    await page.locator('#target_id').focus();
+    await page.locator('#ssh_mode').click();
+    await page.evaluate(() => {
+      const select=document.querySelector('#ssh_mode');
+      select.value='managed';
+      select.dispatchEvent(new Event('change',{bubbles:true}));
+    });
+    assert.equal((await summary(page)).route,'managed');
+    assert.equal((await summary(page)).dirty,false);
+    await page.evaluate(() => {
+      const select=document.querySelector('#ssh_mode');
+      select.value='direct';
+      select.dispatchEvent(new Event('change',{bubbles:true}));
+    });
     assert.equal((await summary(page)).dirty,false);
     pass('SSH mode, action, visibility, ready gate, true edit and revert');
     await page.locator('#target_id').fill('real-draft');
@@ -110,6 +120,60 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     });
     assert.deepEqual(protectedSubmit,{name:'',pw:''});
     pass('passively autofilled Owner password and Name cannot submit');
+
+    // Test the actual two Owner-only revoke forms in a local fixture.
+    const fixtureResult=await page.request.get(base+'/__browser__/owner-revocation-forms');
+    assert.equal(fixtureResult.status(),200);
+    const revokeUrls=await fixtureResult.json();
+    for (const [kind,url,label] of [
+      ['OAuth',revokeUrls.oauth,'Revoke this grant'],
+      ['WordPress',revokeUrls.publishing,'Revoke grant'],
+    ]) {
+      await page.goto(url);
+      const button=page.getByRole('button',{name:label,exact:true}).first();
+      const form=button.locator('xpath=ancestor::form');
+      const ownerPassword=form.locator('input[name="current_password"]');
+      assert.equal(await ownerPassword.getAttribute('data-admin-requires-intent'),'');
+      const endpoint=new URL(await form.getAttribute('action')).pathname;
+      let submitted=0;
+      const track=request=>{
+        if(request.method()==='POST' && new URL(request.url()).pathname===endpoint) submitted++;
+      };
+      page.on('request',track);
+      await ownerPassword.evaluate(control=>{control.value='passive-fixture-value';});
+      await ownerPassword.click();
+      assert.equal(await ownerPassword.inputValue(),'');
+      await button.click();
+      assert.equal(submitted,0,kind+' passive pre-click fill was submitted');
+      await ownerPassword.evaluate(control=>{control.value='passive-fixture-value';});
+      await button.click();
+      assert.equal(submitted,0,kind+' passive post-click fill was submitted');
+      assert.equal(await ownerPassword.inputValue(),'');
+      await ownerPassword.click();
+      if(kind==='OAuth') {
+        await page.keyboard.type('isolated-browser-password');
+      } else {
+        await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:base});
+        await page.evaluate(async ()=>{
+          await navigator.clipboard.writeText('isolated-browser-password');
+        });
+        await page.keyboard.press('Control+V');
+      }
+      assert.equal(await ownerPassword.inputValue(),'isolated-browser-password',
+        kind+' deliberate keyboard/paste did not populate credential');
+      // A passive manager replacement after deliberate entry must not
+      // replace the confirmed value that the browser submits.
+      await ownerPassword.evaluate(control=>{control.value='passive-late-replacement';});
+      const sent=page.waitForResponse(response=>response.request().method()==='POST'
+        && new URL(response.url()).pathname===endpoint);
+      await button.click();
+      assert.equal((await sent).status(),302);
+      assert.equal(submitted,1);
+      page.off('request',track);
+      await page.goto(url);
+      assert.equal(await page.getByRole('button',{name:label,exact:true}).count(),0);
+    }
+    pass('both real Owner grant-revocation forms reject autofill-only and permit confirmed actions');
 
     // Persist only a disabled Gateway configuration on the disposable fixture.
     // No SSHD/systemd or public endpoint is contacted.

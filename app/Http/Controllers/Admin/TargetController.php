@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Admin\TargetConnectorAdmin;
+use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
@@ -77,7 +78,7 @@ final class TargetController extends Controller
         ]);
     }
 
-    public function create(Request $request, TargetConnectorAdmin $connectorAdmin): View
+    public function create(Request $request, TargetConnectorAdmin $connectorAdmin, SshManagedReverseHostReadiness $readiness): View
     {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
@@ -96,12 +97,19 @@ final class TargetController extends Controller
             abort_unless($request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
         }
 
+        // The saved enabled flag is not host readiness. Probe once for this
+        // Owner's create form; re-evaluate at POST admission in the service.
+        $gateway = SshManagedReverseGateway::query()->find(1);
+        $managedState = $request->user()?->getRawOriginal('role') === GatewayRole::Owner->value
+            ? $readiness->assess($gateway)['state'] : 'Disabled';
+
         return view('admin.targets.create', [
             'connectorOptions' => $options,
             'connectorDefinitions' => $definitions,
             'selectedConnector' => $selected,
             'sshMode' => $sshMode,
-            'managedConfigured' => SshManagedReverseGateway::active(),
+            'managedReady' => $managedState === 'Ready',
+            'managedReadinessState' => $managedState,
         ]);
     }
 

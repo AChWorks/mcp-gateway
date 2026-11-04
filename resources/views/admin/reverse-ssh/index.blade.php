@@ -34,10 +34,25 @@
         <p class="field-help">{{ __('Local readiness checks a bounded SSH handshake with the pinned control host key, but does not prove systemd supervision, firewall policy, PHP/host namespace equivalence or remote Target egress.') }}</p>
         <p class="field-help">{{ __('With separately approved host access, inspect') }} <code>sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager</code> {{ __('and') }} <code>sudo ss -lntp</code>. {{ __('Run the verified release installer with --preflight and actual --app, --php-user and dedicated --port before privileged setup.') }}</p>
     </details>
-    @if ($errors->any() && ! $editing)
-        <div class="alert alert-error" role="alert">
-            <strong>{{ __('The host repair did not complete.') }}</strong>
+    @if ($errors->any() && (! $editing || session('reverse_ssh_operation')))
+        <div class="alert alert-error" role="alert" data-admin-feedback tabindex="-1" autofocus>
+            <strong>
+                @if (session('reverse_ssh_operation') === 'save_publication_failed')
+                    {{ __('Configuration Save could not complete key publication.') }}
+                @elseif (session('reverse_ssh_operation') === 'repair_failed')
+                    {{ __('Owner Repair could not complete key publication.') }}
+                @else
+                    {{ __('The host repair did not complete.') }}
+                @endif
+            </strong>
             <ul>@foreach ($errors->all() as $message)<li>{{ $message }}</li>@endforeach</ul>
+            @if ($gateway && session('reverse_ssh_operation'))
+                <p>{{ __('Current saved revision: :revision. Restricted key publication: :status.', [
+                    'revision' => $gateway->revision,
+                    'status' => $gateway->publication_pending ? __('Pending reconciliation') : __('No pending publication'),
+                ]) }}</p>
+                <p>{{ __('The database and host key reader may differ. Inspect host readiness below and use the explicit Owner Repair action only when available; saved configuration is not remote connectivity.') }}</p>
+            @endif
         </div>
     @endif
 
@@ -95,6 +110,8 @@
     @if ($gateway && ! $editing)
         <dl class="detail-list" aria-label="{{ __('Saved Gateway Reverse SSH settings') }}">
             <dt>{{ __('Configuration') }}</dt><dd><strong>{{ __('Saved') }}</strong></dd>
+            <dt>{{ __('Revision') }}</dt><dd>{{ $gateway->revision }}</dd>
+            <dt>{{ __('Key publication') }}</dt><dd>{{ $gateway->publication_pending ? __('Pending reconciliation') : __('Reconciled') }}</dd>
             <dt>{{ __('Feature state') }}</dt><dd>{{ $gateway->enabled ? __('Enabled') : __('Disabled') }}</dd>
             <dt>{{ __('Control host') }}</dt><dd><code>{{ $gateway->control_host }}</code></dd>
             <dt>{{ __('Control SSH port') }}</dt><dd><code>{{ $gateway->control_port }}</code></dd>
@@ -109,9 +126,9 @@
         @csrf
         @method('PUT')
         <input type="hidden" name="revision" value="{{ $gateway?->revision ?? 0 }}">
-        @if ($errors->any())
+        @if ($errors->any() && session('reverse_ssh_operation') !== 'save_publication_failed' && session('reverse_ssh_operation') !== 'repair_failed')
             <div class="alert alert-error" role="alert">
-                <p>{{ __('No configuration was applied. Check the fields and retry.') }}</p>
+                <p>{{ __('The proposed configuration was not accepted. Check the fields and retry.') }}</p>
                 <ul>@foreach ($errors->all() as $message)<li>{{ $message }}</li>@endforeach</ul>
             </div>
         @endif

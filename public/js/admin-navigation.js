@@ -85,6 +85,8 @@
     // A passive later replacement must not override an actual operator value.
     // This also covers a field that the operator edited and then reverted.
     const deliberateValues = new WeakMap();
+    // A user gesture arms the native credential chooser; it is not consent
+    // to reuse a value that a password manager wrote before the gesture.
     const credentialInteractions = new WeakSet();
     const editableInputs = control => control instanceof HTMLInputElement
         || control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement;
@@ -92,18 +94,28 @@
     function deliberate(event) {
         const control = event.target;
         if (!editableInputs(control) || !control.form) return;
-        // Selects have discrete semantic choices, and some browser-driving
-        // mechanisms emit a non-trusted change after selecting a real option.
-        // Protect that changed choice regardless of event trust; an untouched
-        // or reverted selection still compares clean with the baseline.
-        // Technical identity and Owner-password inputs continue to require
-        // deliberate native interaction rather than a synthetic event.
-        if (event.type === 'change' && control instanceof HTMLSelectElement) {
+        // Only native trusted selection events qualify as a human edit.
+        // A preceding click/focus does not grant a later synthetic event
+        // authority over this field. App-owned shortcut actions explicitly
+        // stage their own edits, rather than faking a trusted select event.
+        if (control instanceof HTMLSelectElement) {
+            if ((event.type === 'change' || event.type === 'input')
+                && event.isTrusted && document.activeElement === control) {
+                deliberateFields.add(control);
+                deliberateValues.set(control, control.value);
+            }
+            return;
+        }
+        if (!event.isTrusted || document.activeElement !== control) return;
+        if (control.name === 'current_password' && control.dataset.adminRequiresIntent !== undefined
+            && credentialInteractions.has(control) && control.value !== ''
+            && (event.type === 'input' || event.type === 'change')) {
+            // The credential was entered/chosen after the first user gesture.
+            // Mere pointerdown/focus never makes an existing value eligible.
             deliberateFields.add(control);
             deliberateValues.set(control, control.value);
             return;
         }
-        if (!event.isTrusted || document.activeElement !== control) return;
         if (event.type === 'paste' || event.type === 'cut' || event.type === 'compositionstart') {
             deliberateFields.add(control);
             return;
@@ -135,20 +147,21 @@
     // Some shared controls deliberately edit values through JavaScript rather
     // than a native input event. Their real click (not a synthetic input event)
     // is the intent signal; the normal semantic comparator still detects reverts.
+    function armCredential(control) {
+        if (!control || control.name !== 'current_password' || control.disabled) return;
+        // Late passive autofill may have happened since DOMContentLoaded.
+        // Clear it BEFORE opening a native password chooser. A real selection,
+        // typed input or paste must arrive *after* this gesture to count.
+        if (!deliberateFields.has(control)) control.value = '';
+        credentialInteractions.add(control);
+    }
     document.addEventListener('pointerdown', event => {
-        const control = event.target.closest?.('input[data-admin-requires-intent]');
-        if (event.isTrusted && control?.name === 'current_password' && !control.disabled) {
-            // Explicit interaction may open the browser's native saved-password
-            // chooser; allow that selection, not a silent page-load fill.
-            credentialInteractions.add(control);
-        }
+        if (!event.isTrusted) return;
+        armCredential(event.target.closest?.('input[data-admin-requires-intent]'));
     }, true);
     document.addEventListener('keydown', event => {
         if (!event.isTrusted || !['Enter', 'ArrowDown', 'ArrowUp', ' '].includes(event.key)) return;
-        const control = event.target.closest?.('input[data-admin-requires-intent]');
-        if (control?.name === 'current_password' && !control.disabled) {
-            credentialInteractions.add(control);
-        }
+        armCredential(event.target.closest?.('input[data-admin-requires-intent]'));
     }, true);
 
     document.addEventListener('click', event => {
@@ -173,10 +186,15 @@
         });
         form.querySelectorAll('input[name="current_password"][data-admin-requires-intent]')
             .forEach(control => {
-                if (!deliberateFields.has(control) && !credentialInteractions.has(control)) {
-                    // A password manager may silently write a valid Owner
-                    // password on page load. It must not count as reauth.
+                if (!deliberateFields.has(control)) {
+                    // A gesture only arms credential entry. Passwords silently
+                    // present before or after the gesture remain unauthorized.
                     control.value = '';
+                } else if (deliberateValues.has(control)
+                    && control.value !== deliberateValues.get(control)) {
+                    // Do not let a later passive manager write replace a
+                    // credential the Owner actually chose or entered.
+                    control.value = deliberateValues.get(control);
                 }
             });
     }
@@ -338,11 +356,12 @@
     document.addEventListener('submit', event => {
         if (!event.defaultPrevented && event.target instanceof HTMLFormElement) {
             const form = event.target;
-            reconcilePassiveIdentity(form);
+            // Snapshot passive credentials BEFORE reconciliation clears them.
+            // If validation already passed with an autofilled password, we
+            // must cancel the native POST rather than silently send blank data.
             const passiveOwnerCredential = Array.from(form.querySelectorAll(
                 'input[name="current_password"][data-admin-requires-intent]')).find(
-                control => !control.disabled && control.value !== '' && !deliberateFields.has(control)
-                    && !credentialInteractions.has(control));
+                control => !control.disabled && control.value !== '' && !deliberateFields.has(control));
             if (passiveOwnerCredential) {
                 event.preventDefault();
                 passiveOwnerCredential.value = '';
@@ -350,6 +369,7 @@
                 passiveOwnerCredential.reportValidity();
                 return;
             }
+            reconcilePassiveIdentity(form);
             submittedDirtyForm = formDirty(form) ? form : null;
             if (submittedDirtyForm) submittedDirtyForm.removeAttribute('data-admin-dirty');
         }

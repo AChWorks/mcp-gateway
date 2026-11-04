@@ -1125,6 +1125,22 @@ async function roleSensitiveDirtyForms(browser) {
 
         const form = page.locator('form[data-user-role-form]');
         const role = page.locator('#role');
+        const chooseRole = async value => {
+            // Use actual native keyboard selection: Playwright selectOption()
+            // dispatches an untrusted event and is not proof of user intent.
+            const indices=await role.evaluate((select,next) => ({
+                from:select.selectedIndex,
+                to:Array.from(select.options).findIndex(option=>option.value===next),
+            }),value);
+            assert.ok(indices.to>=0,'Unknown role '+value);
+            await role.focus();
+            for (let step=indices.from;step!==indices.to;) {
+                const increment=indices.to>step?1:-1;
+                await page.keyboard.press(increment>0?'ArrowDown':'ArrowUp');
+                step+=increment;
+            }
+            assert.equal(await role.inputValue(),value);
+        };
         const ssh = page.locator('input[name="denied_permissions[]"][value="ssh.file.read"]');
         assert.equal(await form.getAttribute('data-admin-dirty'), null, 'Viewer begins clean');
         await page.locator('#current_password').evaluate(input => {
@@ -1133,23 +1149,23 @@ async function roleSensitiveDirtyForms(browser) {
         });
         assert.equal(await form.getAttribute('data-admin-dirty'), null,
             'Account Edit must ignore background confirmation-password autofill');
-        await role.selectOption('operator');
+        await chooseRole('operator');
         assert.equal(await form.getAttribute('data-admin-dirty'), 'true', 'Real Role change must guard navigation');
         assert.equal(await ssh.isChecked(), true, 'First promotion retains fail-closed SSH defaults');
-        await role.selectOption('viewer');
+        await chooseRole('viewer');
         assert.equal(await form.getAttribute('data-admin-dirty'), null,
             'Viewer -> Operator -> Viewer must not warn for automatically seeded disabled SSH choices');
 
-        await role.selectOption('operator');
+        await chooseRole('operator');
         await ssh.uncheck();
         assert.equal(await form.getAttribute('data-admin-dirty'), 'true', 'Deliberate SSH Deny edit is unsaved');
-        await role.selectOption('viewer');
+        await chooseRole('viewer');
         assert.equal(await form.getAttribute('data-admin-dirty'), 'true',
             'Intentionally staged SSH choice must remain guarded while temporarily disabled');
-        await role.selectOption('operator');
+        await chooseRole('operator');
         assert.equal(await ssh.isChecked(), false, 'Staged SSH choice survives Role round-trip');
         await ssh.check();
-        await role.selectOption('viewer');
+        await chooseRole('viewer');
         assert.equal(await form.getAttribute('data-admin-dirty'), null,
             'Reverting the deliberate SSH edit and Role clears the guard');
         await nav(page, 'Dashboard', 'Gateway overview');
@@ -1158,9 +1174,9 @@ async function roleSensitiveDirtyForms(browser) {
         await openUser('UI Fixture Owner');
         const ownerForm = page.locator('form[data-user-role-form]');
         assert.equal(await ownerForm.getAttribute('data-admin-dirty'), null, 'Owner begins clean');
-        await page.locator('#role').selectOption('operator');
+        await chooseRole('operator');
         assert.equal(await ownerForm.getAttribute('data-admin-dirty'), 'true');
-        await page.locator('#role').selectOption('owner');
+        await chooseRole('owner');
         assert.equal(await ownerForm.getAttribute('data-admin-dirty'), null,
             'Owner -> Operator -> Owner must not warn for auto-seeded SSH choices');
         await nav(page, 'Dashboard', 'Gateway overview');

@@ -134,7 +134,8 @@ final class SshManagedReverseController extends Controller
                 });
             } catch (\RuntimeException) {
                 return redirect()->route('admin.reverse-ssh.index')
-                    ->withErrors(['site' => __('Gateway configuration intent may have changed, but restricted key publication could not be reconciled. Inspect the current revision and retry Owner Repair. Do not assume the control host key reader was updated.')]);
+                    ->with('reverse_ssh_operation', 'save_publication_failed')
+                    ->withErrors(['site' => __('The settings save may have committed, but restricted key publication was not confirmed. Inspect the saved revision and pending publication state; if pending, use Owner Repair. Do not repeat Save with a stale revision.')]);
             }
         } else {
             if ($enabled) {
@@ -162,7 +163,13 @@ final class SshManagedReverseController extends Controller
                 'site' => __('Host bootstrap is missing. Run the independently authorized one-time host setup before repair.'),
             ]);
         }
-        $keys->sync();
+        try {
+            $keys->sync();
+        } catch (\RuntimeException) {
+            return redirect()->route('admin.reverse-ssh.index')
+                ->with('reverse_ssh_operation', 'repair_failed')
+                ->withErrors(['site' => __('Owner Repair could not publish the restricted key policy. The persisted revision and pending state remain authoritative; inspect host access and retry Repair only after correcting the cause.')]);
+        }
 
         return redirect()->route('admin.reverse-ssh.index')
             ->with('status', __('Restricted public-key policy reconciled. Host SSHD status and reverse listeners still require verification.'));
