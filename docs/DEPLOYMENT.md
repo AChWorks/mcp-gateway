@@ -6,7 +6,7 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## Rolling browser-update support window
 
-**Direct browser updates are supported only from the three most recent preceding published stable MCP Gateway releases to the current release.** The exact supported source versions are recorded in the tagged repository source's `bin/released-baselines.txt` manifest, validated by CI; this source-only manifest is **not** included in the production deployment ZIP. The operator release notes describe the three-release policy. For the proposed v2.5.7 release, the three published tagged predecessor sources are v2.5.4, v2.5.5 and v2.5.6; use that window only after v2.5.7 is independently reviewed and explicitly published as an official Release. Older direct-upgrade attempts are **unsupported and unverified**, even if the updater does not actively reject them.
+**Direct browser updates are supported only from the three most recent preceding published stable MCP Gateway releases to the current release.** The exact supported source versions are recorded in the tagged repository source's `bin/released-baselines.txt` manifest, validated by CI; this source-only manifest is **not** included in the production deployment ZIP. The operator release notes describe the three-release policy. For v2.5.8, the three preceding published tagged sources are v2.5.5, v2.5.6 and v2.5.7; use that window only when v2.5.8 has been explicitly published as an official, verified Release. Older direct-upgrade attempts are **unsupported and unverified**, even if the updater does not actively reject them.
 
 For an older installation, do not skip blindly to the newest release. Preserve an independently restorable full code/database/secret backup, inspect each archived official intermediate version's supported upgrade window, and plan a sequential supported hop to a version within the current three-release window. Verify SHA256/signatures, installation health, schema and recovery after each hop. If the exact hop or old installed runtime cannot be verified, use a tested migration/reinstall/restore plan with operator approval rather than assuming a direct update is safe. Existing browser-updater authorization, maintenance, pre-migration backup validation and fail-closed recovery behavior still apply; narrowing the support window does not weaken these controls.
 
@@ -21,18 +21,20 @@ services, or run the generated Target command without the exact Owner
 host/Target approval and independent host-key verification.
 
 The released v2.5.5 artifact does **not** contain the managed scripts;
-public v2.5.6 introduced them. For an approved upgrade to a separately
-published v2.5.7 Release, verify official ZIP/checksum provenance and an
-independently restorable code/database/secret backup first. Browser Update
-must preserve both pinned managed scripts without overwriting unrelated
-`bin/` content; incomplete updates retain protected recovery evidence.
-The v2.5.7 source patch specifically handles PHP `open_basedir` denial of
-the root-owned host manifest as a fail-closed Admin readiness state rather
-than HTTP 500. **Do not disable `open_basedir` or grant PHP root privileges**
-to work around host setup. Independently verify installed `VERSION`,
-authenticated Admin settings, actual Target end-host login and reconnect
-after upgrade; a local control-host `Ready` status, green CI or published
-Release never proves a live reverse route or reboot persistence.
+v2.5.6 first shipped them. v2.5.7 handled PHP `open_basedir` denial of the
+root-owned host manifest as a fail-closed Admin readiness state rather than
+HTTP 500. v2.5.8 additionally separates one-time Gateway host setup from
+the unified Add Target enrollment and requires explicit Owner authorization
+on enhanced reauthentication forms. For an approved installed upgrade,
+verify official ZIP/checksum provenance and an independently restorable
+code/database/secret backup first. Browser Update must preserve both pinned
+managed scripts without overwriting unrelated `bin/` content; incomplete
+updates retain protected recovery evidence. **Do not disable `open_basedir`
+or grant PHP root privileges** to work around host setup. Independently
+verify installed `VERSION`, authenticated Admin settings, actual Target
+end-host login and reconnect after upgrade; a local control-host `Ready`
+status, green CI or published Release never proves a live reverse route,
+reboot persistence or actual Owner-browser compatibility.
 The independent [manual Reverse SSH route](REVERSE-SSH-OPERATOR.md)
 remains available.
 
