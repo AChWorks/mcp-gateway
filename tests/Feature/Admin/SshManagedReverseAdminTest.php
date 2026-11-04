@@ -97,7 +97,7 @@ final class SshManagedReverseAdminTest extends TestCase
         $this->actingAs($this->user('owner'));
         $normal = $this->get('/admin/targets/create?connector_type=ssh_direct')
             ->assertOk()->assertSee('name="connector_type"', false)
-            ->assertSee('name="ssh_mode"', false)
+            ->assertSee('name="ssh_mode" aria-describedby="ssh-mode-help" disabled', false)
             ->assertSee('Managed Reverse SSH — one-command setup')
             ->assertSee('Manual Reverse SSH (advanced)')
             ->assertSee('data-ssh-reverse-route', false)

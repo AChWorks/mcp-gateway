@@ -77,6 +77,9 @@
     const fingerprint = form.querySelector('#host_fingerprint');
     if (!method || !trustedCheckbox || !hostKey || !fingerprint) return;
     const routeMode = form.querySelector('#ssh_mode');
+    // Without JS this selector is intentionally inert; mode links render a
+    // server-owned POST action. Progressive behavior activates it in-place.
+    if (routeMode) routeMode.disabled = false;
     const standardFields = form.querySelector('[data-ssh-standard]');
     const managedFields = form.querySelector('[data-ssh-managed]');
     const manualFields = form.querySelector('[data-ssh-reverse-route]');

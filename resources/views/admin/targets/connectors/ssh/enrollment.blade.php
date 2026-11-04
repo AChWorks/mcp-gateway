@@ -26,7 +26,7 @@
         <p class="field-help">{{ __('Direct connects from Gateway to the Target. Managed Reverse sets up a persistent Target-initiated tunnel with one installer command. Manual Reverse requires an existing Owner-approved loopback listener.') }}</p>
         <div class="field">
             <label for="ssh_mode">{{ __('Connection method') }}</label>
-            <select id="ssh_mode" name="ssh_mode" aria-describedby="ssh-mode-help">
+            <select id="ssh_mode" name="ssh_mode" aria-describedby="ssh-mode-help" disabled>
                 <option value="direct" @selected($selectedSshMode === 'direct')>{{ __('Direct SSH (default)') }}</option>
                 @if (auth()->user()?->getRawOriginal('role') === 'owner')
                     <option value="managed" @selected($selectedSshMode === 'managed')>{{ __('Managed Reverse SSH — one-command setup') }}</option>

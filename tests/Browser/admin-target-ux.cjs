@@ -144,6 +144,7 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     let res=await plain.goto(base+'/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed');
     assert.equal(res.status(),200);
     assert.ok(await plain.locator('noscript a[href*="ssh_mode=manual"]').count()>0);
+    assert.equal(await plain.locator('#ssh_mode').isDisabled(),true,'No-JS mode is changed only by server links');
     assert.equal(new URL(await plain.locator('#target-create-form').getAttribute('action'),base).pathname,
       '/admin/targets/managed-reverse');
     res=await plain.goto(base+'/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual');
