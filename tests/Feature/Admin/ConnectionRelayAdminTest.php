@@ -6,13 +6,16 @@ use App\Application\Access\UserAccessManager;
 use App\Application\Targets\ConnectionRelayAdministration;
 use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetRegistration;
 use App\Application\Targets\TargetConnectorFailure;
+use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
+use App\Infrastructure\Connectors\SshDirect\SshDirectTargetAdapter;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
@@ -163,6 +166,119 @@ final class ConnectionRelayAdminTest extends TestCase
         } catch (OutboundRequestException $exception) {
             self::assertTrue($exception->preDispatch);
             self::assertSame('network_failure', $exception->reason);
+        }
+    }
+
+    public function test_disable_advances_security_generation_and_rejects_old_enable_and_double_disable(): void
+    {
+        $relay = $this->readyRelay();
+        $this->actingAs($this->user('owner'));
+        $oldFingerprint = $relay->hostFingerprint();
+        $url = '/admin/settings/connection-relays/'.$relay->getKey().'/toggle';
+
+        $this->post($url, [
+            'relay_revision' => 1, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        $relay->refresh();
+        self::assertFalse($relay->enabled);
+        self::assertSame(2, $relay->configuration_revision);
+        self::assertSame(2, $relay->lifecycle_revision);
+        self::assertNotSame($oldFingerprint, $relay->hostFingerprint());
+
+        $this->post($url, [
+            'relay_revision' => 1, 'enable' => '1', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('relay_revision');
+        self::assertFalse($relay->fresh()->enabled);
+
+        // This successful enable uses a fake readiness fixture only; the real
+        // privileged verifier must issue evidence against the new generation.
+        $this->post($url, [
+            'relay_revision' => 2, 'enable' => '1', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        $relay->refresh();
+        self::assertTrue($relay->enabled);
+        self::assertSame(3, $relay->lifecycle_revision);
+        self::assertSame(2, $relay->configuration_revision);
+        // Stale Enable AND a Disable issued before this latest Enable must
+        // both be rejected even though the host attestation did not rotate.
+        $this->post($url, [
+            'relay_revision' => 2, 'enable' => '1', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('relay_revision');
+        $this->post($url, [
+            'relay_revision' => 2, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('relay_revision');
+        self::assertTrue($relay->fresh()->enabled);
+
+        $this->post($url, [
+            'relay_revision' => 3, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        $relay->refresh();
+        self::assertSame(3, $relay->configuration_revision);
+        self::assertSame(4, $relay->lifecycle_revision);
+        self::assertFalse(app(ConnectionRelayAdministration::class)->disable($relay, 4));
+        self::assertSame(4, $relay->fresh()->lifecycle_revision);
+        $this->post($url, [
+            'relay_revision' => 3, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('relay_revision');
+    }
+
+    public function test_double_disable_does_not_reseal_credentials_or_advance_job_epoch(): void
+    {
+        $relay = $this->readyRelay();
+        $target = app(SshTargetRegistration::class)->register(
+            'relay-double-disable', 'Relay second disable', '1.1.1.1', 22,
+            'deploy', $this->publicKey(), 'password', 'ssh-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        $first = app(ConnectionRelayAdministration::class)->disable($relay, 1);
+        self::assertTrue($first);
+        $epoch = $target->fresh()->relay_binding_revision;
+        $encrypted = TargetCredential::query()->where('target_record_id', $target->getKey())
+            ->sole()->encrypted_payload;
+        self::assertFalse(app(ConnectionRelayAdministration::class)->disable($relay, 2));
+        self::assertSame($epoch, $target->fresh()->relay_binding_revision);
+        self::assertSame($encrypted, TargetCredential::query()
+            ->where('target_record_id', $target->getKey())->sole()->encrypted_payload);
+    }
+
+    public function test_connect_reconnect_and_verify_do_not_claim_tunnel_peer_ip(): void
+    {
+        $this->readyRelay();
+        $this->app->instance(SshTargetConnectionService::class, new class
+        {
+            public function test(Target $target): void {}
+        });
+
+        $direct = app(SshTargetRegistration::class)->register(
+            'message-direct', 'Direct', '1.1.1.1', 22, 'deploy',
+            $this->publicKey(), 'password', 'ssh-secret', null,
+        );
+        $relay = app(SshTargetRegistration::class)->register(
+            'message-relay', 'Relay', '1.1.1.1', 22, 'deploy',
+            $this->publicKey(), 'password', 'ssh-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        $reverse = app(SshTargetRegistration::class)->register(
+            'message-reverse', 'Reverse', '1.1.1.1', 22, 'deploy',
+            $this->publicKey(), 'password', 'ssh-secret', null,
+        );
+        DB::table('ssh_direct_target_configs')->where('target_record_id', $reverse->getKey())
+            ->update(['route_mode' => 'reverse', 'reverse_listener_port' => 42050, 'reverse_tunnel_identity' => 'fixture-only']);
+
+        $adapter = app(SshDirectTargetAdapter::class);
+        foreach ([$direct, $relay, $reverse] as $target) {
+            foreach (['connect', 'reconnect', 'test'] as $action) {
+                $message = $adapter->{$action}($target)->statusMessage;
+                self::assertNotNull($message);
+                self::assertStringContainsString('key and login', $message);
+                if ($target->getKey() === $direct->getKey()) {
+                    self::assertStringContainsString('Direct SSH TCP peer', $message);
+                    self::assertStringNotContainsString('remote Target IP was not independently observed', $message);
+                } else {
+                    self::assertStringContainsString('The observed TCP peer is local', $message);
+                    self::assertStringContainsString('remote Target IP was not independently observed', $message);
+                }
+            }
         }
     }
 

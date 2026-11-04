@@ -1315,11 +1315,152 @@ async function actionFeedback(browser) {
     }
 }
 
+
+async function connectionRelays(browser) {
+    const run = await create(browser);
+    const page = run.page;
+    try {
+        await enter(page, 'owner');
+        let renders = 0;
+        for (const width of [360, 390, 768, 1440, 2048]) {
+            for (const dark of [false, true]) {
+                await page.setViewportSize({width, height: 920});
+                await page.emulateMedia({colorScheme: dark ? 'dark' : 'light', reducedMotion: 'reduce'});
+                for (const path of [
+                    '/admin/settings/connection-relays',
+                    '/admin/targets/create?connector_type=ssh_direct',
+                    '/admin/targets/create?connector_type=wp_ai_bridge',
+                    '/admin/targets/ui-ssh-connected/edit',
+                ]) {
+                    const response = await page.goto(base + path);
+                    assert.equal(response.status(), 200);
+                    await assertCenteredFrame(page, path);
+                    const evidence = await page.evaluate(() => {
+                        const main = document.querySelector('#main-content');
+                        const panels = [...main.querySelectorAll(':scope > .panel')];
+                        const boxes = panels.map(panel => panel.getBoundingClientRect());
+                        const controls = [...main.querySelectorAll('.field > input, .field > select, .field > textarea')];
+                        return {
+                            overflow: document.documentElement.scrollWidth - innerWidth,
+                            panelGaps: boxes.slice(1).map((box, i) => Math.round(box.top - boxes[i].bottom)),
+                            orphanedControls: controls.filter(c => !document.querySelector('label[for="' + c.id + '"]') && !c.hasAttribute('aria-label')).map(c=>c.id),
+                            narrowControl: controls.filter(c => c.getBoundingClientRect().width > main.clientWidth).map(c=>c.id),
+                        };
+                    });
+                    assert.ok(evidence.overflow <= 1, 'Relay/Admin horizontal overflow '+JSON.stringify({width,path,evidence}));
+                    assert.ok(evidence.panelGaps.every(gap => gap >= 17), 'Independent panels touch: '+JSON.stringify({width,path,evidence}));
+                    assert.deepEqual(evidence.orphanedControls, [], 'Unlabelled relay field: '+path);
+                    assert.deepEqual(evidence.narrowControl, [], 'Field wider than canvas: '+path);
+                    if (artifactDirectory && width <= 390) await page.screenshot({
+                        path: join(artifactDirectory, width+'-'+(dark?'dark':'light')+'-'+path.replace(/[^a-z0-9]/gi,'-')+'.png')
+                    });
+                    renders++;
+                }
+            }
+        }
+
+        await page.goto(base + '/admin/settings/connection-relays');
+        assert.ok(await page.getByRole('heading', {name:'Before enabling a Relay'}).count());
+        assert.equal(await page.locator('#relay-setup-heading').count(), 1);
+        const technical = page.locator('details.target-help-details').first();
+        assert.equal(await technical.evaluate(node => node.open), false);
+        await technical.locator('summary').focus();
+        await page.keyboard.press('Enter');
+        assert.equal(await technical.evaluate(node => node.open), true);
+        assert.ok(await page.getByText('Operator procedure:').count());
+        const add = page.locator('form[action$="/settings/connection-relays"]');
+        const ownerPassword = add.locator('input[name="current_password"]');
+        assert.equal(await ownerPassword.count(), 1);
+        assert.equal(await ownerPassword.getAttribute('data-admin-requires-intent'), '');
+        assert.equal(await add.locator('[data-admin-owner-approval-input]').count(), 1);
+        for (const name of ['relay_id', 'display_name', 'control_host', 'control_port',
+            'control_user', 'local_socks_port', 'control_host_key']) {
+            assert.equal(await add.locator('[name="'+name+'"]').count(), 1);
+        }
+
+        await page.goto(base + '/admin/targets/create?connector_type=ssh_direct');
+        const form = page.locator('#target-create-form');
+        const relayChoice = page.locator('#connection_relay_id');
+        assert.equal(await relayChoice.inputValue(), '');
+        assert.ok(await relayChoice.locator('option[value="ui-iran"]').count() === 1);
+        assert.equal(await page.locator('[data-relay-owner-group]').isVisible(), false);
+        await relayChoice.selectOption('ui-iran');
+        assert.equal(await page.locator('[data-relay-owner-group]').isVisible(), true);
+        assert.equal(await page.locator('[data-relay-owner-password]').isEnabled(), true);
+        assert.equal(await page.locator('[data-relay-owner-password]').getAttribute('required'), '');
+        assert.equal(await form.locator('[name="current_password"]:enabled').count(), 1);
+        await page.locator('#ssh_mode').selectOption('manual');
+        assert.equal(await relayChoice.inputValue(), '', 'Reverse switch must abandon old Relay draft');
+        assert.equal(await relayChoice.isDisabled(), true);
+        assert.equal(await page.locator('[data-relay-owner-group]').isVisible(), false);
+        assert.equal(await form.locator('[name="current_password"]:enabled').count(), 1);
+        await page.locator('#ssh_mode').selectOption('managed');
+        assert.equal(await relayChoice.isDisabled(), true);
+        assert.equal(await form.locator('[name="current_password"]:enabled').count(), 1);
+        assert.ok((await form.getAttribute('action')).includes('/managed-reverse'));
+        await page.locator('#ssh_mode').selectOption('direct');
+        assert.equal(await relayChoice.isEnabled(), true);
+        assert.equal(await relayChoice.inputValue(), '');
+        assert.equal(await form.locator('[name="current_password"]:enabled').count(), 0);
+        assert.ok(!(await form.getAttribute('action')).includes('/managed-reverse'));
+        await relayChoice.selectOption('ui-iran');
+        await page.locator('#connector_type').selectOption('wp_ai_bridge');
+        assert.equal(await relayChoice.isEnabled(), true);
+        assert.equal(await page.locator('[data-relay-owner-group]').isVisible(), true);
+        assert.equal(await form.locator('[name="current_password"]:enabled').count(), 1);
+
+        // Validation retry goes through real Laravel with cookies and CSRF;
+        // neither a hidden password nor a remote connection is submitted.
+        const token = await form.locator('input[name="_token"]').inputValue();
+        const response = await page.request.post(base + '/admin/targets', {
+            form: { _token:token, connector_type:'ssh_direct', target_id:'ui-invalid-relay',
+                display_name:'Retry with Relay', connection_relay_id:'ui-iran' },
+            maxRedirects: 0,
+        });
+        assert.equal(response.status(), 302);
+        await page.goto(new URL(response.headers()['location'], base).toString());
+        assert.equal(await page.locator('#connection_relay_id').inputValue(), 'ui-iran');
+        assert.equal(await page.locator('[data-relay-owner-group]').isVisible(), true);
+        assert.equal(await page.locator('#target-registration-errors').isVisible(), true);
+
+        // A historical binding to an unavailable Relay must NOT be presented
+        // as silently switched to Direct in Edit Target.
+        await page.goto(base + '/__browser__/relay-unavailable-target');
+        assert.equal(await page.locator('#target-edit-connection-relay').inputValue(), 'ui-iran-offline');
+        assert.ok(await page.getByText(/cannot be used.*Choose Direct/).count() > 0);
+
+        const nonOwner = await create(browser);
+        try {
+            await enter(nonOwner.page, 'operator');
+            const forbidden = await nonOwner.page.goto(base + '/admin/settings/connection-relays');
+            assert.equal(forbidden.status(), 403);
+            await nonOwner.page.goto(base + '/admin/targets/create?connector_type=ssh_direct');
+            assert.equal(await nonOwner.page.locator('#connection_relay_id').count(), 0);
+        } finally { await nonOwner.context.close(); }
+
+        const native = await create(browser, {javaScriptEnabled:false, width:390});
+        try {
+            await enter(native.page, 'owner');
+            await native.page.goto(base + '/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual');
+            assert.equal(await native.page.locator('#connection_relay_id').isDisabled(), true);
+            await native.page.goto(base + '/admin/targets/create?connector_type=ssh_direct&ssh_mode=direct');
+            assert.equal(await native.page.locator('#connection_relay_id').isEnabled(), true);
+            assert.equal(await native.page.locator('input[name="current_password"][data-relay-owner-password]').count(), 1);
+            assert.equal(await native.page.locator('option[value="ui-iran"]').count(), 1);
+        } finally { await native.context.close(); }
+        assert.deepEqual(run.errors, []);
+        assert.deepEqual(run.external, []);
+        pass(renders + ' Relay/Admin responsive light/dark renders, labels, panel rhythm, no overflow, Owner form intent, all SSH modes, validation retry, native fallback, unavailable route and non-Owner denial');
+    } finally {
+        await run.context.close();
+    }
+}
+
 (async () => {
     const browser = await chromium.launch({ headless: true });
     try {
         const group = process.env.GATEWAY_UI_TEST_GROUP || 'all';
-        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets', 'attachments', 'dirty', 'feedback'].includes(group), 'Unknown UI test group.');
+        assert.ok(['all', 'matrix', 'navigation', 'mobile', 'forms', 'adaptation', 'resilience', 'fragments', 'assets', 'attachments', 'dirty', 'feedback', 'relays'].includes(group), 'Unknown UI test group.');
         if (group === 'all' || group === 'matrix') await matrix(browser);
         if (group === 'all' || group === 'navigation') await navigation(browser);
         if (group === 'all' || group === 'mobile') await mobileAndNative(browser);
@@ -1335,6 +1476,7 @@ async function actionFeedback(browser) {
         if (group === 'all' || group === 'dirty') await semanticDirtyForms(browser);
         if (group === 'all' || group === 'dirty') await roleSensitiveDirtyForms(browser);
         if (group === 'all' || group === 'feedback') await actionFeedback(browser);
+        if (group === 'all' || group === 'relays') await connectionRelays(browser);
     } finally {
         await browser.close();
     }

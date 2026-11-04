@@ -54,20 +54,14 @@
         @csrf
         @method('PUT')
         <input type="hidden" name="route_revision" value="{{ $routeRevision }}">
-        <div class="field">
-            <label for="target-edit-connection-relay">{{ __('Route via') }}</label>
-            <select id="target-edit-connection-relay" name="connection_relay_id">
-                <option value="" @selected($selectedRelay === null)>{{ __('Direct (default)') }}</option>
-                @foreach ($connectionRelays as $relay)
-                    <option value="{{ $relay->relay_id }}" @selected($selectedRelay?->getKey() === $relay->getKey())>{{ $relay->display_name }}</option>
-                @endforeach
-            </select>
-            @if ($selectedRelay !== null && ! $connectionRelays->contains(fn($relay) => $relay->getKey() === $selectedRelay->getKey()))
-                <p class="field-help">{{ __('Saved Relay :name is disabled or not host-ready. Its route remains blocked until repaired or explicitly changed.', ['name' => $selectedRelay->display_name]) }}</p>
-            @endif
-            @error('connection_relay_id')<p class="field-error" role="alert">{{ $message }}</p>@enderror
-            @error('route_revision')<p class="field-error" role="alert">{{ $message }}</p>@enderror
-        </div>
+        @include('admin.targets.partials.connection-relay-selector', [
+            'selectId' => 'target-edit-connection-relay',
+            'initialRelayId' => old('connection_relay_id', $selectedRelay?->relay_id),
+            'blockedRelay' => $selectedRelay !== null && ! $connectionRelays->contains(
+                fn($relay) => $relay->getKey() === $selectedRelay->getKey(),
+            ) ? $selectedRelay : null,
+        ])
+        @error('route_revision')<p class="field-error" role="alert" id="route-revision-error">{{ $message }}</p>@enderror
         <div class="field">
             <label for="target-edit-route-password">{{ __('Current Owner password') }}</label>
             <input id="target-edit-route-password" type="password" name="current_password" maxlength="255"

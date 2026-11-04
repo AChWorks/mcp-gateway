@@ -282,7 +282,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
         try {
             $this->container->make(SshTargetConnectionService::class)->test($target);
 
-            return new TargetConnectorResult(statusMessage: __('SSH host key, numeric TCP peer and login verified. No command was run.'));
+            return new TargetConnectorResult(statusMessage: $this->verifiedConnectionMessage($target, true));
         } catch (SshTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
@@ -293,7 +293,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
         try {
             $this->container->make(SshTargetConnectionService::class)->test($target);
 
-            return new TargetConnectorResult(statusMessage: __('SSH recheck verified the pinned host key and login.'));
+            return new TargetConnectorResult(statusMessage: $this->verifiedConnectionMessage($target, false));
         } catch (SshTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
@@ -315,13 +315,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
         try {
             $this->container->make(SshTargetConnectionService::class)->test($target);
 
-            $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
-            $tunneled = $target->getAttribute('relay_record_id') !== null
-                || ($config instanceof SshTargetConfig && $config->route_mode === 'reverse');
-
-            return new TargetConnectorResult(statusMessage: $tunneled
-                ? __('SSH end-host pinned key and login verified through the selected tunnel. The remote TCP peer IP was not independently observed.')
-                : __('SSH TCP peer, pinned host key and login verified.'));
+            return new TargetConnectorResult(statusMessage: $this->verifiedConnectionMessage($target, false));
         } catch (SshTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->failureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
@@ -352,6 +346,19 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
     {
         // SSH has no OAuth callbacks/intents. Shared credential/state checks still apply.
         return false;
+    }
+
+    private function verifiedConnectionMessage(Target $target, bool $initial): string
+    {
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
+        $tunneled = $target->getAttribute('relay_record_id') !== null
+            || ($config instanceof SshTargetConfig && $config->route_mode === 'reverse');
+
+        return $tunneled
+            ? __('SSH end-host pinned key and login verified through the selected tunnel. The observed TCP peer is local; the remote Target IP was not independently observed. No command was run.')
+            : ($initial
+                ? __('Direct SSH TCP peer, pinned host key and login verified. No command was run.')
+                : __('Direct SSH TCP peer, pinned host key and login reverified. No command was run.'));
     }
 
     private function failureMessage(SshTargetConnectionException $exception): string

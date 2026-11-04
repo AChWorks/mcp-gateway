@@ -3,12 +3,10 @@
 namespace App\Infrastructure\Connectors\Relay;
 
 /**
- * Operator-provisioned attestation, not a privilege escalation facility.
- *
- * The Gateway PHP process may read but never write the root-owned file.
- * Before approving it, the host operator must prove that the Gateway PHP
- * UID is dedicated and SOCKS loopback access is denied to unrelated UIDs.
- * A configured relay is not automatically a connected relay.
+ * Host evidence is issued and rotated by an independent privileged verifier.
+ * A root-owned marker fences stale evidence when managed host policy changes;
+ * a boot ID and short lease bound evidence even across untracked host drift.
+ * No PHP action can create, modify or renew either root-owned artifact.
  */
 class ConnectionRelayHostReadiness
 {
@@ -21,29 +19,36 @@ class ConnectionRelayHostReadiness
         if ($uid < 1) {
             return false;
         }
+
         $dir = '/etc/mcp-gateway/connection-relays';
         $path = $dir.'/'.$relay->relay_id.'.json';
+        $policyPath = $dir.'/'.$relay->relay_id.'.policy';
         if (! $this->trusted('/etc', true)
             || ! $this->trusted('/etc/mcp-gateway', true)
-            || ! $this->trusted($dir, true) || ! $this->trusted($path, false)) {
+            || ! $this->trusted($dir, true)
+            || ! $this->trusted($path, false)
+            || ! $this->trusted($policyPath, false)) {
             return false;
         }
         $bytes = @filesize($path);
-        if (! is_int($bytes) || $bytes < 2 || $bytes > 4096) {
+        $policyBytes = @filesize($policyPath);
+        if (! is_int($bytes) || $bytes < 2 || $bytes > 4096
+            || ! is_int($policyBytes) || $policyBytes < 64 || $policyBytes > 65) {
             return false;
         }
 
         $raw = @file_get_contents($path);
-        $document = is_string($raw) ? json_decode($raw, true, 8) : null;
+        $policy = @file_get_contents($policyPath);
+        $boot = @file_get_contents('/proc/sys/kernel/random/boot_id');
+        if (! is_string($raw) || ! is_string($policy) || ! is_string($boot)) {
+            return false;
+        }
+        $document = json_decode($raw, true, 8);
 
         return is_array($document)
-            && count($document) === 6
-            && ($document['relay_id'] ?? null) === $relay->relay_id
-            && ($document['host_fingerprint'] ?? null) === $relay->hostFingerprint()
-            && ($document['gateway_php_uid'] ?? null) === $uid
-            && ($document['dedicated_php_uid_verified'] ?? null) === true
-            && ($document['socks_access_acl_verified'] ?? null) === true
-            && ($document['relay_egress_verified'] ?? null) === true;
+            && ConnectionRelayHostEvidence::matches(
+                $document, $relay, $uid, trim($boot), trim($policy), time(),
+            );
     }
 
     private function trusted(string $path, bool $directory): bool

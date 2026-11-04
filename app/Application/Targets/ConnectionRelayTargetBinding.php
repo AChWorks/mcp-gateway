@@ -27,7 +27,7 @@ final readonly class ConnectionRelayTargetBinding
 
     public function onRegistration(Target $target, ?string $relayId): void
     {
-        $relay = $this->routes->selected($relayId);
+        $relay = $this->routes->selectedForBinding($relayId);
         if ($relay === null) {
             return;
         }
@@ -60,12 +60,14 @@ final readonly class ConnectionRelayTargetBinding
     public function change(Target $target, string $revision, ?string $relayId): bool
     {
         return DB::transaction(function () use ($target, $revision, $relayId): bool {
+            // Match Disable's Relay->Target lock order. An attested route
+            // cannot be disabled between admission and binding commit.
+            $relay = $this->routes->selectedForBinding($relayId);
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
             if (! hash_equals($this->revision($locked), $revision)) {
                 throw new TargetConnectorFailure(__('The Target route changed since this form was opened. Reload the current Target.'), 'route_revision');
             }
 
-            $relay = $this->routes->selected($relayId);
             $nextId = $relay?->getKey();
             $currentId = $locked->getAttribute('relay_record_id');
             if ($nextId === $currentId) {

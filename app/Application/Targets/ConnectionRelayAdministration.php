@@ -21,17 +21,29 @@ final readonly class ConnectionRelayAdministration
         private ActivityRecorder $activity,
     ) {}
 
-    public function disable(ConnectionRelay $relay, int $expectedRevision): void
+    public function disable(ConnectionRelay $relay, int $expectedRevision): bool
     {
-        DB::transaction(function () use ($relay, $expectedRevision): void {
+        return DB::transaction(function () use ($relay, $expectedRevision): bool {
             $locked = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
-            if ((int) $locked->configuration_revision !== $expectedRevision) {
+            if ((int) $locked->lifecycle_revision !== $expectedRevision) {
                 throw new TargetConnectorFailure(__('The Relay changed since this form was opened. Reload and review.'), 'relay_revision');
             }
-            // Fail-close at the Relay control-plane first, in the same
-            // transaction that invalidates every bound Target below.
-            DB::table('connection_relays')->where('id', $locked->getKey())
-                ->update(['enabled' => false, 'updated_at' => now()]);
+            // A fresh second Disable is a no-op; it must not unnecessarily
+            // fence already-disabled Target epochs. A stale revision failed above.
+            if (! $locked->enabled) {
+                return false;
+            }
+            if ((int) $locked->configuration_revision >= 4294967295 || (int) $locked->lifecycle_revision >= 4294967295) {
+                throw new TargetConnectorFailure(__('The Relay security generation is exhausted. Contact the operator before changing its state.'), 'relay_revision');
+            }
+            // Disable and advance the host-fingerprint generation atomically
+            // with Target fencing. Any old Enable form and attestation is stale.
+            DB::table('connection_relays')->where('id', $locked->getKey())->update([
+                'enabled' => false,
+                'configuration_revision' => (int) $locked->configuration_revision + 1,
+                'lifecycle_revision' => (int) $locked->lifecycle_revision + 1,
+                'updated_at' => now(),
+            ]);
 
             $targets = Target::query()->where('relay_record_id', $locked->getKey())->lockForUpdate()->get();
             foreach ($targets as $target) {
@@ -77,6 +89,8 @@ final readonly class ConnectionRelayAdministration
                 );
             }
             $this->activity->recordRequired(CorrelationId::current(), 'connection-relay-disable', 'success');
+
+            return true;
         }, 3);
     }
 }

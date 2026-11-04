@@ -1096,6 +1096,27 @@ a:focus-visible {
     overflow-wrap: anywhere;
 }
 
+/* Shared compact evidence grid for connection/identity summaries. Keeps
+   independent label/value pairs readable without a five-row tall list. */
+.summary-list.summary-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+    gap: 0.85rem;
+    margin-block: 1rem;
+}
+
+.summary-list.summary-grid > div {
+    min-width: 0;
+    padding: 0.85rem;
+    border: 1px solid var(--ui-border);
+    border-radius: 0.65rem;
+    background: var(--ui-surface);
+}
+
+.summary-list.summary-grid dt {
+    color: var(--ui-muted);
+    font-size: 0.85rem;
+}
+
 .alert[hidden] { display: none; }
 
 /* The shared shell and the explicitly owned form summaries are both

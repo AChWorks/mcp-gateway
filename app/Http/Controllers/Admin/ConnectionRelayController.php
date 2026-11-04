@@ -106,18 +106,26 @@ final class ConnectionRelayController extends Controller
         $revision = (int) $fields['relay_revision'];
         if ($fields['enable'] === '0') {
             try {
-                $administration->disable($relay, $revision);
+                $disabled = $administration->disable($relay, $revision);
             } catch (TargetConnectorFailure $exception) {
                 throw ValidationException::withMessages([$exception->field ?? 'relay' => $exception->getMessage()]);
             }
 
-            return back()->with('status', __('Relay disabled. Bound Targets require explicit re-verification; retained SSH Jobs have new route epochs.'));
+            return back()->with('status', $disabled
+                ? __('Relay disabled. Previous host attestation is invalid; the privileged operator must reverify isolation and renew evidence before re-enabling. Bound Targets require reconnection.')
+                : __('Relay was already disabled. Target epochs and host evidence were not changed.'));
         }
 
         DB::transaction(function () use ($relay, $revision, $host, $activity): void {
             $current = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
-            if ((int) $current->configuration_revision !== $revision) {
+            if ((int) $current->lifecycle_revision !== $revision) {
                 throw ValidationException::withMessages(['relay_revision' => __('Relay settings changed. Reload this page.')]);
+            }
+            if ($current->enabled) {
+                throw ValidationException::withMessages(['relay' => __('Relay is already enabled. Refresh before submitting another lifecycle action.')]);
+            }
+            if ((int) $current->lifecycle_revision >= 4294967295) {
+                throw ValidationException::withMessages(['relay_revision' => __('The Relay lifecycle generation is exhausted; its history must not be replayed.')]);
             }
             if (DB::table('targets')->where('relay_record_id', $current->getKey())
                 ->where('relay_binding_revision', '>=', 4294967295)->exists()) {
@@ -127,7 +135,11 @@ final class ConnectionRelayController extends Controller
                 throw ValidationException::withMessages(['relay' => __('Root-owned host attestation for a dedicated Gateway PHP UID and restricted SOCKS5 access is missing or stale. No Relay was enabled.')]);
             }
             DB::table('connection_relays')->where('id', $current->getKey())
-                ->update(['enabled' => true, 'updated_at' => now()]);
+                ->update([
+                    'enabled' => true,
+                    'lifecycle_revision' => (int) $current->lifecycle_revision + 1,
+                    'updated_at' => now(),
+                ]);
             $activity->recordRequired(CorrelationId::current(), 'connection-relay-enable', 'success');
         });
 
@@ -178,7 +190,9 @@ final class ConnectionRelayController extends Controller
         }
         DB::transaction(function () use ($relay, $fields, $endpoint, $pin, $activity): void {
             $current = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
-            if ($current->enabled || (int) $current->configuration_revision !== (int) $fields['relay_revision']
+            if ($current->enabled || (int) $current->lifecycle_revision !== (int) $fields['relay_revision']
+                || (int) $current->configuration_revision >= 4294967295
+                || (int) $current->lifecycle_revision >= 4294967295
                 || DB::table('targets')->where('relay_record_id', $current->getKey())->exists()) {
                 throw ValidationException::withMessages(['relay' => __('Disable and detach all Targets before rotating Relay identity; reload if its revision changed.')]);
             }
@@ -196,6 +210,7 @@ final class ConnectionRelayController extends Controller
                 'control_host_key' => $pin->canonicalLine(),
                 'local_socks_port' => (int) $fields['local_socks_port'],
                 'configuration_revision' => (int) $current->configuration_revision + 1,
+                'lifecycle_revision' => (int) $current->lifecycle_revision + 1,
                 'updated_at' => now(),
             ]);
             $activity->recordRequired(CorrelationId::current(), 'connection-relay-rotate', 'success');

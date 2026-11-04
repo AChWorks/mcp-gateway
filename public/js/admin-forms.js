@@ -166,6 +166,13 @@
     }
     routeMode?.addEventListener('change', () => {
         trustedCheckbox.checked = false;
+        // Switching to Managed/Manual Reverse explicitly abandons any Relay
+        // selection. Returning to Direct must never quietly reselect an old
+        // intermediary and request its credential confirmation.
+        if (routeMode.value !== 'direct') {
+            const relaySelector = form.querySelector('#connection_relay_id');
+            if (relaySelector) relaySelector.value = '';
+        }
         syncRoute();
         syncAuthentication();
     });

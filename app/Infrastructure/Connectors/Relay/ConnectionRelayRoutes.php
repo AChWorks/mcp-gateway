@@ -39,6 +39,27 @@ final readonly class ConnectionRelayRoutes
         return $relay;
     }
 
+    /**
+     * Only call inside the same DB transaction that persists the Target
+     * binding. This lock serializes new enrollment/rebinding against Disable's
+     * Relay-then-Targets lock order. It is not an outbound connectivity probe.
+     */
+    public function selectedForBinding(?string $relayId): ?ConnectionRelay
+    {
+        if ($relayId === null || $relayId === '') {
+            return null;
+        }
+        if (preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $relayId) !== 1) {
+            throw new ConnectionRelayUnavailable;
+        }
+        $relay = ConnectionRelay::query()->where('relay_id', $relayId)->lockForUpdate()->first();
+        if (! $relay instanceof ConnectionRelay || ! $relay->enabled || ! $this->host->ready($relay)) {
+            throw new ConnectionRelayUnavailable;
+        }
+
+        return $relay;
+    }
+
     public function routeForSelection(?string $relayId): ?LocalSocks5Route
     {
         $relay = $this->selected($relayId);

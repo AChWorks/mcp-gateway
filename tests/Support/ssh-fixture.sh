@@ -74,7 +74,7 @@ fixture_user="${fixture_user:0:30}"
 root="${RUNNER_TEMP:-/tmp}/mcp-gateway-ssh-fixture-${run_id}"
 password='GatewaySshFixture!234'
 key_passphrase='fixture-key-passphrase'
-ports=(46231 46232 46233 46234 46235 46236 46237 46238 46239 46240 46241 46242)
+ports=(46231 46232 46233 46234 46235 46236 46237 46238 46239 46240 46241 46242 46243)
 
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   printf '::add-mask::%s\n' "${password}"
@@ -121,6 +121,8 @@ ssh-keygen -q -t ed25519 -N '' -f "${root}/wrong_ed25519"
 ssh-keygen -q -t rsa -b 3072 -N "${key_passphrase}" -f "${root}/login_rsa"
 # Disposable no-pass key only for the restricted remote-forward control login.
 ssh-keygen -q -t ed25519 -N '' -f "${root}/reverse_tunnel_key"
+# Separate client principal for -D (neither Target login nor Reverse).
+ssh-keygen -q -t ed25519 -N '' -f "${root}/relay_control_key"
 
 # Registration intentionally accepts only the canonical two-field public-key
 # form. ssh-keygen appends a local comment by default, so strip fixture-only
@@ -134,6 +136,11 @@ awk '{print $1" "$2}' "${root}/wrong_ed25519.pub" > "${root}/wrong_ed25519.pin"
 sudo install -d -m 700 -o "${fixture_user}" -g "${fixture_user}" "/home/${fixture_user}/.ssh"
 sudo install -m 600 -o "${fixture_user}" -g "${fixture_user}"   "${root}/login_rsa.pub" "/home/${fixture_user}/.ssh/authorized_keys"
 awk '{print "restrict,port-forwarding,permitlisten=\"127.0.0.1:46250\" "$1" "$2}' "${root}/reverse_tunnel_key.pub" | sudo tee -a "/home/${fixture_user}/.ssh/authorized_keys" >/dev/null
+# Only this dedicated relay key can authenticate to relay-control sshd.
+awk '{print "restrict,port-forwarding,permitopen=\"127.0.0.1:46231\",permitopen=\"[::1]:46231\",permitopen=\"127.0.0.1:46244\" "$1" "$2}' "${root}/relay_control_key.pub" |
+  sudo tee "/home/${fixture_user}/.ssh/relay_authorized_keys" >/dev/null
+sudo chown "${fixture_user}:${fixture_user}" "/home/${fixture_user}/.ssh/relay_authorized_keys"
+sudo chmod 600 "/home/${fixture_user}/.ssh/relay_authorized_keys"
 
 start_daemon() {
   local name="$1"
@@ -146,10 +153,16 @@ start_daemon() {
   local allow_forwarding=no
   local allow_password=yes
   local host_key_prefix=host
+  local keys_file=.ssh/authorized_keys
   if [[ "${name}" == "reverse-control" ]]; then
     allow_forwarding=remote
     allow_password=no
     host_key_prefix=control_host
+  elif [[ "${name}" == "relay-control" ]]; then
+    allow_forwarding=local
+    allow_password=no
+    host_key_prefix=control_host
+    keys_file=.ssh/relay_authorized_keys
   fi
   cat > "${config}" <<EOF_CONFIG
 Port ${port}
@@ -157,7 +170,7 @@ ListenAddress 127.0.0.1
 PidFile ${pidfile}
 HostKey ${root}/${host_key_prefix}_ed25519
 HostKey ${root}/${host_key_prefix}_rsa
-AuthorizedKeysFile .ssh/authorized_keys
+AuthorizedKeysFile ${keys_file}
 PasswordAuthentication ${allow_password}
 PubkeyAuthentication yes
 KbdInteractiveAuthentication no
@@ -199,7 +212,7 @@ EOF_CONFIG
 }
 
 sudo install -m 755 -o root -g root "tests/Support/sftp-hostile-fixture.py" "/home/${fixture_user}/.mcp-hostile-sftp.py"
-start_daemon modern "${ports[0]}" "Subsystem sftp internal-sftp"
+start_daemon modern "${ports[0]}" "ListenAddress ::1" "Subsystem sftp internal-sftp"
 start_daemon legacy-rsa "${ports[1]}"   "HostKeyAlgorithms ssh-rsa"   "KexAlgorithms curve25519-sha256"   "Ciphers aes128-ctr"   "MACs hmac-sha2-256"
 start_daemon weak-kex "${ports[2]}"   "HostKeyAlgorithms ssh-ed25519"   "KexAlgorithms diffie-hellman-group14-sha1"   "Ciphers aes128-ctr"   "MACs hmac-sha2-256"
 start_daemon weak-cipher "${ports[3]}"   "HostKeyAlgorithms ssh-ed25519"   "KexAlgorithms curve25519-sha256"   "Ciphers aes128-cbc"   "MACs hmac-sha2-256"
@@ -214,6 +227,8 @@ start_daemon watch-first-write "${ports[9]}" "Subsystem sftp /usr/bin/python3 /h
 start_daemon elevated-sftp "${ports[10]}" "Subsystem sftp /usr/bin/sudo -n /usr/lib/openssh/sftp-server"
 start_daemon reverse-control "${ports[11]}" \
   "PermitListen 127.0.0.1:46250" "PermitOpen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
+start_daemon relay-control "${ports[12]}" \
+  "PermitOpen 127.0.0.1:46231 [::1]:46231 127.0.0.1:46244" "PermitListen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
 # Client-initiated OpenSSH -R: listener and actual pinned end-host sshd
 # remain separate SSH authentication and trust domains.
 printf '[127.0.0.1]:%s %s\n' "${ports[11]}" "$(cat "${root}/control_host_ed25519.pin")" > "${root}/reverse_known_hosts"
@@ -240,6 +255,55 @@ done
 timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46250' 2>/dev/null || {
   cat "${root}/reverse-client.log" >&2
   echo 'OpenSSH -R fixture listener failed to start.' >&2
+  exit 1
+}
+
+# Disposable TLS end host for real Guzzle/SNI/certificate forwarding.
+# The restricted Relay control permits only this HTTPS fixture port in
+# addition to the actual SSH Target port, never arbitrary public egress.
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -subj '/CN=wp.fixture.test' -addext 'subjectAltName=DNS:wp.fixture.test' \
+  -keyout "${root}/relay-tls.key" -out "${root}/relay-tls.crt" > /dev/null 2>&1
+openssl s_server -accept 127.0.0.1:46244 -cert "${root}/relay-tls.crt" \
+  -key "${root}/relay-tls.key" -www > "${root}/relay-tls.log" 2>&1 &
+printf '%s\n' "$!" > "${root}/relay-tls.pid"
+for _ in $(seq 1 50); do
+  if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46244' 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46244' 2>/dev/null || {
+  echo 'Disposable HTTPS fixture did not start.' >&2
+  exit 1
+}
+
+# Distinct restricted local dynamic -D route. The CI OpenSSH daemon
+# admits only the dedicated key, only the approved loopback Target port,
+# and never permits a shell session.
+printf '[127.0.0.1]:%s %s\n' "${ports[12]}" "$(cat "${root}/control_host_ed25519.pin")" > "${root}/relay_known_hosts"
+chmod 600 "${root}/relay_known_hosts"
+ssh -NT -p "${ports[12]}" -i "${root}/relay_control_key" \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${root}/relay_known_hosts" \
+  -o ExitOnForwardFailure=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+  -D "127.0.0.1:46251" "${fixture_user}@127.0.0.1" > "${root}/relay-client.log" 2>&1 &
+relay_pid="$!"
+printf '%s\n' "${relay_pid}" > "${root}/relay-client.pid"
+for _ in $(seq 1 50); do
+  if ! kill -0 "${relay_pid}" 2>/dev/null; then
+    cat "${root}/relay-client.log" >&2
+    echo 'OpenSSH -D client unexpectedly exited.' >&2
+    exit 1
+  fi
+  if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46251' 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46251' 2>/dev/null || {
+  cat "${root}/relay-client.log" >&2
+  echo 'OpenSSH -D listener failed to start.' >&2
   exit 1
 }
 
@@ -279,6 +343,11 @@ SSH_FIXTURE_MISSING_STAGING=/home/${fixture_user}/.mcp-stream-missing
 SSH_FIXTURE_PORT_MODERN=${ports[0]}
 SSH_FIXTURE_REVERSE_PORT=46250
 SSH_FIXTURE_REVERSE_CONTROL_PORT=${ports[11]}
+SSH_FIXTURE_RELAY_SOCKS_PORT=46251
+SSH_FIXTURE_RELAY_CONTROL_PORT=${ports[12]}
+SSH_FIXTURE_RELAY_TLS_CERT=${root}/relay-tls.crt
+SSH_FIXTURE_RELAY_TLS_PORT=46244
+SSH_FIXTURE_RELAY_TLS_HOST=wp.fixture.test
 SSH_FIXTURE_REVERSE_CONTROL_HOST_PUB=${root}/control_host_ed25519.pin
 SSH_FIXTURE_PORT_LEGACY_RSA=${ports[1]}
 SSH_FIXTURE_PORT_WEAK_KEX=${ports[2]}

@@ -19,6 +19,7 @@ return new class extends Migration
             $table->text('control_host_key');
             $table->unsignedSmallInteger('local_socks_port')->unique();
             $table->unsignedInteger('configuration_revision')->default(1);
+            $table->unsignedInteger('lifecycle_revision')->default(1);
             $table->boolean('enabled')->default(false);
             $table->timestamps();
         });
