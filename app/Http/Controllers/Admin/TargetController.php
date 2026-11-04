@@ -118,6 +118,12 @@ final class TargetController extends Controller
         $selected = $request->input('connector_type');
         $query = is_string($selected) && in_array($selected, $connectors->types(), true)
             ? ['connector_type' => $selected] : [];
+        if ($selected === 'ssh_direct'
+            && ($request->input('ssh_route_mode') === 'reverse' || $request->input('ssh_mode') === 'manual')) {
+            // The no-JS selector is disabled: the submitted reverse route is
+            // authoritative for recovering the visible Manual enrollment mode.
+            $query['ssh_mode'] = 'manual';
+        }
 
         try {
             $choice = $request->validate([
@@ -190,7 +196,10 @@ final class TargetController extends Controller
         $selected = $request->input('connector_type');
         $createQuery = is_string($selected) && in_array($selected, $connectors->types(), true)
             ? ['connector_type' => $selected] : [];
-        if ($selected === 'ssh_direct' && $request->input('ssh_mode') === 'manual') {
+        if ($selected === 'ssh_direct'
+            && ($request->input('ssh_route_mode') === 'reverse' || $request->input('ssh_mode') === 'manual')) {
+            // Preserve Manual mode after a rejected native/no-JS registration;
+            // never render a Reverse-specific error under Direct-only fields.
             $createQuery['ssh_mode'] = 'manual';
         }
         try {

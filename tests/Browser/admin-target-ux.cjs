@@ -25,6 +25,16 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     const page=await context.newPage();const jsErrors=[];
     page.on('pageerror',e=>jsErrors.push(e.message));
     await entry(page);
+    await page.goto(base+'/admin/targets/create');
+    assert.equal(await page.locator('[data-target-ssh-shortcuts]').isVisible(),true);
+    const startingUrl=page.url();
+    await page.getByRole('link',{name:'Managed Reverse SSH',exact:true}).click();
+    assert.equal(page.url(),startingUrl,'JavaScript shortcut must select within this form without navigation');
+    assert.equal((await summary(page)).route,'managed');
+    assert.equal((await summary(page)).action,'/admin/targets/managed-reverse');
+    assert.equal(await page.locator('[data-target-ssh-shortcuts]').isVisible(),false);
+    assert.equal(await page.evaluate(()=>document.activeElement?.id),'target_id');
+    pass('Owner sees Managed Reverse from initial Add Target and selects it in-place');
     await page.goto(base+'/admin/targets/create?connector_type=ssh_direct');
     assert.deepEqual(await summary(page),{
       route:'direct',manual:false,managed:false,standard:true,action:'/admin/targets',dirty:false,submitDisabled:false});
@@ -89,6 +99,12 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
       const form=document.querySelector('[data-user-role-form]');
       const name=form.querySelector('#name'),pw=form.querySelector('[name=current_password]');
       name.value='owner@example.test';pw.value='passive-autofilled-password';
+      // Let the installed document-level Admin guard process submit first;
+      // then prevent this synthetic probe from sending a real native POST.
+      // Without this, the pending POST may race the next page.goto.
+      document.addEventListener('submit',event=>{
+        if(event.target===form) event.preventDefault();
+      },{once:true});
       form.noValidate=true;form.requestSubmit();
       return {name:name.value,pw:pw.value};
     });
@@ -103,6 +119,22 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
       Buffer.from([0,0,0,32]),Buffer.alloc(32,33),
     ]);
     await page.goto(base+'/admin/settings/reverse-ssh');
+    assert.ok(await page.getByRole('heading',{name:'One-time Gateway host setup'}).count()>0);
+    assert.equal(await page.locator('ol.reverse-setup-list > li').count(),5);
+    const diagnostics=page.locator('section[aria-labelledby="reverse-status"] details');
+    assert.equal(await diagnostics.isVisible(),true);
+    assert.equal(await diagnostics.evaluate(el=>el.open),false);
+    for (const width of [360,390,768]) {
+      await page.setViewportSize({width,height:950});
+      for (const dir of ['ltr','rtl']) {
+        await page.evaluate(dir=>document.documentElement.dir=dir,dir);
+        const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth);
+        assert.ok(overflow<=1,'Reverse bootstrap must fit viewport: '+JSON.stringify({width,dir,overflow}));
+      }
+    }
+    pass('pre-setup checklist and collapsed diagnostics fit mobile/RTL');
+    await page.setViewportSize({width:1440,height:950});
+    await page.evaluate(()=>document.documentElement.dir='ltr');
     if (await page.locator('#reverse_control_host').count() === 0) {
       await page.getByRole('link',{name:'Edit settings'}).click();
       await page.locator('#reverse_control_host').waitFor();
@@ -148,6 +180,10 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     const nojs=await browser.newContext({javaScriptEnabled:false,viewport:{width:390,height:950}});
     const plain=await nojs.newPage();
     await entry(plain);
+    await plain.goto(base+'/admin/targets/create');
+    assert.equal(await plain.locator('[data-target-ssh-shortcut="managed"]').isVisible(),true);
+    await plain.locator('[data-target-ssh-shortcut="managed"]').click();
+    assert.equal(new URL(plain.url()).searchParams.get('ssh_mode'),'managed');
     let res=await plain.goto(base+'/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed');
     assert.equal(res.status(),200);
     assert.ok(await plain.locator('noscript a[href*="ssh_mode=manual"]').count()>0);

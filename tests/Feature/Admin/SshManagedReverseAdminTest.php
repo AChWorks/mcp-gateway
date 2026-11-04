@@ -95,6 +95,11 @@ final class SshManagedReverseAdminTest extends TestCase
     public function test_add_target_owns_direct_managed_and_manual_mode_without_new_connector(): void
     {
         $this->actingAs($this->user('owner'));
+        $this->get('/admin/targets/create')->assertOk()
+            ->assertSee('data-target-ssh-shortcut="direct"', false)
+            ->assertSee('data-target-ssh-shortcut="managed"', false)
+            ->assertSee('data-target-ssh-shortcut="manual"', false)
+            ->assertSee('SSH connection methods');
         $normal = $this->get('/admin/targets/create?connector_type=ssh_direct')
             ->assertOk()->assertSee('name="connector_type"', false)
             ->assertSee('name="ssh_mode" aria-describedby="ssh-mode-help" disabled', false)
@@ -115,6 +120,38 @@ final class SshManagedReverseAdminTest extends TestCase
             ->assertOk()->assertSee('Gateway-approved loopback listener port');
         $this->get('/admin/targets/create/managed-reverse')
             ->assertRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed');
+    }
+
+    public function test_manual_reverse_native_validation_round_trip_keeps_the_selected_mode(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $input = [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'manual-native',
+            'display_name' => 'Manual no-JS',
+            'ssh_host' => 'server.example.test',
+            'ssh_port' => 'invalid-port',
+            'ssh_username' => 'deploy',
+            'ssh_route_mode' => 'reverse',
+            'ssh_reverse_port' => '24023',
+            'ssh_tunnel_identity' => 'manual-native',
+            // No ssh_mode: the no-JavaScript selector is intentionally disabled.
+        ];
+
+        $preflight = $this->post(route('admin.targets.preflight'), $input)
+            ->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual')
+            ->assertSessionHasErrors('ssh_port');
+        $this->get((string) $preflight->headers->get('Location'))
+            ->assertOk()->assertSee('option value="manual" selected', false)
+            ->assertSee('Gateway-approved loopback listener port');
+
+        $registration = $this->post(route('admin.targets.store'), $input)
+            ->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual')
+            ->assertSessionHasErrors('ssh_port');
+        $this->get((string) $registration->headers->get('Location'))
+            ->assertOk()->assertSee('option value="manual" selected', false)
+            ->assertSee('Gateway-approved tunnel identity');
+        self::assertSame(0, DB::table('targets')->count());
     }
 
     public function test_managed_enrollment_errors_return_to_canonical_target_form_without_secrets(): void

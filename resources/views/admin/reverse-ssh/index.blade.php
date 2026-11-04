@@ -17,7 +17,10 @@
 
 <section class="panel panel-wide" aria-labelledby="reverse-status">
     <h2 id="reverse-status">{{ __('Gateway host readiness') }}</h2>
-    <dl class="detail-list">
+    <p class="field-help">{{ __('Configuration') }}: <strong>{{ __($configurationState) }}</strong>. {{ __('Local host state') }}: <strong>{{ __($status) }}</strong>. {{ __('Only Target verification proves the remote SSH connection.') }}</p>
+    <details class="target-help-details" @if($status === 'Degraded') open @endif>
+        <summary>{{ __('View technical readiness and host diagnostics') }}</summary>
+        <dl class="detail-list">
         <dt>{{ __('Configuration') }}</dt><dd><strong>{{ __($configurationState) }}</strong></dd>
         <dt>{{ __('Local host state') }}</dt><dd><strong>{{ __($status) }}</strong></dd>
         <dt>{{ __('Restricted key reader') }}</dt><dd>{{ $fileReady ? __('Available locally') : __('Missing or not writable by PHP') }}</dd>
@@ -27,26 +30,55 @@
         <dt>{{ __('Remote Target reachability') }}</dt><dd>{{ __($readiness['external']) }}</dd>
         <dt>{{ __('Pending enrollments') }}</dt><dd>{{ $pending }}</dd>
         <dt>{{ __('Activated enrollments') }}</dt><dd>{{ $active }}</dd>
-    </dl>
+        </dl>
+        <p class="field-help">{{ __('Local readiness checks a bounded SSH handshake with the pinned control host key, but does not prove systemd supervision, firewall policy, PHP/host namespace equivalence or remote Target egress.') }}</p>
+        <p class="field-help">{{ __('With separately approved host access, inspect') }} <code>sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager</code> {{ __('and') }} <code>sudo ss -lntp</code>. {{ __('Run the verified release installer with --preflight and actual --app, --php-user and dedicated --port before privileged setup.') }}</p>
+    </details>
     @if ($errors->any() && ! $editing)
         <div class="alert alert-error" role="alert">
             <strong>{{ __('The host repair did not complete.') }}</strong>
             <ul>@foreach ($errors->all() as $message)<li>{{ $message }}</li>@endforeach</ul>
         </div>
     @endif
-    <p class="field-help">{{ __('The local status probes a bounded SSH handshake with the pinned control key when enabled and reachable. It does not prove systemd supervision, firewall policy, container-host namespace equivalence or remote Target egress. PHP cannot change root-owned SSHD/systemd configuration without a separately approved bootstrap.') }}</p>
-    <p class="field-help">{{ __('Trusted Gateway host checks (run with separately authorized host access):') }} <code>sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager</code> {{ __('and') }} <code>sudo ss -lntp</code>. {{ __('To validate setup compatibility first, run the verified release installer with --preflight, the actual --app path, --php-user and selected --port.') }}</p>
+
     @if ($status === 'Degraded')
         <div class="alert alert-error" role="status">{{ __('Gateway Reverse SSH needs host inspection or key-policy reconciliation before onboarding. A key reader alone is not proof of SSHD availability.') }}</div>
     @elseif ($status === 'Needs host setup')
         <div class="alert alert-info" role="status">{{ __('The optional managed feature has not been bootstrapped on this host. Normal Direct SSH Targets remain available.') }}</div>
     @endif
-    @unless ($fileReady)
-        <div class="alert alert-info" role="status">
-            {{ __('One-time Gateway host setup is required. Use a trusted, independently verified release installer with explicit host approval. No host privileges are granted to this Admin page.') }}
-        </div>
-    @endunless
 </section>
+
+@if (! $gateway || $status !== 'Ready')
+<section class="panel panel-wide" aria-labelledby="reverse-setup">
+    <h2 id="reverse-setup">{{ __('One-time Gateway host setup') }}</h2>
+    @if (! $gateway)
+        <p class="field-help"><strong>{{ __('Next: prepare the dedicated SSH control host, then save the independently verified Gateway identity below.') }}</strong></p>
+    @elseif (! $gateway->enabled)
+        <p class="field-help"><strong>{{ __('This feature is disabled. Direct SSH remains available. Enable only after approved host setup.') }}</strong></p>
+    @elseif ($status === 'Degraded')
+        <p class="field-help"><strong>{{ __('Next: diagnose the existing restricted service and key publication before adding a Target. Inspect the technical diagnostics above.') }}</strong></p>
+    @else
+        <p class="field-help"><strong>{{ __('Next: complete the separately approved host setup and confirm local readiness before Managed enrollment.') }}</strong></p>
+    @endif
+    <ol class="reverse-setup-list" aria-label="{{ __('Gateway bootstrap checklist') }}">
+        <li><strong>{{ __('Verify the installed release') }}</strong>
+            <p class="field-help">{{ __('Use independently verified immutable Gateway installer artifacts. Select a dedicated SSH control port that does not conflict with normal SSH or a Target loopback listener.') }}</p>
+        </li>
+        <li><strong>{{ __('Check compatibility without changes') }}</strong>
+            <p class="field-help">{{ __('Run the verified installer in --preflight mode with the actual application path, PHP service account and selected control port using authorized host access.') }}</p>
+        </li>
+        <li><strong>{{ __('Apply the restricted host service only after approval') }}</strong>
+            <p class="field-help">{{ __('The privileged --apply step creates an isolated OpenSSH control service and key reader; this Admin page never runs it. Firewall ingress and narrowly scoped PHP open_basedir access require separate approval. Do not disable PHP isolation or modify the normal SSHD.') }}</p>
+        </li>
+        <li><strong>{{ __('Pin control SSHD identity and save settings') }}</strong>
+            <p class="field-help">{{ __('Verify the dedicated public host key independently. Enter the real control host, port, restricted username and public host key below, confirm with the Owner password, then check local readiness.') }}</p>
+        </li>
+        <li><strong>{{ __('Enroll and verify each Target') }}</strong>
+            <p class="field-help">{{ __('Use Targets > Add Target > SSH > Managed Reverse. The installer creates Pending Setup; only Target Details verification proves the actual remote SSH host key and login. Local Ready is not remote Connected.') }}</p>
+        </li>
+    </ol>
+</section>
+@endif
 
 <section class="panel panel-wide" aria-labelledby="reverse-config">
     <div class="page-heading">

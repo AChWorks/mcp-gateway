@@ -19,6 +19,8 @@
     const actions = form.querySelector('[data-target-actions]');
     const preflight = form.querySelector('#target-endpoint-preflight');
     const staleNotice = form.querySelector('#target-preflight-stale');
+    const shortcuts = form.querySelector('[data-target-ssh-shortcuts]');
+    const sshMode = form.querySelector('#ssh_mode');
 
     // This is a time-of-check observation, never a future authorization. As
     // soon as the connector or any checked field changes, old success is stale.
@@ -61,9 +63,28 @@
             panel.hidden = !active;
             panel.disabled = !active;
         });
+        if (shortcuts) shortcuts.hidden = current === 'ssh_direct';
         syncPreflight();
     };
     connector.addEventListener('change', syncConnector);
+    sshMode?.addEventListener('change', () => {
+        // A preflight for Direct/Manual must not remain visibly valid after
+        // changing the SSH route, even when the real host/port are unchanged.
+        preflightInvalidated = true;
+        syncPreflight();
+    });
+    shortcuts?.querySelectorAll('[data-target-ssh-shortcut]').forEach(link => {
+        link.addEventListener('click', event => {
+            if (event.defaultPrevented || event.button !== 0 || event.metaKey
+                || event.ctrlKey || event.shiftKey || event.altKey || !sshMode) return;
+            event.preventDefault();
+            connector.value = 'ssh_direct';
+            connector.dispatchEvent(new Event('change', { bubbles: true }));
+            sshMode.value = link.dataset.targetSshShortcut;
+            sshMode.dispatchEvent(new Event('change', { bubbles: true }));
+            form.querySelector('#target_id')?.focus();
+        });
+    });
     syncConnector();
     }
 

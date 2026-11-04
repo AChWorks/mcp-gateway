@@ -58,6 +58,19 @@
                 @endforeach
             </noscript>
         </div>
+        <div class="target-ssh-shortcuts" data-target-ssh-shortcuts @if($selected === 'ssh_direct') hidden @endif>
+            <p class="field-help"><strong>{{ __('SSH connection methods') }}</strong> — {{ __('Start an SSH Target directly, or choose SSH above. Every method shares the same Target identity and SSH connector.') }}</p>
+            <div class="target-ssh-shortcut-actions" role="group" aria-label="{{ __('Start an SSH Target') }}">
+                <a class="button button-secondary" data-turbo="false" data-target-ssh-shortcut="direct"
+                    href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'direct']) }}">{{ __('Direct SSH') }}</a>
+                @if (auth()->user()?->getRawOriginal('role') === 'owner')
+                    <a class="button button-secondary" data-turbo="false" data-target-ssh-shortcut="managed"
+                        href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'managed']) }}">{{ __('Managed Reverse SSH') }}</a>
+                    <a class="button button-secondary" data-turbo="false" data-target-ssh-shortcut="manual"
+                        href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'manual']) }}">{{ __('Manual Reverse SSH (advanced)') }}</a>
+                @endif
+            </div>
+        </div>
 
         @include('admin.targets.partials.identity-fields')
 

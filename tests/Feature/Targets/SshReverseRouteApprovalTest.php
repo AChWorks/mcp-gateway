@@ -78,7 +78,7 @@ final class SshReverseRouteApprovalTest extends TestCase
 
         $this->actingAs($this->user('owner'));
         $fields['current_password'] = 'wrong-password-do-not-log';
-        $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct')
+        $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual')
             ->assertSessionHasErrors('current_password');
         self::assertSame(0, Target::query()->count());
         $fields['current_password'] = 'StrongPassword!234';
@@ -110,7 +110,7 @@ final class SshReverseRouteApprovalTest extends TestCase
         $fields = $this->enrollment();
         $fields['current_password'] = 'StrongPassword!234';
         $this->allow([]);
-        $failure = $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct')
+        $failure = $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual')
             ->assertSessionHasErrors('ssh_reverse_port')
             ->assertSessionHas('diagnostic_code', 'reverse_route_not_approved');
         self::assertArrayNotHasKey('current_password', $failure->baseResponse->getSession()->getOldInput());
