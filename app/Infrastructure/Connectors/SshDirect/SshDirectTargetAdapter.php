@@ -56,7 +56,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
     {
         // ssh_host_key is the server's PUBLIC pin; no login secrets are flashed.
         return [
-            'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
+            'connection_relay_id', 'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
             'ssh_auth_method', 'ssh_trust_confirmed', 'ssh_route_mode',
             'ssh_reverse_port', 'ssh_tunnel_identity',
         ];

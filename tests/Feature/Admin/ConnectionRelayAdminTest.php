@@ -53,6 +53,20 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertOk()->assertDontSee('value="iran-1"', false);
     }
 
+    public function test_failed_ssh_enrollment_keeps_explicit_relay_selection_for_safe_retry(): void
+    {
+        $this->readyRelay();
+        $this->actingAs($this->user('owner'));
+
+        $this->post('/admin/targets', [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'relay-validation-error',
+            'display_name' => 'Relayed SSH',
+            'connection_relay_id' => 'iran-1',
+        ])->assertSessionHasErrors('ssh_host')
+            ->assertSessionHas('_old_input.connection_relay_id', 'iran-1');
+    }
+
     public function test_only_owner_can_manage_relay_or_attach_target_to_it(): void
     {
         $this->actingAs($this->user('operator'));
