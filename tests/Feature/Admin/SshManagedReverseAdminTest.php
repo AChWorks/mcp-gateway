@@ -533,6 +533,64 @@ final class SshManagedReverseAdminTest extends TestCase
             ->assertSee('Control SSHD host identity, username or port differs');
     }
 
+    public function test_failed_save_and_repair_keep_operation_identity_with_one_use_feedback_across_tabs(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $writer = new class extends SshManagedReverseAuthorizedKeys
+        {
+            protected function publish(string $contents): void
+            {
+                throw new RuntimeException('Disposable key publication failure');
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+
+        foreach ([['repair', 'save'], ['save', 'repair']] as $order) {
+            $revision = SshManagedReverseGateway::query()->find(1)?->revision ?? 0;
+            $input = $this->settings(true);
+            $input['revision'] = $revision;
+            $save = $this->put('/admin/settings/reverse-ssh', $input)
+                ->assertSessionHasErrors('site');
+            $repair = $this->post('/admin/settings/reverse-ssh/repair', [
+                'current_password' => 'StrongPassword!234',
+            ])->assertSessionHasErrors('site');
+
+            $urls = [
+                'save' => (string) $save->headers->get('Location'),
+                'repair' => (string) $repair->headers->get('Location'),
+            ];
+            self::assertStringContainsString('_admin_feedback=', $urls['save']);
+            self::assertStringContainsString('_admin_feedback=', $urls['repair']);
+            self::assertNotSame($urls['save'], $urls['repair']);
+            self::assertSame($revision + 1, SshManagedReverseGateway::query()->sole()->revision);
+            self::assertTrue(SshManagedReverseGateway::query()->sole()->publication_pending);
+
+            // An unrelated same-session GET ages the native Laravel flash.
+            // Each tab must still see *only* the operation-bound errors.
+            $this->get('/admin/targets')->assertOk()
+                ->assertDontSee('could not complete key publication.');
+            foreach ($order as $operation) {
+                $page = $this->get($urls[$operation])->assertOk()
+                    ->assertSee('Current saved revision: '.($revision + 1))
+                    ->assertSee('Pending reconciliation')
+                    ->assertSee('Reconcile restricted public keys');
+                if ($operation === 'save') {
+                    $page->assertSee('Configuration Save could not complete key publication.')
+                        ->assertDontSee('Owner Repair could not complete key publication.')
+                        ->assertDontSee('The host repair did not complete.');
+                } else {
+                    $page->assertSee('Owner Repair could not complete key publication.')
+                        ->assertDontSee('Configuration Save could not complete key publication.');
+                }
+            }
+            foreach ($urls as $url) {
+                $this->get($url)->assertOk()
+                    ->assertDontSee('Configuration Save could not complete key publication.')
+                    ->assertDontSee('Owner Repair could not complete key publication.');
+            }
+        }
+    }
+
     public function test_global_publication_receipt_requires_owner_reconciliation(): void
     {
         $this->actingAs($this->user('owner'));

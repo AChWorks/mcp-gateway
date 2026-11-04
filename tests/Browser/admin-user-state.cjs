@@ -26,6 +26,11 @@ async function setDenials(page, values) {
     }
 }
 async function post(page, name) {
+    const consent = page.locator('[data-admin-owner-approval-input]');
+    if (await consent.count() && await consent.isVisible()
+        && await page.locator('#current_password').inputValue()) {
+        await consent.first().check();
+    }
     const pending = page.waitForResponse(response => response.request().method() === 'POST'
         && new URL(response.url()).origin === base
         && new URL(response.url()).pathname.startsWith('/admin/users'));

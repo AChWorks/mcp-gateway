@@ -112,14 +112,19 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
       // Let the installed document-level Admin guard process submit first;
       // then prevent this synthetic probe from sending a real native POST.
       // Without this, the pending POST may race the next page.goto.
+      form.noValidate=true;
+      let prevented=false;
       document.addEventListener('submit',event=>{
-        if(event.target===form) event.preventDefault();
+        if(event.target===form) {
+          prevented=event.defaultPrevented;
+          event.preventDefault();
+        }
       },{once:true});
-      form.noValidate=true;form.requestSubmit();
-      return {name:name.value,pw:pw.value};
+      form.requestSubmit();
+      return {name:name.value,prevented};
     });
-    assert.deepEqual(protectedSubmit,{name:'',pw:''});
-    pass('passively autofilled Owner password and Name cannot submit');
+    assert.deepEqual(protectedSubmit,{name:'',prevented:true});
+    pass('passively filled password alone cannot submit; technical Name restored');
 
     // Test the actual two Owner-only revoke forms in a local fixture.
     const fixtureResult=await page.request.get(base+'/__browser__/owner-revocation-forms');
@@ -140,30 +145,87 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
         if(request.method()==='POST' && new URL(request.url()).pathname===endpoint) submitted++;
       };
       page.on('request',track);
+      const consent=form.locator('[data-admin-owner-approval-input]');
+      assert.equal(await consent.count(),1,kind+' requires shared explicit Owner approval');
+      assert.match(await consent.getAttribute('type'),/checkbox/);
+      assert.ok((await consent.locator('xpath=parent::label').innerText()).includes('I confirm'),
+        kind+' confirmation must have a descriptive accessible label');
+      for (const width of [360,390,768]) {
+        await page.setViewportSize({width,height:900});
+        for (const dir of ['ltr','rtl']) {
+          await page.evaluate(direction=>{document.documentElement.dir=direction;},dir);
+          const geometry=await form.locator('.admin-owner-approval').evaluate(node=>({
+            width:node.clientWidth,scrollWidth:node.scrollWidth,height:node.getBoundingClientRect().height,
+            visible:getComputedStyle(node).display!=='none',
+          }));
+          assert.equal(geometry.visible,true,kind+' Owner confirmation hidden at '+width+'/'+dir);
+          assert.ok(geometry.scrollWidth<=geometry.width+1,
+            kind+' Owner confirmation text overflows at '+width+'/'+dir+': '+JSON.stringify(geometry));
+          assert.ok(geometry.height>=40,
+            kind+' Owner confirmation target too small at '+width+'/'+dir);
+        }
+      }
+      await page.setViewportSize({width:1440,height:950});
+      await page.evaluate(()=>{document.documentElement.dir='ltr';});
       await ownerPassword.evaluate(control=>{control.value='passive-fixture-value';});
       await ownerPassword.click();
-      assert.equal(await ownerPassword.inputValue(),'');
+      assert.equal(await ownerPassword.inputValue(),'passive-fixture-value');
       await button.click();
       assert.equal(submitted,0,kind+' passive pre-click fill was submitted');
-      await ownerPassword.evaluate(control=>{control.value='passive-fixture-value';});
+      assert.equal(await form.locator('.admin-owner-approval + .field-error').isVisible(),true);
+      // Restored checkbox state and synthetic change cannot establish consent.
+      await consent.evaluate(control=>{
+        control.checked=true;
+        control.dispatchEvent(new Event('change',{bubbles:true}));
+      });
       await button.click();
-      assert.equal(submitted,0,kind+' passive post-click fill was submitted');
-      assert.equal(await ownerPassword.inputValue(),'');
+      assert.equal(submitted,0,kind+' synthetic checkbox change bypassed Owner consent');
+      assert.equal(await consent.isChecked(),false);
+
+      // A real browser-generated input event is NOT evidence of a deliberate
+      // password-manager choice. Playwright fill exercises the native event
+      // path without claiming to simulate a particular password manager.
+      await ownerPassword.fill('isolated-browser-password');
+      await button.click();
+      assert.equal(submitted,0,kind+' native input event bypassed explicit approval');
+
+      // Both typing and paste still enter valid credentials. A separate
+      // accessible checkbox marks the Owner's decision to use that value.
       await ownerPassword.click();
       if(kind==='OAuth') {
+        await ownerPassword.fill('');
         await page.keyboard.type('isolated-browser-password');
       } else {
+        await ownerPassword.fill('');
         await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:base});
         await page.evaluate(async ()=>{
           await navigator.clipboard.writeText('isolated-browser-password');
         });
         await page.keyboard.press('Control+V');
       }
-      assert.equal(await ownerPassword.inputValue(),'isolated-browser-password',
-        kind+' deliberate keyboard/paste did not populate credential');
-      // A passive manager replacement after deliberate entry must not
-      // replace the confirmed value that the browser submits.
+      assert.equal(await ownerPassword.inputValue(),'isolated-browser-password');
+      await consent.check();
+      assert.equal(await consent.isChecked(),true);
+      assert.equal(await form.getAttribute('data-admin-dirty'),null,
+        'Owner acknowledgement is not an unsaved persisted form change');
+      // Later silent password-manager replacement invalidates the exact
+      // approved value even if the browser emits no events.
       await ownerPassword.evaluate(control=>{control.value='passive-late-replacement';});
+      await button.click();
+      assert.equal(submitted,0,kind+' late passive overwrite replaced approved value');
+      assert.equal(await consent.isChecked(),false);
+      // A browser input/change after approval also revokes consent, even
+      // when the event looks native and the eventual value is unchanged.
+      await ownerPassword.fill('isolated-browser-password');
+      await consent.check();
+      await ownerPassword.fill('isolated-browser-password');
+      await button.click();
+      assert.equal(submitted,0,kind+' later browser input failed to revoke approval');
+
+      await ownerPassword.fill('isolated-browser-password');
+      await consent.focus();
+      await page.keyboard.press('Space'); // keyboard approval, followed by a real POST
+      assert.equal(await consent.isChecked(),true);
       const sent=page.waitForResponse(response=>response.request().method()==='POST'
         && new URL(response.url()).pathname===endpoint);
       await button.click();
@@ -208,6 +270,7 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     await page.locator('#reverse_control_user').fill('mcp-reverse');
     await page.locator('#reverse_host_key').fill('ssh-ed25519 '+hostKey.toString('base64'));
     await page.locator('#reverse_owner_password').fill('isolated-browser-password');
+    await page.locator('[data-admin-owner-approval-input]').first().check();
     await page.getByRole('button',{name:'Save settings'}).click();
     await page.getByRole('link',{name:'Edit settings'}).waitFor();
     assert.equal(await page.locator('#reverse_control_host').count(),0);

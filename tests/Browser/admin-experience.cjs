@@ -399,6 +399,7 @@ async function nativeFormsAndScope(browser) {
         });
         await page.locator('input[name="values[wp_response_kib]"]').fill('80');
         await page.locator('input[name="current_password"]').fill('isolated-browser-password');
+        await page.locator('[data-admin-owner-approval-input]').check();
         await page.getByRole('button', { name: 'Save operational settings', exact: true }).click();
         await page.waitForLoadState('domcontentloaded');
         await page.getByRole('heading', { name: 'Operational settings', exact: true }).waitFor();
@@ -407,6 +408,7 @@ async function nativeFormsAndScope(browser) {
 
         await page.locator('input[name="values[wp_response_kib]"]').fill('999999999');
         await page.locator('input[name="current_password"]').fill('isolated-browser-password');
+        await page.locator('[data-admin-owner-approval-input]').check();
         await page.locator('form[action$="/admin/operations"]').evaluate(form => form.noValidate = true);
         const invalidPost = page.waitForResponse(r => r.request().method() === 'POST'
             && new URL(r.url()).pathname === '/admin/operations');
@@ -1188,6 +1190,7 @@ async function roleSensitiveDirtyForms(browser) {
         const savedName = 'UI Fixture Viewer saved';
         await page.locator('#name').fill(savedName);
         await page.locator('#current_password').fill('isolated-browser-password');
+        await page.locator('[data-admin-owner-approval-input]').check();
         const waitSave = page.waitForResponse(response => response.request().method() === 'POST'
             && new URL(response.url()).pathname.startsWith('/admin/users/'));
         await page.getByRole('button', { name: 'Save user access', exact: true }).click();
@@ -1200,6 +1203,7 @@ async function roleSensitiveDirtyForms(browser) {
 
         await page.locator('#name').fill(savedName + ' rejected');
         await page.locator('#current_password').fill('incorrect-browser-password');
+        await page.locator('[data-admin-owner-approval-input]').check();
         const waitReject = page.waitForResponse(response => response.request().method() === 'POST'
             && new URL(response.url()).pathname.startsWith('/admin/users/'));
         await page.getByRole('button', { name: 'Save user access', exact: true }).click();
