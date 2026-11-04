@@ -1,8 +1,10 @@
 # Managed Reverse SSH — Issue #270
 
-**Availability and approvals:** Managed Reverse SSH is implemented in the
-v2.5.6 source and remains **OFF by default**. Use only an actually published,
-independently verified immutable GitHub Release package for installation;
+**Availability and approvals:** Managed Reverse SSH has been available
+since v2.5.6 and remains **OFF by default**. v2.5.8 unifies its Add Target
+entry with Direct and Manual SSH while retaining separate Gateway host setup.
+Use only an actually published, independently verified immutable GitHub
+Release package for installation;
 source branches or temporary CI candidate artifacts are not public releases.
 Privileged Gateway host bootstrap, installed NL/IR upgrades and real
 inbound-blocked Target acceptance require separately authorized host actions.

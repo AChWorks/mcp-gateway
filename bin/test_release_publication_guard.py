@@ -47,6 +47,9 @@ class PublicationGuardTests(unittest.TestCase):
         self.tamper = None
         self.download_called = 0
         self.real_api = guard.api_release
+        self.real_immutability_api = guard.api_release_immutability
+        self.immutable_release_state = {"enabled": True, "enforced_by_owner": False}
+        self.release_policy_reads = 0
         self.real_create = guard.create_tag_once
         self.create_calls = 0
         self.concurrent_tag_sha = None
@@ -84,10 +87,16 @@ class PublicationGuardTests(unittest.TestCase):
         patcher5 = patch.dict(os.environ, self.env, clear=True)
         patcher6 = patch.object(guard, "create_tag_once", side_effect=self.fake_create)
         patcher7 = patch.object(guard, "github_ruleset_json", side_effect=self.fake_ruleset_json)
+        patcher8 = patch.object(guard, "api_release_immutability", side_effect=self.fake_immutable_releases)
         self.real_ruleset_json = guard.github_ruleset_json
-        for p in (patcher1, patcher2, patcher3, patcher4, patcher5, patcher6, patcher7):
+        for p in (patcher1, patcher2, patcher3, patcher4, patcher5, patcher6, patcher7, patcher8):
             p.start()
             self.addCleanup(p.stop)
+
+    def fake_immutable_releases(self, token: str):
+        self.assertEqual(token, self.env["GH_TOKEN"])
+        self.release_policy_reads += 1
+        return self.immutable_release_state
 
     def fake_ruleset_json(self, url: str, token: str):
         self.assertEqual(token, self.env["GH_TOKEN"])
@@ -147,6 +156,7 @@ class PublicationGuardTests(unittest.TestCase):
             "draft": False,
             "prerelease": False,
             "published_at": "2026-10-14T16:00:00Z",
+            "immutable": True,
             "assets": [{
                 "name": name, "state": "uploaded", "size": len(data),
                 "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
@@ -164,6 +174,80 @@ class PublicationGuardTests(unittest.TestCase):
         self.release = self.expected_release()
         guard.execute("after")
         self.assertGreaterEqual(self.ruleset_reads, 6)
+
+    def test_owner_policy_preflight_requires_enabled_state_without_tag_mutation(self):
+        self.immutable_release_state["enabled"] = False
+        with self.assertRaisesRegex(guard.PublicationStateError,
+                                    "Release asset immutability is not enabled"):
+            guard.require_immutable_release_assets_policy(self.env["GH_TOKEN"])
+        self.assertEqual(self.create_calls, 0)
+        self.assertEqual(self.download_called, 0)
+        self.assertEqual(self.ruleset_reads, 0)
+
+    def test_owner_policy_preflight_is_read_only_and_separate_from_actions_token(self):
+        with patch.object(sys, "argv", ["release_publication_guard.py", "policy"]):
+            guard.main()
+        self.assertEqual(self.release_policy_reads, 1)
+        self.assertEqual(self.create_calls, 0)
+        self.assertEqual(self.ruleset_reads, 0)
+        # The workflow's contents-write token is not a repository-admin-read
+        # credential; the normal publication phases must never require one.
+        guard.execute("before")
+        guard.execute("reserve")
+        self.release = self.expected_release()
+        guard.execute("after")
+        self.assertEqual(self.release_policy_reads, 1)
+
+    def test_missing_or_malformed_immutable_release_state_fails_closed(self):
+        for state in (None, {}, [], {"enabled": "true"},
+                      {"enabled": 1}, {"enabled": False}):
+            with self.subTest(state=state):
+                self.immutable_release_state = state
+                with self.assertRaises(guard.PublicationStateError):
+                    guard.require_immutable_release_assets_policy(self.env["GH_TOKEN"])
+        self.assertEqual(self.create_calls, 0)
+
+    def test_immutable_release_api_is_authenticated_read_only_and_verifiable(self):
+        class Response:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, size):
+                return b'{"enabled":true,"enforced_by_owner":false}'
+        seen = []
+        def route(request, timeout):
+            seen.append(request.full_url)
+            self.assertEqual(request.get_method(), "GET")
+            self.assertEqual(request.get_header("Authorization"),
+                             f"Bearer {self.env['GH_TOKEN']}")
+            self.assertEqual(request.get_header("X-github-api-version"), "2026-03-10")
+            self.assertEqual(timeout, 20)
+            return Response()
+        with patch.object(guard, "api_release_immutability", self.real_immutability_api):
+            with patch.object(guard.urllib.request, "urlopen", side_effect=route):
+                guard.require_immutable_release_assets_policy(self.env["GH_TOKEN"])
+        self.assertEqual(seen, [f"https://api.github.com/repos/{guard.REPOSITORY}/immutable-releases"])
+
+    def test_immutable_release_api_denial_and_invalid_json_fail_closed(self):
+        class InvalidResponse:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, size):
+                return b'not-json'
+        with patch.object(guard, "api_release_immutability", self.real_immutability_api):
+            with patch.object(guard.urllib.request, "urlopen",
+                              side_effect=HTTPError("https://api.github.com",403,"denied",{},None)):
+                with self.assertRaisesRegex(guard.PublicationStateError, "could not be verified"):
+                    guard.require_immutable_release_assets_policy(self.env["GH_TOKEN"])
+            with patch.object(guard.urllib.request, "urlopen", return_value=InvalidResponse()):
+                with self.assertRaisesRegex(guard.PublicationStateError, "invalid JSON"):
+                    guard.require_immutable_release_assets_policy(self.env["GH_TOKEN"])
+        self.assertEqual(self.create_calls, 0)
 
     def test_one_time_owner_policy_does_not_require_release_attestation_inputs(self):
         self.assertFalse(any(k.startswith("APPROVED_TAG_RULESET_") for k in os.environ))
@@ -546,6 +630,20 @@ class PublicationGuardTests(unittest.TestCase):
         self.release["draft"] = True
         with self.assertRaisesRegex(guard.PublicationStateError, "not fully published"):
             guard.execute("after")
+
+    def test_postpublication_requires_actual_immutable_release_metadata(self):
+        self.tag = (APPROVED, None)
+        for immutable in (False, None, "true"):
+            with self.subTest(immutable=immutable):
+                self.release = self.expected_release()
+                if immutable is None:
+                    self.release.pop("immutable")
+                else:
+                    self.release["immutable"] = immutable
+                with self.assertRaisesRegex(guard.PublicationStateError,
+                                            "not GitHub-platform immutable"):
+                    guard.execute("after")
+        self.assertEqual(self.download_called, 0)
 
     def test_incomplete_asset_set_fails_closed(self):
         self.tag = (APPROVED, None)
