@@ -89,7 +89,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
                 return new TargetPreflightResult(
                     __('The reverse route matches the operator-managed approval for this Target. Listener availability and remote SSH identity have NOT been tested.'),
                     __('Only the allowlist was checked; confirm the restricted OpenSSH forward independently, then verify the remote host key and login using Target Details.'),
-                    $endpoint->host.':'.$endpoint->port.' via NL 127.0.0.1:'.$route->listenerPort,
+                    $endpoint->host.':'.$endpoint->port.' via Gateway 127.0.0.1:'.$route->listenerPort,
                     [
                         'ssh_host' => (string) $input['ssh_host'],
                         'ssh_port' => (string) $input['ssh_port'],
@@ -107,7 +107,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
         } catch (SshTargetConnectionException $exception) {
             if ($exception->reason === 'reverse_route_not_approved') {
                 throw new TargetConnectorFailure(
-                    __('No matching NL operator approval exists for this reverse route and Target.'),
+                    __('No matching Gateway operator approval exists for this reverse route and Target.'),
                     'ssh_reverse_port', 'reverse_route_not_approved',
                 );
             }
@@ -169,7 +169,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
             throw new TargetConnectorFailure(
                 $exception->reason === 'reverse_listener_conflict'
                     ? __('The approved local listener port is already enrolled for another SSH Target. Use a different operator-assigned port.')
-                    : __('Reverse SSH requires an exact, independent NL operator approval for the Target, listener port and tunnel identity.'),
+                    : __('Reverse SSH requires an exact, independent Gateway operator approval for the Target, listener port and tunnel identity.'),
                 'ssh_reverse_port', $exception->reason,
             );
         } catch (InvalidArgumentException $exception) {

@@ -74,7 +74,7 @@
             </div>
             <div class="field">
                 <label for="current_password">{{ __('Current Owner password') }}</label>
-                <input id="current_password" type="password" name="current_password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="current_password-error" @enderror>
+                <input id="current_password" type="password" name="current_password" data-admin-requires-intent maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="current_password-error" @enderror>
                 @error('current_password')<p class="field-error" id="current_password-error" role="alert">{{ $message }}</p>@enderror
             </div>
             <button class="button button-primary" type="submit">{{ __('Grant scoped publication') }}</button>

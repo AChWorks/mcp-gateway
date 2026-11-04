@@ -102,7 +102,7 @@ final class AdminConnectorPresentationTest extends TestCase
         [$rows, $queries] = $this->presentWithQueries([$target]);
         self::assertSame([], $queries);
         self::assertNull($rows['ssh-no-projection']['identity']);
-        self::assertSame('Direct SSH', $rows['ssh-no-projection']['label']);
+        self::assertSame('SSH', $rows['ssh-no-projection']['label']);
 
         Http::preventStrayRequests();
         $this->actingAs($this->owner())->get('/admin/targets')->assertOk()

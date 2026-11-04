@@ -76,27 +76,70 @@
     const hostKey = form.querySelector('#ssh_host_key');
     const fingerprint = form.querySelector('#host_fingerprint');
     if (!method || !trustedCheckbox || !hostKey || !fingerprint) return;
-    const routeMode = form.querySelector('#ssh_route_mode');
-    const syncReverseRoute = () => {
-        const reverse = routeMode?.value === 'reverse' && connector.value === 'ssh_direct';
-        form.querySelectorAll('[data-ssh-reverse-route] input').forEach(field => {
-            field.disabled = !reverse;
-            field.required = reverse && field.name !== 'current_password' ? true : reverse;
-        });
+    const routeMode = form.querySelector('#ssh_mode');
+    const standardFields = form.querySelector('[data-ssh-standard]');
+    const managedFields = form.querySelector('[data-ssh-managed]');
+    const manualFields = form.querySelector('[data-ssh-reverse-route]');
+    const routeValue = form.querySelector('[data-ssh-route-value]');
+    const submit = form.querySelector('[data-target-submit]');
+    const preflightAction = form.querySelector('[data-target-preflight]');
+    const preflightHelp = form.querySelector('[data-target-preflight-help]');
+    const initialSubmitLabel = submit?.textContent || '';
+    const managedSubmitLabel = 'Create Pending Setup and installer command';
+
+    const syncRoute = () => {
+        const ssh = connector.value === 'ssh_direct';
+        const managed = ssh && routeMode?.value === 'managed';
+        const manual = ssh && routeMode?.value === 'manual';
+        if (manualFields) {
+            manualFields.hidden = !manual;
+            manualFields.querySelectorAll('input').forEach(field => {
+                field.disabled = !manual;
+                field.required = manual;
+            });
+        }
+        if (managedFields) {
+            managedFields.hidden = !managed;
+            managedFields.querySelectorAll('input').forEach(field => {
+                field.disabled = !managed;
+                field.required = managed;
+            });
+        }
+        if (standardFields) standardFields.hidden = managed;
+        if (routeValue) {
+            routeValue.disabled = managed || !ssh;
+            routeValue.value = manual ? 'reverse' : 'direct';
+        }
+        if (submit) {
+            submit.textContent = managed ? managedSubmitLabel : (submit.dataset.standardLabel || initialSubmitLabel);
+            submit.disabled = managed && form.dataset.managedConfigured !== 'true';
+        }
+        if (preflightAction) {
+            preflightAction.hidden = managed;
+            preflightAction.disabled = managed;
+        }
+        if (preflightHelp) preflightHelp.hidden = managed;
+        form.action = managed ? form.dataset.managedAction : form.dataset.standardAction;
     };
+    if (submit) {
+        submit.dataset.standardLabel = routeMode?.value === 'managed' ? 'Register Target' : initialSubmitLabel;
+    }
     routeMode?.addEventListener('change', () => {
         trustedCheckbox.checked = false;
-        syncReverseRoute();
+        syncRoute();
+        syncAuthentication();
     });
-    connector.addEventListener('change', syncReverseRoute);
-    syncReverseRoute();
+    connector.addEventListener('change', syncRoute);
+    syncRoute();
     const syncAuthentication = () => {
         const current = method.value;
+        const standard = routeMode?.value !== 'managed' && connector.value === 'ssh_direct';
+        method.disabled = !standard;
         form.querySelectorAll('[data-ssh-secret]').forEach(group => {
             const active = group.dataset.sshSecret === current;
             group.hidden = !active;
             group.querySelectorAll('input, textarea').forEach(field => {
-                field.disabled = !active || connector.value !== 'ssh_direct';
+                field.disabled = !active || !standard;
                 field.required = active && field.name !== 'ssh_passphrase';
             });
         });
@@ -145,6 +188,8 @@
     const routeMode = form.querySelector('#ssh_edit_route_mode');
     const syncRoute = () => {
         const reverse = routeMode?.value === 'reverse';
+        const routeFields = form.querySelector('[data-ssh-reverse-route]');
+        if (routeFields) routeFields.hidden = !reverse;
         form.querySelectorAll('[data-ssh-reverse-route] input').forEach(field => {
             field.disabled = !reverse;
             field.required = reverse;

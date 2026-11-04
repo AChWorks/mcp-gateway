@@ -11,8 +11,9 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
-use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Models\User;
+use App\Support\TargetFormInput;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
@@ -22,12 +23,13 @@ use RuntimeException;
 
 final class SshManagedReverseTargetController extends Controller
 {
-    public function create(Request $request): View
+    public function create(Request $request): RedirectResponse
     {
         $this->requireOwner($request);
 
-        return view('admin.reverse-ssh.create-target', [
-            'configured' => SshManagedReverseGateway::active(),
+        // Bookmarked legacy route has one canonical Target-owned enrollment form.
+        return redirect()->route('admin.targets.create', [
+            'connector_type' => 'ssh_direct', 'ssh_mode' => 'managed',
         ]);
     }
 
@@ -36,8 +38,38 @@ final class SshManagedReverseTargetController extends Controller
         AdministratorPasswordConfirmation $password,
         SshManagedReverseEnrollmentService $enroll,
         SshManagedReverseInstallCommand $installer,
-    ): View {
+    ): View|RedirectResponse {
         $this->requireOwner($request);
+
+        try {
+            return $this->createPending($request, $password, $enroll, $installer);
+        } catch (ValidationException $exception) {
+            if ($request->expectsJson()) {
+                throw $exception;
+            }
+
+            // A failed POST must return to the canonical Add Target flow even
+            // without Referer, restoring only non-secret identity/trust drafts.
+            return redirect()->route('admin.targets.create', [
+                'connector_type' => 'ssh_direct', 'ssh_mode' => 'managed',
+            ])->withInput(TargetFormInput::replayable($request, [
+                'connector_type', 'ssh_mode', 'target_id', 'display_name',
+                'ai_guidance', 'ssh_host', 'ssh_port', 'ssh_username',
+                'ssh_host_key', 'ssh_trust_confirmed',
+            ]))->withErrors($exception->errors());
+        }
+    }
+
+    private function createPending(
+        Request $request, AdministratorPasswordConfirmation $password,
+        SshManagedReverseEnrollmentService $enroll, SshManagedReverseInstallCommand $installer,
+    ): View {
+        // Distinguish browser-profile emails from real OS account names.
+        if (str_contains((string) $request->input('ssh_username', ''), '@')) {
+            throw ValidationException::withMessages([
+                'ssh_username' => __('Enter the existing SSH OS account name (such as deploy), not a browser login email.'),
+            ]);
+        }
         $fields = $request->validate([
             'target_id' => ['required', 'string', 'max:64',
                 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
@@ -46,7 +78,7 @@ final class SshManagedReverseTargetController extends Controller
                 'not_regex:/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/'],
             'ssh_host' => ['required', 'string', 'max:253'],
             'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
-            'ssh_username' => ['required', 'string', 'max:128'],
+            'ssh_username' => ['required', 'string', 'max:128', 'regex:/^[a-zA-Z0-9_][a-zA-Z0-9_.+-]{0,127}$/D'],
             'ssh_host_key' => ['required', 'string', 'max:4096'],
             'ssh_trust_confirmed' => ['required', 'in:yes'],
         ]);

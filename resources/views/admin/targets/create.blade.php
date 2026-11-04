@@ -7,6 +7,7 @@
 @section('content')
 @php
     $requestedConnector = old('connector_type', $selectedConnector);
+    $selectedSshMode = old('ssh_mode', $sshMode);
     $selected = is_string($requestedConnector) && array_key_exists($requestedConnector, $connectorOptions)
         ? $requestedConnector : '';
 @endphp
@@ -21,7 +22,10 @@
 
 <section class="panel panel-wide target-enrollment" aria-labelledby="target-enrollment-title">
     <h2 id="target-enrollment-title">{{ __('New connection') }}</h2>
-    <form id="target-create-form" method="post" action="{{ route('admin.targets.store') }}" class="form-stack">
+    <form id="target-create-form" method="post" action="{{ route($selectedSshMode === 'managed' ? 'admin.reverse-ssh.targets.store' : 'admin.targets.store') }}"
+        data-standard-action="{{ route('admin.targets.store') }}"
+        data-managed-action="{{ route('admin.reverse-ssh.targets.store') }}"
+        data-managed-configured="{{ $managedConfigured ? 'true' : 'false' }}" class="form-stack" autocomplete="off">
         @csrf
         @if ($errors->any())
             <div id="target-registration-errors" class="alert alert-error" data-admin-feedback role="alert" tabindex="-1" autofocus aria-labelledby="target-registration-errors-title">
@@ -55,41 +59,15 @@
             </noscript>
         </div>
 
-        <fieldset class="target-form-section" data-target-shared @if($selected === '') hidden disabled @endif>
-            <legend>{{ __('2. Target details') }}</legend>
-            <p class="field-help">{{ __('A stable ID identifies this Target across clients and permissions; the display name can change later.') }}</p>
-            <div class="target-field-grid">
-                <div class="field">
-                    <label for="target_id">{{ __('Stable Target ID') }}</label>
-                    <input type="text" id="target_id" name="target_id" maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" required
-                        autocomplete="off" spellcheck="false" placeholder="my-target" value="{{ old('target_id') }}" @error('target_id') aria-invalid="true" @enderror aria-describedby="target_id-help{{ $errors->has('target_id') ? ' target_id-error' : '' }}">
-                    <p class="field-help" id="target_id-help">{{ __('Lowercase letters, numbers and hyphens.') }}</p>
-                    @error('target_id')<p class="field-error" role="alert" id="target_id-error">{{ $message }}</p>@enderror
-                </div>
-                <div class="field">
-                    <label for="display_name">{{ __('Display name') }}</label>
-                    <input type="text" id="display_name" name="display_name" maxlength="160" required
-                        placeholder="{{ __('Production blog or staging server') }}" value="{{ old('display_name') }}" @error('display_name') aria-invalid="true" aria-describedby="display_name-error" @enderror>
-                    @error('display_name')<p class="field-error" role="alert" id="display_name-error">{{ $message }}</p>@enderror
-                </div>
-                <div class="field target-span-all">
-                    <label for="ai_guidance">{{ __('AI guidance (optional)') }}</label>
-                    <textarea id="ai_guidance" name="ai_guidance" rows="3"
-                        maxlength="{{ \App\Domain\Targets\Target::AI_GUIDANCE_MAX_LENGTH }}" autocomplete="off"
-                        placeholder="{{ __('Example: This is a production server. Explain risks and ask before making changes.') }}" @error('ai_guidance') aria-invalid="true" @enderror aria-describedby="ai_guidance_help{{ $errors->has('ai_guidance') ? ' ai_guidance-error' : '' }}">{{ old('ai_guidance') }}</textarea>
-                    <p id="ai_guidance_help" class="field-help">{{ __('Shown to authorized AI clients as Target-specific context. This is advice, not enforced approval. Never include credentials or secrets.') }}</p>
-                    @error('ai_guidance')<p class="field-error" role="alert" id="ai_guidance-error">{{ $message }}</p>@enderror
-                </div>
-            </div>
-        </fieldset>
+        @include('admin.targets.partials.identity-fields')
 
         @foreach ($connectorDefinitions as $connectorDefinition)
             @include($connectorDefinition->enrollmentView)
         @endforeach
 
         <div class="target-create-actions" data-target-actions @if($selected === '') hidden @endif>
-            <button class="button button-primary" type="submit">{{ __('Register Target') }}</button>
-            <button class="button button-secondary" type="submit"
+            <button class="button button-primary" type="submit" data-target-submit @disabled($selected === 'ssh_direct' && $selectedSshMode === 'managed' && ! $managedConfigured)>{{ $selectedSshMode === 'managed' ? __('Create Pending Setup and installer command') : __('Register Target') }}</button>
+            <button class="button button-secondary" type="submit" data-target-preflight @if($selectedSshMode === 'managed') hidden disabled @endif
                 formaction="{{ route('admin.targets.preflight') }}" formnovalidate>
                 {{ __('Check endpoint from Gateway (no registration)') }}
             </button>
@@ -121,7 +99,7 @@
                 <p id="target-preflight-stale" class="field-help" role="status" hidden>{{ __('The endpoint changed after preflight. The previous result no longer applies; check the new endpoint again.') }}</p>
             @endif
         @endif
-        <p class="field-help">{{ __('Preflight is optional and read-only. It uses the selected connector network policy and does not register, contact, authenticate or trust a Target. Actual connections independently recheck DNS and verify their required identity protections.') }}</p>
+        <p class="field-help" data-target-preflight-help @if($selectedSshMode === 'managed') hidden @endif>{{ __('Preflight is optional and read-only. It uses the selected connector network policy and does not register, contact, authenticate or trust a Target. Actual connections independently recheck DNS and verify their required identity protections.') }}</p>
     </form>
 </section>
 

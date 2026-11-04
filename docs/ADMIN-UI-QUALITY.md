@@ -26,6 +26,13 @@
 - Verify both light and dark media preference, reduced-motion setting, longest realistic localized text, and RTL-compatible layout when relevant. Keep text wrapping, sufficient touch targets and readable monospace/code snippets.
 - Preserve server-rendered Blade, escaped output, CSRF, per-user/Target permissions, redaction, Owner password reauthentication and the current security/transport boundaries. UI polish must not silently relax behavior.
 
+## Unified SSH enrollment and form intent
+
+- Targets > Add Target owns one shared Target identity form. Within SSH, Direct, Managed Reverse and Manual Reverse are mutually exclusive connection methods using the existing ssh_direct connector. Switching method keeps common Target/server identity in place, changes only applicable controls and POST actions, and preserves no-JavaScript server-rendered choices. Manual-only listener/identity fields must not appear in other modes. Managed enrollment yields a one-time installation command as the next step of the same Target workflow; it never navigates to a second registration form.
+- System > Reverse SSH owns Gateway-wide host setup, configuration and local readiness only. Saved settings show a read-only summary and explicit Edit/Cancel instead of the full mutable form. Saved does not equal Ready; local Ready never means that any remote Target is Connected.
+- Browser personal-account autofill is not a trusted edit of User Name/Email, Target ID/display name, Target Group Name or OS username. Use explicit safe server baselines to reconcile passive browser writes. Real typing, paste and selection must retain draft values; returning to the original value must clear intent and prevent later silent refill from inheriting it. Do not rely solely on autocomplete attributes, timers, focus or synthetic input events.
+- Owner confirmation needs explicit user interaction: a silently filled current password is not consent to perform a sensitive operation. Preserve deliberate typing and saved-password selection after user interaction, actual server-side password validation and safe failed-form drafts. The shared navigation guard protects genuine unsaved changes but does not block page opening.
+
 ## Connector and navigation consistency
 
 - Shared shell, field/table, feedback and evidence patterns are connector-neutral. Connector companions supply only reviewed local content/partial references; preserve their distinct authentication/recovery meaning and existing server authority. Unknown types must not inherit SSH or WordPress claims.

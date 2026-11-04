@@ -1,11 +1,11 @@
 <fieldset class="target-form-section" data-connector-panel="ssh_direct" @if($selected !== 'ssh_direct') hidden disabled @endif>
-    <legend>{{ __('3. Direct SSH connection') }}</legend>
-    <p class="field-help" id="ssh-enrollment-help">{{ __('Register a public SSH endpoint. Authentication will be verified separately; no shell command is executed during enrollment.') }}</p>
+    <legend>{{ __('3. SSH connection') }}</legend>
+    <p class="field-help" id="ssh-enrollment-help">{{ __('Register the real SSH endpoint and independently verified host identity. Direct authentication and Managed Reverse setup are verified only after enrollment.') }}</p>
     <div class="target-field-grid">
         <div class="field">
             <label for="ssh_host">{{ __('Registered hostname or IP address') }}</label>
             <input type="text" id="ssh_host" name="ssh_host" maxlength="253" required
-                autocomplete="off" spellcheck="false" placeholder="server.example.com" value="{{ old('ssh_host') }}" @error('ssh_host') aria-invalid="true" @enderror aria-describedby="ssh-enrollment-help{{ $errors->has('ssh_host') ? ' ssh_host-error' : '' }}">
+                autocomplete="off" data-admin-manual-entry data-admin-server-value="{{ old('ssh_host') }}" spellcheck="false" placeholder="server.example.com" value="{{ old('ssh_host') }}" @error('ssh_host') aria-invalid="true" @enderror aria-describedby="ssh-enrollment-help{{ $errors->has('ssh_host') ? ' ssh_host-error' : '' }}">
             @error('ssh_host')<p class="field-error" role="alert" id="ssh_host-error">{{ $message }}</p>@enderror
         </div>
         <div class="field">
@@ -16,52 +16,70 @@
         <div class="field target-span-all">
             <label for="ssh_username">{{ __('SSH OS username') }}</label>
             <input type="text" id="ssh_username" name="ssh_username" maxlength="128" required
-                spellcheck="false" autocomplete="off" placeholder="deploy" value="{{ old('ssh_username') }}" @error('ssh_username') aria-invalid="true" aria-describedby="ssh_username-error" @enderror>
+                spellcheck="false" autocomplete="off" data-admin-manual-entry data-admin-server-value="{{ old('ssh_username') }}" placeholder="deploy" value="{{ old('ssh_username') }}" @error('ssh_username') aria-invalid="true" aria-describedby="ssh_username-error" @enderror>
             @error('ssh_username')<p class="field-error" role="alert" id="ssh_username-error">{{ $message }}</p>@enderror
         </div>
     </div>
 
     <div class="target-subsection">
-        <h3>{{ __('SSH connection route') }}</h3>
-        @if (auth()->user()?->getRawOriginal('role') === 'owner')
-            <p class="field-help">{{ __('Prefer one-command Managed Reverse SSH enrollment for new inbound-blocked Targets.') }}
-                <a href="{{ route('admin.reverse-ssh.targets.create') }}">{{ __('Configure new managed Reverse SSH Target') }}</a>
-            </p>
-        @endif
-        <p class="field-help">{{ __('Direct uses the public SSH TCP endpoint. Reverse uses only an NL operator-approved 127.0.0.1 listener created by the Target-initiated OpenSSH remote forward. The original registered server and host-key pin remain the authenticated identity.') }}</p>
+        <h3>{{ __('SSH connection method') }}</h3>
+        <p class="field-help">{{ __('Direct connects from Gateway to the Target. Managed Reverse sets up a persistent Target-initiated tunnel with one installer command. Manual Reverse requires an existing Owner-approved loopback listener.') }}</p>
         <div class="field">
-            <label for="ssh_route_mode">{{ __('Connection route') }}</label>
-            <select id="ssh_route_mode" name="ssh_route_mode">
-                <option value="direct" @selected(old('ssh_route_mode', 'direct') === 'direct')>{{ __('Direct SSH (default)') }}</option>
-                @can('security.manage')
-                    <option value="reverse" @selected(old('ssh_route_mode') === 'reverse')>{{ __('Owner-approved Reverse SSH') }}</option>
-                @endcan
+            <label for="ssh_mode">{{ __('Connection method') }}</label>
+            <select id="ssh_mode" name="ssh_mode" aria-describedby="ssh-mode-help">
+                <option value="direct" @selected($selectedSshMode === 'direct')>{{ __('Direct SSH (default)') }}</option>
+                @if (auth()->user()?->getRawOriginal('role') === 'owner')
+                    <option value="managed" @selected($selectedSshMode === 'managed')>{{ __('Managed Reverse SSH — one-command setup') }}</option>
+                    <option value="manual" @selected($selectedSshMode === 'manual')>{{ __('Manual Reverse SSH (advanced)') }}</option>
+                @endif
             </select>
-            @error('ssh_route_mode')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+            <p class="field-help" id="ssh-mode-help">{{ __('Choose how Gateway will reach the real SSH server. The Target ID, identity and host-key verification remain the same.') }}</p>
+            <noscript>
+                <p class="field-help">{{ __('Choose a connection mode using the links below before completing the form:') }}</p>
+                <a href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'direct']) }}">{{ __('Direct SSH') }}</a>
+                @if (auth()->user()?->getRawOriginal('role') === 'owner')
+                    <a href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'managed']) }}">{{ __('Managed Reverse SSH') }}</a>
+                    <a href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'manual']) }}">{{ __('Manual Reverse SSH') }}</a>
+                @endif
+            </noscript>
         </div>
-        @can('security.manage')
-            <div class="target-field-grid" data-ssh-reverse-route>
+        <input name="ssh_route_mode" type="hidden" value="{{ $selectedSshMode === 'manual' ? 'reverse' : 'direct' }}" data-ssh-route-value @if($selectedSshMode === 'managed') disabled @endif>
+        @if (auth()->user()?->getRawOriginal('role') === 'owner')
+            <div class="target-field-grid" data-ssh-reverse-route @if($selectedSshMode !== 'manual') hidden @endif>
                 <div class="field">
-                    <label for="ssh_reverse_port">{{ __('Approved NL loopback listener port (1024–65535)') }}</label>
-                    <input id="ssh_reverse_port" name="ssh_reverse_port" type="number" min="1024" max="65535"
-                        value="{{ old('ssh_reverse_port') }}" @error('ssh_reverse_port') aria-invalid="true" @enderror>
+                    <label for="ssh_reverse_port">{{ __('Gateway-approved loopback listener port (1024–65535)') }}</label>
+                    <input id="ssh_reverse_port" name="ssh_reverse_port" type="number" min="1024" max="65535" value="{{ old('ssh_reverse_port') }}" @if($selectedSshMode !== 'manual') disabled @endif @error('ssh_reverse_port') aria-invalid="true" @enderror>
                     @error('ssh_reverse_port')<p class="field-error" role="alert">{{ $message }}</p>@enderror
                 </div>
                 <div class="field">
-                    <label for="ssh_tunnel_identity">{{ __('NL-approved tunnel identity') }}</label>
-                    <input id="ssh_tunnel_identity" name="ssh_tunnel_identity" type="text" maxlength="80"
-                        autocomplete="off" spellcheck="false" value="{{ old('ssh_tunnel_identity') }}">
+                    <label for="ssh_tunnel_identity">{{ __('Gateway-approved tunnel identity') }}</label>
+                    <input id="ssh_tunnel_identity" name="ssh_tunnel_identity" type="text" maxlength="80" autocomplete="off" spellcheck="false" value="{{ old('ssh_tunnel_identity') }}" @if($selectedSshMode !== 'manual') disabled @endif>
                     @error('ssh_tunnel_identity')<p class="field-error" role="alert">{{ $message }}</p>@enderror
                 </div>
                 <div class="field target-span-all">
-                    <label for="ssh_reverse_owner_password">{{ __('Current Owner password (Reverse SSH only)') }}</label>
-                    <input id="ssh_reverse_owner_password" name="current_password" type="password"
-                        maxlength="255" autocomplete="current-password">
+                    <label for="ssh_reverse_owner_password">{{ __('Current Owner password (manual Reverse SSH only)') }}</label>
+                    <input id="ssh_reverse_owner_password" name="current_password" type="password" data-admin-requires-intent maxlength="255" autocomplete="off" @if($selectedSshMode !== 'manual') disabled @endif>
                     @error('current_password')<p class="field-error" role="alert">{{ $message }}</p>@enderror
-                    <p class="field-help">{{ __('No actual forward is installed or started by Gateway registration. Enter the password for Reverse enrollment, then independently start the restricted tunnel and verify SSH on Target Details.') }}</p>
+                    <p class="field-help">{{ __('Manual Reverse requires an independently provisioned, Owner-approved loopback forward. Do not enter the Gateway control SSHD port here.') }}</p>
                 </div>
             </div>
-        @endcan
+            <div class="target-route-mode-details" data-ssh-managed @if($selectedSshMode !== 'managed') hidden @endif>
+                <h4>{{ __('One-command Managed Reverse SSH') }}</h4>
+                @if (! $managedConfigured)
+                    <div class="alert alert-info" role="status">
+                        {{ __('Managed Reverse SSH is not enabled. Configure and verify the Gateway host before issuing an installer command.') }}
+                        <a href="{{ route('admin.reverse-ssh.index') }}">{{ __('Open System Reverse SSH settings') }}</a>
+                    </div>
+                @else
+                    <p class="field-help">{{ __('After creating Pending Setup, copy the one-time verified installer command in the next step. The Target remains unconnected until explicit verification.') }}</p>
+                @endif
+                <div class="field">
+                    <label for="managed_owner_password">{{ __('Current Owner password (managed enrollment)') }}</label>
+                    <input id="managed_owner_password" name="current_password" type="password" data-admin-requires-intent required maxlength="255" autocomplete="off" @if($selectedSshMode !== 'managed') disabled @endif>
+                    @error('current_password')<p class="field-error" role="alert">{{ $message }}</p>@enderror
+                </div>
+            </div>
+        @endif
     </div>
     <div class="target-subsection">
         <h3>{{ __('Server identity') }}</h3>
@@ -96,11 +114,11 @@
         @error('ssh_trust_confirmed')<p class="field-error" role="alert" id="ssh_trust_confirmed-error">{{ $message }}</p>@enderror
     </div>
 
-    <div class="target-subsection">
+    <div class="target-subsection" data-ssh-standard @if($selectedSshMode === 'managed') hidden @endif>
         <h3>{{ __('Login credentials') }}</h3>
         <div class="field">
             <label for="ssh_auth_method">{{ __('Authentication method') }}</label>
-            <select id="ssh_auth_method" name="ssh_auth_method" required @error('ssh_auth_method') aria-invalid="true" @enderror aria-describedby="ssh_auth_help{{ $errors->has('ssh_auth_method') ? ' ssh_auth_method-error' : '' }}">
+            <select id="ssh_auth_method" name="ssh_auth_method" required @if($selectedSshMode === 'managed') disabled @endif @error('ssh_auth_method') aria-invalid="true" @enderror aria-describedby="ssh_auth_help{{ $errors->has('ssh_auth_method') ? ' ssh_auth_method-error' : '' }}">
                 <option value="password" @selected(old('ssh_auth_method', 'password') === 'password')>{{ __('Password only') }}</option>
                 <option value="private_key" @selected(old('ssh_auth_method') === 'private_key')>{{ __('Private key only') }}</option>
             </select>

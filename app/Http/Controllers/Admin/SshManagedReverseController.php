@@ -27,9 +27,20 @@ final class SshManagedReverseController extends Controller
         $gateway = SshManagedReverseGateway::query()->find(1);
         $fileReady = $keys->canPublish();
         $health = $readiness->assess($gateway);
+        $fingerprint = null;
+        if ($gateway instanceof SshManagedReverseGateway) {
+            try {
+                $fingerprint = SshHostKeyPin::fromLine($gateway->control_host_key)->fingerprint();
+            } catch (InvalidArgumentException) {
+                // A stale/corrupt stored pin never becomes an invented verified identity.
+            }
+        }
 
         return view('admin.reverse-ssh.index', [
             'gateway' => $gateway,
+            'gatewayFingerprint' => $fingerprint,
+            'configurationState' => $gateway === null
+                ? 'Not configured' : ($gateway->enabled ? 'Configured and enabled' : 'Configured but disabled'),
             'status' => $health['state'],
             'readiness' => $health,
             'policyReconciled' => $keys->isReconciled(),

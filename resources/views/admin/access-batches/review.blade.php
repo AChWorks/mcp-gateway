@@ -81,7 +81,7 @@
         @endif
         <div class="field">
             <label for="current_password">{{ __('Your current password') }}</label>
-            <input id="current_password" name="current_password" type="password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="current_password-error" @enderror>
+            <input id="current_password" name="current_password" data-admin-requires-intent type="password" maxlength="255" required autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="current_password-error" @enderror>
             @error('current_password')<p id="current_password-error" class="field-error" role="alert">{{ $message }}</p>@enderror
         </div>
         <div class="action-row">

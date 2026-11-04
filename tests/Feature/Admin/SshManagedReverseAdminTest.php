@@ -92,6 +92,68 @@ final class SshManagedReverseAdminTest extends TestCase
         ];
     }
 
+    public function test_add_target_owns_direct_managed_and_manual_mode_without_new_connector(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $normal = $this->get('/admin/targets/create?connector_type=ssh_direct')
+            ->assertOk()->assertSee('name="connector_type"', false)
+            ->assertSee('name="ssh_mode"', false)
+            ->assertSee('Managed Reverse SSH — one-command setup')
+            ->assertSee('Manual Reverse SSH (advanced)')
+            ->assertSee('data-ssh-reverse-route', false)
+            ->assertSee('data-ssh-managed', false);
+        self::assertMatchesRegularExpression('/data-ssh-reverse-route\s+hidden/', $normal->getContent());
+        self::assertMatchesRegularExpression('/data-ssh-managed\s+hidden/', $normal->getContent());
+        self::assertStringContainsString('action="'.route('admin.targets.store').'"', $normal->getContent());
+        $managed = $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
+            ->assertOk()->assertSee('option value="managed" selected', false)
+            ->assertSee('Create Pending Setup and installer command')
+            ->assertSee('Open System Reverse SSH settings');
+        self::assertStringContainsString('action="'.route('admin.reverse-ssh.targets.store').'"',
+            $managed->getContent());
+        $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual')
+            ->assertOk()->assertSee('Gateway-approved loopback listener port');
+        $this->get('/admin/targets/create/managed-reverse')
+            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed');
+    }
+
+    public function test_managed_enrollment_errors_return_to_canonical_target_form_without_secrets(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $fields = $this->enrollmentFields() + ['connector_type' => 'ssh_direct', 'ssh_mode' => 'managed'];
+        $fields['ssh_username'] = 'browser@example.test';
+        $response = $this->post('/admin/targets/managed-reverse', $fields)
+            ->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
+            ->assertSessionHasErrors('ssh_username')
+            ->assertSessionHas('_old_input.target_id', 'managed-target')
+            ->assertSessionHas('_old_input.ssh_username', 'browser@example.test')
+            ->assertSessionMissing('_old_input.current_password');
+        $this->get((string) $response->headers->get('Location'))
+            ->assertOk()->assertSee('Enter the existing SSH OS account name')
+            ->assertSee('browser@example.test')
+            ->assertDontSee('StrongPassword!234');
+        self::assertSame(0, SshManagedReverseEnrollment::query()->count());
+    }
+
+    public function test_saved_gateway_configuration_shows_summary_until_explicit_edit(): void
+    {
+        $this->actingAs($this->user('owner'));
+        SshManagedReverseGateway::query()->create([
+            'id' => 1, 'enabled' => false,
+            'control_host' => 'gateway.example.test', 'control_port' => 7770,
+            'control_user' => 'mcp-reverse', 'control_host_key' => $this->publicKey(41),
+            'revision' => 1, 'publication_pending' => false,
+        ]);
+        $this->get('/admin/settings/reverse-ssh')
+            ->assertOk()->assertSee('Saved Gateway Reverse SSH settings')
+            ->assertSee('Edit settings')->assertSee('Disabled')
+            ->assertSee('SHA256:')->assertDontSee('name="current_password"', false);
+        $this->get('/admin/settings/reverse-ssh?edit=1')
+            ->assertOk()->assertSee('Cancel editing')
+            ->assertSee('name="current_password"', false)
+            ->assertSee('gateway.example.test');
+    }
+
     public function test_non_owner_cannot_view_configure_or_enroll_managed_reverse(): void
     {
         $this->get('/admin/settings/reverse-ssh')->assertRedirect('/admin/login');
@@ -142,8 +204,10 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertSame('pending', SshManagedReverseEnrollment::query()->sole()->target->connection_state->value);
         self::assertSame('reverse', SshTargetConfig::query()->sole()->route_mode);
         self::assertStringNotContainsString('BEGIN OPENSSH PRIVATE KEY', $reply->getContent());
-        $this->get('/admin/targets/create/managed-reverse')->assertOk()
-            ->assertDontSee('sha256sum -c -');
+        $this->get('/admin/targets/create/managed-reverse')
+            ->assertRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed');
+        $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
+            ->assertOk()->assertDontSee('sha256sum -c -');
     }
 
     public function test_public_claim_is_scoped_one_use_replay_denied_and_does_not_connect_target(): void

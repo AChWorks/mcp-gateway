@@ -18,6 +18,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
@@ -87,11 +88,20 @@ final class TargetController extends Controller
         }
         $requested = $request->query('connector_type');
         $selected = is_string($requested) && array_key_exists($requested, $options) ? $requested : '';
+        $requestedMode = $request->query('ssh_mode', 'direct');
+        $sshMode = in_array($requestedMode, ['direct', 'managed', 'manual'], true)
+            ? $requestedMode : 'direct';
+        if ($sshMode !== 'direct' && $selected === 'ssh_direct') {
+            Gate::authorize(GatewayPermission::SecurityManage->value);
+            abort_unless($request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
+        }
 
         return view('admin.targets.create', [
             'connectorOptions' => $options,
             'connectorDefinitions' => $definitions,
             'selectedConnector' => $selected,
+            'sshMode' => $sshMode,
+            'managedConfigured' => SshManagedReverseGateway::active(),
         ]);
     }
 
@@ -180,11 +190,19 @@ final class TargetController extends Controller
         $selected = $request->input('connector_type');
         $createQuery = is_string($selected) && in_array($selected, $connectors->types(), true)
             ? ['connector_type' => $selected] : [];
+        if ($selected === 'ssh_direct' && $request->input('ssh_mode') === 'manual') {
+            $createQuery['ssh_mode'] = 'manual';
+        }
         try {
             $choice = $request->validate([
                 'connector_type' => ['required', Rule::in($connectors->types())],
             ]);
             $adapter = $connectors->forType((string) $choice['connector_type']);
+            if ($adapter->type() === 'ssh_direct' && $request->input('ssh_mode') === 'managed') {
+                throw ValidationException::withMessages([
+                    'ssh_mode' => __('For Managed Reverse SSH, open the selected Managed connection mode and use Create Pending Setup. No Target was registered.'),
+                ]);
+            }
             $validated = $request->validate([
                 'target_id' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
                 'display_name' => ['required', 'string', 'max:160'],
@@ -435,6 +453,7 @@ final class TargetController extends Controller
         // default even when the adapter introduces an unfamiliar form field.
         return TargetFormInput::replayable($request, [
             'connector_type',
+            'ssh_mode',
             'target_id',
             'display_name',
             'ai_guidance',
