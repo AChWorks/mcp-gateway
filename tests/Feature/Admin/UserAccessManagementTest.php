@@ -10,6 +10,8 @@ use App\Domain\Access\TargetScopeMode;
 use App\Domain\Targets\Target;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
@@ -404,6 +406,83 @@ final class UserAccessManagementTest extends TestCase
         $owner->refresh();
         self::assertSame(GatewayRole::Owner, $owner->role);
         self::assertTrue($owner->access_enabled);
+    }
+
+    public function test_last_owner_rejection_preserves_nonsecret_draft_without_flashing_credentials_to_session_or_correlated_cache(): void
+    {
+        $owner = $this->owner();
+        $destination = route('admin.users.edit', ['user' => $owner->id], false);
+        $this->actingAs($owner);
+
+        foreach ([
+            ['role' => GatewayRole::Owner->value, 'access_enabled' => '0'],
+            ['role' => GatewayRole::Viewer->value, 'access_enabled' => '1'],
+        ] as $case) {
+            $draftName = 'Rejected last Owner '.($case['access_enabled'] === '0' ? 'disable' : 'demotion');
+            $response = $this->from($destination)->put('/admin/users/'.$owner->id, [
+                'name' => $draftName,
+                'email' => $owner->email,
+                'role' => $case['role'],
+                'target_scope_mode' => TargetScopeMode::All->value,
+                'access_enabled' => $case['access_enabled'],
+                'ai_access_enabled' => '0',
+                'ssh_permissions_reviewed' => '1',
+                'denied_permissions' => [],
+                'password' => 'ReplacementHorse!234',
+                'password_confirmation' => 'ReplacementHorse!234',
+                'current_password' => 'CorrectHorse!234',
+                'unrelated_secret_input' => 'unrelated-sensitive-marker',
+            ])->assertAdminRedirect($destination)
+                ->assertSessionHasErrors('access_enabled')
+                ->assertSessionHas('_old_input.name', $draftName)
+                ->assertSessionHas('_old_input.email', $owner->email)
+                ->assertSessionHas('_old_input.role', $case['role'])
+                ->assertSessionHas('_old_input.target_scope_mode', TargetScopeMode::All->value)
+                ->assertSessionHas('_old_input.access_enabled', $case['access_enabled'])
+                ->assertSessionHas('_old_input.ai_access_enabled', '0')
+                ->assertSessionHas('_old_input.ssh_permissions_reviewed', '1')
+                ->assertSessionHas('_old_input.denied_permissions', [])
+                ->assertSessionMissing('_old_input.current_password')
+                ->assertSessionMissing('_old_input.password')
+                ->assertSessionMissing('_old_input.password_confirmation')
+                ->assertSessionMissing('_old_input.unrelated_secret_input');
+
+            self::assertSame(GatewayRole::Owner, $owner->fresh()->role);
+            self::assertTrue($owner->access_enabled);
+            $url = (string) $response->headers->get('Location');
+            self::assertStringNotContainsString('CorrectHorse!234', $url);
+            self::assertStringNotContainsString('ReplacementHorse!234', $url);
+            $token = [];
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $token);
+            self::assertMatchesRegularExpression('/\\A[a-f0-9]{40}\\z/D', (string) ($token['_admin_feedback'] ?? ''));
+            $binding = (string) session('admin.feedback.session_binding');
+            $path = ltrim((string) parse_url($url, PHP_URL_PATH), '/');
+            $cacheKey = 'admin:feedback:'.hash('sha256', implode(':', [
+                $binding, (string) $owner->getAuthIdentifier(), $path,
+                hash('sha256', json_encode([], JSON_THROW_ON_ERROR)), (string) $token['_admin_feedback'],
+            ]));
+            $ciphertext = Cache::get($cacheKey);
+            self::assertIsString($ciphertext);
+            $payload = json_decode(Crypt::decryptString($ciphertext), true, flags: JSON_THROW_ON_ERROR);
+            self::assertSame($draftName, $payload['data']['_old_input']['name']);
+            $transported = json_encode($payload, JSON_THROW_ON_ERROR);
+            foreach (['CorrectHorse!234', 'ReplacementHorse!234', 'unrelated-sensitive-marker'] as $secretValue) {
+                self::assertStringNotContainsString($secretValue, $transported);
+            }
+            foreach (['current_password', 'password', 'password_confirmation', 'unrelated_secret_input'] as $secretKey) {
+                self::assertArrayNotHasKey($secretKey, $payload['data']['_old_input']);
+            }
+            $this->get('/admin/targets')->assertOk()
+                ->assertDontSee('Create or enable another owner before disabling or demoting');
+            $this->get($url)->assertOk()
+                ->assertSee('Create or enable another owner before disabling or demoting')
+                ->assertSee('value="'.$draftName.'"', false)
+                ->assertDontSee('CorrectHorse!234')
+                ->assertDontSee('ReplacementHorse!234')
+                ->assertDontSee('unrelated-sensitive-marker');
+            $this->get($url)->assertOk()
+                ->assertDontSee('Create or enable another owner before disabling or demoting');
+        }
     }
 
     public function test_wrong_current_password_cannot_change_user_access(): void
