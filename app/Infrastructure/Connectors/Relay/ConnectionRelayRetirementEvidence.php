@@ -71,6 +71,105 @@ class ConnectionRelayRetirementEvidence
         return is_array($document) && self::matches($document, $relay, trim($boot), time(), $bootSeconds, $hostState);
     }
 
+    /**
+     * A successful retirement receipt alone is NOT a DB transaction barrier.
+     * A root-only operator must first create an irreversible revision/record
+     * fence under the SAME flock as prepare-setup. PHP reads this fence but
+     * can neither issue nor lift it. The fence therefore remains effective
+     * after this method returns and through a subsequent DB COMMIT.
+     */
+    public function verifiedForDeletion(ConnectionRelay $relay): bool
+    {
+        return $this->verifiedWithFence($relay, 'delete');
+    }
+
+    public function verifiedForRotation(ConnectionRelay $relay): bool
+    {
+        return $this->verifiedWithFence($relay, 'rotate');
+    }
+
+    public function deletionFencePresent(ConnectionRelay $relay): bool
+    {
+        // Do not offer a misleading Edit action when a permanent deletion
+        // fence exists but the short-lived retirement receipt expired.
+        return $this->fenceMatchesCurrent($relay, 'delete');
+    }
+
+    private function verifiedWithFence(ConnectionRelay $relay, string $intent): bool
+    {
+        // The immutable fence is the cross-process synchronization barrier;
+        // the receipt is the independent, short-lived state evidence.
+        return $this->fenceMatchesCurrent($relay, $intent)
+            && $this->verified($relay);
+    }
+
+    private function fenceMatchesCurrent(ConnectionRelay $relay, string $intent): bool
+    {
+        $recordId = (string) $relay->getKey();
+        if (preg_match('/\A[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}\z/D', $recordId) !== 1) {
+            return false;
+        }
+        $directory = $this->evidenceDirectory();
+        $fenceDirectory = $directory.'/.fences';
+        $path = $fenceDirectory.'/'.$recordId.'.json';
+        $generationPath = $directory.'/'.$relay->relay_id.'.generation.json';
+        foreach (['/etc', '/etc/mcp-gateway', $directory, $fenceDirectory] as $parent) {
+            if (! $this->trusted($parent, true)) {
+                return false;
+            }
+        }
+        if (! $this->trusted($path, false) || ! $this->trusted($generationPath, false)) {
+            return false;
+        }
+        $size = @filesize($path);
+        if (! is_int($size) || $size < 2 || $size > 1024) {
+            return false;
+        }
+        $rawFence = @file_get_contents($path);
+        $rawGeneration = @file_get_contents($generationPath);
+        $fence = is_string($rawFence) ? json_decode($rawFence, true, 8) : null;
+        $generation = is_string($rawGeneration) ? json_decode($rawGeneration, true, 8) : null;
+        if (! is_array($fence) || ! is_array($generation)
+            || ! self::fenceMatches($fence, $relay, $generation, $intent)) {
+            return false;
+        }
+
+        // A matching root-owned terminal fence cannot be lifted by a
+        // legitimate helper after this check, including while PHP commits.
+        return true;
+    }
+
+    /**
+     * @param  array<array-key,mixed>  $fence
+     * @param  array<array-key,mixed>  $generation
+     */
+    public static function fenceMatches(
+        array $fence, ConnectionRelay $relay, array $generation, string $intent,
+    ): bool {
+        $expected = [
+            'version', 'relay_record_id', 'relay_id', 'host_fingerprint',
+            'configuration_revision', 'host_generation', 'intent',
+        ];
+        $keys = array_keys($fence);
+        sort($keys);
+        sort($expected);
+
+        return $keys === $expected
+            && $fence['version'] === 1
+            && $fence['relay_record_id'] === (string) $relay->getKey()
+            && $fence['relay_id'] === $relay->relay_id
+            && is_string($fence['host_fingerprint'])
+            && hash_equals($relay->hostFingerprint(), $fence['host_fingerprint'])
+            && $fence['configuration_revision'] === (int) $relay->configuration_revision
+            && $fence['intent'] === $intent
+            && is_string($fence['host_generation'])
+            && is_string($generation['host_generation'] ?? null)
+            && hash_equals($generation['host_generation'], $fence['host_generation'])
+            && ($generation['state'] ?? null) === 'retired'
+            && ($generation['relay_record_id'] ?? null) === (string) $relay->getKey()
+            && ($generation['relay_id'] ?? null) === $relay->relay_id;
+    }
+
     /** @phpstan-impure Reads mutable host filesystem state. */
     public static function hasActiveHostClaims(string $directory, string $relayId): bool
     {

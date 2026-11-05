@@ -36,10 +36,10 @@ final class AdminUiPresentationTest extends TestCase
         $this->actingAs($this->owner());
         $this->get('/admin/settings/connection-relays')->assertOk()
             ->assertSee('Retire and remove Relay')
-            ->assertSee('Next: run the one-Relay cleanup command')
+            ->assertSee('Next: run the Gateway-host cleanup-and-seal-for-delete command')
             ->assertDontSee('Delete verified retired Relay');
         $this->get('/admin/settings/connection-relays')->assertOk()
-            ->assertSee('One cleanup command')
+            ->assertSee('One cleanup-and-seal-for-delete command')
             ->assertSee('One-time verified helper installation')
             ->assertSee('/usr/bin/sudo /usr/bin/sha256sum --check --status')
             ->assertSee('A disconnected Iran host NEVER blocks this action');
@@ -48,7 +48,12 @@ final class AdminUiPresentationTest extends TestCase
         // operator. Mock this boundary for view presentation only.
         $this->app->instance(ConnectionRelayRetirementEvidence::class, new class extends ConnectionRelayRetirementEvidence
         {
-            public function verified(ConnectionRelay $relay): bool
+            public function verifiedForDeletion(ConnectionRelay $relay): bool
+            {
+                return true;
+            }
+
+            public function deletionFencePresent(ConnectionRelay $relay): bool
             {
                 return true;
             }

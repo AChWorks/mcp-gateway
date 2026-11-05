@@ -44,7 +44,13 @@ final class ConnectionRelayController extends Controller
                 static fn (ConnectionRelay $relay): array => [$relay->id => $host->ready($relay)],
             ),
             'retiredStates' => $relays->mapWithKeys(
-                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verified($relay)],
+                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verifiedForDeletion($relay)],
+            ),
+            'rotationStates' => $relays->mapWithKeys(
+                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verifiedForRotation($relay)],
+            ),
+            'deletionFencedStates' => $relays->mapWithKeys(
+                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->deletionFencePresent($relay)],
             ),
             'hostCommands' => $relays->mapWithKeys(
                 static fn (ConnectionRelay $relay): array => [$relay->id => $operator->commands($relay)],
@@ -245,9 +251,9 @@ final class ConnectionRelayController extends Controller
 
                     return 'renamed';
                 }
-                if (! $retirement->verified($current)) {
+                if (! $retirement->verifiedForRotation($current)) {
                     throw ValidationException::withMessages([
-                        'relay' => __('Before changing host, key, username or port, run the Relay-specific Gateway cleanup command and verify retirement. This prevents orphaned services and rules.'),
+                        'relay' => __('Before changing Relay connection settings, run the Gateway cleanup-and-seal-for-rotation command. A retirement receipt alone does not prevent concurrent host setup.'),
                     ]);
                 }
                 DB::table('connection_relays')->where('id', $current->getKey())->update([
@@ -377,9 +383,9 @@ final class ConnectionRelayController extends Controller
             // Owner acknowledgement alone cannot prove retirement of the
             // Relay's local resources. An independent privileged helper
             // verifies this Gateway host; Iranian reachability is irrelevant.
-            if (! $retirement->verified($current)) {
+            if (! $retirement->verifiedForDeletion($current)) {
                 throw ValidationException::withMessages([
-                    'relay' => __('Verified Gateway-host cleanup is missing or stale. Keep this Relay disabled; local privileged cleanup must be verified before deleting this record. Iran reachability is not required.'),
+                    'relay' => __('Verified Gateway-host deletion fence is missing or stale. Run the local cleanup-and-seal-for-delete command first; a retirement receipt alone is insufficient. Iran reachability is not required.'),
                 ]);
             }
             $current->delete();

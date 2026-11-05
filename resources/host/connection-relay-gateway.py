@@ -84,6 +84,11 @@ class Layout:
     def lock_path(self, relay: Relay) -> Path:
         return self.at("/run/mcp-gateway-relays") / (relay.relay_id + ".lock")
 
+    def fence(self, relay: Relay) -> Path:
+        # A durable per-record tombstone: an old CLI command must stay
+        # fenced even after the DB row is deleted or a Relay ID is reused.
+        return self.evidence_dir / ".fences" / (relay.record_id + ".json")
+
 
 def trusted(path: Path, directory: bool, uid: int, required: bool = False) -> bool:
     try:
@@ -215,6 +220,35 @@ class Retirement:
             or value["state"] not in {"provisioning", "retired"}):
             raise Refusal("Invalid or mismatched root-owned Relay host generation record.")
         return value
+
+    def _fence(self) -> dict | None:
+        path = self.layout.fence(self.relay)
+        owned_parents(path.parent, self.layout)
+        if not self._owned(path.parent, True):
+            return None
+        if not self._owned(path):
+            return None
+        fence = self._json(path, 1024)
+        expected = {"version", "relay_record_id", "relay_id", "host_fingerprint",
+                    "configuration_revision", "host_generation", "intent"}
+        if (set(fence) != expected or fence["version"] != 1
+            or fence["relay_record_id"] != self.relay.record_id
+            or fence["relay_id"] != self.relay.relay_id
+            or fence["intent"] not in {"delete", "rotate"}
+            or not isinstance(fence["configuration_revision"], int)
+            or not 1 <= fence["configuration_revision"] <= 4294967295
+            or not isinstance(fence["host_fingerprint"], str)
+            or re.fullmatch(r"[a-f0-9]{64}", fence["host_fingerprint"]) is None
+            or not isinstance(fence["host_generation"], str)
+            or re.fullmatch(r"[a-f0-9]{64}", fence["host_generation"]) is None):
+            raise Refusal("Invalid or unowned durable Relay lifecycle fence.")
+        return fence
+
+    def _require_mutable_revision(self) -> None:
+        fence = self._fence()
+        if fence and (fence["intent"] == "delete"
+                      or self.relay.revision <= fence["configuration_revision"]):
+            raise Refusal("This Relay record/revision was permanently fenced; stale operator commands cannot provision it.")
 
     def _write_json_atomic(self, path: Path, payload: dict) -> None:
         # Root-owned, world-readable non-secret host state. Never overwrite
@@ -489,6 +523,9 @@ class Retirement:
         owned_parents(self.layout.evidence_dir, self.layout)
         owned_parents(self.layout.unit(self.relay).parent, self.layout)
         self._owned(self.layout.evidence_dir, True)
+        # Inspect the durable fence even when no active host claim exists.
+        # The fence itself is never removed by Gateway-host cleanup.
+        self._fence()
         for ext in [".managed.json", ".policy", ".json", ".retired.json", ".generation.json"]:
             self._owned(self.layout.evidence(self.relay, ext))
         owned_parents(self.layout.key_dir(self.relay), self.layout)
@@ -533,6 +570,7 @@ class Retirement:
             if not self._owned(lockpath):
                 raise Refusal("Unsafe Relay lock ownership.")
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._require_mutable_revision()
             managed = self._preflight()
             unit = self.layout.unit(self.relay)
             ports = {self.relay.local_port}
@@ -631,6 +669,82 @@ class Retirement:
         }
         self._write_json_atomic(self.layout.evidence(self.relay, ".retired.json"), proof)
 
+    def seal(self, intent: str) -> str:
+        """Irreversible host-side barrier, issued BEFORE DB rotation/delete.
+
+        Both Seal and Setup take the SAME root-only per-Relay flock. After
+        sealing revision N, no old command for revision <=N can restart it;
+        a delete seal fences every revision of this immutable record ULID.
+        A later record ULID has a different fence, never erasing the old one.
+        """
+        if intent not in {"delete", "rotate"}:
+            raise Refusal("Unknown Relay lifecycle fence intent.")
+        if os.geteuid() != self.layout.owner_uid:
+            raise Refusal("Explicit root/sudo privileges are required.")
+        make_privileged_directory(self.layout.evidence_dir, self.layout, php_traversable=True)
+        make_privileged_directory(self.layout.lock_path(self.relay).parent, self.layout)
+        lockpath = self.layout.lock_path(self.relay)
+        fd = os.open(lockpath, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            if not self._owned(lockpath):
+                raise Refusal("Unsafe Relay lock ownership.")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            prior = self._fence()
+            if prior:
+                if (prior["intent"] == "delete"
+                    or prior["configuration_revision"] > self.relay.revision
+                    or (prior["configuration_revision"] == self.relay.revision
+                        and (prior["intent"] != intent
+                             or prior["host_fingerprint"] != self.relay.fingerprint))):
+                    # An already sealed delete may be re-verified only for
+                    # the exact same record/configuration, never converted.
+                    if not (prior["intent"] == intent == "delete"
+                            and prior["configuration_revision"] == self.relay.revision
+                            and prior["host_fingerprint"] == self.relay.fingerprint):
+                        raise Refusal("Conflicting or stale Relay lifecycle fence; refusing replacement.")
+            managed = self._preflight()
+            if managed is not None:
+                raise Refusal("Cannot seal a Relay with a managed host claim; retire first.")
+            if (self._unit_active() or self._unit_enabled() or self._nft_table_exists()
+                or self._listening({self.relay.local_port})):
+                raise Refusal("Cannot seal Relay while its local service, listener or firewall exists.")
+            self._assert_no_loaded_same_name_unit()
+            generation = self._generation()
+            if generation is None or generation["state"] != "retired":
+                raise Refusal("Host retirement generation is missing; run verified cleanup first.")
+            receipt = self._json(self.layout.evidence(self.relay, ".retired.json"), 2048)
+            if (receipt.get("relay_record_id") != self.relay.record_id
+                or receipt.get("relay_id") != self.relay.relay_id
+                or receipt.get("host_fingerprint") != self.relay.fingerprint
+                or receipt.get("configuration_revision") != self.relay.revision
+                or receipt.get("host_generation") != generation["host_generation"]
+                or receipt.get("gateway_cleanup_verified") is not True):
+                raise Refusal("Retirement proof does not match the exact Relay being sealed.")
+            if prior and prior["configuration_revision"] == self.relay.revision:
+                if prior["host_generation"] != generation["host_generation"]:
+                    raise Refusal("Host generation changed after a lifecycle fence; refusing to renew.")
+            else:
+                make_privileged_directory(self.layout.fence(self.relay).parent,
+                                          self.layout, php_traversable=True)
+                self._write_json_atomic(self.layout.fence(self.relay), {
+                    "version": 1, "relay_record_id": self.relay.record_id,
+                    "relay_id": self.relay.relay_id,
+                    "host_fingerprint": self.relay.fingerprint,
+                    "configuration_revision": self.relay.revision,
+                    "host_generation": generation["host_generation"],
+                    "intent": intent,
+                })
+            # Safe idempotent renewal if DB processing failed or timed out.
+            # Never rotate generation or lift the permanent fence.
+            self._receipt(generation["host_generation"])
+            return ("LIFECYCLE FENCE VERIFIED for Gateway Relay " + self.relay.relay_id
+                    + " (" + intent + "). Old host setup commands are permanently rejected; "
+                    "Iran was not contacted.")
+        except BlockingIOError as error:
+            raise Refusal("Another operator is changing this Relay.") from error
+        finally:
+            os.close(fd)
+
     def prepare_setup(self) -> str:
         """Root-only invalidation barrier; must precede ANY new provisioning."""
         if os.geteuid() != self.layout.owner_uid:
@@ -642,6 +756,7 @@ class Retirement:
             if not self._owned(self.layout.lock_path(self.relay)):
                 raise Refusal("Unsafe Relay lock ownership.")
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._require_mutable_revision()
             if self._preflight() is not None:
                 raise Refusal("Managed Relay claim exists; retire it before new Setup.")
             if self._unit_active() or self._unit_enabled() or self._nft_table_exists() or self._listening({self.relay.local_port}):
@@ -662,7 +777,7 @@ class Retirement:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay retirement; never contacts Iran.")
-    parser.add_argument("action", choices=("preflight", "retire", "prepare-setup"))
+    parser.add_argument("action", choices=("preflight", "retire", "prepare-setup", "seal-delete", "seal-rotate"))
     parser.add_argument("--relay-id", required=True)
     parser.add_argument("--record-id", required=True)
     parser.add_argument("--fingerprint", required=True)
@@ -679,6 +794,8 @@ def main() -> int:
             print(operation.preview())
         elif args.action == "prepare-setup":
             print(operation.prepare_setup())
+        elif args.action.startswith("seal-"):
+            print(operation.seal(args.action.removeprefix("seal-")))
         else:
             print(operation.retire())
         return 0

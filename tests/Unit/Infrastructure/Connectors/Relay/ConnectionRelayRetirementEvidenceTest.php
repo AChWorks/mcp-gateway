@@ -48,6 +48,39 @@ final class ConnectionRelayRetirementEvidenceTest extends TestCase
         ];
 
         self::assertTrue(ConnectionRelayRetirementEvidence::matches($proof, $relay, $boot, $time, $uptime, $state));
+        $fence = [
+            'version' => 1,
+            'relay_record_id' => $relay->getKey(),
+            'relay_id' => $relay->relay_id,
+            'host_fingerprint' => $relay->hostFingerprint(),
+            'configuration_revision' => 4,
+            'host_generation' => $generation,
+            'intent' => 'delete',
+        ];
+        self::assertTrue(ConnectionRelayRetirementEvidence::fenceMatches($fence, $relay, $state, 'delete'));
+        self::assertFalse(ConnectionRelayRetirementEvidence::fenceMatches($fence, $relay, $state, 'rotate'));
+        foreach ([
+            ['relay_record_id', '01JAE000000000000000000002'],
+            ['relay_id', 'iran-2'],
+            ['host_fingerprint', str_repeat('f', 64)],
+            ['configuration_revision', 3],
+            ['host_generation', str_repeat('d', 64)],
+            ['intent', 'rotate'],
+            ['version', 2],
+        ] as [$field, $value]) {
+            $invalid = $fence;
+            $invalid[$field] = $value;
+            self::assertFalse(ConnectionRelayRetirementEvidence::fenceMatches($invalid, $relay, $state, 'delete'), $field);
+        }
+        $unexpected = $fence;
+        $unexpected['unknown'] = true;
+        self::assertFalse(ConnectionRelayRetirementEvidence::fenceMatches($unexpected, $relay, $state, 'delete'));
+        $differentGeneration = $state;
+        $differentGeneration['host_generation'] = str_repeat('d', 64);
+        self::assertFalse(ConnectionRelayRetirementEvidence::fenceMatches($fence, $relay, $differentGeneration, 'delete'));
+        $differentGeneration['host_generation'] = $generation;
+        $differentGeneration['state'] = 'provisioning';
+        self::assertFalse(ConnectionRelayRetirementEvidence::fenceMatches($fence, $relay, $differentGeneration, 'delete'));
 
         foreach ([
             ['gateway_cleanup_verified', false],

@@ -11,7 +11,7 @@ final readonly class ConnectionRelayHostOperatorPlan
     private const INSTALLED_HELPER = '/usr/local/sbin/mcp-gateway-relay';
 
     /**
-     * @return array{preflight:string,retire:string,prepare_setup:string,bootstrap:string,cleanup:string,sha256:string}|null
+     * @return array{preflight:string,retire:string,prepare_setup:string,bootstrap:string,cleanup:string,cleanup_for_rotation:string,seal_delete:string,seal_rotate:string,sha256:string}|null
      */
     public function commands(ConnectionRelay $relay): ?array
     {
@@ -91,14 +91,28 @@ BASH;
 
         $bootstrap = '/usr/bin/sudo /usr/bin/bash -c '.escapeshellarg($bootstrapScript);
         $retire = $verifiedPrefix.'retire '.$arguments;
+        $sealDelete = $verifiedPrefix.'seal-delete '.$arguments;
+        $sealRotate = $verifiedPrefix.'seal-rotate '.$arguments;
+        $fencePath = escapeshellarg('/etc/mcp-gateway/connection-relays/.fences/'.$recordId.'.json');
+        // Root-owned durable fences survive a failed DB transaction and an
+        // expired receipt. Re-seal (renew) instead of trying to re-retire a
+        // permanently fenced revision. The helper verifies all contents and
+        // host state: the shell existence check grants no authority.
+        $fenceExists = 'test -e '.$fencePath.' || test -L '.$fencePath;
+        $cleanupDelete = 'if '.$fenceExists.'; then '.$sealDelete.'; else '.$retire.' && '.$sealDelete.'; fi';
+        $cleanupRotate = 'if '.$fenceExists.'; then '.$sealRotate.'; else '.$retire.' && '.$sealRotate.'; fi';
 
         return [
             'preflight' => $verifiedPrefix.'preflight '.$arguments,
             'prepare_setup' => $verifiedPrefix.'prepare-setup '.$arguments,
             'retire' => $retire,
-            // One Owner command: verify/install helper once, then retire only
-            // the selected local Relay. Unknown binaries are never replaced.
-            'cleanup' => $bootstrap.' && '.$retire,
+            // The final seal shares the privileged lock with prepare-setup.
+            // Cleanup receipts without an irreversible fence MUST NOT allow
+            // DB deletion or sensitive identity rotation.
+            'cleanup' => $bootstrap.' && '.$cleanupDelete,
+            'cleanup_for_rotation' => $bootstrap.' && '.$cleanupRotate,
+            'seal_delete' => $sealDelete,
+            'seal_rotate' => $sealRotate,
             'bootstrap' => $bootstrap,
             'sha256' => $expected,
         ];

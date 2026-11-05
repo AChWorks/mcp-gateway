@@ -469,6 +469,109 @@ class RetirementTests(unittest.TestCase):
         self.assertTrue(self.fake.nft)
         self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
 
+    def test_deletion_fence_blocks_setup_exactly_after_receipt_verification_before_db_commit(self):
+        # Deterministic interleaving: Gateway reads the root-owned proof and
+        # fence, then a stale Owner command attempts new Setup BEFORE DB COMMIT.
+        self.operator.retire()
+        with self.assertRaisesRegex(mod.Refusal, "Missing expected root-owned host record"):
+            self.operator._json(self.layout.fence(self.relay))
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.operator.seal("delete"))
+        fence = json.loads(self.layout.fence(self.relay).read_text())
+        generation = self.operator._generation()
+        receipt = json.loads(self.layout.evidence(self.relay, ".retired.json").read_text())
+        self.assertEqual("delete", fence["intent"])
+        self.assertEqual(generation["host_generation"], fence["host_generation"])
+        self.assertEqual(receipt["host_generation"], fence["host_generation"])
+        # PHP verifiedForDeletion returns TRUE here. Simulate host Setup on
+        # this exact worker boundary and assert it cannot rotate generation.
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.operator.prepare_setup()
+        self.assertEqual(generation, self.operator._generation())
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.operator.retire()
+        # DB COMMIT would remove the row now. The same stale command is STILL
+        # denied; the fence lives on the host and does not rely on the DB row.
+        self.assertTrue(self.layout.fence(self.relay).exists())
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.operator.prepare_setup()
+        # An expired proof is renewable without lifting the permanent fence.
+        # Simulate a later Owner retry; it still cannot enable stale Setup.
+        original_expiry = receipt["expires_at_unix"]
+        with mock.patch.object(mod.time, "time", return_value=original_expiry + 90):
+            self.assertIn("LIFECYCLE FENCE VERIFIED", self.operator.seal("delete"))
+        renewed = json.loads(self.layout.evidence(self.relay, ".retired.json").read_text())
+        self.assertGreater(renewed["expires_at_unix"], original_expiry)
+        self.assertEqual(generation, self.operator._generation())
+        self.assertEqual(0o644, self.layout.fence(self.relay).stat().st_mode & 0o777)
+        self.assertEqual(0o755, self.layout.fence(self.relay).parent.stat().st_mode & 0o777)
+        # /run is ephemeral across reboots; a fresh lock must still honor the
+        # durable /etc per-record tombstone.
+        self.layout.lock_path(self.relay).unlink()
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            mod.Retirement(self.relay, self.layout, self.fake).prepare_setup()
+
+    def test_prepare_setup_winning_root_lock_invalidates_receipt_before_seal(self):
+        import fcntl
+
+        self.operator.retire()
+        lock = self.layout.lock_path(self.relay)
+        with lock.open("rb") as already_held:
+            fcntl.flock(already_held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(mod.Refusal, "Another operator"):
+                self.operator.seal("delete")
+        self.assertFalse(self.layout.fence(self.relay).exists())
+        self.operator.prepare_setup()
+        with self.assertRaisesRegex(mod.Refusal, "retirement generation is missing"):
+            self.operator.seal("delete")
+        self.assertFalse(self.layout.fence(self.relay).exists())
+        self.assertEqual("provisioning", self.operator._generation()["state"])
+
+    def test_rotation_fence_blocks_old_revision_and_allows_only_new_revision(self):
+        self.operator.retire()
+        original = self.operator._generation()
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.operator.seal("rotate"))
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.operator.prepare_setup()
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.operator.retire()
+        updated = mod.Relay(self.relay.relay_id, self.relay.record_id, "e" * 64,
+                            self.relay.revision + 1, self.relay.local_port)
+        new_operator = mod.Retirement(updated, self.layout, self.fake)
+        self.assertIn("PROOF INVALIDATED", new_operator.prepare_setup())
+        self.assertEqual("provisioning", new_operator._generation()["state"])
+        self.assertNotEqual(original["host_generation"], new_operator._generation()["host_generation"])
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.operator.prepare_setup()
+        self.assertEqual("rotate", json.loads(self.layout.fence(self.relay).read_text())["intent"])
+
+    def test_delete_seal_is_irreversible_and_cannot_be_switched_to_rotation(self):
+        self.operator.retire()
+        self.operator.seal("delete")
+        with self.assertRaisesRegex(mod.Refusal, "Conflicting or stale"):
+            self.operator.seal("rotate")
+        changed = mod.Relay(self.relay.relay_id, self.relay.record_id,
+                            "e" * 64, self.relay.revision + 1, self.relay.local_port)
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            mod.Retirement(changed, self.layout, self.fake).prepare_setup()
+        self.assertEqual("delete", json.loads(self.layout.fence(self.relay).read_text())["intent"])
+
+    def test_seal_refuses_live_owned_resources_and_untrusted_fence_path(self):
+        self.write_managed_claim()
+        with self.assertRaisesRegex(mod.Refusal, "managed host claim"):
+            self.operator.seal("delete")
+        self.assertFalse(self.layout.fence(self.relay).exists())
+        self.fake.nft = False
+        self.layout.evidence(self.relay, ".managed.json").unlink()
+        self.operator.retire()
+        fence = self.layout.fence(self.relay)
+        fence.parent.mkdir()
+        elsewhere = self.root / "unrelated.txt"
+        elsewhere.write_text("PRESERVE")
+        fence.symlink_to(elsewhere)
+        with self.assertRaisesRegex(mod.Refusal, "Unsafe ownership/permissions|Unsafe non-file path"):
+            self.operator.seal("delete")
+        self.assertEqual("PRESERVE", elsewhere.read_text())
+
     def test_valid_retired_generation_invalidated_before_new_setup_and_refreshed(self):
         self.operator.retire()
         old_receipt = json.loads(self.layout.evidence(self.relay, ".retired.json").read_text())

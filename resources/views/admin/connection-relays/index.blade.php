@@ -104,11 +104,24 @@
             @if (! $relay->enabled && (int) ($counts[$relay->id] ?? 0) === 0)
                 <details class="target-help-details">
                     <summary>{{ __('Edit connection settings') }}</summary>
-                    <p class="field-help">{{ __('The Relay ID is permanent. To change the control host, port, username, pinned key or local SOCKS5 port, first complete the Gateway-local retirement command under Retire and remove Relay below. Then save and complete new host setup/attestation. Rename above changes the display name without downtime.') }}</p>
-                    @unless($retiredStates[$relay->id] ?? false)
-                        <a href="#relay-retire-{{ $relay->id }}">{{ __('Prepare the local cleanup command before editing') }}</a>
-                    @endunless
-                    <form class="form-stack" method="post" action="{{ route('admin.connection-relays.update', ['relay' => $relay->id]) }}" autocomplete="off">
+                    <p class="field-help">{{ __('The Relay ID is permanent. Changing host, port, user, pinned key or SOCKS5 port requires a root-owned rotation fence BEFORE saving; a cleanup receipt alone cannot prevent a concurrent Setup. After saving, provision and attest the next configuration revision separately. Display-only rename needs no host command.') }}</p>
+                    @if($deletionFencedStates[$relay->id] ?? false)
+                        <p class="field-error" role="alert">{{ __('This registration has a permanent deletion fence. Connection settings cannot be edited; renew the retirement proof if needed, then complete the confirmed Delete action.') }}</p>
+                    @else
+                        @if (! ($rotationStates[$relay->id] ?? false))
+                            @if ($hostCommands[$relay->id] ?? null)
+                                <div class="field">
+                                    <label for="relay-rotate-command-{{ $relay->id }}">{{ __('One Gateway-host cleanup and revision-fence command — run before saving connection changes') }}</label>
+                                    <textarea id="relay-rotate-command-{{ $relay->id }}" rows="7" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['cleanup_for_rotation'] }}</textarea>
+                                    <p class="field-help">{{ __('Expected on first run: RETIREMENT VERIFIED then LIFECYCLE FENCE VERIFIED (rotate); on retry, only LIFECYCLE FENCE VERIFIED. This permanently blocks old configuration commands; if DB save fails, retry the same update. Never run this command for display-only rename.') }}</p>
+                                </div>
+                            @else
+                                <p class="field-error" role="alert">{{ __('The host helper does not match this release; restore a verified version before privileged rotation.') }}</p>
+                            @endif
+                        @else
+                            <p class="field-help">{{ __('Rotation fence verified for this configuration. Save the new identity or retry the previously interrupted save.') }}</p>
+                        @endif
+                        <form class="form-stack" method="post" action="{{ route('admin.connection-relays.update', ['relay' => $relay->id]) }}" autocomplete="off">
                         @csrf
                         @method('PUT')
                         <input type="hidden" name="relay_revision" value="{{ $relay->lifecycle_revision }}">
@@ -119,7 +132,8 @@
                             <input id="relay-edit-password-{{ $relay->id }}" type="password" name="current_password" data-admin-requires-intent autocomplete="current-password" maxlength="255" required>
                         </div>
                         <button class="button button-primary" type="submit">{{ __('Save Relay identity') }}</button>
-                    </form>
+                        </form>
+                    @endif
                 </details>
             @elseif (! $relay->enabled)
                 <p class="field-help">{{ __('Reassign or detach the :count Target(s) under Targets before editing the connection. No Target will switch to Direct automatically.', ['count' => $counts[$relay->id] ?? 0]) }}</p>
@@ -129,12 +143,12 @@
                 <details class="target-help-details" id="relay-retire-{{ $relay->id }}">
                     <summary>{{ __('Retire and remove Relay') }}</summary>
                     @if (! ($retiredStates[$relay->id] ?? false))
-                        <p class="field-help">{{ __('Next: run the one-Relay cleanup command on the Gateway host with authorized sudo access. It checks systemd, local listener, owned keys, firewall table and root-owned evidence before issuing a short-lived receipt. A disconnected Iran host NEVER blocks this action. Refresh after a successful result.') }}</p>
+                        <p class="field-help">{{ __('Next: run the Gateway-host cleanup-and-seal-for-delete command with authorized sudo. It retires only the selected Relay local resources and permanently fences old setup commands BEFORE any DB Delete. A disconnected Iran host NEVER blocks this action. Refresh afterward.') }}</p>
                         @if ($hostCommands[$relay->id] ?? null)
                             <div class="field">
-                                <label for="relay-retire-command-{{ $relay->id }}">{{ __('One cleanup command — copy and run on the Gateway host only') }}</label>
+                                <label for="relay-retire-command-{{ $relay->id }}">{{ __('One cleanup-and-seal-for-delete command — Gateway host only') }}</label>
                                 <textarea id="relay-retire-command-{{ $relay->id }}" rows="7" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['cleanup'] }}</textarea>
-                                <p class="field-help">{{ __('Expected successful output begins RETIREMENT VERIFIED. If the command fails, do not delete the record; inspect the reported local blocker. Unmanaged or unknown resources are never silently adopted or removed.') }}</p>
+                                <p class="field-help">{{ __('Expected final output: LIFECYCLE FENCE VERIFIED (delete); the first run also prints RETIREMENT VERIFIED. Re-running can renew expired evidence without lifting the fence. Delete remains blocked unless the root-owned fence matches this record. A deletion fence is permanent, so never use it when you intend to edit this registration.') }}</p>
                             </div>
                             <details class="target-help-details">
                                 <summary>{{ __('First-time helper installation and optional preflight') }}</summary>
@@ -154,7 +168,7 @@
                             <p class="field-error" role="alert">{{ __('Cannot generate the host cleanup command: the installed helper does not match the release-pinned SHA256 or Relay identity. Restore a verified Gateway release before privileged operations.') }}</p>
                         @endif
                     @else
-                        <p class="field-help">{{ __('Gateway-host cleanup has been verified for this exact Relay. Iran-side access and cleanup are not required. Confirm any necessary local cleanup command was completed before deletion.') }}</p>
+                        <p class="field-help">{{ __('Gateway-host cleanup and irreversible deletion fence have been verified for this record. Setup commands for this record can no longer run; Iran cleanup is not required. Confirm the final deletion.') }}</p>
                         <form method="post" class="form-stack" action="{{ route('admin.connection-relays.destroy', ['relay' => $relay->id]) }}" autocomplete="off">
                         @csrf
                         @method('DELETE')
@@ -165,7 +179,7 @@
                         </div>
                         <label class="checkbox-option">
                             <input type="checkbox" name="confirm_gateway_cleanup" value="1" required>
-                            <span>{{ __('I confirm any required Gateway-host cleanup command is complete. Iran-side cleanup may remain pending and does not block deleting this Gateway record.') }}</span>
+                            <span>{{ __('I confirm Gateway-host cleanup and irreversible deletion fencing were completed. Iran-side cleanup is optional and does not block deleting this Gateway record.') }}</span>
                         </label>
                         <div class="field">
                             <label for="relay-delete-password-{{ $relay->id }}">{{ __('Current Owner password') }}</label>

@@ -23,9 +23,11 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Models\User;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 final class ConnectionRelayAdminTest extends TestCase
@@ -169,7 +171,7 @@ final class ConnectionRelayAdminTest extends TestCase
         // there is intentionally no Iran-host check or network requirement.
         $this->app->instance(ConnectionRelayRetirementEvidence::class, new class extends ConnectionRelayRetirementEvidence
         {
-            public function verified(ConnectionRelay $relay): bool
+            public function verifiedForDeletion(ConnectionRelay $relay): bool
             {
                 return true;
             }
@@ -200,7 +202,19 @@ final class ConnectionRelayAdminTest extends TestCase
         try {
             $evidence = new class($directory) extends ConnectionRelayRetirementEvidence
             {
+                public ?\Closure $afterDeletionVerified = null;
+
                 public function __construct(private readonly string $directory) {}
+
+                public function verifiedForDeletion(ConnectionRelay $relay): bool
+                {
+                    $valid = parent::verifiedForDeletion($relay);
+                    if ($valid && $this->afterDeletionVerified) {
+                        ($this->afterDeletionVerified)($relay);
+                    }
+
+                    return $valid;
+                }
 
                 protected function evidenceDirectory(): string
                 {
@@ -269,15 +283,75 @@ final class ConnectionRelayAdminTest extends TestCase
             file_put_contents($stateFile, json_encode($state, JSON_THROW_ON_ERROR));
             file_put_contents($receipt, json_encode($proof, JSON_THROW_ON_ERROR));
             self::assertTrue($evidence->verified($relay));
+            // Exact old race: a valid retirement receipt alone no longer
+            // authorizes Delete, even with no active host claims.
+            self::assertFalse($evidence->verifiedForDeletion($relay));
+            $this->delete($url, $form)->assertSessionHasErrors('relay');
+            self::assertNotNull(ConnectionRelay::query()->find($relay->getKey()));
+
+            $fenceDirectory = $directory.'/.fences';
+            mkdir($fenceDirectory, 0755);
+            $fence = [
+                'version' => 1,
+                'relay_record_id' => $relay->getKey(),
+                'relay_id' => $relay->relay_id,
+                'host_fingerprint' => $relay->hostFingerprint(),
+                'configuration_revision' => (int) $relay->configuration_revision,
+                'host_generation' => $state['host_generation'],
+                'intent' => 'delete',
+            ];
+            file_put_contents($fenceDirectory.'/'.$relay->getKey().'.json', json_encode($fence, JSON_THROW_ON_ERROR));
+            self::assertTrue($evidence->verifiedForDeletion($relay));
+            self::assertFalse($evidence->verifiedForRotation($relay));
+
+            // Controlled cross-language concurrency injection. Run the
+            // actual Python prepare_setup() AFTER PHP has verified the exact
+            // fence, but BEFORE the controller commits the DB DELETE.
+            // It must refuse without rotating the generation; otherwise the
+            // callback fails the request and the DB row cannot be removed.
+            $evidence->afterDeletionVerified = static function (ConnectionRelay $current) use ($directory, $stateFile): void {
+                $python = <<<'PYTHON'
+import os
+import pathlib
+import sys
+sys.path.insert(0, sys.argv[1])
+import test_connection_relay_gateway_host as fixtures
+class FixtureLayout(fixtures.mod.Layout):
+    @property
+    def evidence_dir(self):
+        return self.root
+relay = fixtures.mod.Relay(sys.argv[3], sys.argv[4], sys.argv[5], int(sys.argv[6]), int(sys.argv[7]))
+layout = FixtureLayout(pathlib.Path(sys.argv[2]), os.geteuid())
+operator = fixtures.mod.Retirement(relay, layout, fixtures.FakeHost(relay))
+try:
+    operator.prepare_setup()
+except fixtures.mod.Refusal as error:
+    if 'permanently fenced' not in str(error):
+        raise
+    print('SETUP BLOCKED AFTER PHP VERIFIED')
+else:
+    raise SystemExit('UNSAFE: host Setup began after an irreversible delete fence')
+PYTHON;
+                $before = file_get_contents($stateFile);
+                $probe = new Process([
+                    '/usr/bin/python3', '-c', $python, base_path('tests/Support'),
+                    $directory, $current->relay_id, (string) $current->getKey(),
+                    $current->hostFingerprint(), (string) $current->configuration_revision,
+                    (string) $current->local_socks_port,
+                ], base_path());
+                $probe->run();
+                self::assertTrue($probe->isSuccessful(), $probe->getErrorOutput().' '.$probe->getOutput());
+                self::assertStringContainsString('SETUP BLOCKED AFTER PHP VERIFIED', $probe->getOutput());
+                self::assertSame($before, file_get_contents($stateFile), 'Blocked Setup must not rotate generation.');
+            };
             $this->delete($url, $form)
                 ->assertSessionHasNoErrors()
                 ->assertAdminRedirect('/admin/settings/connection-relays');
             self::assertNull(ConnectionRelay::query()->find($relay->getKey()));
         } finally {
-            foreach (glob($directory.'/*') ?: [] as $file) {
-                unlink($file);
-            }
-            rmdir($directory);
+            // This exact disposable fixture includes the helper's private
+            // test-only lock, not a production /run path.
+            (new Filesystem)->deleteDirectory($directory);
         }
     }
 
@@ -409,8 +483,13 @@ final class ConnectionRelayAdminTest extends TestCase
             '/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay prepare-setup',
             $commands['prepare_setup'],
         );
-        self::assertSame($commands['bootstrap'].' && '.$commands['retire'], $commands['cleanup']);
+        self::assertStringContainsString('if test -e ', $commands['cleanup']);
+        self::assertStringContainsString($relay->getKey().'.json', $commands['cleanup']);
         self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay retire', $commands['cleanup']);
+        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-delete', $commands['cleanup']);
+        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-rotate', $commands['cleanup_for_rotation']);
+        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-delete', $commands['seal_delete']);
+        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-rotate', $commands['seal_rotate']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
 
         config()->set('connection_relays.gateway_retirement_helper_sha256', str_repeat('0', 64));
@@ -462,7 +541,7 @@ final class ConnectionRelayAdminTest extends TestCase
         // retirement proof. This test-only fake performs no actual setup.
         $this->app->instance(ConnectionRelayRetirementEvidence::class, new class extends ConnectionRelayRetirementEvidence
         {
-            public function verified(ConnectionRelay $relay): bool
+            public function verifiedForRotation(ConnectionRelay $relay): bool
             {
                 return true;
             }
