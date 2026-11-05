@@ -39,7 +39,9 @@ app()->instance(ConnectionRelayHostReadiness::class, new class extends Connectio
 {
     public function ready(ConnectionRelay $relay): bool
     {
-        return true;
+        // Keep one independently "ready" UI fixture while exposing a real
+        // fail-closed degraded and an unverified draft presentation.
+        return $relay->relay_id === 'ui-iran';
     }
 });
 
@@ -114,13 +116,19 @@ Route::middleware('web')->get('/__browser__/experience/{role}', static function 
     }
     // Browser-only synthetic route. No SSH client, network or root attestation
     // is created; readiness above is only a screen-rendering fixture.
-    if (! ConnectionRelay::query()->where('relay_id', 'ui-iran')->exists()) {
+    foreach ([
+        ['ui-iran', 'Iran intermediary — synthetic browser fixture', '198.51.100.42', 46081],
+        ['ui-iran-stale', 'Unverified enabled intermediary', '198.51.100.44', 46083],
+    ] as [$relayId, $name, $host, $socksPort]) {
+        if (ConnectionRelay::query()->where('relay_id', $relayId)->exists()) {
+            continue;
+        }
         $key = implode(' ', array_slice(preg_split('/\s+/', trim(EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH'))), 0, 2));
         $relay = ConnectionRelay::query()->create([
-            'relay_id' => 'ui-iran', 'display_name' => 'Iran intermediary — synthetic browser fixture',
-            'control_host' => '198.51.100.42', 'control_port' => 22,
+            'relay_id' => $relayId, 'display_name' => $name,
+            'control_host' => $host, 'control_port' => 22,
             'control_user' => 'ui-only-relay', 'control_host_key' => $key,
-            'local_socks_port' => 46081,
+            'local_socks_port' => $socksPort,
         ]);
         DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
     }

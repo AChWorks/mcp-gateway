@@ -37,7 +37,7 @@ cleanup() {
         done
         if [[ -f "$fixture_dir/storage/logs/laravel.log" ]]; then
             echo '--- disposable Laravel error summary ---' >&2
-            rg 'local.ERROR' "$fixture_dir/storage/logs/laravel.log" | tail -n 3 >&2 || true
+            grep -F 'local.ERROR' "$fixture_dir/storage/logs/laravel.log" | tail -n 3 >&2 || true
             tail -n 8 "$fixture_dir/storage/logs/laravel.log" >&2 2>/dev/null || true
         fi
     fi

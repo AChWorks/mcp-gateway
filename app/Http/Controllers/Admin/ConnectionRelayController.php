@@ -12,6 +12,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayHostOperatorPlan;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayOperationalState;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRetirementEvidence;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
@@ -34,24 +35,26 @@ final class ConnectionRelayController extends Controller
         $this->authorizeOwner($request);
 
         $relays = ConnectionRelay::query()->orderBy('display_name')->get();
+        $hostStates = $relays->mapWithKeys(static fn (ConnectionRelay $relay): array => [$relay->id => $host->ready($relay)]);
+        $retiredStates = $relays->mapWithKeys(static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verifiedForDeletion($relay)]);
+        $rotationStates = $relays->mapWithKeys(static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verifiedForRotation($relay)]);
+        $deletionFencedStates = $relays->mapWithKeys(static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->deletionFencePresent($relay)]);
+        $operationalStates = $relays->mapWithKeys(static fn (ConnectionRelay $relay): array => [
+            $relay->id => ConnectionRelayOperationalState::assess(
+                $relay, (bool) $hostStates[$relay->id], (bool) $deletionFencedStates[$relay->id],
+            ),
+        ]);
 
         /** @var view-string $template */
         $template = 'admin.connection-relays.index';
 
         return view($template, [
             'relays' => $relays,
-            'hostStates' => $relays->mapWithKeys(
-                static fn (ConnectionRelay $relay): array => [$relay->id => $host->ready($relay)],
-            ),
-            'retiredStates' => $relays->mapWithKeys(
-                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verifiedForDeletion($relay)],
-            ),
-            'rotationStates' => $relays->mapWithKeys(
-                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verifiedForRotation($relay)],
-            ),
-            'deletionFencedStates' => $relays->mapWithKeys(
-                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->deletionFencePresent($relay)],
-            ),
+            'hostStates' => $hostStates,
+            'retiredStates' => $retiredStates,
+            'rotationStates' => $rotationStates,
+            'deletionFencedStates' => $deletionFencedStates,
+            'operationalStates' => $operationalStates,
             'hostCommands' => $relays->mapWithKeys(
                 static fn (ConnectionRelay $relay): array => [$relay->id => $operator->commands($relay)],
             ),

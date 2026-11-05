@@ -54,8 +54,13 @@
                 <div><dt>{{ __('Control SSH') }}</dt><dd><code>{{ $relay->control_user.'@'.$relay->control_host.':'.$relay->control_port }}</code></dd></div>
                 <div><dt>{{ __('Local SOCKS5') }}</dt><dd><code>127.0.0.1:{{ $relay->local_socks_port }}</code></dd></div>
                 <div><dt>{{ __('Targets using Relay') }}</dt><dd>{{ $counts[$relay->id] ?? 0 }}</dd></div>
+                <div><dt>{{ __('Operational status') }}</dt><dd>{{ $operationalStates[$relay->id]->label() }}</dd></div>
                 <div><dt>{{ __('Host evidence') }}</dt><dd>{{ $hostStates[$relay->id] ? __('Current for this PHP UID') : __('Not ready — missing, expired or mismatched') }}</dd></div>
             </dl>
+            <p class="field-help">{{ $operationalStates[$relay->id]->nextAction() }}</p>
+            @if ($rotationStates[$relay->id] ?? false)
+                <p class="field-help">{{ __('Old revision retirement is sealed. Save the pending connection change before requesting setup for the new revision.') }}</p>
+            @endif
             <details class="target-help-details">
                 <summary>{{ __('Rename Relay') }}</summary>
                 <p class="field-help">{{ __('Change the name displayed in Gateway without interrupting the connection or bound Targets.') }}</p>
