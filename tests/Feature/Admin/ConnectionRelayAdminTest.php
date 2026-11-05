@@ -94,12 +94,19 @@ final class ConnectionRelayAdminTest extends TestCase
         $readiness->isReady = false;
         $this->get($path)->assertOk()
             ->assertSee('Degraded — routing blocked')
-            ->assertSee('Bound Target operations fail closed');
+            ->assertSee('Bound Target operations fail closed')
+            ->assertSee('disable this Relay now')
+            ->assertSee('Gateway Repair is not available yet')
+            ->assertSee('a permanently fenced record must never be reprovisioned');
 
         $this->post($path.'/'.$relay->id.'/toggle', [
             'relay_revision' => 2, 'enable' => '0', 'current_password' => self::PASSWORD,
         ])->assertSessionHasNoErrors();
-        $this->get($path)->assertOk()->assertSee('Needs setup or re-verification');
+        $this->get($path)->assertOk()
+            ->assertSee('Needs setup or re-verification')
+            ->assertSee('No supported Gateway Setup/Update/Repair or trusted attestation issuance is available yet')
+            ->assertSee('a separately approved host procedure and independent readiness proof')
+            ->assertSee('Bound Targets never fall back to Direct');
     }
 
     public function test_owner_can_manage_multiple_relays_and_rename_an_active_relay_without_rekeying_targets(): void

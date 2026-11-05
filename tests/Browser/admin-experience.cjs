@@ -1135,11 +1135,14 @@ async function roleSensitiveDirtyForms(browser) {
                 to:Array.from(select.options).findIndex(option=>option.value===next),
             }),value);
             assert.ok(indices.to>=0,'Unknown role '+value);
-            await role.focus();
             for (let step=indices.from;step!==indices.to;) {
                 const increment=indices.to>step?1:-1;
-                await page.keyboard.press(increment>0?'ArrowDown':'ArrowUp');
+                // Retarget each real keypress to the actual native control;
+                // role-dependent UI changes may shift focus between steps.
+                await role.press(increment>0?'ArrowDown':'ArrowUp');
                 step+=increment;
+                assert.equal(await role.evaluate(select => select.selectedIndex), step,
+                    'Each native Role keystroke must select the intended option');
             }
             assert.equal(await role.inputValue(),value);
         };
@@ -1177,6 +1180,11 @@ async function roleSensitiveDirtyForms(browser) {
         const ownerForm = page.locator('form[data-user-role-form]');
         assert.equal(await ownerForm.getAttribute('data-admin-dirty'), null, 'Owner begins clean');
         await chooseRole('operator');
+        // A changed select value alone is not evidence that its trusted
+        // native input/change event reached the semantic dirty guard.
+        // Wait for the real observable guard; never synthesize that event.
+        await page.waitForFunction(() => document.querySelector('form[data-user-role-form]')?.dataset.adminDirty === 'true',
+            null, {timeout: 5000});
         assert.equal(await ownerForm.getAttribute('data-admin-dirty'), 'true');
         await chooseRole('owner');
         assert.equal(await ownerForm.getAttribute('data-admin-dirty'), null,
@@ -1360,6 +1368,20 @@ async function connectionRelays(browser) {
         }
 
         await page.goto(base + '/admin/settings/connection-relays');
+        const enabledFixture = page.locator('article.target-subsection')
+            .filter({hasText:'Iran intermediary — synthetic browser fixture'});
+        assert.equal(await enabledFixture.getByText('Enabled — host evidence current', {exact:true}).count(), 1,
+            'Only the synthetic, explicitly attested Relay may be visibly Enabled');
+        assert.ok(await enabledFixture.getByText('does not prove a working route', {exact:false}).count(),
+            'Host readiness must not claim actual Target authentication');
+        const degradedFixture = page.locator('article.target-subsection')
+            .filter({hasText:'Unverified enabled intermediary'});
+        assert.equal(await degradedFixture.getByText('Degraded — routing blocked', {exact:true}).count(), 1,
+            'Enabled Relay without verified host evidence must be visibly Degraded');
+        assert.ok(await degradedFixture.getByText('Gateway Repair is not available yet', {exact:false}).count(),
+            'Degraded Relay must not advertise an unavailable Repair action');
+        assert.ok(await degradedFixture.getByText('Bound Target operations fail closed', {exact:false}).count(),
+            'Degraded status must explain fail-closed routing');
         assert.ok(await page.getByRole('heading', {name:'Before enabling a Relay'}).count());
         assert.equal(await page.locator('#relay-setup-heading').count(), 1);
         const technical = page.locator('details.target-help-details').first();
@@ -1428,6 +1450,13 @@ async function connectionRelays(browser) {
         await page.goto(base + '/__browser__/relay-unavailable-target');
         assert.equal(await page.locator('#target-edit-connection-relay').inputValue(), 'ui-iran-offline');
         assert.ok(await page.getByText(/cannot be used.*Choose Direct/).count() > 0);
+        await page.goto(base + '/admin/settings/connection-relays');
+        const disabledFixture = page.locator('article.target-subsection')
+            .filter({hasText:'Unusable saved intermediary'});
+        assert.equal(await disabledFixture.getByText('Draft — host unverified', {exact:true}).count(), 1,
+            'A newly saved disabled Relay without host evidence is a Draft');
+        assert.ok(await disabledFixture.getByText('Do not assume host resources are absent', {exact:false}).count(),
+            'Draft status cannot infer absence of privileged host resources');
 
         const nonOwner = await create(browser);
         try {
