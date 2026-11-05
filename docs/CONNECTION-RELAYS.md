@@ -110,13 +110,20 @@ Do not disable the hash check to make an older helper accept a new command.
    a root-owned temporary inode, SHA256-checks the copied bytes and atomically
    publishes it. An unknown, stale, linked or unsafe installed tool causes
    an explicit refusal. No existing binary is overwritten.
-3. The same command runs `retire`, then `seal-delete` under the same
-   helper version and per-Relay root lock. Each privileged invocation
-   independently checks the installed helper digest. Separate
-   bootstrap and preflight commands remain available for diagnostics. The
-   arguments include only
-   the Relay ID, DB ULID, configuration fingerprint/revision and local port,
-   not SSH private keys or Target credentials.
+3. The command first attempts an exact-current `seal-delete` using
+   the release-pinned privileged helper. If the current permanent fence and
+   retired generation already match, Seal **renews the receipt only**; no
+   repeat retirement is needed. Otherwise the command runs exact Gateway-local
+   `retire` followed by `seal-delete`. **Each privileged CLI invocation**
+   independently verifies the installed helper digest and acquires/releases
+   the same per-Relay exclusive root lock; the two separate invocations are
+   **not one continuously locked transaction**. A host generation or resource
+   change between them makes the subsequent Seal fail closed, requiring
+   operator reconciliation and retry, not an assumed success. Separate
+   bootstrap and preflight commands remain available for diagnostics.
+   The arguments identify the Relay ID, DB ULID, current configuration
+   fingerprint/revision and local port (plus the exact prior fingerprint for
+   scoped retirement after Disable), never SSH private keys or Target credentials.
 4. The helper locks and validates the exact root-owned Relay namespace.
    It stops only a matching claimed systemd service, removes only the
    claimed nftables table and key files, clears local readiness evidence,
@@ -127,12 +134,18 @@ Do not disable the hash check to make an older helper accept a new command.
    resources, unsafe ownership/symlinks, active listeners and failed
    operations are rejected instead of purged.
    No SSH connection to Iran is attempted.
-5. On success, `retire` atomically issues a root-owned, boot-bound receipt
-   with a 600-second lease; `seal-delete` verifies the clean host and commits
-   a permanent per-record deletion fence, then renews the receipt. Refresh
-   Admin. With no bound Targets, exact ID, Owner password, Owner acknowledgement
-   and a current matching fence + receipt, the DB record can be deleted.
-   An offline Iran host NEVER prevents this.
+5. On the **first successful cleanup**, `retire` issues a root-owned,
+   boot-bound retirement receipt (600-second lease) after verifying removal
+   of the exact Gateway resources; `seal-delete` verifies that clean host,
+   commits the permanent per-record deletion fence and renews the receipt.
+   Expected first-run output includes **RETIREMENT VERIFIED**, then
+   **LIFECYCLE FENCE VERIFIED (delete)**. On an idempotent retry with a
+   valid **current** Seal, the command skips retirement and renews the
+   receipt, outputting only **LIFECYCLE FENCE VERIFIED (delete)**. A stale,
+   foreign or historical rotation fence is never sufficient to skip cleanup.
+   Refresh Admin. With no bound Targets, exact ID, Owner password, Owner
+   acknowledgement and a current matching fence + receipt, the DB record
+   can be deleted. An offline Iran host NEVER prevents this.
    Cleanup of old Iran-side accounts/keys is optional and independent.
 
 ### Generation invalidation: mandatory BEFORE new Setup or Repair
