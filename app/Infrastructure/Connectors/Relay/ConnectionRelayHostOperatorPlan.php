@@ -49,7 +49,7 @@ final readonly class ConnectionRelayHostOperatorPlan
         // matches the release-pinned helper; an old or replaced binary cannot
         // silently execute under the generated command.
         $verifiedPrefix = "printf '%s\n' ".escapeshellarg($expected.'  '.self::INSTALLED_HELPER)
-            .' | sudo sha256sum --check --status && sudo '.self::INSTALLED_HELPER.' ';
+            .' | sudo /usr/bin/sha256sum --check --status && sudo '.self::INSTALLED_HELPER.' ';
 
         // Copy release source to an isolated root-owned temporary inode, SHA-
         // check the COPIED bytes, and atomically publish without overwriting
@@ -89,7 +89,7 @@ BASH;
             $bootstrapScript,
         );
 
-        $bootstrap = 'sudo bash -c '.escapeshellarg($bootstrapScript);
+        $bootstrap = 'sudo /usr/bin/bash -c '.escapeshellarg($bootstrapScript);
         $retire = $verifiedPrefix.'retire '.$arguments;
 
         return [

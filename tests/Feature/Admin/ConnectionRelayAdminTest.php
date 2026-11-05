@@ -295,14 +295,14 @@ final class ConnectionRelayAdminTest extends TestCase
         self::assertIsArray($commands);
         self::assertSame(hash_file('sha256', base_path('resources/host/connection-relay-gateway.py')), $commands['sha256']);
         foreach (['preflight', 'retire'] as $action) {
-            self::assertStringContainsString('sudo sha256sum --check --status', $commands[$action]);
+            self::assertStringContainsString('sudo /usr/bin/sha256sum --check --status', $commands[$action]);
             self::assertStringContainsString('sudo /usr/local/sbin/mcp-gateway-relay '.$action, $commands[$action]);
             self::assertStringContainsString($relay->relay_id, $commands[$action]);
             self::assertStringContainsString($relay->getKey(), $commands[$action]);
             self::assertStringContainsString($relay->hostFingerprint(), $commands[$action]);
             self::assertStringNotContainsString('ssh ', $commands[$action]);
         }
-        self::assertStringContainsString('sudo bash -c', $commands['bootstrap']);
+        self::assertStringContainsString('sudo /usr/bin/bash -c', $commands['bootstrap']);
         self::assertStringContainsString('sha256sum --check --status', $commands['bootstrap']);
         self::assertStringContainsString('ln --', $commands['bootstrap']);
         self::assertStringContainsString('Untrusted host tool directory', $commands['bootstrap']);
