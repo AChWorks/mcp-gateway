@@ -266,6 +266,10 @@ class Retirement:
                 "Unclaimed active host evidence exists. Reconcile the legacy "
                 "manual transport locally before claiming complete cleanup."
             )
+        if managed is None:
+            # A previously loaded or foreign same-name systemd definition
+            # may survive even when no owned unit file exists on disk.
+            self._assert_no_loaded_same_name_unit()
         if managed is not None:
             if self._owned(unit):
                 marker = "# MCP-GATEWAY-CONNECTION-RELAY " + self.relay.record_id + " " + self.relay.relay_id
@@ -359,6 +363,12 @@ class Retirement:
         if info["FragmentPath"] not in {"", expected}:
             raise Refusal("Loaded same-name systemd unit has a foreign FragmentPath.")
         return info
+
+    def _assert_no_loaded_same_name_unit(self) -> None:
+        info = self._systemd_info()
+        if (info["LoadState"] != "not-found" or info["FragmentPath"]
+            or info["ExecStart"]):
+            raise Refusal("A same-name systemd unit remains loaded; retirement is unverified.")
 
     def _verify_effective_systemd(self, managed: dict) -> bool:
         """Return True only when a verified owned unit may be disabled."""
@@ -568,7 +578,6 @@ class Retirement:
                             raise Refusal("Unsafe Relay key file.")
                         entry.unlink()
                     keydir.rmdir()
-                self.layout.evidence(self.relay, ".managed.json").unlink()
             else:
                 if self._unit_active():
                     raise Refusal("A Relay service is still active without a recognized owned claim.")
@@ -580,6 +589,15 @@ class Retirement:
                     path.unlink()
             if self._unit_active() or self._unit_enabled() or self._nft_table_exists() or self._listening(ports):
                 raise Refusal("Cleanup verification did not reach the disabled/inactive/absent state.")
+            # A systemd daemon-reload can expose a foreign replacement unit
+            # under the same name. Never issue a clean-host proof while any
+            # effective definition is still loaded, even if inactive.
+            self._assert_no_loaded_same_name_unit()
+            # Preserve the v2 ownership claim until final host checks pass;
+            # a foreign unit discovered after daemon-reload must remain
+            # diagnosable and must not be mistaken for an unclaimed draft.
+            if managed:
+                self.layout.evidence(self.relay, ".managed.json").unlink()
             generation = self._advance_generation("retired")
             self._receipt(generation)
             return ("RETIREMENT VERIFIED for Gateway Relay " + self.relay.relay_id

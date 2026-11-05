@@ -36,6 +36,7 @@ class FakeHost:
         self.fail_daemon_reload = False
         self.stale_loaded = False
         self.foreign_fragment: str | None = None
+        self.foreign_fragment_after_reload: str | None = None
         self.foreign_dropin = False
         self.foreign_exec = False
         self.unknown_nft_rule = False
@@ -127,6 +128,8 @@ class FakeHost:
             if argv[1] == "daemon-reload":
                 if not self.fail_daemon_reload:
                     self.stale_loaded = self.unit_path is not None and self.unit_path.is_file()
+                    if self.foreign_fragment_after_reload is not None:
+                        self.foreign_fragment = self.foreign_fragment_after_reload
                 return subprocess.CompletedProcess(
                     argv, 1 if self.fail_daemon_reload else 0, "",
                     "reload failed" if self.fail_daemon_reload else "",
@@ -332,6 +335,37 @@ class RetirementTests(unittest.TestCase):
             self.operator.retire()
         self.assertTrue(unit.exists())
         self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+
+    def test_unclaimed_inactive_foreign_same_name_service_blocks_retirement_and_setup(self):
+        # A file may be absent from the owned location while a foreign unit
+        # with the same name remains loaded but inactive/disabled in systemd.
+        self.fake.foreign_fragment = "/usr/lib/systemd/system/" + self.relay.unit_name
+        with self.assertRaisesRegex(mod.Refusal, "same-name systemd"):
+            self.operator.retire()
+        with self.assertRaisesRegex(mod.Refusal, "same-name systemd"):
+            self.operator.prepare_setup()
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".generation.json").exists())
+        self.assertFalse(any(x[:2] == ["systemctl", "disable"] for x in self.fake.calls))
+
+    def test_foreign_same_name_unit_loaded_after_reload_prevents_retirement_proof(self):
+        unit = self.layout.unit(self.relay)
+        unit.write_text("# MCP-GATEWAY-CONNECTION-RELAY " + self.relay.record_id +
+                        " " + self.relay.relay_id + "\n[Unit]\nDescription=owned\n")
+        self.write_managed_claim()
+        self.fake.foreign_fragment_after_reload = (
+            "/usr/lib/systemd/system/" + self.relay.unit_name
+        )
+        with self.assertRaisesRegex(mod.Refusal, "same-name systemd"):
+            self.operator.retire()
+        self.assertTrue(self.layout.evidence(self.relay, ".managed.json").exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertEqual(1, sum(1 for x in self.fake.calls if x[:2] == ["systemctl", "daemon-reload"]))
+        # A later operator can remove the unrelated unit separately and retry
+        # the same scoped cleanup without losing the ownership claim.
+        self.fake.foreign_fragment = None
+        self.fake.foreign_fragment_after_reload = None
+        self.assertIn("RETIREMENT VERIFIED", self.operator.retire())
 
     def test_legacy_v1_claim_is_not_silently_adopted_for_privileged_cleanup(self):
         self.layout.evidence(self.relay, ".managed.json").write_text(json.dumps({

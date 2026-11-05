@@ -57,9 +57,12 @@ authorize the host change and compare the displayed digest against a
 4. The helper locks and validates the exact root-owned Relay namespace.
    It stops only a matching claimed systemd service, removes only the
    claimed nftables table and key files, clears local readiness evidence,
-   and verifies there is no remaining local service, listener or named
-   firewall table. Unknown resources, unsafe ownership/symlinks, active
-   listeners and failed operations are rejected instead of purged.
+   and verifies there is no remaining local service, loaded same-name
+   systemd unit (even inactive), listener or named firewall table.
+   A foreign unit discovered after daemon-reload blocks the receipt and
+   preserves the managed resource claim for safe diagnosis/retry. Unknown
+   resources, unsafe ownership/symlinks, active listeners and failed
+   operations are rejected instead of purged.
    No SSH connection to Iran is attempted.
 5. On success it atomically issues a root-owned, boot-bound receipt with
    a 600-second lease. Refresh the Admin page. With no bound Targets,
