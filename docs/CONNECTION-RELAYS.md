@@ -1,6 +1,6 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Source under review; not deployed.** Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
+**Core Relay routing source is merged, but this capability has not been published or accepted on real hosts.** A Gateway-host-only privileged cleanup helper is in development; initial setup, update/reprovision and independent readiness attestation are still unfinished. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
 
 ## Intent and architecture
 
@@ -12,6 +12,204 @@ Connection Relay is a reusable per-Target transport route, not a third connector
     -> end-to-end SSH host-key pin or HTTPS TLS SNI and certificate check
 
 Each Relay requires one control-plane SSH identity/key completely distinct from the Target login credential and the existing Reverse SSH control identities. The Gateway performs bounded public DNS and numeric destination approval locally, sends only numeric SOCKS5 CONNECT, preserves the real SSH Target host key or HTTPS certificate, and never treats the SOCKS reply as verified remote peer identity. No automatic fallback to Direct. Only deliberate Target operations use a relay; ChatGPT signed-file ingress and unrelated Gateway services remain Direct.
+
+## Unified Create / Edit / Delete lifecycle (required product acceptance; not yet delivered)
+
+Gateway is the **unprivileged control plane**, not a root-level package manager. Its user journey must offer one cohesive lifecycle for multiple independently managed Relay resources:
+
+| Owner action | What Gateway may do | Privileged host action and proof |
+| --- | --- | --- |
+| Create | Save an inactive draft and prepare a scoped, easy-to-copy Setup instruction | Prepare dedicated UID/ACL, SSH identity, keys and supervised listener; constrain Iran principal/egress; independently verify both sides; issue root-owned short-lived readiness evidence |
+| Rename | Change only the display name with Owner reauthentication and optimistic revision check | **No host command**, no connection interruption or Target epoch reset |
+| Edit host, port, key, username, identity or local listener | Disable/detach Targets, require verified root-owned `rotate` fence for the old revision before DB commit | **Gateway-only cleanup + `seal-rotate` under the same root lock as Setup**; old revision cannot be provisioned after fencing; only a newer revision can proceed to future Setup/attestation |
+| Disable or diagnose | Fail closed for explicitly bound Targets and show distinct host/control/Target status | Host service changes require a reviewed privileged action; no implicit Direct fallback |
+| Delete | Require explicit Target detach/reassignment, disable, Owner confirmation, fresh exact-registration cleanup receipt **and irreversible `delete` fence** | **Scoped cleanup + `seal-delete` on the Gateway host** permanently forbids any future Setup/Repair for that exact DB ULID, including after DB deletion. No Iran connectivity, remote cleanup, or sibling/Reverse SSH resource change |
+
+The command must be generated for the exact Relay and checked revision; support an independently transferred/offline Iran-side package when Iran cannot fetch code from foreign endpoints. No arbitrary shell construction from form inputs, production root execution by PHP, generic destructive purge or silently claimed success. Failure leaves a recoverable disabled registration with an actionable Retry/Repair. Host resource changes must be idempotent, ownership-scoped and positively verified. A successful response from a script alone is not evidence that the Target was authenticated.
+
+**Interim security boundary:** The application now separates display-only rename from sensitive route changes and forbids hard deletion based on an Owner checkbox or absent attestation file. Final deletion requires Owner acknowledgement, a **privileged, short-lived root-owned Gateway-host cleanup receipt** AND an **irreversible, root-owned `delete` fence** bound to exact DB ULID, Relay ID, fingerprint, revision and host generation. An ordinary receipt alone never authorizes DB deletion or sensitive identity rotation. It does **not** require Iran reachability, remote cleanup evidence or Iranian SSH credentials. The exact-receipt verifier and scoped Gateway-host-only retirement helper are implemented in the current unmerged candidate. The helper must be installed by the separately authorized host operator; it is NOT a tunnel installer or host-readiness attester. **Do not present Create/Edit/Setup as finished or claim this is deployed.** The UI preserves records instead of fabricating cleanup. This receipt is never to be hand-authored by PHP or fabricated by an operator.
+
+The receipt is located at `/etc/mcp-gateway/connection-relays/<relay-id>.retired.json` (fixed root-owned, symlink-free namespace) and contains exactly `relay_record_id`, `relay_id`, `host_fingerprint`, `configuration_revision`, `host_generation`, `verified_boot_id`, `verified_at_unix`, `verified_at_boot_seconds`, `expires_at_unix`, `gateway_cleanup_verified`. The single boolean must be true **based on independent privileged verification on the Gateway host**. The lease is valid for no more than 900 seconds, with no significant wall-clock/boot-clock divergence. Active policy and readiness files must be gone. There is no Iranian cleanup field or network check: an unreachable Iran server must never prevent Gateway-side deletion after local verification and Owner confirmation. Remote cleanup, if desired, is an optional separate follow-up. Real-host operational acceptance and a distinct setup/update helper are still required before whole-product acceptance.
+
+### Durable cross-process lifecycle fence (R1 race closure)
+
+A PHP DB transaction cannot hold the privileged helper's root-only `/run`
+`flock`, and a second read of `.generation.json` cannot close this race.
+Instead, an approved host operator first runs `seal-delete` or `seal-rotate`
+**after** successful `retire`, while holding the SAME root-only per-Relay
+exclusive lock as `prepare-setup`. The operator's single copyable command
+includes cleanup and the required seal. No PHP endpoint invokes `sudo`.
+
+The helper writes a non-secret root-owned, mode 0644 and fsync'd durable
+fence at `/etc/mcp-gateway/connection-relays/.fences/<record-ULID>.json`
+under trusted root-owned, PHP-traversable parents. The exact keys are
+`version=1`, `relay_record_id`, `relay_id`, `host_fingerprint`,
+`configuration_revision`, `host_generation` and `intent=delete|rotate`.
+The fence matches the current **retired** generation and independently
+issued cleanup receipt; PHP checks its owner, strict schema, exact identity,
+revision and intended action before running the existing receipt verifier.
+`seal-delete` permits only deletion; `seal-rotate` permits only an identity
+change that advances `configuration_revision`. This is not a reusable
+"approval checkbox" or a claim of active Target readiness.
+
+**Concurrency rule:** An in-flight `prepare-setup` with the root lock wins
+before a seal only by invalidating the old retirement generation, causing
+the seal to fail. If the seal wins first, all later `prepare-setup` and
+`retire` commands for the fenced revision fail before modifying host state.
+For `delete`, every revision of that **exact record ULID** is barred
+permanently. For `rotate` at revision N, revisions <=N remain forbidden,
+while a strictly newer revision can subsequently begin separately approved
+Setup. The fence survives cleanup, DB COMMIT, receipt expiry, and host
+reboot and MUST NOT be removed by an operator just to unblock old commands.
+Future Setup/Repair implementations must use this same guarded helper protocol
+and root lock; bypassing either invalidates the safety contract.
+
+If the PHP transaction fails **after** sealing, the registration remains
+recoverable: retry the same Owner action. An exact repeat `seal-delete` or
+`seal-rotate` re-verifies the empty Gateway-host namespace and can renew the
+short-lived receipt without removing the fence or changing host generation.
+After `seal-delete`, sensitive edits of that same registration are intentionally
+refused; the operator cannot reinterpret it as a rotation. New registration
+ULIDs have distinct fences, but reuse of the same Relay ID while an old host
+generation exists requires separately reviewed reconciliation, not silent
+adoption or removal of the old permanent fence.
+
+**This is a protocol between cooperating privileged helpers**, not protection
+against an authorized Root actor that deliberately writes host resources
+outside the helper. No release or real-host test has occurred.
+
+## Gateway-local retirement procedure (source candidate, not deployed)
+
+The reviewed helper source is shipped with the normal release and update
+payload at `resources/host/connection-relay-gateway.py`. Its exact SHA256 is
+pinned in `config/connection_relays.php`. Updating the web app does NOT
+install or execute the privileged helper. The Owner must separately
+authorize the host change and compare the displayed digest against a
+**trusted release artifact**, not just the same web UI.
+
+1. Disable the selected Relay, reconcile and explicitly detach/reassign all
+   Targets; never silently fall back to Direct. Open **Retire and remove Relay**.
+2. Copy the **one cleanup-and-seal-for-delete command** and execute it with approved
+   sudo access **only on the Gateway host**. It verifies an already installed
+   exact release-pinned helper; if missing, it first copies the source into
+   a root-owned temporary inode, SHA256-checks the copied bytes and atomically
+   publishes it. An unknown, stale, linked or unsafe installed tool causes
+   an explicit refusal. No existing binary is overwritten.
+3. The same command runs `retire`, then `seal-delete` under the same
+   helper version and per-Relay root lock. Each privileged invocation
+   independently checks the installed helper digest. Separate
+   bootstrap and preflight commands remain available for diagnostics. The
+   arguments include only
+   the Relay ID, DB ULID, configuration fingerprint/revision and local port,
+   not SSH private keys or Target credentials.
+4. The helper locks and validates the exact root-owned Relay namespace.
+   It stops only a matching claimed systemd service, removes only the
+   claimed nftables table and key files, clears local readiness evidence,
+   and verifies there is no remaining local service, loaded same-name
+   systemd unit (even inactive), listener or named firewall table.
+   A foreign unit discovered after daemon-reload blocks the receipt and
+   preserves the managed resource claim for safe diagnosis/retry. Unknown
+   resources, unsafe ownership/symlinks, active listeners and failed
+   operations are rejected instead of purged.
+   No SSH connection to Iran is attempted.
+5. On success, `retire` atomically issues a root-owned, boot-bound receipt
+   with a 600-second lease; `seal-delete` verifies the clean host and commits
+   a permanent per-record deletion fence, then renews the receipt. Refresh
+   Admin. With no bound Targets, exact ID, Owner password, Owner acknowledgement
+   and a current matching fence + receipt, the DB record can be deleted.
+   An offline Iran host NEVER prevents this.
+   Cleanup of old Iran-side accounts/keys is optional and independent.
+
+### Generation invalidation: mandatory BEFORE new Setup or Repair
+
+The privileged helper now maintains a **root-owned, non-secret**
+`/etc/mcp-gateway/connection-relays/<relay-id>.generation.json` containing
+exactly `version=1`, DB `relay_record_id`, `relay_id`,
+`host_generation` (fresh 64-character random hex) and
+`state=provisioning|retired`. Its file mode is 0644 for the isolated,
+unprivileged PHP reader. Retirement rotates this generation to
+`retired` **before** issuing a matching receipt, under the per-Relay
+root lock. PHP requires BOTH the retired proof and matching current
+retired generation, and refuses any present active `.managed.json`,
+`.policy` or `.json` file even with an unexpired old receipt.
+
+**Every future privileged Setup/Repair/reprovision must execute**
+`prepare-setup` with the exact Relay identity, revision and port
+**before any host resource is created**, and check the permanent per-record
+fence before changing generation or resources. This action locks the Relay,
+proves existing resources are absent, rotates its generation to
+`provisioning` FIRST, then removes the old receipt. A crash between
+these steps remains fail-closed. Future installer/repair code must hold
+the same root lock while creating resources, and its v2 managed claim
+must carry that new provisioning generation. It may not reuse an old
+retired generation or create resources before invalidating proof.
+**No Setup/Repair feature is delivered in PR #286**; this is an explicit
+host-generation protocol boundary for the next implementation package.
+
+The retirement receipt is **non-secret metadata** and is issued
+root-owned, mode 0644, so the non-root Gateway PHP-FPM identity can read
+it. Newly created evidence paths are root-owned, mode 0755, while the
+lock directory and keys remain private. Existing root-owned evidence
+parents that are not PHP-searchable are **not chmodded by the helper**:
+the operation refuses to claim success and the operator must decide
+how to reconcile directory access.
+
+**Owned resource contract — v2, fail-closed:** The root-owned
+`/etc/mcp-gateway/connection-relays/<relay-id>.managed.json` contains
+exactly `version=2`, `relay_record_id`, `relay_id`,
+`service_unit`, `firewall_table`, `local_socks_port`,
+`host_fingerprint`, `configuration_revision`,
+`host_generation`, `unit_sha256`, `unit_exec_sha256`
+and `firewall_sha256`. Its generation must match a root-owned
+`provisioning` state. Older or unproven v1 claims are refused, not
+silently adopted.
+
+Systemd unit:
+`mcp-gateway-relay-<relay-id>.service` at
+`/etc/systemd/system/<service-name>` with exact root-owned
+`# MCP-GATEWAY-CONNECTION-RELAY <record-ULID> <relay-id>` marker and
+claimed SHA256 bytes. Before `disable --now` the helper verifies
+effective `systemctl show` identity and `FragmentPath`, no
+drop-in/transient configuration, `NeedDaemonReload=no`, and matching
+SHA256 of the immutable `ExecStart` executable path, arguments and
+`ignore_errors` value. The helper deliberately excludes volatile
+systemd-reported start/stop timestamps, PID and last exit status, so a
+legitimate restart cannot invalidate a correct unit identity. The future
+installer must hash this same canonical representation. A foreign
+same-name unit is never stopped. An interrupted removal after the owned unit disappeared is
+recoverable only when the loaded but inactive old definition still
+matches the expected path and `ExecStart`, followed by
+successful `daemon-reload`.
+
+Dedicated nftables inet table:
+`mcp_gateway_relay_<first-12-hex-sha256-of-record-ULID>`.
+Before removal, the helper parses the **full**
+`nft -j list table inet <name>` JSON, validates exact
+table/chain/rule ownership, removes only volatile `handle`
+and `metainfo` fields, serializes stable sorted JSON and compares
+SHA256 to the root-owned claim. The future Setup helper must use this
+exact normalization algorithm when recording the claim. Unknown,
+modified or unprovable rules are never removed; table name is
+insufficient proof. The helper rechecks policy immediately before
+deletion and preserves ACLs while a listener remains open.
+
+The root-owned key namespace is
+`/var/lib/mcp-gateway-relays/<relay-id>`, restricted to the known
+files. Other Relays, Reverse SSH, and unknown host resources are not
+modified. Privileged local testing and prerequisites `systemctl`,
+`nft` and `ss` still need distinct real-host authorization.
+
+**Editing:** immutable Relay IDs cannot be rotated in place; create a new
+Relay and intentionally migrate Targets. Changing endpoint, host key,
+username or local port requires fresh local retirement proof AND a `rotate`
+fence for the old configuration before the PHP update. Rename display name without any host command or downtime.
+After an identity edit the old retirement proof no longer validates the
+new configuration. The Setup/Update and short-lived independent readiness
+attestation implementation are still outstanding.
+
+Tests of this helper currently use disposable directories and fake
+`systemctl`, `nft` and `ss`; those tests are **not a claim of
+production host, systemd, firewall or Iran setup verification**.
 
 ## User workflow
 

@@ -9,6 +9,8 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRetirementEvidence;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +21,64 @@ use Tests\TestCase;
 final class AdminUiPresentationTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_relay_management_uses_shared_accessible_native_forms_for_create_rename_edit_and_safe_delete(): void
+    {
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'ui-test-relay',
+            'display_name' => 'Secondary Relay',
+            'control_host' => '198.51.100.42',
+            'control_port' => 22,
+            'control_user' => 'dedicated-relay',
+            'control_host_key' => 'ssh-ed25519 synthetic-display-only',
+            'local_socks_port' => 46901,
+        ]);
+        $this->actingAs($this->owner());
+        $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertSee('Retire and remove Relay')
+            ->assertSee('Next: run the Gateway-host cleanup-and-seal-for-delete command')
+            ->assertDontSee('Delete verified retired Relay');
+        $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertSee('One cleanup-and-seal-for-delete command')
+            ->assertSee('One-time verified helper installation')
+            ->assertSee('/usr/bin/sudo /usr/bin/sha256sum --check --status')
+            ->assertSee('A disconnected Iran host NEVER blocks this action');
+
+        // The real host evidence is issued only by a privileged host
+        // operator. Mock this boundary for view presentation only.
+        $this->app->instance(ConnectionRelayRetirementEvidence::class, new class extends ConnectionRelayRetirementEvidence
+        {
+            public function verifiedForDeletion(ConnectionRelay $relay): bool
+            {
+                return true;
+            }
+
+            public function deletionFencePresent(ConnectionRelay $relay): bool
+            {
+                return true;
+            }
+        });
+        $html = $this->get('/admin/settings/connection-relays')->assertOk()->getContent();
+        $dom = new \DOMDocument;
+        $dom->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($dom);
+        $url = '/settings/connection-relays/'.$relay->getKey();
+
+        self::assertSame(1, (int) $xpath->evaluate('count(//a[@href="#relay-add-heading"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//main//section[@aria-labelledby="relay-list-heading"]//article[contains(@class,"target-subsection")])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'/name")]/input[@name="_method"][@value="PUT"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'")]/input[@name="_method"][@value="DELETE"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'")]/label/input[@name="confirm_gateway_cleanup"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'")]//input[@name="confirm_relay_id"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'/name")]/div[contains(@class,"field")]/label[@for="relay-name-'.$relay->getKey().'"])'));
+
+        // The destructive action must not be offered while the Relay is
+        // enabled. The Owner must disable and reconcile Target bindings first.
+        DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
+        $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertDontSee('Delete verified retired Relay')
+            ->assertSee('Rename Relay');
+    }
 
     public function test_all_admin_owner_reauthentication_fields_share_the_explicit_intent_guard(): void
     {

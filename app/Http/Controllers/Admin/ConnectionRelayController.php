@@ -10,7 +10,9 @@ use App\Domain\Access\GatewayRole;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayHostOperatorPlan;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRetirementEvidence;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Support\CorrelationId;
@@ -25,8 +27,10 @@ use InvalidArgumentException;
 
 final class ConnectionRelayController extends Controller
 {
-    public function index(Request $request, ConnectionRelayHostReadiness $host): View
-    {
+    public function index(
+        Request $request, ConnectionRelayHostReadiness $host, ConnectionRelayRetirementEvidence $retirement,
+        ConnectionRelayHostOperatorPlan $operator,
+    ): View {
         $this->authorizeOwner($request);
 
         $relays = ConnectionRelay::query()->orderBy('display_name')->get();
@@ -38,6 +42,18 @@ final class ConnectionRelayController extends Controller
             'relays' => $relays,
             'hostStates' => $relays->mapWithKeys(
                 static fn (ConnectionRelay $relay): array => [$relay->id => $host->ready($relay)],
+            ),
+            'retiredStates' => $relays->mapWithKeys(
+                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verifiedForDeletion($relay)],
+            ),
+            'rotationStates' => $relays->mapWithKeys(
+                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->verifiedForRotation($relay)],
+            ),
+            'deletionFencedStates' => $relays->mapWithKeys(
+                static fn (ConnectionRelay $relay): array => [$relay->id => $retirement->deletionFencePresent($relay)],
+            ),
+            'hostCommands' => $relays->mapWithKeys(
+                static fn (ConnectionRelay $relay): array => [$relay->id => $operator->commands($relay)],
             ),
             'counts' => DB::table('targets')->whereNotNull('relay_record_id')
                 ->selectRaw('relay_record_id, count(*) as total')
@@ -51,9 +67,15 @@ final class ConnectionRelayController extends Controller
         $fields = $request->validate($this->rules());
         $password->confirm($request);
         [$endpoint, $pin] = $this->validatedEndpointAndPin($fields);
-        if (ConnectionRelay::query()->where('relay_id', $fields['relay_id'])
-            ->orWhere('local_socks_port', (int) $fields['local_socks_port'])->exists()) {
-            throw ValidationException::withMessages(['relay_id' => __('Relay ID or local listener port is already registered.')]);
+        if (ConnectionRelay::query()->where('relay_id', $fields['relay_id'])->exists()) {
+            throw ValidationException::withMessages([
+                'relay_id' => __('This Relay ID is already in use by another Relay.'),
+            ]);
+        }
+        if (ConnectionRelay::query()->where('local_socks_port', (int) $fields['local_socks_port'])->exists()) {
+            throw ValidationException::withMessages([
+                'local_socks_port' => __('This SOCKS5 port is already reserved by another Relay.'),
+            ]);
         }
         try {
             $relay = DB::transaction(function () use ($fields, $endpoint, $pin, $activity): ConnectionRelay {
@@ -71,10 +93,20 @@ final class ConnectionRelayController extends Controller
                 return $relay;
             });
         } catch (UniqueConstraintViolationException) {
-            // The database unique indexes close a concurrent Owner save
-            // race even if the friendly initial uniqueness check passed.
+            // Recheck the database after a concurrent write. A separate
+            // query path avoids treating the earlier preflight as immutable.
+            if (DB::table('connection_relays')->where('relay_id', $fields['relay_id'])->exists()) {
+                throw ValidationException::withMessages([
+                    'relay_id' => __('This Relay ID is already in use by another Relay.'),
+                ]);
+            }
+            if (DB::table('connection_relays')->where('local_socks_port', (int) $fields['local_socks_port'])->exists()) {
+                throw ValidationException::withMessages([
+                    'local_socks_port' => __('This SOCKS5 port is already reserved by another Relay.'),
+                ]);
+            }
             throw ValidationException::withMessages([
-                'relay_id' => __('Relay ID or dedicated local SOCKS5 listener port was already registered.'),
+                'relay' => __('A concurrent Relay registration conflicted. Refresh and retry.'),
             ]);
         }
 
@@ -166,42 +198,202 @@ final class ConnectionRelayController extends Controller
 
     public function update(
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
-        ActivityRecorder $activity,
+        ActivityRecorder $activity, ConnectionRelayRetirementEvidence $retirement,
     ): RedirectResponse {
         $this->authorizeOwner($request);
         $fields = $request->validate([...$this->rules(), 'relay_revision' => ['required', 'integer', 'min:1']]);
         $password->confirm($request);
         [$endpoint, $pin] = $this->validatedEndpointAndPin($fields);
-        DB::transaction(function () use ($relay, $fields, $endpoint, $pin, $activity): void {
+        try {
+            $change = DB::transaction(function () use ($relay, $fields, $endpoint, $pin, $activity, $retirement): string {
+                $current = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
+                if ($current->enabled || (int) $current->lifecycle_revision !== (int) $fields['relay_revision']
+                    || (int) $current->configuration_revision >= 4294967295
+                    || (int) $current->lifecycle_revision >= 4294967295
+                    || DB::table('targets')->where('relay_record_id', $current->getKey())->exists()) {
+                    throw ValidationException::withMessages(['relay' => __('Disable and detach all Targets before rotating Relay identity; reload if its revision changed.')]);
+                }
+                // The internal ID is an immutable resource namespace. Rotating
+                // it would orphan root-owned service and firewall identities.
+                // Create a new Relay after retiring this one instead.
+                if ($fields['relay_id'] !== $current->relay_id) {
+                    throw ValidationException::withMessages([
+                        'relay_id' => __('Relay ID is permanent. Create a new Relay and explicitly migrate Targets instead.'),
+                    ]);
+                }
+                if (ConnectionRelay::query()->whereKeyNot($current->getKey())
+                    ->where('relay_id', $fields['relay_id'])->exists()) {
+                    throw ValidationException::withMessages([
+                        'relay_id' => __('This Relay ID is already in use by another Relay.'),
+                    ]);
+                }
+                if (ConnectionRelay::query()->whereKeyNot($current->getKey())
+                    ->where('local_socks_port', (int) $fields['local_socks_port'])->exists()) {
+                    throw ValidationException::withMessages([
+                        'local_socks_port' => __('This SOCKS5 port is already reserved by another Relay.'),
+                    ]);
+                }
+                $connectionChanged = $current->control_host !== $endpoint->host
+                    || $current->control_port !== $endpoint->port
+                    || $current->control_user !== $endpoint->username
+                    || $current->control_host_key !== $pin->canonicalLine()
+                    || $current->local_socks_port !== (int) $fields['local_socks_port'];
+                if (! $connectionChanged) {
+                    if ($current->display_name === $fields['display_name']) {
+                        return 'unchanged';
+                    }
+                    DB::table('connection_relays')->where('id', $current->getKey())->update([
+                        'display_name' => (string) $fields['display_name'],
+                        'lifecycle_revision' => (int) $current->lifecycle_revision + 1,
+                        'updated_at' => now(),
+                    ]);
+                    $activity->recordRequired(CorrelationId::current(), 'connection-relay-rename', 'success');
+
+                    return 'renamed';
+                }
+                if (! $retirement->verifiedForRotation($current)) {
+                    throw ValidationException::withMessages([
+                        'relay' => __('Before changing Relay connection settings, run the Gateway cleanup-and-seal-for-rotation command. A retirement receipt alone does not prevent concurrent host setup.'),
+                    ]);
+                }
+                DB::table('connection_relays')->where('id', $current->getKey())->update([
+                    'relay_id' => (string) $fields['relay_id'],
+                    'display_name' => (string) $fields['display_name'],
+                    'control_host' => $endpoint->host,
+                    'control_port' => $endpoint->port,
+                    'control_user' => $endpoint->username,
+                    'control_host_key' => $pin->canonicalLine(),
+                    'local_socks_port' => (int) $fields['local_socks_port'],
+                    'configuration_revision' => (int) $current->configuration_revision + 1,
+                    'lifecycle_revision' => (int) $current->lifecycle_revision + 1,
+                    'updated_at' => now(),
+                ]);
+                $activity->recordRequired(CorrelationId::current(), 'connection-relay-rotate', 'success');
+
+                return 'rotated';
+            }, 3);
+        } catch (UniqueConstraintViolationException) {
+            // A concurrent save may win the DB uniqueness race after the
+            // friendly initial check; preserve the field-specific feedback.
+            if (ConnectionRelay::query()->whereKeyNot($relay->getKey())
+                ->where('relay_id', $fields['relay_id'])->exists()) {
+                throw ValidationException::withMessages([
+                    'relay_id' => __('This Relay ID is already in use by another Relay.'),
+                ]);
+            }
+            if (ConnectionRelay::query()->whereKeyNot($relay->getKey())
+                ->where('local_socks_port', (int) $fields['local_socks_port'])->exists()) {
+                throw ValidationException::withMessages([
+                    'local_socks_port' => __('This SOCKS5 port is already reserved by another Relay.'),
+                ]);
+            }
+            throw ValidationException::withMessages([
+                'relay' => __('Another Relay update conflicted with this change. Refresh and try again.'),
+            ]);
+        }
+
+        return redirect()->route('admin.connection-relays.index')
+            ->with('status', match ($change) {
+                'rotated' => __('Relay connection settings updated while disabled. New host setup and attestation are required before enabling.'),
+                'renamed' => __('Relay display name updated without changing its host transport or attestation.'),
+                default => __('No Relay settings changed.'),
+            });
+    }
+
+    public function rename(
+        Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
+        ActivityRecorder $activity,
+    ): RedirectResponse {
+        $this->authorizeOwner($request);
+        $fields = $request->validate([
+            'display_name' => ['required', 'string', 'max:160'],
+            'relay_revision' => ['required', 'integer', 'min:1'],
+        ]);
+        $password->confirm($request);
+
+        $changed = DB::transaction(function () use ($relay, $fields, $activity): bool {
             $current = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
-            if ($current->enabled || (int) $current->lifecycle_revision !== (int) $fields['relay_revision']
-                || (int) $current->configuration_revision >= 4294967295
-                || (int) $current->lifecycle_revision >= 4294967295
-                || DB::table('targets')->where('relay_record_id', $current->getKey())->exists()) {
-                throw ValidationException::withMessages(['relay' => __('Disable and detach all Targets before rotating Relay identity; reload if its revision changed.')]);
+            if ((int) $current->lifecycle_revision !== (int) $fields['relay_revision']) {
+                throw ValidationException::withMessages([
+                    'relay_revision' => __('This Relay changed since you opened its settings. Reload before saving.'),
+                ]);
             }
-            if (ConnectionRelay::query()->where('id', '!=', $current->getKey())
-                ->where(static fn ($query) => $query->where('relay_id', $fields['relay_id'])
-                    ->orWhere('local_socks_port', (int) $fields['local_socks_port']))->exists()) {
-                throw ValidationException::withMessages(['relay_id' => __('Relay ID or local listener port conflicts with another Relay.')]);
+            $name = (string) $fields['display_name'];
+            if ($current->display_name === $name) {
+                return false;
             }
+            if ((int) $current->lifecycle_revision >= 4294967295) {
+                throw ValidationException::withMessages([
+                    'relay_revision' => __('Relay revision is exhausted; changing this record is unsafe.'),
+                ]);
+            }
+
+            // A display-only edit does not change host identity, attestations
+            // or bound Target epochs. The lifecycle revision fences stale forms.
             DB::table('connection_relays')->where('id', $current->getKey())->update([
-                'relay_id' => (string) $fields['relay_id'],
-                'display_name' => (string) $fields['display_name'],
-                'control_host' => $endpoint->host,
-                'control_port' => $endpoint->port,
-                'control_user' => $endpoint->username,
-                'control_host_key' => $pin->canonicalLine(),
-                'local_socks_port' => (int) $fields['local_socks_port'],
-                'configuration_revision' => (int) $current->configuration_revision + 1,
+                'display_name' => $name,
                 'lifecycle_revision' => (int) $current->lifecycle_revision + 1,
                 'updated_at' => now(),
             ]);
-            $activity->recordRequired(CorrelationId::current(), 'connection-relay-rotate', 'success');
-        });
+            $activity->recordRequired(CorrelationId::current(), 'connection-relay-rename', 'success');
+
+            return true;
+        }, 3);
 
         return redirect()->route('admin.connection-relays.index')
-            ->with('status', __('Relay identity updated while disabled. Reprovision the root-owned host attestation before enabling.'));
+            ->with('status', $changed
+                ? __('Relay display name updated without changing its connection or bound Targets.')
+                : __('Relay display name was already up to date.'));
+    }
+
+    public function destroy(
+        Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
+        ActivityRecorder $activity, ConnectionRelayRetirementEvidence $retirement,
+    ): RedirectResponse {
+        $this->authorizeOwner($request);
+        $fields = $request->validate([
+            'relay_revision' => ['required', 'integer', 'min:1'],
+            'confirm_relay_id' => ['required', 'string', 'max:64'],
+            'confirm_gateway_cleanup' => ['accepted'],
+        ]);
+        $password->confirm($request);
+
+        DB::transaction(function () use ($relay, $fields, $activity, $retirement): void {
+            $current = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
+            if ((int) $current->lifecycle_revision !== (int) $fields['relay_revision']) {
+                throw ValidationException::withMessages([
+                    'relay_revision' => __('This Relay changed since you opened the delete form. Reload and review.'),
+                ]);
+            }
+            if (! hash_equals((string) $current->relay_id, (string) $fields['confirm_relay_id'])) {
+                throw ValidationException::withMessages([
+                    'confirm_relay_id' => __('Type the exact Relay ID to confirm deletion.'),
+                ]);
+            }
+            if ($current->enabled) {
+                throw ValidationException::withMessages([
+                    'relay' => __('Disable this Relay before removing its registration.'),
+                ]);
+            }
+            if (DB::table('targets')->where('relay_record_id', $current->getKey())->exists()) {
+                throw ValidationException::withMessages([
+                    'relay' => __('This Relay still has assigned Targets. Reassign or detach every Target explicitly first; no Target will silently fall back to Direct.'),
+                ]);
+            }
+            // Owner acknowledgement alone cannot prove retirement of the
+            // Relay's local resources. An independent privileged helper
+            // verifies this Gateway host; Iranian reachability is irrelevant.
+            if (! $retirement->verifiedForDeletion($current)) {
+                throw ValidationException::withMessages([
+                    'relay' => __('Verified Gateway-host deletion fence is missing or stale. Run the local cleanup-and-seal-for-delete command first; a retirement receipt alone is insufficient. Iran reachability is not required.'),
+                ]);
+            }
+            $current->delete();
+            $activity->recordRequired(CorrelationId::current(), 'connection-relay-delete-registration', 'success');
+        }, 3);
+
+        return redirect()->route('admin.connection-relays.index')
+            ->with('status', __('Relay registration removed after verified Gateway-host cleanup and Owner confirmation. Iran-side cleanup was not checked.'));
     }
 
     /** @param array<string,mixed> $fields

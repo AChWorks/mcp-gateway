@@ -135,6 +135,8 @@ Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-
     Route::get('/settings/connection-relays', [ConnectionRelayController::class, 'index'])->name('connection-relays.index');
     Route::post('/settings/connection-relays', [ConnectionRelayController::class, 'store'])->name('connection-relays.store');
     Route::put('/settings/connection-relays/{relay}', [ConnectionRelayController::class, 'update'])->name('connection-relays.update');
+    Route::put('/settings/connection-relays/{relay}/name', [ConnectionRelayController::class, 'rename'])->name('connection-relays.rename');
+    Route::delete('/settings/connection-relays/{relay}', [ConnectionRelayController::class, 'destroy'])->name('connection-relays.destroy');
     Route::post('/settings/connection-relays/{relay}/toggle', [ConnectionRelayController::class, 'toggle'])->name('connection-relays.toggle');
     Route::post('/settings/connection-relays/{relay}/test', [ConnectionRelayController::class, 'test'])
         ->middleware('throttle:10,1')->name('connection-relays.test');
