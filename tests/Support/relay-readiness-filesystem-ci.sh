@@ -7,16 +7,18 @@ test "${GITHUB_ACTIONS:-}" = true || {
     exit 2
 }
 php_bin="$(command -v php)"
+reader_uid="$(id -u)"
+test "$reader_uid" -gt 0 || { echo 'Expected an unprivileged GitHub runner user' >&2; exit 2; }
 fixture='tests/Support/relay-readiness-filesystem.php'
 root="$(sudo mktemp -d /run/mcp-relay-readiness-test-XXXXXXXX)"
 trap 'sudo rm -rf -- "$root"' EXIT
 sudo chmod 0755 "$root"
-sudo "$php_bin" "$fixture" init "$root"
+sudo "$php_bin" "$fixture" init "$root" "$reader_uid"
 
 check() {
     local mutation="$1" expected="$2"
     sudo "$php_bin" "$fixture" mutate "$root" "$mutation"
-    sudo -u nobody "$php_bin" "$fixture" check "$root" "$expected"
+    "$php_bin" "$fixture" check "$root" "$expected"
 }
 check missing ready
 check directory-0700 blocked

@@ -43,7 +43,8 @@ $write = static function (string $path, array $data): void {
 };
 
 if ($action === 'init') {
-    if (posix_geteuid() !== 0 || file_exists($dir)) {
+    $readerUid = filter_var($argument, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if (posix_geteuid() !== 0 || file_exists($dir) || ! is_int($readerUid)) {
         exit(2);
     }
     mkdir($dir, 0755);
@@ -68,7 +69,7 @@ if ($action === 'init') {
     }
     $evidence = [
         'relay_id' => 'iran-1', 'host_fingerprint' => $relay->hostFingerprint(),
-        'gateway_php_uid' => posix_getpwnam('nobody')['uid'],
+        'gateway_php_uid' => $readerUid,
         'dedicated_php_uid_verified' => true, 'socks_access_acl_verified' => true,
         'relay_egress_verified' => true,
         'verified_boot_id' => trim(file_get_contents('/proc/sys/kernel/random/boot_id')),
@@ -145,8 +146,8 @@ if ($action === 'mutate') {
 }
 
 if ($action === 'check') {
-    if (posix_geteuid() !== posix_getpwnam('nobody')['uid']) {
-        fwrite(STDERR, "The PHP reader must run with the real non-root nobody UID.\n");
+    if (posix_geteuid() === 0) {
+        fwrite(STDERR, "The PHP reader must run with a real non-root UID.\n");
         exit(2);
     }
     $readiness = new class($dir) extends ConnectionRelayHostReadiness
