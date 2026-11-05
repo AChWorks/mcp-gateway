@@ -20,14 +20,46 @@ class ConnectionRelayHostReadiness
             return false;
         }
 
+        // Never derive filesystem paths from an unchecked record/Relay ID.
+        if (preg_match('/\A[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}\z/D', (string) $relay->getKey()) !== 1
+            || preg_match('/\A[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\z/D', $relay->relay_id) !== 1) {
+            return false;
+        }
+
         $dir = '/etc/mcp-gateway/connection-relays';
         $path = $dir.'/'.$relay->relay_id.'.json';
         $policyPath = $dir.'/'.$relay->relay_id.'.policy';
+        $generationPath = $dir.'/'.$relay->relay_id.'.generation.json';
+        $managedPath = $dir.'/'.$relay->relay_id.'.managed.json';
+        $retiredPath = $dir.'/'.$relay->relay_id.'.retired.json';
+        $fenceDir = $dir.'/.fences';
+        $fencePath = $fenceDir.'/'.$relay->getKey().'.json';
+        // A retirement receipt cannot coexist with an active readiness lease.
+        if (file_exists($retiredPath) || is_link($retiredPath)) {
+            return false;
+        }
+        $fence = null;
+        if (file_exists($fenceDir) || is_link($fenceDir)) {
+            if (! $this->trusted($fenceDir, true)) {
+                return false;
+            }
+            if (file_exists($fencePath) || is_link($fencePath)) {
+                if (! $this->trusted($fencePath, false)) {
+                    return false;
+                }
+                $fence = $this->readObject($fencePath, 1024);
+                if ($fence === null) {
+                    return false;
+                }
+            }
+        }
         if (! $this->trusted('/etc', true)
             || ! $this->trusted('/etc/mcp-gateway', true)
             || ! $this->trusted($dir, true)
             || ! $this->trusted($path, false)
-            || ! $this->trusted($policyPath, false)) {
+            || ! $this->trusted($policyPath, false)
+            || ! $this->trusted($generationPath, false)
+            || ! $this->trusted($managedPath, false)) {
             return false;
         }
         $bytes = @filesize($path);
@@ -46,11 +78,30 @@ class ConnectionRelayHostReadiness
             return false;
         }
         $document = json_decode($raw, true, 8);
+        $generation = $this->readObject($generationPath, 1024);
+        $managed = $this->readObject($managedPath, 4096);
 
-        return is_array($document)
+        return is_array($document) && $generation !== null && $managed !== null
+            && ConnectionRelayHostEvidence::matchesLifecycle($generation, $managed, $fence, $relay, trim($policy))
             && ConnectionRelayHostEvidence::matches(
                 $document, $relay, $uid, trim($boot), trim($policy), time(), $bootSeconds,
             );
+    }
+
+    /** @return array<array-key,mixed>|null */
+    private function readObject(string $path, int $limit): ?array
+    {
+        $size = @filesize($path);
+        if (! is_int($size) || $size < 2 || $size > $limit) {
+            return null;
+        }
+        $raw = @file_get_contents($path);
+        if (! is_string($raw)) {
+            return null;
+        }
+        $value = json_decode($raw, true, 8);
+
+        return is_array($value) ? $value : null;
     }
 
     private function trusted(string $path, bool $directory): bool

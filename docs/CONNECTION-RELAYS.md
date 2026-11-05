@@ -133,6 +133,25 @@ root lock. PHP requires BOTH the retired proof and matching current
 retired generation, and refuses any present active `.managed.json`,
 `.policy` or `.json` file even with an unexpired old receipt.
 
+**Current application-side readiness hardening:** PHP now requires the complete,
+root-owned v2 `<relay-id>.managed.json` claim and the v1
+`<relay-id>.generation.json` record in addition to the existing eleven-field
+host evidence and `<relay-id>.policy` marker. The active generation MUST be
+`provisioning`, belong to the **exact database record ULID**, and match the
+claim, the current Relay fingerprint, configuration revision, reserved port,
+expected scoped systemd unit/table identities, and the policy marker. A
+retirement receipt, invalid/foreign generation/claim, permanent deletion fence,
+or stale rotation fence makes the Relay **not ready**. An older rotation fence
+may coexist only with a strictly newer configuration revision and a different
+host generation. This closes replay of a legacy/manual lease after
+`prepare-setup`, rotation or record-ID reuse; it does **not** attest effective
+OS controls on its own. Future privileged Setup and verifier must use the
+current generation token as the published policy marker and must replace it
+under the same per-Relay root lock after policy changes, never forge an
+attestation from Gateway PHP. Previously issued manual evidence without a
+matching owned v2 claim and generation cannot enable the route. No automated
+installer/verifier or real-host claim issuance is delivered by this hardening.
+
 **Every future privileged Setup/Repair/reprovision must execute**
 `prepare-setup` with the exact Relay identity, revision and port
 **before any host resource is created**, and check the permanent per-record
