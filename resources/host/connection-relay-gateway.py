@@ -109,7 +109,9 @@ def owned_parents(path: Path, layout: Layout) -> None:
         current = current.parent
 
 
-def make_privileged_directory(path: Path, layout: Layout) -> None:
+def make_privileged_directory(
+    path: Path, layout: Layout, php_traversable: bool = False,
+) -> None:
     parents = []
     current = path
     while not current.exists() and not current.is_symlink():
@@ -119,7 +121,12 @@ def make_privileged_directory(path: Path, layout: Layout) -> None:
         current = current.parent
     trusted(current, True, layout.owner_uid, True)
     for folder in reversed(parents):
-        folder.mkdir(mode=0o755)
+        # mkdir is umask-sensitive. Ensure fresh evidence directories can be
+        # traversed by the unprivileged PHP UID (receipt carries no secrets);
+        # keep runtime locks private to root.
+        mode = 0o755 if php_traversable else 0o700
+        folder.mkdir(mode=mode)
+        folder.chmod(mode)
         trusted(folder, True, layout.owner_uid, True)
     owned_parents(path, layout)
 
@@ -295,7 +302,16 @@ class Retirement:
     def retire(self) -> str:
         if os.geteuid() != self.layout.owner_uid:
             raise Refusal("Explicit root/sudo privileges are required.")
-        make_privileged_directory(self.layout.evidence_dir, self.layout)
+        make_privileged_directory(self.layout.evidence_dir, self.layout, php_traversable=True)
+        # A pre-existing directory may be root-owned but mode 0700. Do not
+        # silently broaden its permissions or claim PHP can read the proof.
+        for dirname in ("/etc", "/etc/mcp-gateway", "/etc/mcp-gateway/connection-relays"):
+            directory = self.layout.at(dirname)
+            if (directory.lstat().st_mode & 0o001) == 0:
+                raise Refusal(
+                    "Root-owned Relay evidence path is not searchable by the "
+                    "non-root PHP identity: " + dirname + ". Reconcile access explicitly."
+                )
         make_privileged_directory(self.layout.lock_path(self.relay).parent, self.layout)
         lockpath = self.layout.lock_path(self.relay)
         if self._owned(lockpath):
@@ -397,6 +413,9 @@ class Retirement:
                 json.dump(proof, dest, sort_keys=True, separators=(",", ":"))
                 dest.write("\n")
                 dest.flush()
+                # The proof is non-secret metadata, verified by PHP running
+                # under its own dedicated non-root UID. Only root may modify.
+                os.fchmod(dest.fileno(), 0o644)
                 os.fsync(dest.fileno())
             os.replace(tempname, output)
             parent_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)

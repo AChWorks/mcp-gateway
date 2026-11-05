@@ -67,6 +67,14 @@ authorize the host change and compare the displayed digest against a
    Gateway record can be deleted. An offline Iran host NEVER prevents this.
    Cleanup of old Iran-side accounts/keys is optional and independent.
 
+The retirement receipt is **non-secret metadata** and is issued
+root-owned, mode 0644, so the non-root Gateway PHP-FPM identity can read
+it. Newly created evidence paths are root-owned, mode 0755, while the
+lock directory and keys remain private. Existing root-owned evidence
+parents that are not PHP-searchable are **not chmodded by the helper**:
+the operation refuses to claim success and the operator must decide
+how to reconcile directory access.
+
 **Owned resource contract:** the optional root-owned
 `/etc/mcp-gateway/connection-relays/<relay-id>.managed.json`
 must match the exact record ID, Relay ID, service name, firewall table and

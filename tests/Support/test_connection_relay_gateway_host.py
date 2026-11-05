@@ -91,12 +91,40 @@ class RetirementTests(unittest.TestCase):
             self.root / "proc/sys/kernel/random",
         ]:
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for access_dir in (
+            self.root / "etc", self.root / "etc/mcp-gateway",
+            self.root / "etc/mcp-gateway/connection-relays",
+        ):
+            access_dir.chmod(0o755)
         (self.root / "proc/sys/kernel/random/boot_id").write_text(
             "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n"
         )
         (self.root / "proc/uptime").write_text("3601.50 100.00\n")
         self.fake = FakeHost(self.relay)
         self.operator = mod.Retirement(self.relay, self.layout, self.fake)
+
+    def test_existing_private_evidence_path_fails_without_widening_permissions(self):
+        directory = self.root / "etc/mcp-gateway"
+        directory.chmod(0o700)
+        try:
+            with self.assertRaisesRegex(mod.Refusal, "not searchable by the non-root PHP"):
+                self.operator.retire()
+            self.assertEqual(0o700, directory.stat().st_mode & 0o777)
+            self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        finally:
+            directory.chmod(0o755)
+
+    def test_fresh_proof_directory_is_php_traversable_under_restrictive_umask(self):
+        new = self.root / "etc/mcp-gateway/fresh-proof"
+        old_umask = os.umask(0o077)
+        try:
+            mod.make_privileged_directory(new, self.layout, php_traversable=True)
+            private = self.root / "run/private-lock"
+            mod.make_privileged_directory(private, self.layout)
+        finally:
+            os.umask(old_umask)
+        self.assertEqual(0o755, new.stat().st_mode & 0o777)
+        self.assertEqual(0o700, private.stat().st_mode & 0o777)
 
     def test_lock_namespace_avoids_world_writable_standard_run_lock(self):
         # Debian's /run/lock is mode 1777 and must not be trusted as a
@@ -121,6 +149,7 @@ class RetirementTests(unittest.TestCase):
             "gateway_cleanup_verified",
         })
         self.assertEqual(self.relay.record_id, receipt["relay_record_id"])
+        self.assertEqual(0o644, output.stat().st_mode & 0o777)
         self.assertTrue(receipt["gateway_cleanup_verified"])
         self.assertEqual(3601, receipt["verified_at_boot_seconds"])
         self.assertLessEqual(receipt["expires_at_unix"]-receipt["verified_at_unix"], 900)
