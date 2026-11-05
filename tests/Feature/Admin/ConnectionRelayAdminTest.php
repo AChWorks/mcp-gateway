@@ -545,6 +545,29 @@ PYTHON;
         self::assertNull(app(ConnectionRelayHostOperatorPlan::class)->commands($relay));
     }
 
+    public function test_disable_operator_plan_targets_the_exact_previous_owned_revision_and_current_seal(): void
+    {
+        $relay = $this->readyRelay();
+        $original = $relay->hostFingerprint();
+        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($relay, 1));
+        $relay->refresh();
+        self::assertSame(2, $relay->configuration_revision);
+        self::assertSame($original, $relay->hostFingerprint(1));
+        self::assertNotSame($original, $relay->hostFingerprint());
+        $commands = app(ConnectionRelayHostOperatorPlan::class)->commands($relay);
+        self::assertIsArray($commands);
+        // The cleanup command may inspect N or N+1 owned host claims; the
+        // permanent root fence is issued only for the new DB revision N+1.
+        self::assertStringContainsString('--revision 2 --local-port 46081 --prior-fingerprint '."'".$original."'", $commands['retire']);
+        self::assertStringContainsString('--revision 2 --local-port 46081', $commands['seal_delete']);
+        self::assertStringNotContainsString('--prior-fingerprint', $commands['seal_delete']);
+        self::assertStringNotContainsString('--prior-fingerprint', $commands['seal_rotate']);
+        self::assertStringNotContainsString('--prior-fingerprint', $commands['prepare_setup']);
+        self::assertStringContainsString($relay->hostFingerprint(), $commands['cleanup']);
+        self::assertStringContainsString($original, $commands['cleanup']);
+        self::assertStringContainsString('--prior-fingerprint', $commands['preflight']);
+    }
+
     public function test_edit_display_name_only_never_rotates_attestation_or_requires_host_command(): void
     {
         $relay = ConnectionRelay::query()->create($this->relayFields());

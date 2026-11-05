@@ -657,6 +657,92 @@ class RetirementTests(unittest.TestCase):
         self.fake.fail_stop = False
         self.assertIn("RETIREMENT VERIFIED", self.operator.retire())
 
+    def test_disable_retires_exact_previous_owned_host_then_seals_current_revision(self):
+        # DB Disable fences revision N by advancing to N+1. The installed
+        # v2 claim remains N until root-only local retirement is verified.
+        unit = self.layout.unit(self.relay)
+        unit.write_text("# MCP-GATEWAY-CONNECTION-RELAY " + self.relay.record_id +
+                        " " + self.relay.relay_id + "\n[Unit]\nDescription=owned\n")
+        self.write_managed_claim()
+        self.fake.active = self.fake.nft = self.fake.enabled = self.fake.listener = True
+        unrelated = self.root / "var/lib/unrelated-relay-key"
+        unrelated.parent.mkdir(parents=True, exist_ok=True)
+        unrelated.write_text("DO NOT TOUCH")
+        current = mod.Relay(self.relay.relay_id, self.relay.record_id,
+                            "e" * 64, self.relay.revision + 1, self.relay.local_port)
+        operation = mod.Retirement(current, self.layout, self.fake,
+                                   prior_fingerprint=self.relay.fingerprint)
+        self.assertIn("verified installed revision " + str(self.relay.revision), operation.preview())
+        self.assertIn("RETIREMENT VERIFIED", operation.retire())
+        receipt = operation._json(self.layout.evidence(current, ".retired.json"))
+        self.assertEqual(current.revision, receipt["configuration_revision"])
+        self.assertEqual(current.fingerprint, receipt["host_fingerprint"])
+        self.assertFalse(self.layout.evidence(current, ".managed.json").exists())
+        self.assertEqual("DO NOT TOUCH", unrelated.read_text())
+        # Seal is a distinct CLI invocation and never receives old identity.
+        seal = mod.Retirement(current, self.layout, self.fake)
+        self.assertIn("LIFECYCLE FENCE VERIFIED", seal.seal("delete"))
+        fence = seal._fence()
+        self.assertEqual(current.revision, fence["configuration_revision"])
+        self.assertEqual(current.fingerprint, fence["host_fingerprint"])
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            seal.prepare_setup()
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.operator.prepare_setup()
+        self.assertIn("LIFECYCLE FENCE VERIFIED", seal.seal("delete"))
+        self.assertEqual("DO NOT TOUCH", unrelated.read_text())
+
+    def test_previous_owned_host_cannot_be_retired_by_unrelated_fingerprint_or_stale_revision(self):
+        self.write_managed_claim()
+        self.fake.nft = True
+        current = mod.Relay(self.relay.relay_id, self.relay.record_id,
+                            "e" * 64, self.relay.revision + 1, self.relay.local_port)
+        for previous in (None, "d" * 64):
+            operation = mod.Retirement(current, self.layout, self.fake,
+                                       prior_fingerprint=previous)
+            with self.assertRaisesRegex(mod.Refusal, "revision/fingerprint"):
+                operation.retire()
+            self.assertTrue(self.layout.evidence(self.relay, ".managed.json").exists())
+            self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        stale = mod.Relay(self.relay.relay_id, self.relay.record_id,
+                          "a" * 64, self.relay.revision + 2, self.relay.local_port)
+        with self.assertRaisesRegex(mod.Refusal, "revision/fingerprint"):
+            mod.Retirement(stale, self.layout, self.fake,
+                           prior_fingerprint=self.relay.fingerprint).retire()
+        with self.assertRaisesRegex(mod.Refusal, "Invalid prior host identity"):
+            mod.Retirement(self.relay, self.layout, self.fake, prior_fingerprint="x" * 64)
+        with self.assertRaisesRegex(mod.Refusal, "permitted only during retirement"):
+            mod.Retirement(current, self.layout, self.fake,
+                           prior_fingerprint=self.relay.fingerprint).seal("delete")
+        with self.assertRaisesRegex(mod.Refusal, "permitted only during retirement"):
+            mod.Retirement(current, self.layout, self.fake,
+                           prior_fingerprint=self.relay.fingerprint).prepare_setup()
+
+    def test_previous_owned_host_retirement_recovers_after_interrupted_cleanup_and_rotate(self):
+        unit = self.layout.unit(self.relay)
+        unit.write_text("# MCP-GATEWAY-CONNECTION-RELAY " + self.relay.record_id +
+                        " " + self.relay.relay_id + "\n[Unit]\nDescription=owned\n")
+        self.write_managed_claim()
+        self.fake.active = self.fake.nft = True
+        current = mod.Relay(self.relay.relay_id, self.relay.record_id,
+                            "e" * 64, self.relay.revision + 1, self.relay.local_port)
+        operation = mod.Retirement(current, self.layout, self.fake,
+                                   prior_fingerprint=self.relay.fingerprint)
+        self.fake.fail_daemon_reload = True
+        with self.assertRaisesRegex(mod.Refusal, "daemon-reload failed"):
+            operation.retire()
+        self.assertTrue(self.layout.evidence(current, ".managed.json").exists())
+        self.assertFalse(self.layout.evidence(current, ".retired.json").exists())
+        self.fake.fail_daemon_reload = False
+        self.assertIn("RETIREMENT VERIFIED", operation.retire())
+        sealed = mod.Retirement(current, self.layout, self.fake)
+        self.assertIn("LIFECYCLE FENCE VERIFIED", sealed.seal("rotate"))
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            sealed.prepare_setup()
+        next_rev = mod.Relay(current.relay_id, current.record_id, "a" * 64,
+                             current.revision + 1, current.local_port)
+        self.assertIn("PROOF INVALIDATED", mod.Retirement(next_rev, self.layout, self.fake).prepare_setup())
+
     def test_invalid_operator_arguments_refuse_before_host_commands(self):
         for invalid in [
             mod.Relay("bad;whoami", self.relay.record_id, "f"*64, 2, 46081),

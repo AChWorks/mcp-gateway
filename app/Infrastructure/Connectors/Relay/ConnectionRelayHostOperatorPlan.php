@@ -90,7 +90,14 @@ BASH;
         );
 
         $bootstrap = '/usr/bin/sudo /usr/bin/bash -c '.escapeshellarg($bootstrapScript);
-        $retire = $verifiedPrefix.'retire '.$arguments;
+        // Disable advances the DB security revision to N+1 without altering
+        // the still-installed N host. Retire must authenticate either exact
+        // owned identity and then emit a receipt for CURRENT N+1. The Seal
+        // command never accepts the prior fingerprint or a prior revision.
+        $prior = $revision > 1
+            ? ' --prior-fingerprint '.escapeshellarg($relay->hostFingerprint($revision - 1))
+            : '';
+        $retire = $verifiedPrefix.'retire '.$arguments.$prior;
         $sealDelete = $verifiedPrefix.'seal-delete '.$arguments;
         $sealRotate = $verifiedPrefix.'seal-rotate '.$arguments;
         $fencePath = escapeshellarg('/etc/mcp-gateway/connection-relays/.fences/'.$recordId.'.json');
@@ -103,7 +110,7 @@ BASH;
         $cleanupRotate = 'if '.$fenceExists.'; then '.$sealRotate.'; else '.$retire.' && '.$sealRotate.'; fi';
 
         return [
-            'preflight' => $verifiedPrefix.'preflight '.$arguments,
+            'preflight' => $verifiedPrefix.'preflight '.$arguments.$prior,
             'prepare_setup' => $verifiedPrefix.'prepare-setup '.$arguments,
             'retire' => $retire,
             // The final seal shares the privileged lock with prepare-setup.
