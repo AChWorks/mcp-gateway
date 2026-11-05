@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Privileged, explicitly invoked Gateway-side Relay retirement helper.
 
 This is NOT an SSH client installer or a remote Iran cleanup tool. Runtime
@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import subprocess
 import sys
@@ -173,11 +174,13 @@ class Retirement:
             return None
         manifest = self._json(path)
         expected = {
-            "version": 1,
+            "version": 2,
             "relay_record_id": self.relay.record_id,
             "relay_id": self.relay.relay_id,
             "service_unit": self.relay.unit_name,
             "firewall_table": self.relay.firewall_table,
+            "host_fingerprint": self.relay.fingerprint,
+            "configuration_revision": self.relay.revision,
         }
         for key, value in expected.items():
             if manifest.get(key) != value:
@@ -185,9 +188,66 @@ class Retirement:
         port = manifest.get("local_socks_port")
         if not isinstance(port, int) or not 46000 <= port <= 60999:
             raise Refusal("Invalid local port in managed host claim.")
-        if set(manifest) != set(expected) | {"local_socks_port"}:
-            raise Refusal("Unrecognized fields in managed host claim.")
+        integrity = {"unit_sha256", "unit_exec_sha256", "firewall_sha256", "host_generation"}
+        if set(manifest) != set(expected) | {"local_socks_port"} | integrity:
+            raise Refusal("Managed host claim must include exact v2 resource digests and generation.")
+        if any(not isinstance(manifest[k], str)
+               or re.fullmatch(r"[a-f0-9]{64}", manifest[k]) is None
+               for k in integrity):
+            raise Refusal("Invalid resource checksum or host generation in managed claim.")
+        generation = self._generation()
+        if (generation is None or generation["state"] != "provisioning"
+            or manifest["host_generation"] != generation["host_generation"]):
+            raise Refusal("Managed host claim does not match a provisioning host generation.")
         return manifest
+
+    def _generation(self) -> dict | None:
+        path = self.layout.evidence(self.relay, ".generation.json")
+        if not self._owned(path):
+            return None
+        value = self._json(path, 1024)
+        expected = {"version", "relay_record_id", "relay_id", "host_generation", "state"}
+        if (set(value) != expected or value["version"] != 1
+            or value["relay_record_id"] != self.relay.record_id
+            or value["relay_id"] != self.relay.relay_id
+            or not isinstance(value["host_generation"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", value["host_generation"]) is None
+            or value["state"] not in {"provisioning", "retired"}):
+            raise Refusal("Invalid or mismatched root-owned Relay host generation record.")
+        return value
+
+    def _write_json_atomic(self, path: Path, payload: dict) -> None:
+        # Root-owned, world-readable non-secret host state. Never overwrite
+        # an untrusted inode/symlink; existing ancestors are root-controlled.
+        self._owned(path)
+        fd, tempname = tempfile.mkstemp(prefix=".relay-host-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w") as dest:
+                json.dump(payload, dest, sort_keys=True, separators=(",", ":"))
+                dest.write("\n")
+                dest.flush()
+                os.fchmod(dest.fileno(), 0o644)
+                os.fsync(dest.fileno())
+            os.replace(tempname, path)
+            parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
+        finally:
+            if os.path.lexists(tempname):
+                os.unlink(tempname)
+
+    def _advance_generation(self, state: str) -> str:
+        self._generation()
+        token = secrets.token_hex(32)
+        self._write_json_atomic(
+            self.layout.evidence(self.relay, ".generation.json"),
+            {"version": 1, "relay_record_id": self.relay.record_id,
+             "relay_id": self.relay.relay_id, "host_generation": token,
+             "state": state},
+        )
+        return token
 
     def _check_unmanaged_namespaces(self, managed: dict | None) -> None:
         unit = self.layout.unit(self.relay)
@@ -208,10 +268,11 @@ class Retirement:
             )
         if managed is not None:
             if self._owned(unit):
-                # Ownership alone is insufficient: refuse unrelated unit bodies.
                 marker = "# MCP-GATEWAY-CONNECTION-RELAY " + self.relay.record_id + " " + self.relay.relay_id
                 if marker not in unit.read_text(encoding="utf8", errors="replace").splitlines():
                     raise Refusal("Unexpected systemd unit content for this Relay.")
+                if hashlib.sha256(unit.read_bytes()).hexdigest() != managed["unit_sha256"]:
+                    raise Refusal("Owned systemd unit bytes differ from the claimed immutable definition.")
             if self._owned(keydir, True):
                 # The next setup helper must keep this privileged namespace
                 # bounded. Never use recursive deletion on unknown files.
@@ -237,6 +298,145 @@ class Retirement:
             )
         except (ValueError, AttributeError) as error:
             raise Refusal("Invalid nftables inventory.") from error
+
+    @staticmethod
+    def _canonical_exec(value: str) -> str:
+        # systemctl show ExecStart includes volatile start/stop times, PID,
+        # exit code and status. Digest ONLY the fixed executable, argv and
+        # ignore_errors of the one reviewed OpenSSH process. Unknown formats
+        # or multiple ExecStart actions fail closed.
+        if not value.startswith("{ ") or not value.endswith(" }"):
+            raise Refusal("Unrecognized effective systemd ExecStart format.")
+        tokens = value[2:-2].split(" ; ")
+        keys = ("path", "argv[]", "ignore_errors", "start_time",
+                "stop_time", "pid", "code", "status")
+        if len(tokens) != len(keys):
+            raise Refusal("Unexpected systemd ExecStart fields.")
+        parts = []
+        for token, key in zip(tokens, keys):
+            if not token.startswith(key + "="):
+                raise Refusal("Unexpected systemd ExecStart field or order.")
+            parts.append(token[len(key)+1:])
+        if (not re.fullmatch(r"/[A-Za-z0-9/_\.-]+", parts[0])
+            or not parts[1].startswith(parts[0])
+            or parts[2] != "no"):
+            raise Refusal("Untrusted systemd ExecStart command definition.")
+        return json.dumps(
+            {"path": parts[0], "argv": parts[1], "ignore_errors": parts[2]},
+            sort_keys=True, separators=(",", ":"),
+        )
+
+    def _systemd_info(self) -> dict[str, str]:
+        fields = ("Id", "LoadState", "ActiveState", "FragmentPath",
+                  "DropInPaths", "NeedDaemonReload", "Transient", "ExecStart")
+        result = self.run([
+            "systemctl", "show", self.relay.unit_name,
+            "--property=" + ",".join(fields), "--no-pager",
+        ])
+        if result.returncode != 0:
+            raise Refusal("Cannot inspect effective systemd unit definition.")
+        info = {}
+        for line in result.stdout.splitlines():
+            if "=" not in line:
+                raise Refusal("Invalid systemd show output.")
+            key, value = line.split("=", 1)
+            if key not in fields or key in info:
+                raise Refusal("Unexpected systemd property response.")
+            info[key] = value
+        # systemctl omits ExecStart entirely for an unknown unit; that
+        # is safe only when LoadState is verifiably not-found.
+        if info.get("LoadState") == "not-found" and "ExecStart" not in info:
+            info["ExecStart"] = ""
+        if set(info) != set(fields) or info["Id"] != self.relay.unit_name:
+            raise Refusal("Could not prove the effective systemd unit identity.")
+        if info["Transient"] != "no" or info["DropInPaths"]:
+            raise Refusal("Unowned transient or drop-in systemd configuration.")
+        if info["LoadState"] not in {"loaded", "not-found"}:
+            raise Refusal("Ambiguous or masked systemd unit load state.")
+        if info["ActiveState"] not in {"active", "inactive", "failed"}:
+            raise Refusal("Ambiguous systemd activation state.")
+        expected = str(self.layout.unit(self.relay))
+        if info["FragmentPath"] not in {"", expected}:
+            raise Refusal("Loaded same-name systemd unit has a foreign FragmentPath.")
+        return info
+
+    def _verify_effective_systemd(self, managed: dict) -> bool:
+        """Return True only when a verified owned unit may be disabled."""
+        unit = self.layout.unit(self.relay)
+        file_present = self._owned(unit)
+        info = self._systemd_info()
+        if file_present:
+            # If a prior initial load never completed, allow a harmless
+            # daemon-reload, but never stop an unproven effective definition.
+            if info["LoadState"] == "not-found":
+                reload = self.run(["systemctl", "daemon-reload"])
+                if reload.returncode != 0:
+                    raise Refusal("Could not reload existing root-owned Relay unit.")
+                info = self._systemd_info()
+            if (info["LoadState"] != "loaded"
+                or info["FragmentPath"] != str(unit)
+                or info["NeedDaemonReload"] != "no"
+                or hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest() != managed["unit_exec_sha256"]):
+                raise Refusal("Effective loaded systemd definition differs from owned Relay unit.")
+            return True
+        # A previous interrupted cleanup may have unlinked the unit but
+        # failed daemon-reload. Recover ONLY when the still-loaded definition
+        # is the expected former path, is inactive and matches the claim.
+        if info["LoadState"] == "loaded":
+            if (info["FragmentPath"] != str(unit)
+                or info["ActiveState"] == "active"
+                or hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest() != managed["unit_exec_sha256"]):
+                raise Refusal("Loaded systemd unit cannot be safely retired without its owned file.")
+            reload = self.run(["systemctl", "daemon-reload"])
+            if reload.returncode != 0:
+                raise Refusal("Could not reload systemd after interrupted Relay retirement.")
+            info = self._systemd_info()
+        if (info["LoadState"] != "not-found"
+            or info["ActiveState"] == "active" or info["FragmentPath"]):
+            raise Refusal("A same-name systemd service remains loaded without an owned unit file.")
+        return False
+
+    def _nft_policy_digest(self) -> str:
+        result = self.run(["nft", "-j", "list", "table", "inet", self.relay.firewall_table])
+        if result.returncode != 0:
+            raise Refusal("Cannot inspect exact effective Relay firewall policy.")
+        try:
+            data = json.loads(result.stdout)
+            if not isinstance(data, dict) or not isinstance(data.get("nftables"), list):
+                raise Refusal("Invalid full nftables policy structure.")
+            entries = []
+            table_count = 0
+            chains = 0
+            for item in data["nftables"]:
+                if not isinstance(item, dict) or len(item) != 1:
+                    raise Refusal("Unknown entry in effective nftables policy.")
+                kind, value = next(iter(item.items()))
+                if kind == "metainfo":
+                    continue
+                if kind not in {"table", "chain", "rule"} or not isinstance(value, dict):
+                    raise Refusal("Unexpected nftables policy object.")
+                if (value.get("family") != "inet"
+                    or value.get("name" if kind == "table" else "table") != self.relay.firewall_table):
+                    raise Refusal("Foreign nftables object in Relay table.")
+                if kind == "table":
+                    table_count += 1
+                elif kind == "chain":
+                    chains += 1
+                normalized = {k: v for k, v in value.items() if k != "handle"}
+                entries.append({kind: normalized})
+            if table_count != 1 or chains < 1:
+                raise Refusal("Missing expected table/chain in Relay nftables policy.")
+            canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+            return hashlib.sha256(canonical.encode()).hexdigest()
+        except (ValueError, TypeError, AttributeError) as error:
+            raise Refusal("Invalid effective nftables JSON document.") from error
+
+    def _verify_effective_nft(self, managed: dict) -> bool:
+        if not self._nft_table_exists():
+            return False
+        if self._nft_policy_digest() != managed["firewall_sha256"]:
+            raise Refusal("Effective nftables table has unowned or modified rules; refusing deletion.")
+        return True
 
     def _unit_active(self) -> bool:
         result = self.run(["systemctl", "is-active", self.relay.unit_name])
@@ -279,10 +479,11 @@ class Retirement:
         owned_parents(self.layout.evidence_dir, self.layout)
         owned_parents(self.layout.unit(self.relay).parent, self.layout)
         self._owned(self.layout.evidence_dir, True)
-        for ext in [".managed.json", ".policy", ".json", ".retired.json"]:
+        for ext in [".managed.json", ".policy", ".json", ".retired.json", ".generation.json"]:
             self._owned(self.layout.evidence(self.relay, ext))
         owned_parents(self.layout.key_dir(self.relay), self.layout)
         managed = self._manifest()
+        self._generation()
         self._check_unmanaged_namespaces(managed)
         evidence = self.layout.evidence(self.relay, ".json")
         if self._owned(evidence) and self._json(evidence).get("relay_id") != self.relay.relay_id:
@@ -327,8 +528,11 @@ class Retirement:
             ports = {self.relay.local_port}
             if managed:
                 ports.add(managed["local_socks_port"])
-                # Check ownership of every managed artifact *before* side effects.
-                if self._owned(unit) or self._unit_active():
+                # Prove effective loaded service and full nftables policy
+                # BEFORE any service stop, firewall mutation or file deletion.
+                should_disable = self._verify_effective_systemd(managed)
+                self._verify_effective_nft(managed)
+                if should_disable:
                     stopped = self.run(["systemctl", "disable", "--now", self.relay.unit_name])
                     if stopped.returncode != 0:
                         raise Refusal("Could not stop/disable the exact Relay service; inspect systemd and retry.")
@@ -339,7 +543,7 @@ class Retirement:
                 # could keep an open proxy while the ACL is removed.
                 if self._listening(ports):
                     raise Refusal("A local listener remains after stop. Firewall ACL was preserved.")
-                if self._nft_table_exists():
+                if self._verify_effective_nft(managed):
                     removed = self.run(["nft", "delete", "table", "inet", self.relay.firewall_table])
                     if removed.returncode != 0:
                         raise Refusal("Could not delete the owned Relay nftables table.")
@@ -376,7 +580,8 @@ class Retirement:
                     path.unlink()
             if self._unit_active() or self._unit_enabled() or self._nft_table_exists() or self._listening(ports):
                 raise Refusal("Cleanup verification did not reach the disabled/inactive/absent state.")
-            self._receipt()
+            generation = self._advance_generation("retired")
+            self._receipt(generation)
             return ("RETIREMENT VERIFIED for Gateway Relay " + self.relay.relay_id
                     + ". Iran was not contacted, and its cleanup was not asserted.")
         except BlockingIOError as error:
@@ -384,7 +589,7 @@ class Retirement:
         finally:
             os.close(fd)
 
-    def _receipt(self) -> None:
+    def _receipt(self, host_generation: str) -> None:
         boot = self.layout.at("/proc/sys/kernel/random/boot_id").read_text().strip()
         uptime = self.layout.at("/proc/uptime").read_text().split()[0]
         if not re.fullmatch(r"[a-f0-9-]{36}", boot):
@@ -399,38 +604,47 @@ class Retirement:
             "relay_id": self.relay.relay_id,
             "host_fingerprint": self.relay.fingerprint,
             "configuration_revision": self.relay.revision,
+            "host_generation": host_generation,
             "verified_boot_id": boot,
             "verified_at_unix": now,
             "verified_at_boot_seconds": seconds,
             "expires_at_unix": now + 600,
             "gateway_cleanup_verified": True,
         }
-        output = self.layout.evidence(self.relay, ".retired.json")
-        fd, tempname = tempfile.mkstemp(prefix=".relay-retired-", dir=output.parent)
+        self._write_json_atomic(self.layout.evidence(self.relay, ".retired.json"), proof)
+
+    def prepare_setup(self) -> str:
+        """Root-only invalidation barrier; must precede ANY new provisioning."""
+        if os.geteuid() != self.layout.owner_uid:
+            raise Refusal("Explicit root/sudo privileges are required.")
+        make_privileged_directory(self.layout.evidence_dir, self.layout, php_traversable=True)
+        make_privileged_directory(self.layout.lock_path(self.relay).parent, self.layout)
+        fd = os.open(self.layout.lock_path(self.relay), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w") as dest:
-                json.dump(proof, dest, sort_keys=True, separators=(",", ":"))
-                dest.write("\n")
-                dest.flush()
-                # The proof is non-secret metadata, verified by PHP running
-                # under its own dedicated non-root UID. Only root may modify.
-                os.fchmod(dest.fileno(), 0o644)
-                os.fsync(dest.fileno())
-            os.replace(tempname, output)
-            parent_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(parent_fd)
-            finally:
-                os.close(parent_fd)
+            if not self._owned(self.layout.lock_path(self.relay)):
+                raise Refusal("Unsafe Relay lock ownership.")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if self._preflight() is not None:
+                raise Refusal("Managed Relay claim exists; retire it before new Setup.")
+            if self._unit_active() or self._unit_enabled() or self._nft_table_exists() or self._listening({self.relay.local_port}):
+                raise Refusal("Begin Setup only after local service, listener and policy are absent.")
+            # Order is security-critical: old PHP receipt invalid even if
+            # power loss occurs before its file is unlinked.
+            self._advance_generation("provisioning")
+            receipt = self.layout.evidence(self.relay, ".retired.json")
+            if self._owned(receipt):
+                receipt.unlink()
+            return ("OLD RETIREMENT PROOF INVALIDATED for Relay " + self.relay.relay_id
+                    + ". New host setup must use the same generation.")
+        except BlockingIOError as error:
+            raise Refusal("Another operator is changing this Relay.") from error
         finally:
-            if os.path.lexists(tempname):
-                os.unlink(tempname)
+            os.close(fd)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay retirement; never contacts Iran.")
-    parser.add_argument("action", choices=("preflight", "retire"))
+    parser.add_argument("action", choices=("preflight", "retire", "prepare-setup"))
     parser.add_argument("--relay-id", required=True)
     parser.add_argument("--record-id", required=True)
     parser.add_argument("--fingerprint", required=True)
@@ -443,7 +657,12 @@ def main() -> int:
         if os.geteuid() != 0:
             raise Refusal("Run this trusted installed helper explicitly with sudo/root.")
         operation = Retirement(relay, layout)
-        print(operation.preview() if args.action == "preflight" else operation.retire())
+        if args.action == "preflight":
+            print(operation.preview())
+        elif args.action == "prepare-setup":
+            print(operation.prepare_setup())
+        else:
+            print(operation.retire())
         return 0
     except (Refusal, OSError, UnicodeError) as error:
         print("FAIL CLOSED: " + str(error), file=sys.stderr)

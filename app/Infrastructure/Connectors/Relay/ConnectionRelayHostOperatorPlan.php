@@ -11,7 +11,7 @@ final readonly class ConnectionRelayHostOperatorPlan
     private const INSTALLED_HELPER = '/usr/local/sbin/mcp-gateway-relay';
 
     /**
-     * @return array{preflight:string,retire:string,bootstrap:string,cleanup:string,sha256:string}|null
+     * @return array{preflight:string,retire:string,prepare_setup:string,bootstrap:string,cleanup:string,sha256:string}|null
      */
     public function commands(ConnectionRelay $relay): ?array
     {
@@ -49,7 +49,7 @@ final readonly class ConnectionRelayHostOperatorPlan
         // matches the release-pinned helper; an old or replaced binary cannot
         // silently execute under the generated command.
         $verifiedPrefix = "printf '%s\n' ".escapeshellarg($expected.'  '.self::INSTALLED_HELPER)
-            .' | sudo /usr/bin/sha256sum --check --status && sudo '.self::INSTALLED_HELPER.' ';
+            .' | /usr/bin/sudo /usr/bin/sha256sum --check --status && /usr/bin/sudo '.self::INSTALLED_HELPER.' ';
 
         // Copy release source to an isolated root-owned temporary inode, SHA-
         // check the COPIED bytes, and atomically publish without overwriting
@@ -89,11 +89,12 @@ BASH;
             $bootstrapScript,
         );
 
-        $bootstrap = 'sudo /usr/bin/bash -c '.escapeshellarg($bootstrapScript);
+        $bootstrap = '/usr/bin/sudo /usr/bin/bash -c '.escapeshellarg($bootstrapScript);
         $retire = $verifiedPrefix.'retire '.$arguments;
 
         return [
             'preflight' => $verifiedPrefix.'preflight '.$arguments,
+            'prepare_setup' => $verifiedPrefix.'prepare-setup '.$arguments,
             'retire' => $retire,
             // One Owner command: verify/install helper once, then retire only
             // the selected local Relay. Unknown binaries are never replaced.

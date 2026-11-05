@@ -183,6 +183,104 @@ final class ConnectionRelayAdminTest extends TestCase
         self::assertSame(0, DB::table('targets')->whereNotNull('relay_record_id')->count());
     }
 
+    public function test_new_host_claim_invalidates_old_retirement_proof_and_preserves_registration(): void
+    {
+        $relay = ConnectionRelay::query()->create($this->relayFields());
+        $relay->refresh();
+        $this->actingAs($this->user('owner'));
+        $url = '/admin/settings/connection-relays/'.$relay->getKey();
+        $form = [
+            'relay_revision' => 1,
+            'confirm_relay_id' => $relay->relay_id,
+            'confirm_gateway_cleanup' => '1',
+            'current_password' => self::PASSWORD,
+        ];
+        $directory = sys_get_temp_dir().'/relay-delete-test-'.bin2hex(random_bytes(8));
+        mkdir($directory, 0700);
+        try {
+            $evidence = new class($directory) extends ConnectionRelayRetirementEvidence
+            {
+                public function __construct(private readonly string $directory) {}
+
+                protected function evidenceDirectory(): string
+                {
+                    return $this->directory;
+                }
+
+                protected function trusted(string $path, bool $directory): bool
+                {
+                    if ($directory && $path !== $this->directory) {
+                        return true;
+                    }
+
+                    return ! is_link($path) && ($directory ? is_dir($path) : is_file($path));
+                }
+            };
+            $this->app->instance(ConnectionRelayRetirementEvidence::class, $evidence);
+            $generation = str_repeat('b', 64);
+            $state = [
+                'version' => 1,
+                'relay_record_id' => $relay->getKey(),
+                'relay_id' => $relay->relay_id,
+                'host_generation' => $generation,
+                'state' => 'retired',
+            ];
+            $now = time();
+            $boot = trim((string) file_get_contents('/proc/sys/kernel/random/boot_id'));
+            $uptime = (int) floor((float) explode(' ', trim((string) file_get_contents('/proc/uptime')))[0]);
+            $proof = [
+                'relay_record_id' => $relay->getKey(),
+                'relay_id' => $relay->relay_id,
+                'host_fingerprint' => $relay->hostFingerprint(),
+                'configuration_revision' => (int) $relay->configuration_revision,
+                'host_generation' => $generation,
+                'verified_boot_id' => $boot,
+                'verified_at_unix' => $now,
+                'verified_at_boot_seconds' => $uptime,
+                'expires_at_unix' => $now + 600,
+                'gateway_cleanup_verified' => true,
+            ];
+            $receipt = $directory.'/'.$relay->relay_id.'.retired.json';
+            $stateFile = $directory.'/'.$relay->relay_id.'.generation.json';
+            $claimFile = $directory.'/'.$relay->relay_id.'.managed.json';
+            file_put_contents($receipt, json_encode($proof, JSON_THROW_ON_ERROR));
+            file_put_contents($stateFile, json_encode($state, JSON_THROW_ON_ERROR));
+            self::assertTrue($evidence->verified($relay));
+
+            // A new host claim appears without any DB revision change.
+            file_put_contents($claimFile, '{"version":2}');
+            $this->delete($url, $form)->assertSessionHasErrors('relay');
+            self::assertNotNull(ConnectionRelay::query()->find($relay->getKey()));
+            unlink($claimFile);
+
+            // Setup generation invalidation defeats a stale receipt even
+            // before new resources have been installed.
+            $state['state'] = 'provisioning';
+            $state['host_generation'] = str_repeat('c', 64);
+            file_put_contents($stateFile, json_encode($state, JSON_THROW_ON_ERROR));
+            $this->delete($url, $form)->assertSessionHasErrors('relay');
+            self::assertNotNull(ConnectionRelay::query()->find($relay->getKey()));
+
+            // Only a new correct, root-analogous retirement proof unlocks
+            // the previously blocked Owner action.
+            $state['state'] = 'retired';
+            $state['host_generation'] = str_repeat('d', 64);
+            $proof['host_generation'] = $state['host_generation'];
+            file_put_contents($stateFile, json_encode($state, JSON_THROW_ON_ERROR));
+            file_put_contents($receipt, json_encode($proof, JSON_THROW_ON_ERROR));
+            self::assertTrue($evidence->verified($relay));
+            $this->delete($url, $form)
+                ->assertSessionHasNoErrors()
+                ->assertAdminRedirect('/admin/settings/connection-relays');
+            self::assertNull(ConnectionRelay::query()->find($relay->getKey()));
+        } finally {
+            foreach (glob($directory.'/*') ?: [] as $file) {
+                unlink($file);
+            }
+            rmdir($directory);
+        }
+    }
+
     public function test_non_owner_cannot_rename_or_delete_relays(): void
     {
         $relay = ConnectionRelay::query()->create($this->relayFields());
@@ -295,20 +393,24 @@ final class ConnectionRelayAdminTest extends TestCase
         self::assertIsArray($commands);
         self::assertSame(hash_file('sha256', base_path('resources/host/connection-relay-gateway.py')), $commands['sha256']);
         foreach (['preflight', 'retire'] as $action) {
-            self::assertStringContainsString('sudo /usr/bin/sha256sum --check --status', $commands[$action]);
-            self::assertStringContainsString('sudo /usr/local/sbin/mcp-gateway-relay '.$action, $commands[$action]);
+            self::assertStringContainsString('/usr/bin/sudo /usr/bin/sha256sum --check --status', $commands[$action]);
+            self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay '.$action, $commands[$action]);
             self::assertStringContainsString($relay->relay_id, $commands[$action]);
             self::assertStringContainsString($relay->getKey(), $commands[$action]);
             self::assertStringContainsString($relay->hostFingerprint(), $commands[$action]);
             self::assertStringNotContainsString('ssh ', $commands[$action]);
         }
-        self::assertStringContainsString('sudo /usr/bin/bash -c', $commands['bootstrap']);
+        self::assertStringContainsString('/usr/bin/sudo /usr/bin/bash -c', $commands['bootstrap']);
         self::assertStringContainsString('sha256sum --check --status', $commands['bootstrap']);
         self::assertStringContainsString('ln --', $commands['bootstrap']);
         self::assertStringContainsString('Untrusted host tool directory', $commands['bootstrap']);
         self::assertStringContainsString('Unknown or outdated installed host tool', $commands['bootstrap']);
+        self::assertStringContainsString(
+            '/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay prepare-setup',
+            $commands['prepare_setup'],
+        );
         self::assertSame($commands['bootstrap'].' && '.$commands['retire'], $commands['cleanup']);
-        self::assertStringContainsString('sudo /usr/local/sbin/mcp-gateway-relay retire', $commands['cleanup']);
+        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay retire', $commands['cleanup']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
 
         config()->set('connection_relays.gateway_retirement_helper_sha256', str_repeat('0', 64));

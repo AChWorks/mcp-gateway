@@ -41,7 +41,7 @@ final class AdminUiPresentationTest extends TestCase
         $this->get('/admin/settings/connection-relays')->assertOk()
             ->assertSee('One cleanup command')
             ->assertSee('One-time verified helper installation')
-            ->assertSee('sudo /usr/bin/sha256sum --check --status')
+            ->assertSee('/usr/bin/sudo /usr/bin/sha256sum --check --status')
             ->assertSee('A disconnected Iran host NEVER blocks this action');
 
         // The real host evidence is issued only by a privileged host
