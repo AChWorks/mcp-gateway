@@ -86,6 +86,21 @@ pinned in `config/connection_relays.php`. Updating the web app does NOT
 install or execute the privileged helper. The Owner must separately
 authorize the host change and compare the displayed digest against a
 **trusted release artifact**, not just the same web UI.
+The operator cleanup command first attempts an **exact current privileged Seal**:
+when the matching permanent fence/receipt already exists, it renews that
+proof without re-retirement. If Seal cannot certify the current revision,
+it runs exact Gateway-only resource retirement followed by Seal. Merely
+finding a fence file is **never** enough to skip retirement; a previous
+rotation fence can coexist with newly provisioned resources at a later
+revision. Any failed retirement or Seal leaves the record disabled/recoverable
+and never authorizes DB deletion or rotation.
+
+The helper source was revised for exact N+1-to-N retirement support. An
+older already-installed helper will **fail the release SHA256 check**; the
+application intentionally does not silently replace privileged binaries.
+Any installed-helper version change needs separate host-operator approval,
+independent provenance/digest verification and a deliberate scoped update.
+Do not disable the hash check to make an older helper accept a new command.
 
 1. Disable the selected Relay, reconcile and explicitly detach/reassign all
    Targets; never silently fall back to Direct. Open **Retire and remove Relay**.
@@ -95,13 +110,20 @@ authorize the host change and compare the displayed digest against a
    a root-owned temporary inode, SHA256-checks the copied bytes and atomically
    publishes it. An unknown, stale, linked or unsafe installed tool causes
    an explicit refusal. No existing binary is overwritten.
-3. The same command runs `retire`, then `seal-delete` under the same
-   helper version and per-Relay root lock. Each privileged invocation
-   independently checks the installed helper digest. Separate
-   bootstrap and preflight commands remain available for diagnostics. The
-   arguments include only
-   the Relay ID, DB ULID, configuration fingerprint/revision and local port,
-   not SSH private keys or Target credentials.
+3. The command first attempts an exact-current `seal-delete` using
+   the release-pinned privileged helper. If the current permanent fence and
+   retired generation already match, Seal **renews the receipt only**; no
+   repeat retirement is needed. Otherwise the command runs exact Gateway-local
+   `retire` followed by `seal-delete`. **Each privileged CLI invocation**
+   independently verifies the installed helper digest and acquires/releases
+   the same per-Relay exclusive root lock; the two separate invocations are
+   **not one continuously locked transaction**. A host generation or resource
+   change between them makes the subsequent Seal fail closed, requiring
+   operator reconciliation and retry, not an assumed success. Separate
+   bootstrap and preflight commands remain available for diagnostics.
+   The arguments identify the Relay ID, DB ULID, current configuration
+   fingerprint/revision and local port (plus the exact prior fingerprint for
+   scoped retirement after Disable), never SSH private keys or Target credentials.
 4. The helper locks and validates the exact root-owned Relay namespace.
    It stops only a matching claimed systemd service, removes only the
    claimed nftables table and key files, clears local readiness evidence,
@@ -112,12 +134,18 @@ authorize the host change and compare the displayed digest against a
    resources, unsafe ownership/symlinks, active listeners and failed
    operations are rejected instead of purged.
    No SSH connection to Iran is attempted.
-5. On success, `retire` atomically issues a root-owned, boot-bound receipt
-   with a 600-second lease; `seal-delete` verifies the clean host and commits
-   a permanent per-record deletion fence, then renews the receipt. Refresh
-   Admin. With no bound Targets, exact ID, Owner password, Owner acknowledgement
-   and a current matching fence + receipt, the DB record can be deleted.
-   An offline Iran host NEVER prevents this.
+5. On the **first successful cleanup**, `retire` issues a root-owned,
+   boot-bound retirement receipt (600-second lease) after verifying removal
+   of the exact Gateway resources; `seal-delete` verifies that clean host,
+   commits the permanent per-record deletion fence and renews the receipt.
+   Expected first-run output includes **RETIREMENT VERIFIED**, then
+   **LIFECYCLE FENCE VERIFIED (delete)**. On an idempotent retry with a
+   valid **current** Seal, the command skips retirement and renews the
+   receipt, outputting only **LIFECYCLE FENCE VERIFIED (delete)**. A stale,
+   foreign or historical rotation fence is never sufficient to skip cleanup.
+   Refresh Admin. With no bound Targets, exact ID, Owner password, Owner
+   acknowledgement and a current matching fence + receipt, the DB record
+   can be deleted. An offline Iran host NEVER prevents this.
    Cleanup of old Iran-side accounts/keys is optional and independent.
 
 ### Generation invalidation: mandatory BEFORE new Setup or Repair
@@ -132,6 +160,25 @@ unprivileged PHP reader. Retirement rotates this generation to
 root lock. PHP requires BOTH the retired proof and matching current
 retired generation, and refuses any present active `.managed.json`,
 `.policy` or `.json` file even with an unexpired old receipt.
+
+**Current application-side readiness hardening:** PHP now requires the complete,
+root-owned v2 `<relay-id>.managed.json` claim and the v1
+`<relay-id>.generation.json` record in addition to the existing eleven-field
+host evidence and `<relay-id>.policy` marker. The active generation MUST be
+`provisioning`, belong to the **exact database record ULID**, and match the
+claim, the current Relay fingerprint, configuration revision, reserved port,
+expected scoped systemd unit/table identities, and the policy marker. A
+retirement receipt, invalid/foreign generation/claim, permanent deletion fence,
+or stale rotation fence makes the Relay **not ready**. An older rotation fence
+may coexist only with a strictly newer configuration revision and a different
+host generation. This closes replay of a legacy/manual lease after
+`prepare-setup`, rotation or record-ID reuse; it does **not** attest effective
+OS controls on its own. Future privileged Setup and verifier must use the
+current generation token as the published policy marker and must replace it
+under the same per-Relay root lock after policy changes, never forge an
+attestation from Gateway PHP. Previously issued manual evidence without a
+matching owned v2 claim and generation cannot enable the route. No automated
+installer/verifier or real-host claim issuance is delivered by this hardening.
 
 **Every future privileged Setup/Repair/reprovision must execute**
 `prepare-setup` with the exact Relay identity, revision and port
@@ -252,12 +299,18 @@ Iran setup must not require the Iran server to download a script from NL or fore
 
 ## Root-owned readiness evidence
 
-The Admin backend reads **two** independently privileged, root-owned files for each Relay:
+The Admin backend validates **four** required root-owned artifacts for each Relay. They must all belong to the same exact record ULID and active configuration:
 
-    /etc/mcp-gateway/connection-relays/<relay-id>.policy
-    /etc/mcp-gateway/connection-relays/<relay-id>.json
+    /etc/mcp-gateway/connection-relays/<relay-id>.generation.json  (v1)
+    /etc/mcp-gateway/connection-relays/<relay-id>.managed.json     (v2)
+    /etc/mcp-gateway/connection-relays/<relay-id>.policy           (current generation token)
+    /etc/mcp-gateway/connection-relays/<relay-id>.json             (11-key readiness lease)
 
-The parent directories and both files must be root-owned, non-symlink and not group/world writable. The `.policy` file is a single fresh, unpredictable 256-bit generation (64 lowercase hex characters, optional trailing newline). A privileged operator rotates it **before** changing the relevant FPM/CLI identity, service, SSH principal, firewall, routing, egress or binding policy. Host operations must fail closed until post-change verification and renewed evidence. Neither file is written by the Gateway PHP process.
+The verifier also checks whether `<relay-id>.retired.json` exists (which rejects readiness) and inspects the optional root-owned `.fences/<record-ULID>.json`. **A missing fence is accepted only after the PHP identity positively enumerates the trusted parent directory and, if present, `.fences`; an inaccessible directory is not evidence of absence.** A visible deletion fence rejects readiness permanently for that record, while a valid older `rotate` fence is permitted only for a strictly newer revision and different generation. Recheck the fence and generation after the rest of the read. These PHP checks are not a replacement for the privileged helper's exclusive lifecycle lock.
+
+All four artifacts and their parent directories must be root-owned, non-symlink, not group/world writable, and actually accessible to the effective Gateway PHP UID. The evidence directory and optional `.fences` directory must be **readable and searchable** (or the Relay fails closed); the private key and lock directories must **not** be opened to PHP. A root-owned `0700` `.fences` directory with a concealed fence is explicitly unsafe: reconcile operator permissions rather than interpreting it as an empty directory. The `.policy` file contains the **same fresh 256-bit generation** as the `provisioning` v1 record, never an independently invented token. Before any FPM/CLI identity, service, SSH principal, firewall, routing, egress or binding policy change, a privileged helper must invalidate the old generation under the same exclusive root-only lock used for the entire Setup/Repair lifecycle. Post-change effective OS checks must finish before an independent privileged verifier issues/renews the lease; PHP writes none of these artifacts.
+
+The current release provides the **source-side validator and retirement/fence helper only**. It does **not** supply the new Setup/Repair helper, effective host-policy attestation issuance/renewal, or real-host evidence that the claimed service/nftables policy is enforced. A syntactically valid root-owned claim is not proof of actual SOCKS, Iran reachability or Target identity.
 
 The manifest has exactly **11** keys (illustrative schema, not real values; never copy as-is). **Existing 10-key manifests are invalid and must be reissued by the independently privileged operator**; do not migrate or extend them automatically:
 
@@ -277,7 +330,9 @@ The manifest has exactly **11** keys (illustrative schema, not real values; neve
 
 The operator records `verified_at_boot_seconds` **at the same verification moment** as `verified_at_unix`, using the integer part of the first value in Linux `/proc/uptime`; this is a boot-relative clock **including suspend time** ([Linux `proc_uptime(5)`](https://man7.org/linux/man-pages/man5/proc_uptime.5.html)). The verifier must obtain the sample on the **Gateway host**, not on the Iran Relay or in a container with an incompatible boot/uptime view. Both timestamps must be observed only after effective host isolation is independently verified; do not fill them from unchecked assumptions. The manifest is accepted only while the actual PHP effective UID matches, the running Linux boot ID and policy generation match, the boot-relative age is non-negative and strictly under 86400 seconds, its Unix expiry is strictly in the future and within 24 hours of verification, and Unix versus boot-relative elapsed ages differ by no more than 60 seconds. Large wall-clock forward/backward jumps invalidate the evidence rather than extending the lease. Readable `/proc/uptime` and a valid 11-key schema are mandatory; missing or invalid sources fail closed. The privileged verifier must regularly re-check the effective host controls and renew the manifest **before** expiry; no PHP action may silently renew or infer that effective firewall enforcement is intact. A reboot always invalidates the prior boot's manifest. Independent host configuration drift must trigger policy rotation and re-verification even if the short lease has not yet expired; **static file checks alone cannot detect unreported host drift**.
 
-`host_fingerprint` is generated by `ConnectionRelay::hostFingerprint()` from the immutable Relay identity, endpoint, control key, local port and `configuration_revision`, separated with NUL bytes; it is **not** a login-key fingerprint. Every effective Enable or Disable advances the separate monotonic `lifecycle_revision` used by Owner action forms, invalidating prepared Enable/Disable requests after any intervening action. Each effective Disable also advances `configuration_revision` and atomically fences bound Targets, invalidating the old host manifest. Enable does **not** change the attested configuration fingerprint; the independently verified manifest remains current for the same unchanged host policy until expiry. Re-enabling after a Disable requires a new privileged verification and manifest for the new configuration fingerprint. A repeated Disable while already disabled is a no-op only with the latest lifecycle revision. No production host setup, verifier implementation, attestation or socket supervision is provided by this application source; the host operator owns their separate approval, persistence, exact host policy and recovery.
+`host_fingerprint` is generated by `ConnectionRelay::hostFingerprint()` from the immutable Relay identity, endpoint, control key, local port and `configuration_revision`, separated with NUL bytes; it is **not** a login-key fingerprint. Every effective Enable or Disable advances the separate monotonic `lifecycle_revision` used by Owner action forms, invalidating prepared Enable/Disable requests after any intervening action. Each effective Disable also advances `configuration_revision` and atomically fences bound Targets, invalidating the old host manifest. **This does not imply that the prior host resources have been removed:** the approved Gateway-only `retire` command may prove an exact v2 claim against the current DB revision N+1 **or** its immediately preceding provisioned revision N, using an explicit expected prior fingerprint deterministically calculated from the unchanged connection fields. It never adopts arbitrary older or foreign claims. Under the same Relay-scoped root lock, the helper positively verifies and removes those exact installed resources, then issues the retirement receipt for the **current** N+1 fingerprint and revision. `seal-delete` / `seal-rotate` accept **only** the current revision, so the permanent fence agrees with the DB transition. A partial failure retains the claim for bounded Retry. The optional prior fingerprint is accepted by read-only `preflight` and `retire` only; it grants no Setup or Seal privilege. Iran reachability remains irrelevant.
+
+Enable does **not** change the attested configuration fingerprint; the independently verified manifest remains current for the same unchanged host policy until expiry. Re-enabling after a Disable requires new privileged verification and a new manifest matching the current configuration fingerprint. A repeated Disable while already disabled is a no-op only with the latest lifecycle revision. No production host setup, verifier implementation, attestation or socket supervision is provided by this application source; the host operator owns their separate approval, persistence, exact host policy and recovery.
 
 ## Acceptance, diagnostics and rollback
 

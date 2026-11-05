@@ -151,11 +151,23 @@ class Retirement:
     def __init__(
         self, relay: Relay, layout: Layout = Layout(),
         run: Callable[[list[str]], subprocess.CompletedProcess[str]] = run_checked,
+        prior_fingerprint: str | None = None,
     ):
         relay.validate()
+        if prior_fingerprint is not None and (
+            relay.revision <= 1
+            or not isinstance(prior_fingerprint, str)
+            or re.fullmatch(r"[a-f0-9]{64}", prior_fingerprint) is None
+            or prior_fingerprint == relay.fingerprint
+        ):
+            raise Refusal("Invalid prior host identity for a one-revision Disable transition.")
         self.relay = relay
         self.layout = layout
         self.run = run
+        # A disabled DB record is revision N+1, while its still-owned host
+        # resources may have been installed at N. Only retire accepts this
+        # specifically asserted previous fingerprint, never Setup or Seal.
+        self.prior_fingerprint = prior_fingerprint
 
     def _owned(self, path: Path, directory: bool = False) -> bool:
         return trusted(path, directory, self.layout.owner_uid)
@@ -184,17 +196,20 @@ class Retirement:
             "relay_id": self.relay.relay_id,
             "service_unit": self.relay.unit_name,
             "firewall_table": self.relay.firewall_table,
-            "host_fingerprint": self.relay.fingerprint,
-            "configuration_revision": self.relay.revision,
         }
         for key, value in expected.items():
             if manifest.get(key) != value:
                 raise Refusal("Managed host resource ownership does not match this Relay: " + key)
+        identities = {(self.relay.revision, self.relay.fingerprint)}
+        if self.prior_fingerprint is not None:
+            identities.add((self.relay.revision - 1, self.prior_fingerprint))
+        if (manifest.get("configuration_revision"), manifest.get("host_fingerprint")) not in identities:
+            raise Refusal("Managed host revision/fingerprint does not match the current or exact prior installed identity.")
         port = manifest.get("local_socks_port")
-        if not isinstance(port, int) or not 46000 <= port <= 60999:
+        if not isinstance(port, int) or port != self.relay.local_port:
             raise Refusal("Invalid local port in managed host claim.")
         integrity = {"unit_sha256", "unit_exec_sha256", "firewall_sha256", "host_generation"}
-        if set(manifest) != set(expected) | {"local_socks_port"} | integrity:
+        if set(manifest) != set(expected) | {"local_socks_port", "host_fingerprint", "configuration_revision"} | integrity:
             raise Refusal("Managed host claim must include exact v2 resource digests and generation.")
         if any(not isinstance(manifest[k], str)
                or re.fullmatch(r"[a-f0-9]{64}", manifest[k]) is None
@@ -541,7 +556,7 @@ class Retirement:
         managed = self._preflight()
         return (
             "LOCAL PREVIEW: Relay=" + self.relay.relay_id
-            + ", resource claim=" + ("verified" if managed else "absent")
+            + ", resource claim=" + (("verified installed revision " + str(managed["configuration_revision"])) if managed else "absent")
             + ", active unit=" + ("yes" if self._unit_active() else "no")
             + ", reserved listener=" + ("present" if self._listening({self.relay.local_port}) else "absent")
             + ". No remote Iran access is attempted."
@@ -679,6 +694,8 @@ class Retirement:
         """
         if intent not in {"delete", "rotate"}:
             raise Refusal("Unknown Relay lifecycle fence intent.")
+        if self.prior_fingerprint is not None:
+            raise Refusal("Prior host identity is permitted only during retirement.")
         if os.geteuid() != self.layout.owner_uid:
             raise Refusal("Explicit root/sudo privileges are required.")
         make_privileged_directory(self.layout.evidence_dir, self.layout, php_traversable=True)
@@ -747,6 +764,8 @@ class Retirement:
 
     def prepare_setup(self) -> str:
         """Root-only invalidation barrier; must precede ANY new provisioning."""
+        if self.prior_fingerprint is not None:
+            raise Refusal("Prior host identity is permitted only during retirement.")
         if os.geteuid() != self.layout.owner_uid:
             raise Refusal("Explicit root/sudo privileges are required.")
         make_privileged_directory(self.layout.evidence_dir, self.layout, php_traversable=True)
@@ -783,13 +802,17 @@ def main() -> int:
     parser.add_argument("--fingerprint", required=True)
     parser.add_argument("--revision", required=True, type=int)
     parser.add_argument("--local-port", required=True, type=int)
+    parser.add_argument("--prior-fingerprint", default=None,
+                        help="Read-only preflight or retire: exact N-1 installed fingerprint after DB Disable.")
     args = parser.parse_args()
     try:
         relay = Relay(args.relay_id, args.record_id, args.fingerprint, args.revision, args.local_port)
         layout = Layout()
         if os.geteuid() != 0:
             raise Refusal("Run this trusted installed helper explicitly with sudo/root.")
-        operation = Retirement(relay, layout)
+        if args.prior_fingerprint is not None and args.action not in {"preflight", "retire"}:
+            raise Refusal("Prior host fingerprint is allowed only for local preflight or retirement.")
+        operation = Retirement(relay, layout, prior_fingerprint=args.prior_fingerprint)
         if args.action == "preflight":
             print(operation.preview())
         elif args.action == "prepare-setup":

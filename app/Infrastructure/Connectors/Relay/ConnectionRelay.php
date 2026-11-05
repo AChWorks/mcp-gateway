@@ -44,12 +44,15 @@ final class ConnectionRelay extends Model
         });
     }
 
-    public function hostFingerprint(): string
+    public function hostFingerprint(?int $configurationRevision = null): string
     {
+        // The previous exact identity is needed only to retire a provisioned
+        // revision invalidated by Disable. Never mutate DB state to derive it.
         return hash('sha256', implode("\0", [
             $this->relay_id, $this->control_host, (string) $this->control_port,
             $this->control_user, $this->control_host_key,
-            (string) $this->local_socks_port, (string) $this->configuration_revision,
+            (string) $this->local_socks_port,
+            (string) ($configurationRevision ?? $this->configuration_revision),
         ]));
     }
 }

@@ -69,6 +69,72 @@ final class ConnectionRelayHostEvidenceTest extends TestCase
         self::assertFalse($check($manifest), 'Lifecycle disable invalidates old attestation fingerprint.');
     }
 
+    public function test_live_readiness_must_match_the_exact_root_owned_host_generation_and_record(): void
+    {
+        $relay = new ConnectionRelay([
+            'relay_id' => 'iran-1',
+            'control_host' => '192.0.2.25',
+            'control_port' => 22,
+            'control_user' => 'relay-user',
+            'control_host_key' => 'ssh-ed25519 fixture',
+            'local_socks_port' => 46081,
+        ]);
+        $relay->setAttribute('id', '01JAE000000000000000000001');
+        $relay->setAttribute('configuration_revision', 3);
+        $policy = str_repeat('a', 64);
+        $generation = [
+            'version' => 1,
+            'relay_record_id' => $relay->getKey(),
+            'relay_id' => 'iran-1',
+            'host_generation' => $policy,
+            'state' => 'provisioning',
+        ];
+        $managed = [
+            'version' => 2,
+            'relay_record_id' => $relay->getKey(),
+            'relay_id' => 'iran-1',
+            'service_unit' => 'mcp-gateway-relay-iran-1.service',
+            'firewall_table' => 'mcp_gateway_relay_'.substr(hash('sha256', $relay->getKey()), 0, 12),
+            'local_socks_port' => 46081,
+            'host_fingerprint' => $relay->hostFingerprint(),
+            'configuration_revision' => 3,
+            'host_generation' => $policy,
+            'unit_sha256' => str_repeat('b', 64),
+            'unit_exec_sha256' => str_repeat('c', 64),
+            'firewall_sha256' => str_repeat('d', 64),
+        ];
+        $check = static fn (array $gen, array $claim, ?array $fence = null, ?string $marker = null): bool => ConnectionRelayHostEvidence::matchesLifecycle($gen, $claim, $fence, $relay, $marker ?? $policy);
+
+        self::assertTrue($check($generation, $managed));
+        self::assertFalse($check($generation, $managed, marker: str_repeat('e', 64)));
+        self::assertFalse($check([...$generation, 'state' => 'retired'], $managed));
+        self::assertFalse($check([...$generation, 'host_generation' => str_repeat('f', 64)], $managed));
+        self::assertFalse($check([...$generation, 'relay_record_id' => '01JAE000000000000000000002'], $managed));
+        self::assertFalse($check($generation, [...$managed, 'relay_record_id' => '01JAE000000000000000000002']));
+        self::assertFalse($check($generation, [...$managed, 'configuration_revision' => 2]));
+        self::assertFalse($check($generation, [...$managed, 'host_fingerprint' => str_repeat('0', 64)]));
+        self::assertFalse($check($generation, [...$managed, 'local_socks_port' => 46082]));
+        self::assertFalse($check($generation, [...$managed, 'unit_exec_sha256' => str_repeat('Z', 64)]));
+        self::assertFalse($check($generation, [...$managed, 'unexpected' => true]));
+        self::assertFalse($check([...$generation, 'extra' => true], $managed));
+        $fence = [
+            'version' => 1,
+            'relay_record_id' => $relay->getKey(),
+            'relay_id' => 'iran-1',
+            'host_fingerprint' => str_repeat('e', 64),
+            'configuration_revision' => 2,
+            'host_generation' => str_repeat('f', 64),
+            'intent' => 'rotate',
+        ];
+        self::assertTrue($check($generation, $managed, $fence), 'A newer revision may follow an old rotation fence.');
+        self::assertFalse($check($generation, $managed, [...$fence, 'intent' => 'delete']), 'A permanent deletion fence is terminal.');
+        self::assertFalse($check($generation, $managed, [...$fence, 'configuration_revision' => 3]));
+        self::assertFalse($check($generation, $managed, [...$fence, 'host_generation' => $policy]));
+        self::assertFalse($check($generation, $managed, [...$fence, 'relay_id' => 'iran-2']));
+        $relay->setAttribute('id', '01JAE000000000000000000002');
+        self::assertFalse($check($generation, $managed), 'Reusing the same human Relay ID must not reuse a previous record proof.');
+    }
+
     public function test_linux_proc_uptime_parser_is_strict_and_fails_closed(): void
     {
         self::assertSame(100000, ConnectionRelayHostEvidence::bootSecondsFromUptime("100000.65 21000.91\n"));

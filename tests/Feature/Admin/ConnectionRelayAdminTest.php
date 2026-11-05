@@ -532,8 +532,9 @@ PYTHON;
             '/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay prepare-setup',
             $commands['prepare_setup'],
         );
-        self::assertStringContainsString('if test -e ', $commands['cleanup']);
-        self::assertStringContainsString($relay->getKey().'.json', $commands['cleanup']);
+        self::assertStringContainsString('if sealed=$(', $commands['cleanup']);
+        self::assertStringNotContainsString('/etc/mcp-gateway/connection-relays/.fences/'.$relay->getKey().'.json', $commands['cleanup']);
+        self::assertStringContainsString('if sealed=$(', $commands['cleanup_for_rotation']);
         self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay retire', $commands['cleanup']);
         self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-delete', $commands['cleanup']);
         self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-rotate', $commands['cleanup_for_rotation']);
@@ -543,6 +544,70 @@ PYTHON;
 
         config()->set('connection_relays.gateway_retirement_helper_sha256', str_repeat('0', 64));
         self::assertNull(app(ConnectionRelayHostOperatorPlan::class)->commands($relay));
+    }
+
+    public function test_cleanup_sequence_retires_old_rotation_fence_but_only_renews_exact_current_fence(): void
+    {
+        $dir = sys_get_temp_dir().'/relay-operator-shell-'.bin2hex(random_bytes(8));
+        mkdir($dir, 0700);
+        try {
+            $state = escapeshellarg($dir.'/fence');
+            $seal = 'test "$(cat '.$state.' 2>/dev/null)" = current && printf "SEALED\n"';
+            $retire = 'printf "RETIRED\n" && printf current > '.$state;
+            $sequence = new \ReflectionMethod(ConnectionRelayHostOperatorPlan::class, 'cleanupSequence');
+            $command = $sequence->invoke(null, $seal, $retire);
+            self::assertIsString($command);
+            $run = static function (string $shell): Process {
+                $process = new Process(['/usr/bin/bash', '-c', $shell]);
+                $process->run();
+
+                return $process;
+            };
+            // On first use, Seal cannot verify retirement; fall back to
+            // exact local retirement and then seal the current revision.
+            $first = $run($command);
+            self::assertTrue($first->isSuccessful(), $first->getErrorOutput());
+            self::assertSame("RETIRED\nSEALED\n", $first->getOutput());
+            // Replaying an already sealed operation renews the proof only.
+            $again = $run($command);
+            self::assertTrue($again->isSuccessful());
+            self::assertSame("SEALED\n", $again->getOutput());
+            // A prior rotation fence exists, but it is NOT a current Seal.
+            file_put_contents($dir.'/fence', 'older-rotation');
+            $later = $run($command);
+            self::assertTrue($later->isSuccessful());
+            self::assertSame("RETIRED\nSEALED\n", $later->getOutput());
+            // No successful Seal or retirement can report cleanup success.
+            file_put_contents($dir.'/fence', 'older-rotation');
+            $blocked = $run($sequence->invoke(null, $seal, 'false'));
+            self::assertFalse($blocked->isSuccessful());
+        } finally {
+            @unlink($dir.'/fence');
+            rmdir($dir);
+        }
+    }
+
+    public function test_disable_operator_plan_targets_the_exact_previous_owned_revision_and_current_seal(): void
+    {
+        $relay = $this->readyRelay();
+        $original = $relay->hostFingerprint();
+        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($relay, 1));
+        $relay->refresh();
+        self::assertSame(2, $relay->configuration_revision);
+        self::assertSame($original, $relay->hostFingerprint(1));
+        self::assertNotSame($original, $relay->hostFingerprint());
+        $commands = app(ConnectionRelayHostOperatorPlan::class)->commands($relay);
+        self::assertIsArray($commands);
+        // The cleanup command may inspect N or N+1 owned host claims; the
+        // permanent root fence is issued only for the new DB revision N+1.
+        self::assertStringContainsString('--revision 2 --local-port 46081 --prior-fingerprint '."'".$original."'", $commands['retire']);
+        self::assertStringContainsString('--revision 2 --local-port 46081', $commands['seal_delete']);
+        self::assertStringNotContainsString('--prior-fingerprint', $commands['seal_delete']);
+        self::assertStringNotContainsString('--prior-fingerprint', $commands['seal_rotate']);
+        self::assertStringNotContainsString('--prior-fingerprint', $commands['prepare_setup']);
+        self::assertStringContainsString($relay->hostFingerprint(), $commands['cleanup']);
+        self::assertStringContainsString($original, $commands['cleanup']);
+        self::assertStringContainsString('--prior-fingerprint', $commands['preflight']);
     }
 
     public function test_edit_display_name_only_never_rotates_attestation_or_requires_host_command(): void
