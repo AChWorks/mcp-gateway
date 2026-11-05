@@ -56,6 +56,8 @@ final readonly class ConnectionRelayHostOperatorPlan
         // unknown installed tools. Checking source before sudo is a TOCTOU risk.
         $bootstrapScript = <<<'BASH'
 set -euo pipefail
+PATH=/usr/sbin:/usr/bin
+export PATH
 umask 077
 source=__SOURCE__
 expected=__SHA__

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 source = pathlib.Path(__file__).resolve().parents[2] / "resources/host/connection-relay-gateway.py"
@@ -291,6 +292,19 @@ class RetirementTests(unittest.TestCase):
             with self.assertRaises(mod.Refusal):
                 mod.Retirement(invalid, self.layout, self.fake)
         self.assertEqual([], self.fake.calls)
+
+
+class FixedRootToolPathTests(unittest.TestCase):
+    def test_local_system_tool_commands_never_use_owner_inherited_path(self):
+        fake = subprocess.CompletedProcess(["nft", "-j", "list", "tables"], 0, "{}", "")
+        with mock.patch.object(mod.subprocess, "run", return_value=fake) as run:
+            mod.run_checked(["nft", "-j", "list", "tables"])
+        options = run.call_args.kwargs
+        self.assertEqual(
+            {"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"},
+            options["env"],
+        )
+        self.assertFalse(options["check"])
 
 
 class BootstrapShellTests(unittest.TestCase):

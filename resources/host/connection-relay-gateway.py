@@ -126,7 +126,10 @@ def make_privileged_directory(path: Path, layout: Layout) -> None:
 
 def run_checked(argv: list[str]) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=12, check=False)
+        return subprocess.run(
+            argv, capture_output=True, text=True, timeout=12, check=False,
+            env={"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"},
+        )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise Refusal("Local tool is unavailable or timed out: " + argv[0]) from error
 
