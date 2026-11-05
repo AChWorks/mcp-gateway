@@ -13,6 +13,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayHostOperatorPlan;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRetirementEvidence;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
@@ -278,12 +279,104 @@ final class ConnectionRelayAdminTest extends TestCase
             'relay_revision' => 1, 'current_password' => self::PASSWORD,
         ])->assertSessionHasErrors('relay_id');
         $this->put($url, [
-            ...$this->relayFields(), 'relay_id' => 'iran-3',
+            ...$this->relayFields(), 'relay_id' => 'iran-2',
             'relay_revision' => 1, 'current_password' => self::PASSWORD,
         ])->assertSessionHasErrors('local_socks_port');
         self::assertSame('iran-2', $other->fresh()->relay_id);
         self::assertSame(46082, $other->fresh()->local_socks_port);
         self::assertSame('iran-1', $one->fresh()->relay_id);
+    }
+
+    public function test_operator_commands_are_relay_specific_release_pinned_and_fail_closed_on_stale_source(): void
+    {
+        $relay = ConnectionRelay::query()->create($this->relayFields());
+        $relay->refresh(); // Database defaults own configuration_revision.
+        $commands = app(ConnectionRelayHostOperatorPlan::class)->commands($relay);
+        self::assertIsArray($commands);
+        self::assertSame(hash_file('sha256', base_path('resources/host/connection-relay-gateway.py')), $commands['sha256']);
+        foreach (['preflight', 'retire'] as $action) {
+            self::assertStringContainsString('sudo sha256sum --check --status', $commands[$action]);
+            self::assertStringContainsString('sudo /usr/local/sbin/mcp-gateway-relay '.$action, $commands[$action]);
+            self::assertStringContainsString($relay->relay_id, $commands[$action]);
+            self::assertStringContainsString($relay->getKey(), $commands[$action]);
+            self::assertStringContainsString($relay->hostFingerprint(), $commands[$action]);
+            self::assertStringNotContainsString('ssh ', $commands[$action]);
+        }
+        self::assertStringContainsString('sudo bash -c', $commands['bootstrap']);
+        self::assertStringContainsString('sha256sum --check --status', $commands['bootstrap']);
+        self::assertStringContainsString('ln --', $commands['bootstrap']);
+        self::assertStringContainsString('Untrusted host tool directory', $commands['bootstrap']);
+        self::assertStringContainsString('Unknown or outdated installed host tool', $commands['bootstrap']);
+        self::assertSame($commands['bootstrap'].' && '.$commands['retire'], $commands['cleanup']);
+        self::assertStringContainsString('sudo /usr/local/sbin/mcp-gateway-relay retire', $commands['cleanup']);
+        self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
+
+        config()->set('connection_relays.gateway_retirement_helper_sha256', str_repeat('0', 64));
+        self::assertNull(app(ConnectionRelayHostOperatorPlan::class)->commands($relay));
+    }
+
+    public function test_edit_display_name_only_never_rotates_attestation_or_requires_host_command(): void
+    {
+        $relay = ConnectionRelay::query()->create($this->relayFields());
+        $relay->refresh();
+        $fingerprint = $relay->hostFingerprint();
+        $this->actingAs($this->user('owner'));
+        $url = '/admin/settings/connection-relays/'.$relay->getKey();
+        $this->put($url, [
+            ...$this->relayFields(), 'display_name' => 'Renamed within Edit form',
+            'relay_revision' => 1, 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+
+        $relay->refresh();
+        self::assertSame('Renamed within Edit form', $relay->display_name);
+        self::assertSame(1, $relay->configuration_revision);
+        self::assertSame(2, $relay->lifecycle_revision);
+        self::assertSame($fingerprint, $relay->hostFingerprint());
+
+        $this->put($url, [
+            ...$this->relayFields(), 'display_name' => 'Renamed within Edit form',
+            'relay_revision' => 2, 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        self::assertSame(2, $relay->fresh()->lifecycle_revision);
+    }
+
+    public function test_sensitive_edit_requires_retirement_and_internal_id_is_permanent(): void
+    {
+        $relay = ConnectionRelay::query()->create($this->relayFields());
+        $this->actingAs($this->user('owner'));
+        $url = '/admin/settings/connection-relays/'.$relay->getKey();
+        $new = [...$this->relayFields(), 'control_host' => '198.51.100.99'];
+        $form = [...$new, 'relay_revision' => 1, 'current_password' => self::PASSWORD];
+
+        $this->put($url, $form)->assertSessionHasErrors('relay');
+        self::assertSame('193.111.235.101', $relay->fresh()->control_host);
+        self::assertSame(1, $relay->fresh()->configuration_revision);
+
+        $this->put($url, [...$form, 'relay_id' => 'changed-relay-id'])
+            ->assertSessionHasErrors('relay_id');
+        self::assertSame('iran-1', $relay->fresh()->relay_id);
+
+        // Only a separately privileged local helper can create real
+        // retirement proof. This test-only fake performs no actual setup.
+        $this->app->instance(ConnectionRelayRetirementEvidence::class, new class extends ConnectionRelayRetirementEvidence
+        {
+            public function verified(ConnectionRelay $relay): bool
+            {
+                return true;
+            }
+        });
+        $oldFingerprint = $relay->hostFingerprint();
+        $this->put($url, $form)->assertSessionHasNoErrors()
+            ->assertAdminRedirect('/admin/settings/connection-relays');
+        $relay->refresh();
+        self::assertSame('198.51.100.99', $relay->control_host);
+        self::assertSame(2, $relay->configuration_revision);
+        self::assertSame(2, $relay->lifecycle_revision);
+        self::assertNotSame($oldFingerprint, $relay->hostFingerprint());
+        self::assertFalse($relay->enabled);
+
+        $this->put($url, $form)->assertSessionHasErrors('relay');
+        self::assertSame(2, $relay->fresh()->configuration_revision);
     }
 
     public function test_only_owner_can_manage_relay_or_attach_target_to_it(): void

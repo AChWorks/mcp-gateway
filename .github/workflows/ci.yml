@@ -62,6 +62,9 @@ jobs:
       - name: Validate configuration reference matches .env.example
         run: python3 bin/test-configuration-docs.py
 
+      - name: Verify isolated Relay host retirement helper
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/Support -p 'test_connection_relay_gateway_host.py'
+
       - name: Check updater continuation and crash-journal guards
         run: php bin/test-update-state-guards.php
 

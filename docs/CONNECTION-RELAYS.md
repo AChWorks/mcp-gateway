@@ -1,6 +1,6 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Core Relay routing source is merged, but this capability has not been published or accepted on real hosts.** Guided privileged host setup, update, repair and cleanup remain under development. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
+**Core Relay routing source is merged, but this capability has not been published or accepted on real hosts.** A Gateway-host-only privileged cleanup helper is in development; initial setup, update/reprovision and independent readiness attestation are still unfinished. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
 
 ## Intent and architecture
 
@@ -27,9 +27,71 @@ Gateway is the **unprivileged control plane**, not a root-level package manager.
 
 The command must be generated for the exact Relay and checked revision; support an independently transferred/offline Iran-side package when Iran cannot fetch code from foreign endpoints. No arbitrary shell construction from form inputs, production root execution by PHP, generic destructive purge or silently claimed success. Failure leaves a recoverable disabled registration with an actionable Retry/Repair. Host resource changes must be idempotent, ownership-scoped and positively verified. A successful response from a script alone is not evidence that the Target was authenticated.
 
-**Interim security boundary:** The application now separates display-only rename from sensitive route changes and forbids hard deletion based on an Owner checkbox or absent attestation file. Final deletion requires Owner acknowledgement of any necessary local command and a **privileged, short-lived, root-owned Gateway-host cleanup receipt** bound to exact DB record ULID, Relay ID, host fingerprint, configuration revision and current boot. It does **not** require Iran reachability, remote cleanup evidence or Iranian SSH credentials. The strict receipt verifier is implemented; no privileged helper that can create this receipt or perform setup/update/cleanup is shipped yet. Therefore **do not present this as finished self-service Delete/Edit/Setup**. The UI preserves records instead of fabricating cleanup. This receipt is never to be hand-authored by PHP or fabricated by an operator.
+**Interim security boundary:** The application now separates display-only rename from sensitive route changes and forbids hard deletion based on an Owner checkbox or absent attestation file. Final deletion requires Owner acknowledgement of any necessary local command and a **privileged, short-lived, root-owned Gateway-host cleanup receipt** bound to exact DB record ULID, Relay ID, host fingerprint, configuration revision and current boot. It does **not** require Iran reachability, remote cleanup evidence or Iranian SSH credentials. The exact-receipt verifier and scoped Gateway-host-only retirement helper are implemented in the current unmerged candidate. The helper must be installed by the separately authorized host operator; it is NOT a tunnel installer or host-readiness attester. **Do not present Create/Edit/Setup as finished or claim this is deployed.** The UI preserves records instead of fabricating cleanup. This receipt is never to be hand-authored by PHP or fabricated by an operator.
 
-The receipt is located at `/etc/mcp-gateway/connection-relays/<relay-id>.retired.json` (fixed root-owned, symlink-free namespace) and contains exactly `relay_record_id`, `relay_id`, `host_fingerprint`, `configuration_revision`, `verified_boot_id`, `verified_at_unix`, `verified_at_boot_seconds`, `expires_at_unix`, `gateway_cleanup_verified`. The single boolean must be true **based on independent privileged verification on the Gateway host**. The lease is valid for no more than 900 seconds, with no significant wall-clock/boot-clock divergence. Active policy and readiness files must be gone. There is no Iranian cleanup field or network check: an unreachable Iran server must never prevent Gateway-side deletion after local verification and Owner confirmation. Remote cleanup, if desired, is an optional separate follow-up. The local helper and its end-to-end tests are required before product acceptance.
+The receipt is located at `/etc/mcp-gateway/connection-relays/<relay-id>.retired.json` (fixed root-owned, symlink-free namespace) and contains exactly `relay_record_id`, `relay_id`, `host_fingerprint`, `configuration_revision`, `verified_boot_id`, `verified_at_unix`, `verified_at_boot_seconds`, `expires_at_unix`, `gateway_cleanup_verified`. The single boolean must be true **based on independent privileged verification on the Gateway host**. The lease is valid for no more than 900 seconds, with no significant wall-clock/boot-clock divergence. Active policy and readiness files must be gone. There is no Iranian cleanup field or network check: an unreachable Iran server must never prevent Gateway-side deletion after local verification and Owner confirmation. Remote cleanup, if desired, is an optional separate follow-up. Real-host operational acceptance and a distinct setup/update helper are still required before whole-product acceptance.
+
+## Gateway-local retirement procedure (source candidate, not deployed)
+
+The reviewed helper source is shipped with the normal release and update
+payload at `resources/host/connection-relay-gateway.py`. Its exact SHA256 is
+pinned in `config/connection_relays.php`. Updating the web app does NOT
+install or execute the privileged helper. The Owner must separately
+authorize the host change and compare the displayed digest against a
+**trusted release artifact**, not just the same web UI.
+
+1. Disable the selected Relay, reconcile and explicitly detach/reassign all
+   Targets; never silently fall back to Direct. Open **Retire and remove Relay**.
+2. Copy the **one cleanup command** and execute it once with approved
+   sudo access **only on the Gateway host**. It verifies an already installed
+   exact release-pinned helper; if missing, it first copies the source into
+   a root-owned temporary inode, SHA256-checks the copied bytes and atomically
+   publishes it. An unknown, stale, linked or unsafe installed tool causes
+   an explicit refusal. No existing binary is overwritten.
+3. The same command then runs `retire` scoped to just that Relay.
+   Both phases independently check the installed helper digest. Separate
+   bootstrap and preflight commands remain available for diagnostics. The
+   arguments include only
+   the Relay ID, DB ULID, configuration fingerprint/revision and local port,
+   not SSH private keys or Target credentials.
+4. The helper locks and validates the exact root-owned Relay namespace.
+   It stops only a matching claimed systemd service, removes only the
+   claimed nftables table and key files, clears local readiness evidence,
+   and verifies there is no remaining local service, listener or named
+   firewall table. Unknown resources, unsafe ownership/symlinks, active
+   listeners and failed operations are rejected instead of purged.
+   No SSH connection to Iran is attempted.
+5. On success it atomically issues a root-owned, boot-bound receipt with
+   a 600-second lease. Refresh the Admin page. With no bound Targets,
+   the exact ID, Owner password and explicit Owner acknowledgement, the
+   Gateway record can be deleted. An offline Iran host NEVER prevents this.
+   Cleanup of old Iran-side accounts/keys is optional and independent.
+
+**Owned resource contract:** the optional root-owned
+`/etc/mcp-gateway/connection-relays/<relay-id>.managed.json`
+must match the exact record ID, Relay ID, service name, firewall table and
+reserved local listener port. Service name:
+`mcp-gateway-relay-<relay-id>.service`; unit marker:
+`# MCP-GATEWAY-CONNECTION-RELAY <record-ULID> <relay-id>`.
+Dedicated inet nftables table:
+`mcp_gateway_relay_<first-12-hex-sha256-of-record-ULID>`.
+Managed root-owned key directory:
+`/var/lib/mcp-gateway-relays/<relay-id>`. Unknown manually installed
+services, arbitrary user-owned keys and unclaimed firewall state are
+not adopted. The future Setup helper must follow this same ownership protocol.
+The local helper requires usable `systemctl`, `nft` and `ss`.
+
+**Editing:** immutable Relay IDs cannot be rotated in place; create a new
+Relay and intentionally migrate Targets. Changing endpoint, host key,
+username or local port requires fresh local retirement proof for the
+old configuration. Rename display name without any host command or downtime.
+After an identity edit the old retirement proof no longer validates the
+new configuration. The Setup/Update and short-lived independent readiness
+attestation implementation are still outstanding.
+
+Tests of this helper currently use disposable directories and fake
+`systemctl`, `nft` and `ss`; those tests are **not a claim of
+production host, systemd, firewall or Iran setup verification**.
 
 ## User workflow
 

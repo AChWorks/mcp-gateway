@@ -10,9 +10,10 @@
         <input id="relay-{{ $prefix }}-id" type="text" name="relay_id" maxlength="64" required
             pattern="[a-z0-9]+(-[a-z0-9]+)*" spellcheck="false" autocomplete="off"
             data-admin-manual-entry data-admin-server-value="{{ $draft('relay_id', $editing ? $relay->relay_id : '') }}"
-            value="{{ $draft('relay_id', $editing ? $relay->relay_id : '') }}" placeholder="iran-bridge-1"
+            value="{{ $draft('relay_id', $editing ? $relay->relay_id : '') }}" placeholder="iran-bridge-1" @readonly($editing)
             @if($restore && $errors->has('relay_id')) aria-invalid="true" aria-describedby="relay-{{ $prefix }}-id-error" @endif>
         @if($restore) @error('relay_id')<p class="field-error" role="alert" id="relay-{{ $prefix }}-id-error">{{ $message }}</p>@enderror @endif
+        @if($editing)<p class="field-help">{{ __('Stable host-resource identifier. To change it, create a new Relay and explicitly migrate Targets; do not rename existing systemd/firewall resources.') }}</p>@endif
     </div>
     <div class="field">
         <label for="relay-{{ $prefix }}-name">{{ __('Display name') }}</label>

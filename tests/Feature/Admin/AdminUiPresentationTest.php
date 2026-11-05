@@ -36,8 +36,13 @@ final class AdminUiPresentationTest extends TestCase
         $this->actingAs($this->owner());
         $this->get('/admin/settings/connection-relays')->assertOk()
             ->assertSee('Retire and remove Relay')
-            ->assertSee('Deletion is locked')
+            ->assertSee('Next: run the one-Relay cleanup command')
             ->assertDontSee('Delete verified retired Relay');
+        $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertSee('One cleanup command')
+            ->assertSee('One-time verified helper installation')
+            ->assertSee('sudo sha256sum --check --status')
+            ->assertSee('A disconnected Iran host NEVER blocks this action');
 
         // The real host evidence is issued only by a privileged host
         // operator. Mock this boundary for view presentation only.

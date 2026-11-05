@@ -104,7 +104,10 @@
             @if (! $relay->enabled && (int) ($counts[$relay->id] ?? 0) === 0)
                 <details class="target-help-details">
                     <summary>{{ __('Edit connection settings') }}</summary>
-                    <p class="field-help">{{ __('Disable this Relay and detach or reassign its Targets before changing host, key, ID or port. These changes require new privileged host setup and verification. Use Rename above to change only the display name without downtime.') }}</p>
+                    <p class="field-help">{{ __('The Relay ID is permanent. To change the control host, port, username, pinned key or local SOCKS5 port, first complete the Gateway-local retirement command under Retire and remove Relay below. Then save and complete new host setup/attestation. Rename above changes the display name without downtime.') }}</p>
+                    @unless($retiredStates[$relay->id] ?? false)
+                        <a href="#relay-retire-{{ $relay->id }}">{{ __('Prepare the local cleanup command before editing') }}</a>
+                    @endunless
                     <form class="form-stack" method="post" action="{{ route('admin.connection-relays.update', ['relay' => $relay->id]) }}" autocomplete="off">
                         @csrf
                         @method('PUT')
@@ -123,11 +126,33 @@
                 <a href="{{ route('admin.targets.index') }}">{{ __('Manage assigned Targets') }}</a>
             @endif
             @if (! $relay->enabled && (int) ($counts[$relay->id] ?? 0) === 0)
-                <details class="target-help-details">
+                <details class="target-help-details" id="relay-retire-{{ $relay->id }}">
                     <summary>{{ __('Retire and remove Relay') }}</summary>
                     @if (! ($retiredStates[$relay->id] ?? false))
-                        <p class="field-help">{{ __('Deletion is locked until local Gateway-host resources for this Relay are retired and independently verified. Iran may be offline; no connection to it is needed to remove the Gateway registration. The scoped local cleanup command and verifier are still under development.') }}</p>
-                        <p class="field-help">{{ __('Read the operator recovery and cleanup requirements in docs/CONNECTION-RELAYS.md. Existing host resources must not be assumed absent.') }}</p>
+                        <p class="field-help">{{ __('Next: run the one-Relay cleanup command on the Gateway host with authorized sudo access. It checks systemd, local listener, owned keys, firewall table and root-owned evidence before issuing a short-lived receipt. A disconnected Iran host NEVER blocks this action. Refresh after a successful result.') }}</p>
+                        @if ($hostCommands[$relay->id] ?? null)
+                            <div class="field">
+                                <label for="relay-retire-command-{{ $relay->id }}">{{ __('One cleanup command — copy and run on the Gateway host only') }}</label>
+                                <textarea id="relay-retire-command-{{ $relay->id }}" rows="7" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['cleanup'] }}</textarea>
+                                <p class="field-help">{{ __('Expected successful output begins RETIREMENT VERIFIED. If the command fails, do not delete the record; inspect the reported local blocker. Unmanaged or unknown resources are never silently adopted or removed.') }}</p>
+                            </div>
+                            <details class="target-help-details">
+                                <summary>{{ __('First-time helper installation and optional preflight') }}</summary>
+                                <p class="field-help">{{ __('The primary command installs the helper when missing, or verifies an existing installation without replacing unknown files. The separate steps below are for diagnosis. Independently confirm the trusted release SHA256 and application path before executing privileged material.') }}</p>
+                                <div class="field">
+                                    <label for="relay-retire-bootstrap-{{ $relay->id }}">{{ __('One-time verified helper installation') }}</label>
+                                    <textarea id="relay-retire-bootstrap-{{ $relay->id }}" rows="3" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['bootstrap'] }}</textarea>
+                                </div>
+                                <p class="field-help">{{ __('Helper release SHA256') }}: <code>{{ $hostCommands[$relay->id]['sha256'] }}</code></p>
+                                <div class="field">
+                                    <label for="relay-retire-preflight-{{ $relay->id }}">{{ __('Optional read-only local preflight') }}</label>
+                                    <textarea id="relay-retire-preflight-{{ $relay->id }}" rows="3" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['preflight'] }}</textarea>
+                                </div>
+                                <p class="field-help">{{ __('The helper never performs a remote SSH connection or reaches the Iran server. It refuses unknown systemd, firewall and key namespaces, instead of deleting unrelated resources. It does not provision a new Relay.') }}</p>
+                            </details>
+                        @else
+                            <p class="field-error" role="alert">{{ __('Cannot generate the host cleanup command: the installed helper does not match the release-pinned SHA256 or Relay identity. Restore a verified Gateway release before privileged operations.') }}</p>
+                        @endif
                     @else
                         <p class="field-help">{{ __('Gateway-host cleanup has been verified for this exact Relay. Iran-side access and cleanup are not required. Confirm any necessary local cleanup command was completed before deletion.') }}</p>
                         <form method="post" class="form-stack" action="{{ route('admin.connection-relays.destroy', ['relay' => $relay->id]) }}" autocomplete="off">
