@@ -60,6 +60,48 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertOk()->assertDontSee('value="iran-1"', false);
     }
 
+    public function test_admin_status_distinguishes_draft_ready_enabled_degraded_and_needs_setup(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->post('/admin/settings/connection-relays', [
+            ...$this->relayFields(), 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+
+        $relay = ConnectionRelay::query()->sole();
+        $path = '/admin/settings/connection-relays';
+        $this->get($path)->assertOk()
+            ->assertSee('Draft — host unverified')
+            ->assertSee('Do not assume host resources are absent.');
+
+        $readiness = new class extends ConnectionRelayHostReadiness
+        {
+            public bool $isReady = false;
+
+            public function ready(ConnectionRelay $relay): bool
+            {
+                return $this->isReady;
+            }
+        };
+        $this->app->instance(ConnectionRelayHostReadiness::class, $readiness);
+        $readiness->isReady = true;
+        $this->get($path)->assertOk()->assertSee('Ready — host evidence current');
+
+        $this->post($path.'/'.$relay->id.'/toggle', [
+            'relay_revision' => 1, 'enable' => '1', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        $this->get($path)->assertOk()->assertSee('Enabled — host evidence current');
+
+        $readiness->isReady = false;
+        $this->get($path)->assertOk()
+            ->assertSee('Degraded — routing blocked')
+            ->assertSee('Bound Target operations fail closed');
+
+        $this->post($path.'/'.$relay->id.'/toggle', [
+            'relay_revision' => 2, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        $this->get($path)->assertOk()->assertSee('Needs setup or re-verification');
+    }
+
     public function test_owner_can_manage_multiple_relays_and_rename_an_active_relay_without_rekeying_targets(): void
     {
         $first = $this->readyRelay();

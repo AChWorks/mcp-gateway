@@ -211,6 +211,21 @@ Tests of this helper currently use disposable directories and fake
 `systemctl`, `nft` and `ss`; those tests are **not a claim of
 production host, systemd, firewall or Iran setup verification**.
 
+### Evidence-bounded Admin operational states (next candidate; not deployed)
+
+The Admin listing classifies each registration without a blocking TCP/SSH probe:
+**Draft** means the initial application registration is not host-attested (it
+does not prove that external host files are absent); **Needs setup** means a
+later disabled revision has no current readiness proof; **Ready** means a
+disabled registration has current independent host evidence; **Enabled** means
+the route was deliberately enabled and host evidence remains current;
+**Degraded** means an enabled registration has stale/missing evidence or an
+unexpected terminal deletion fence; **Cleanup required** means an inactive
+registration has a durable deletion fence and awaits proof renewal or final
+metadata removal. Each state displays a concrete next action. These
+application-facing labels neither install resources nor assert SOCKS
+availability, Iran reachability, or end-to-end Target authentication.
+
 ## User workflow
 
 1. Open **System > Connection Relays**. Register stable Relay ID, display name, Iran control SSH endpoint and independently verified *public* SSH host key, dedicated user and reserved NL local SOCKS5 port (46000–60999). The metadata is saved disabled, without changing hosts.
