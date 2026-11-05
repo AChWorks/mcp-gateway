@@ -1,6 +1,6 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Source under review; not deployed.** Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
+**Core Relay routing source is merged, but this capability has not been published or accepted on real hosts.** Guided privileged host setup, update, repair and cleanup remain under development. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
 
 ## Intent and architecture
 
@@ -12,6 +12,24 @@ Connection Relay is a reusable per-Target transport route, not a third connector
     -> end-to-end SSH host-key pin or HTTPS TLS SNI and certificate check
 
 Each Relay requires one control-plane SSH identity/key completely distinct from the Target login credential and the existing Reverse SSH control identities. The Gateway performs bounded public DNS and numeric destination approval locally, sends only numeric SOCKS5 CONNECT, preserves the real SSH Target host key or HTTPS certificate, and never treats the SOCKS reply as verified remote peer identity. No automatic fallback to Direct. Only deliberate Target operations use a relay; ChatGPT signed-file ingress and unrelated Gateway services remain Direct.
+
+## Unified Create / Edit / Delete lifecycle (required product acceptance; not yet delivered)
+
+Gateway is the **unprivileged control plane**, not a root-level package manager. Its user journey must offer one cohesive lifecycle for multiple independently managed Relay resources:
+
+| Owner action | What Gateway may do | Privileged host action and proof |
+| --- | --- | --- |
+| Create | Save an inactive draft and prepare a scoped, easy-to-copy Setup instruction | Prepare dedicated UID/ACL, SSH identity, keys and supervised listener; constrain Iran principal/egress; independently verify both sides; issue root-owned short-lived readiness evidence |
+| Rename | Change only the display name with Owner reauthentication and optimistic revision check | **No host command**, no connection interruption or Target epoch reset |
+| Edit host, port, key, username, identity or local listener | Explain disruption, fence/disable and account for every bound Target; preserve old host identity until it can be retired | **Scoped Update or Retire-then-Setup command**; reconcile old owned resources first; verify replacement and re-attest before re-enabling |
+| Disable or diagnose | Fail closed for explicitly bound Targets and show distinct host/control/Target status | Host service changes require a reviewed privileged action; no implicit Direct fallback |
+| Delete | Require explicit Target detach/reassignment, disable, Owner confirmation and a fresh exact-registration Gateway-host cleanup receipt | **Scoped Cleanup command on the Gateway host** retires only this Relay's local service, SSH client identity, ACLs and evidence. Iran may be offline and its cleanup is never a delete precondition; offer optional independent Iran cleanup guidance when possible. Never touch other Relays or Reverse SSH |
+
+The command must be generated for the exact Relay and checked revision; support an independently transferred/offline Iran-side package when Iran cannot fetch code from foreign endpoints. No arbitrary shell construction from form inputs, production root execution by PHP, generic destructive purge or silently claimed success. Failure leaves a recoverable disabled registration with an actionable Retry/Repair. Host resource changes must be idempotent, ownership-scoped and positively verified. A successful response from a script alone is not evidence that the Target was authenticated.
+
+**Interim security boundary:** The application now separates display-only rename from sensitive route changes and forbids hard deletion based on an Owner checkbox or absent attestation file. Final deletion requires Owner acknowledgement of any necessary local command and a **privileged, short-lived, root-owned Gateway-host cleanup receipt** bound to exact DB record ULID, Relay ID, host fingerprint, configuration revision and current boot. It does **not** require Iran reachability, remote cleanup evidence or Iranian SSH credentials. The strict receipt verifier is implemented; no privileged helper that can create this receipt or perform setup/update/cleanup is shipped yet. Therefore **do not present this as finished self-service Delete/Edit/Setup**. The UI preserves records instead of fabricating cleanup. This receipt is never to be hand-authored by PHP or fabricated by an operator.
+
+The receipt is located at `/etc/mcp-gateway/connection-relays/<relay-id>.retired.json` (fixed root-owned, symlink-free namespace) and contains exactly `relay_record_id`, `relay_id`, `host_fingerprint`, `configuration_revision`, `verified_boot_id`, `verified_at_unix`, `verified_at_boot_seconds`, `expires_at_unix`, `gateway_cleanup_verified`. The single boolean must be true **based on independent privileged verification on the Gateway host**. The lease is valid for no more than 900 seconds, with no significant wall-clock/boot-clock divergence. Active policy and readiness files must be gone. There is no Iranian cleanup field or network check: an unreachable Iran server must never prevent Gateway-side deletion after local verification and Owner confirmation. Remote cleanup, if desired, is an optional separate follow-up. The local helper and its end-to-end tests are required before product acceptance.
 
 ## User workflow
 

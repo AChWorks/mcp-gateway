@@ -14,6 +14,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRetirementEvidence;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\SshDirect\SshDirectTargetAdapter;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
@@ -54,6 +55,148 @@ final class ConnectionRelayAdminTest extends TestCase
 
         $this->get('/admin/targets/create?connector_type=ssh_direct')
             ->assertOk()->assertDontSee('value="iran-1"', false);
+    }
+
+    public function test_owner_can_manage_multiple_relays_and_rename_an_active_relay_without_rekeying_targets(): void
+    {
+        $first = $this->readyRelay();
+        $second = ConnectionRelay::query()->create([
+            ...$this->relayFields(),
+            'relay_id' => 'iran-2',
+            'display_name' => 'Secondary route',
+            'local_socks_port' => 46082,
+        ]);
+        $target = app(SshTargetRegistration::class)->register(
+            'relay-rename-active', 'SSH relay', '1.1.1.1', 22,
+            'deploy', $this->publicKey(), 'password', 'ssh-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        $oldEpoch = $target->relay_binding_revision;
+        $fingerprint = $first->hostFingerprint();
+        $this->actingAs($this->user('owner'));
+        $this->get('/admin/settings/connection-relays')
+            ->assertOk()
+            ->assertSee('Iran shared relay')
+            ->assertSee('Secondary route')
+            ->assertSee('Rename Relay')
+            ->assertSee('Retire and remove Relay')
+            ->assertSee('Add Relay');
+
+        $url = '/admin/settings/connection-relays/'.$first->getKey().'/name';
+        $this->put($url, [
+            'display_name' => 'Iran primary link',
+            'relay_revision' => $first->lifecycle_revision,
+            'current_password' => self::PASSWORD,
+        ])->assertAdminRedirect('/admin/settings/connection-relays')->assertSessionHasNoErrors();
+
+        $first->refresh();
+        self::assertSame('Iran primary link', $first->display_name);
+        self::assertTrue($first->enabled);
+        self::assertSame(1, $first->configuration_revision);
+        self::assertSame(2, $first->lifecycle_revision);
+        self::assertSame($fingerprint, $first->hostFingerprint());
+        self::assertSame($oldEpoch, $target->fresh()->relay_binding_revision);
+        self::assertSame($first->id, $target->fresh()->relay_record_id);
+        self::assertSame('Secondary route', $second->fresh()->display_name);
+
+        $this->put($url, [
+            'display_name' => 'Stale rename',
+            'relay_revision' => 1,
+            'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('relay_revision');
+        self::assertSame('Iran primary link', $first->fresh()->display_name);
+
+        $this->put($url, [
+            'display_name' => 'Iran primary link',
+            'relay_revision' => 2,
+            'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        self::assertSame(2, $first->fresh()->lifecycle_revision);
+    }
+
+    public function test_delete_requires_local_cleanup_proof_owner_confirmation_and_explicit_target_detach(): void
+    {
+        $relay = $this->readyRelay();
+        $target = app(SshTargetRegistration::class)->register(
+            'relay-delete-bound', 'SSH relay', '1.1.1.1', 22,
+            'deploy', $this->publicKey(), 'password', 'ssh-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        $this->actingAs($this->user('owner'));
+        $url = '/admin/settings/connection-relays/'.$relay->id;
+        $fields = [
+            'confirm_relay_id' => 'iran-1',
+            'confirm_gateway_cleanup' => '1',
+            'current_password' => self::PASSWORD,
+        ];
+
+        $this->delete($url, [...$fields, 'relay_revision' => 1])
+            ->assertSessionHasErrors('relay');
+        self::assertNotNull($relay->fresh());
+
+        $this->post($url.'/toggle', [
+            'relay_revision' => 1, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        $this->delete($url, [...$fields, 'relay_revision' => 2])
+            ->assertSessionHasErrors('relay');
+        self::assertNotNull($target->fresh()->relay_record_id);
+
+        $bindings = app(ConnectionRelayTargetBinding::class);
+        $target->refresh();
+        $afterDisableEpoch = $target->relay_binding_revision;
+        self::assertTrue($bindings->change($target, $bindings->revision($target), null));
+        self::assertNull($target->fresh()->relay_record_id);
+        self::assertGreaterThan($afterDisableEpoch, $target->fresh()->relay_binding_revision);
+
+        $this->delete($url, [...$fields, 'relay_revision' => 1])
+            ->assertSessionHasErrors('relay_revision');
+        $this->delete($url, [...$fields, 'relay_revision' => 2, 'confirm_relay_id' => 'iran-2'])
+            ->assertSessionHasErrors('confirm_relay_id');
+        $this->delete($url, [...$fields, 'relay_revision' => 2, 'current_password' => 'bad password'])
+            ->assertSessionHasErrors('current_password');
+        $this->delete($url, [...$fields, 'relay_revision' => 2, 'confirm_gateway_cleanup' => ''])
+            ->assertSessionHasErrors('confirm_gateway_cleanup');
+        self::assertNotNull($relay->fresh());
+
+        // Owner confirmation alone does not prove privileged host cleanup.
+        $this->delete($url, [...$fields, 'relay_revision' => 2])
+            ->assertSessionHasErrors('relay');
+        self::assertNotNull($relay->fresh());
+
+        // A real deployment requires fresh root-owned evidence ONLY for
+        // Gateway-host cleanup. This fake is local-only and creates no files;
+        // there is intentionally no Iran-host check or network requirement.
+        $this->app->instance(ConnectionRelayRetirementEvidence::class, new class extends ConnectionRelayRetirementEvidence
+        {
+            public function verified(ConnectionRelay $relay): bool
+            {
+                return true;
+            }
+        });
+        $this->delete($url, [...$fields, 'relay_revision' => 2, 'confirm_gateway_cleanup' => ''])
+            ->assertSessionHasErrors('confirm_gateway_cleanup');
+        $this->delete($url, [...$fields, 'relay_revision' => 2])
+            ->assertAdminRedirect('/admin/settings/connection-relays')->assertSessionHasNoErrors();
+        self::assertNull(ConnectionRelay::query()->find($relay->getKey()));
+        self::assertNull($target->fresh()->relay_record_id);
+        self::assertSame(0, DB::table('targets')->whereNotNull('relay_record_id')->count());
+    }
+
+    public function test_non_owner_cannot_rename_or_delete_relays(): void
+    {
+        $relay = ConnectionRelay::query()->create($this->relayFields());
+        $this->actingAs($this->user('operator'));
+        $this->put('/admin/settings/connection-relays/'.$relay->id.'/name', [
+            'display_name' => 'Not authorized',
+            'relay_revision' => 1,
+            'current_password' => self::PASSWORD,
+        ])->assertForbidden();
+        $this->delete('/admin/settings/connection-relays/'.$relay->id, [
+            'relay_revision' => 1,
+            'confirm_relay_id' => 'iran-1',
+            'current_password' => self::PASSWORD,
+        ])->assertForbidden();
+        self::assertSame('Iran shared relay', $relay->fresh()->display_name);
     }
 
     public function test_failed_ssh_enrollment_keeps_explicit_relay_selection_for_safe_retry(): void
@@ -109,6 +252,38 @@ final class ConnectionRelayAdminTest extends TestCase
                 ->assertSessionMissing('_old_input.current_password');
             self::assertSame($before, $relay->fresh()->only(array_keys($before)), 'Invalid edit must not rotate persisted Relay identity.');
         }
+    }
+
+    public function test_relay_create_and_edit_reject_duplicate_id_and_listener_port_on_the_correct_field(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $one = ConnectionRelay::query()->create($this->relayFields());
+        $other = ConnectionRelay::query()->create([
+            ...$this->relayFields(),
+            'relay_id' => 'iran-2',
+            'local_socks_port' => 46082,
+        ]);
+        $this->post('/admin/settings/connection-relays', [
+            ...$this->relayFields(), 'local_socks_port' => 46083,
+            'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('relay_id');
+        $this->post('/admin/settings/connection-relays', [
+            ...$this->relayFields(), 'relay_id' => 'iran-3',
+            'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('local_socks_port');
+
+        $url = '/admin/settings/connection-relays/'.$other->getKey();
+        $this->put($url, [
+            ...$this->relayFields(), 'local_socks_port' => 46082,
+            'relay_revision' => 1, 'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('relay_id');
+        $this->put($url, [
+            ...$this->relayFields(), 'relay_id' => 'iran-3',
+            'relay_revision' => 1, 'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('local_socks_port');
+        self::assertSame('iran-2', $other->fresh()->relay_id);
+        self::assertSame(46082, $other->fresh()->local_socks_port);
+        self::assertSame('iran-1', $one->fresh()->relay_id);
     }
 
     public function test_only_owner_can_manage_relay_or_attach_target_to_it(): void

@@ -10,7 +10,10 @@
         <h1>{{ __('Connection Relays') }}</h1>
         <p class="muted reading-width">{{ __('Register one intermediary for several SSH/SFTP or WordPress Targets. Direct stays the default; existing Reverse SSH routes remain separate.') }}</p>
     </div>
-    <a href="{{ route('admin.targets.create') }}">{{ __('Add Target') }}</a>
+    <div class="action-row">
+        <a href="#relay-add-heading" class="button button-primary">{{ __('Add Relay') }}</a>
+        <a href="{{ route('admin.targets.create') }}">{{ __('Add Target') }}</a>
+    </div>
 </div>
 
 <section class="panel panel-wide" aria-labelledby="relay-setup-heading">
@@ -36,7 +39,8 @@
 </section>
 
 <section class="panel panel-wide" aria-labelledby="relay-list-heading">
-    <h2 id="relay-list-heading">{{ __('Registered Relays') }}</h2>
+    <h2 id="relay-list-heading">{{ __('Registered Relays') }} ({{ $relays->count() }})</h2>
+    <p class="field-help">{{ __('Relays are managed independently. Renaming only changes the displayed name; editing a connection requires renewed host verification.') }}</p>
     @forelse ($relays as $relay)
         <article class="target-subsection" aria-labelledby="relay-title-{{ $relay->id }}">
             <div class="section-heading">
@@ -52,6 +56,31 @@
                 <div><dt>{{ __('Targets using Relay') }}</dt><dd>{{ $counts[$relay->id] ?? 0 }}</dd></div>
                 <div><dt>{{ __('Host evidence') }}</dt><dd>{{ $hostStates[$relay->id] ? __('Current for this PHP UID') : __('Not ready — missing, expired or mismatched') }}</dd></div>
             </dl>
+            <details class="target-help-details">
+                <summary>{{ __('Rename Relay') }}</summary>
+                <p class="field-help">{{ __('Change the name displayed in Gateway without interrupting the connection or bound Targets.') }}</p>
+                @php $renameDraft = old('name_relay_id') === (string) $relay->getKey(); @endphp
+                <form method="post" class="form-stack" action="{{ route('admin.connection-relays.rename', ['relay' => $relay->id]) }}" autocomplete="off">
+                    @csrf
+                    @method('PUT')
+                    <input type="hidden" name="relay_revision" value="{{ $relay->lifecycle_revision }}">
+                    <input type="hidden" name="name_relay_id" value="{{ $relay->getKey() }}">
+                    <div class="field">
+                        <label for="relay-name-{{ $relay->id }}">{{ __('Display name') }}</label>
+                        <input id="relay-name-{{ $relay->id }}" type="text" name="display_name" maxlength="160" required
+                            autocomplete="off" data-admin-manual-entry
+                            data-admin-server-value="{{ $renameDraft ? old('display_name', $relay->display_name) : $relay->display_name }}"
+                            value="{{ $renameDraft ? old('display_name', $relay->display_name) : $relay->display_name }}"
+                            @if($renameDraft && $errors->has('display_name')) aria-invalid="true" aria-describedby="relay-name-error-{{ $relay->id }}" @endif>
+                        @if($renameDraft) @error('display_name')<p class="field-error" role="alert" id="relay-name-error-{{ $relay->id }}">{{ $message }}</p>@enderror @endif
+                    </div>
+                    <div class="field">
+                        <label for="relay-rename-password-{{ $relay->id }}">{{ __('Current Owner password') }}</label>
+                        <input id="relay-rename-password-{{ $relay->id }}" type="password" name="current_password" data-admin-requires-intent autocomplete="current-password" maxlength="255" required>
+                    </div>
+                    <button class="button button-secondary" type="submit">{{ __('Save display name') }}</button>
+                </form>
+            </details>
             @if ($relay->enabled)
                 <form method="post" class="form-stack" action="{{ route('admin.connection-relays.test', ['relay' => $relay->id]) }}">
                     @csrf
@@ -74,8 +103,8 @@
             </form>
             @if (! $relay->enabled && (int) ($counts[$relay->id] ?? 0) === 0)
                 <details class="target-help-details">
-                    <summary>{{ __('Edit inactive Relay identity') }}</summary>
-                    <p class="field-help">{{ __('Changing the control endpoint, key or port requires fresh privileged host verification before enabling.') }}</p>
+                    <summary>{{ __('Edit connection settings') }}</summary>
+                    <p class="field-help">{{ __('Disable this Relay and detach or reassign its Targets before changing host, key, ID or port. These changes require new privileged host setup and verification. Use Rename above to change only the display name without downtime.') }}</p>
                     <form class="form-stack" method="post" action="{{ route('admin.connection-relays.update', ['relay' => $relay->id]) }}" autocomplete="off">
                         @csrf
                         @method('PUT')
@@ -90,7 +119,39 @@
                     </form>
                 </details>
             @elseif (! $relay->enabled)
-                <p class="field-help">{{ __('Detach all bound Targets before editing this Relay’s identity.') }}</p>
+                <p class="field-help">{{ __('Reassign or detach the :count Target(s) under Targets before editing the connection. No Target will switch to Direct automatically.', ['count' => $counts[$relay->id] ?? 0]) }}</p>
+                <a href="{{ route('admin.targets.index') }}">{{ __('Manage assigned Targets') }}</a>
+            @endif
+            @if (! $relay->enabled && (int) ($counts[$relay->id] ?? 0) === 0)
+                <details class="target-help-details">
+                    <summary>{{ __('Retire and remove Relay') }}</summary>
+                    @if (! ($retiredStates[$relay->id] ?? false))
+                        <p class="field-help">{{ __('Deletion is locked until local Gateway-host resources for this Relay are retired and independently verified. Iran may be offline; no connection to it is needed to remove the Gateway registration. The scoped local cleanup command and verifier are still under development.') }}</p>
+                        <p class="field-help">{{ __('Read the operator recovery and cleanup requirements in docs/CONNECTION-RELAYS.md. Existing host resources must not be assumed absent.') }}</p>
+                    @else
+                        <p class="field-help">{{ __('Gateway-host cleanup has been verified for this exact Relay. Iran-side access and cleanup are not required. Confirm any necessary local cleanup command was completed before deletion.') }}</p>
+                        <form method="post" class="form-stack" action="{{ route('admin.connection-relays.destroy', ['relay' => $relay->id]) }}" autocomplete="off">
+                        @csrf
+                        @method('DELETE')
+                        <input type="hidden" name="relay_revision" value="{{ $relay->lifecycle_revision }}">
+                        <div class="field">
+                            <label for="relay-confirm-delete-{{ $relay->id }}">{{ __('Type the exact Relay ID to confirm deletion: :id', ['id' => $relay->relay_id]) }}</label>
+                            <input id="relay-confirm-delete-{{ $relay->id }}" type="text" name="confirm_relay_id" required maxlength="64" autocomplete="off" spellcheck="false">
+                        </div>
+                        <label class="checkbox-option">
+                            <input type="checkbox" name="confirm_gateway_cleanup" value="1" required>
+                            <span>{{ __('I confirm any required Gateway-host cleanup command is complete. Iran-side cleanup may remain pending and does not block deleting this Gateway record.') }}</span>
+                        </label>
+                        <div class="field">
+                            <label for="relay-delete-password-{{ $relay->id }}">{{ __('Current Owner password') }}</label>
+                            <input id="relay-delete-password-{{ $relay->id }}" type="password" name="current_password" data-admin-requires-intent autocomplete="current-password" maxlength="255" required>
+                        </div>
+                        <button class="button button-danger" type="submit">{{ __('Delete verified retired Relay') }}</button>
+                        </form>
+                    @endif
+                </details>
+            @elseif ($relay->enabled)
+                <p class="field-help">{{ __('Disable this Relay before deleting it. Assigned Targets must also be explicitly detached or reassigned.') }}</p>
             @endif
         </article>
     @empty
