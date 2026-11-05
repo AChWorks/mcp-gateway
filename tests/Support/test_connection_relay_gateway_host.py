@@ -97,6 +97,15 @@ class RetirementTests(unittest.TestCase):
         self.fake = FakeHost(self.relay)
         self.operator = mod.Retirement(self.relay, self.layout, self.fake)
 
+    def test_lock_namespace_avoids_world_writable_standard_run_lock(self):
+        # Debian's /run/lock is mode 1777 and must not be trusted as a
+        # privileged path parent. Use a dedicated root-owned /run subtree.
+        self.assertEqual(
+            self.root / "run/mcp-gateway-relays/iran-1.lock",
+            self.layout.lock_path(self.relay),
+        )
+        self.assertNotIn("/run/lock/", str(self.layout.lock_path(self.relay)))
+
     def test_fresh_disabled_draft_can_retire_without_remote_host_or_any_network(self):
         self.assertIn("claim=absent", self.operator.preview().replace("resource claim", "claim"))
         self.assertEqual([], [x for x in self.fake.calls if x[0] in ("ssh", "curl")])

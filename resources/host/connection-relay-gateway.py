@@ -81,7 +81,7 @@ class Layout:
         return self.at("/var/lib/mcp-gateway-relays") / relay.relay_id
 
     def lock_path(self, relay: Relay) -> Path:
-        return self.at("/run/lock/mcp-gateway-relays") / (relay.relay_id + ".lock")
+        return self.at("/run/mcp-gateway-relays") / (relay.relay_id + ".lock")
 
 
 def trusted(path: Path, directory: bool, uid: int, required: bool = False) -> bool:
