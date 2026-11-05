@@ -3,6 +3,8 @@
 namespace App\Infrastructure\Connectors\SshDirect;
 
 use App\Application\Targets\SshTargetConnectionException;
+use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
+use App\Infrastructure\Connectors\Relay\Socks5NumericDialer;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use Closure;
 use phpseclib4\Crypt\PublicKeyLoader;
@@ -26,12 +28,12 @@ final readonly class SshVerifiedTransport
     public function authenticate(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        ?SshReverseRoute $route = null,
+        ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null,
     ): string {
         return $this->withAuthenticatedSession(
             $endpoint, $pin, $authMethod, $secret, $passphrase,
             static fn (SSH2 $ssh, string $peerIp): string => $peerIp,
-            $route,
+            $route, $relay,
         );
     }
 
@@ -45,11 +47,11 @@ final readonly class SshVerifiedTransport
     public function withAuthenticatedSession(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        Closure $operation, ?SshReverseRoute $route = null,
+        Closure $operation, ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase, $operation, false,
-            null, $route,
+            null, $route, $relay,
         );
     }
 
@@ -58,6 +60,7 @@ final readonly class SshVerifiedTransport
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
         Closure $operation, ?int $deadlineNs = null, ?SshReverseRoute $route = null,
+        ?LocalSocks5Route $relay = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase,
@@ -68,7 +71,7 @@ final readonly class SshVerifiedTransport
 
                 return $operation($ssh, $peerIp);
             },
-            true, $deadlineNs, $route,
+            true, $deadlineNs, $route, $relay,
         );
     }
 
@@ -77,8 +80,12 @@ final readonly class SshVerifiedTransport
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
         Closure $operation, bool $requireSftp, ?int $deadlineNs = null,
-        ?SshReverseRoute $route = null,
+        ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null,
     ): mixed {
+        if ($route !== null && $relay !== null) {
+            throw new SshTargetConnectionException('egress_denied');
+        }
+
         $privateKey = null;
         $rsaClientAuthentication = false;
         if ($authMethod === 'password') {
@@ -131,11 +138,39 @@ final readonly class SshVerifiedTransport
         $address = 'tcp://'.(str_contains($ip, ':') ? '['.$ip.']' : $ip).':'.$dialPort;
         $errno = 0;
         $error = '';
-        $socket = @stream_socket_client(
-            $address, $errno, $error, $this->boundedTimeout(5, $deadlineNs), STREAM_CLIENT_CONNECT,
-        );
-        if (! is_resource($socket)) {
-            throw new SshTargetConnectionException($route === null ? 'tcp_unreachable' : 'reverse_listener_unavailable');
+        if ($relay !== null) {
+            try {
+                $socket = (new Socks5NumericDialer)->connect(
+                    $relay->loopbackPort, $ip, $endpoint->port,
+                    $this->boundedTimeout(5, $deadlineNs),
+                );
+            } catch (\RuntimeException $exception) {
+                $this->assertDeadline($deadlineNs);
+                $code = $exception->getMessage();
+                throw new SshTargetConnectionException('relay_unavailable', [
+                    'failure_origin' => 'gateway_transport',
+                    'failure_stage' => 'relay_socks_connect',
+                    'source_error_code' => in_array($code, [
+                        'relay_endpoint_invalid', 'relay_unavailable', 'relay_peer_mismatch',
+                        'relay_handshake_failed', 'relay_connect_denied',
+                    ], true) ? $code : 'relay_handshake_failed',
+                    'pre_dispatch' => true,
+                ]);
+            } catch (Throwable) {
+                $this->assertDeadline($deadlineNs);
+                throw new SshTargetConnectionException('relay_unavailable', [
+                    'failure_origin' => 'gateway_transport',
+                    'failure_stage' => 'relay_socks_connect',
+                    'pre_dispatch' => true,
+                ]);
+            }
+        } else {
+            $socket = @stream_socket_client(
+                $address, $errno, $error, $this->boundedTimeout(5, $deadlineNs), STREAM_CLIENT_CONNECT,
+            );
+            if (! is_resource($socket)) {
+                throw new SshTargetConnectionException($route === null ? 'tcp_unreachable' : 'reverse_listener_unavailable');
+            }
         }
 
         $ssh = null;
@@ -145,9 +180,18 @@ final readonly class SshVerifiedTransport
             $peerHost = is_string($peer) ? parse_url('tcp://'.$peer, PHP_URL_HOST) : false;
             $peerPort = is_string($peer) ? parse_url('tcp://'.$peer, PHP_URL_PORT) : false;
             $peerIp = is_string($peerHost) ? trim($peerHost, '[]') : '';
-            if ($peerPort !== $dialPort || @inet_pton($peerIp) === false
-                || ! hash_equals((string) inet_pton($ip), (string) inet_pton($peerIp))) {
+            // The OS-visible TCP peer for SOCKS is local, not the end host.
+            // The CONNECT reply is NOT an independently observed remote peer.
+            // Validate the local tunnel endpoint and suppress remote peer
+            // claims; the end-host's cryptographic pin is checked below.
+            $expectedIp = $relay === null ? $ip : '127.0.0.1';
+            $expectedPort = $relay === null ? $dialPort : $relay->loopbackPort;
+            if ($peerPort !== $expectedPort || @inet_pton($peerIp) === false
+                || ! hash_equals((string) inet_pton($expectedIp), (string) inet_pton($peerIp))) {
                 throw new SshTargetConnectionException('tcp_peer_mismatch');
+            }
+            if ($relay !== null) {
+                $peerIp = '';
             }
 
             try {

@@ -9,6 +9,8 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
@@ -29,6 +31,17 @@ if (! app()->environment('local') || getenv('GATEWAY_BROWSER_FIXTURE') !== '1'
 // Render real SSH file forms only in this already guarded disposable fixture.
 // Browser tests intercept transfer actions before any application execution.
 config()->set('ssh.file_transfer.enabled', true);
+
+// The isolated loopback-only browser fixture must exercise the real enabled
+// Owner UI without fabricating privileged root files or changing host state.
+// Production never binds this synthetic readiness implementation.
+app()->instance(ConnectionRelayHostReadiness::class, new class extends ConnectionRelayHostReadiness
+{
+    public function ready(ConnectionRelay $relay): bool
+    {
+        return true;
+    }
+});
 
 Route::middleware('web')->get('/__browser__/experience/{role}', static function (string $role) {
     abort_unless(in_array($role, ['owner', 'administrator', 'operator', 'viewer'], true), 404);
@@ -99,9 +112,59 @@ Route::middleware('web')->get('/__browser__/experience/{role}', static function 
             'user_id' => $user->getKey(), 'target_record_id' => $target->getKey(),
         ], ['allowed' => true]);
     }
+    // Browser-only synthetic route. No SSH client, network or root attestation
+    // is created; readiness above is only a screen-rendering fixture.
+    if (! ConnectionRelay::query()->where('relay_id', 'ui-iran')->exists()) {
+        $key = implode(' ', array_slice(preg_split('/\s+/', trim(EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH'))), 0, 2));
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'ui-iran', 'display_name' => 'Iran intermediary — synthetic browser fixture',
+            'control_host' => '198.51.100.42', 'control_port' => 22,
+            'control_user' => 'ui-only-relay', 'control_host_key' => $key,
+            'local_socks_port' => 46081,
+        ]);
+        DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
+    }
     Auth::login($user);
 
     return redirect()->route('admin.dashboard');
+});
+
+// A disabled saved Relay must remain selected and explicitly blocked on Edit,
+// not silently present Direct. This disposable fixture creates no connection.
+Route::middleware(['web', 'auth'])->get('/__browser__/relay-unavailable-target', static function () {
+    abort_unless(Auth::user()?->getRawOriginal('role') === 'owner', 403);
+    $relay = ConnectionRelay::query()->where('relay_id', 'ui-iran-offline')->first();
+    if (! $relay instanceof ConnectionRelay) {
+        $key = implode(' ', array_slice(
+            preg_split('/\\s+/', trim(EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH'))), 0, 2,
+        ));
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'ui-iran-offline', 'display_name' => 'Unusable saved intermediary',
+            'control_host' => '198.51.100.43', 'control_port' => 22,
+            'control_user' => 'offline-ui-only', 'control_host_key' => $key,
+            'local_socks_port' => 46082,
+        ]);
+    }
+    $target = Target::query()->where('target_id', 'ui-relay-unavailable')->first();
+    if (! $target instanceof Target) {
+        $target = Target::query()->create([
+            'target_id' => 'ui-relay-unavailable',
+            'display_name' => 'Synthetic disabled route',
+            'connector_type' => 'ssh_direct',
+            'connection_state' => TargetConnectionState::Disconnected,
+        ]);
+        DB::table('targets')->where('id', $target->getKey())->update([
+            'relay_record_id' => $relay->getKey(), 'relay_binding_revision' => 1,
+        ]);
+        SshTargetConfig::query()->create([
+            'target_record_id' => $target->getKey(),
+            'host' => '203.0.113.5', 'port' => 22, 'username' => 'fixture',
+            'auth_method' => 'password', 'pinned_host_key' => $relay->control_host_key,
+            'route_mode' => 'direct', 'binding_revision' => 0,
+        ]);
+    }
+
+    return redirect()->route('admin.targets.edit', ['target' => 'ui-relay-unavailable']);
 });
 
 // Seed the two real Owner-only revocation pages on this disposable browser DB.

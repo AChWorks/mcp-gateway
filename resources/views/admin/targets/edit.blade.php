@@ -46,6 +46,34 @@
 </section>
 
 @can('security.manage')
+@if(auth()->user()?->getRawOriginal('role') === 'owner' && in_array($target->connector_type, ['ssh_direct','wp_ai_bridge'], true))
+<section class="panel panel-wide target-enrollment" aria-labelledby="target-route-heading">
+    <h2 id="target-route-heading">{{ __('Connection route') }}</h2>
+    <p class="field-help">{{ __('This route is shared by the Target’s SSH/SFTP or WordPress/OAuth/MCP operations. A change fences retained SSH Jobs and requires reconnection. Switch only after finishing pending authentication, revocation and remote operations.') }}</p>
+    <form class="form-stack" method="post" action="{{ route('admin.targets.relay-route.update', ['target' => $target->target_id]) }}">
+        @csrf
+        @method('PUT')
+        <input type="hidden" name="route_revision" value="{{ $routeRevision }}">
+        @include('admin.targets.partials.connection-relay-selector', [
+            'selectId' => 'target-edit-connection-relay',
+            'initialRelayId' => old('connection_relay_id', $selectedRelay?->relay_id),
+            'blockedRelay' => $selectedRelay !== null && ! $connectionRelays->contains(
+                fn($relay) => $relay->getKey() === $selectedRelay->getKey(),
+            ) ? $selectedRelay : null,
+        ])
+        @error('route_revision')<p class="field-error" role="alert" id="route-revision-error">{{ $message }}</p>@enderror
+        <div class="field">
+            <label for="target-edit-route-password">{{ __('Current Owner password') }}</label>
+            <input id="target-edit-route-password" type="password" name="current_password" maxlength="255"
+                data-admin-requires-intent autocomplete="current-password" required>
+        </div>
+        <button class="button button-primary" type="submit">{{ __('Save connection route and require re-verification') }}</button>
+    </form>
+</section>
+@endif
+@endcan
+
+@can('security.manage')
 @if (! empty($configurationRevision))
     <section class="panel panel-wide target-enrollment" aria-label="{{ __('Connector settings') }}">
         <h2>{{ __('Connection settings') }}</h2>

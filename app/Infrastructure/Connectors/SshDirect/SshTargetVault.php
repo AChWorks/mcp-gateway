@@ -90,6 +90,12 @@ final class SshTargetVault
             ];
         }
 
+        $relayEpoch = (int) ($target->getAttribute('relay_binding_revision') ?? 0);
+        $relayId = $target->getAttribute('relay_record_id');
+        if ($relayEpoch > 0 || $relayId !== null) {
+            $parts = [...$parts, 'connection_relay', (string) $relayId, (string) $relayEpoch];
+        }
+
         return hash('sha256', implode("\0", $parts));
     }
 

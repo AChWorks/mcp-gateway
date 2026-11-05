@@ -6,9 +6,11 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
+use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Support\CorrelationId;
@@ -22,6 +24,7 @@ final readonly class WpAiBridgeTargetReconfiguration
         private WpAiBridgeDiscovery $discovery,
         private OutboundTargetPolicy $policy,
         private ActivityRecorder $activity,
+        private ConnectionRelayRoutes $relays,
     ) {}
 
     public function revision(Target $target): string
@@ -66,7 +69,12 @@ final readonly class WpAiBridgeTargetReconfiguration
         // Public HTTPS metadata discovery deliberately happens without a DB
         // lock; the same strict SSRF, DNS and origin checks as registration.
         try {
-            $discovered = $this->discovery->discover($url);
+            $discovered = $this->discovery->discover($url, $this->relays->httpRouteForTarget($target));
+        } catch (OutboundRequestException $exception) {
+            throw new TargetConnectorFailure(
+                __('The selected Connection Relay is unavailable; no WordPress origin change was saved.'),
+                'base_url', 'relay_unavailable',
+            );
         } catch (BridgeDiscoveryException $exception) {
             throw new TargetConnectorFailure(
                 OperationDiagnostics::summary($exception->reason, $exception->diagnostics),

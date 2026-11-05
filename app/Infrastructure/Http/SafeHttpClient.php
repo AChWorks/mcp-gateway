@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Http;
 
 use App\Application\Operations\OperationalSettings;
+use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
 use App\Support\OperationTiming;
 use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
 use GuzzleHttp\TransferStats;
@@ -21,9 +22,9 @@ final class SafeHttpClient
     ) {}
 
     /** @param array<string, string> $headers */
-    public function get(string $url, array $headers = []): SafeHttpResponse
+    public function get(string $url, array $headers = [], ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
-        return $this->send('GET', $url, $headers, [], 'none');
+        return $this->send('GET', $url, $headers, [], 'none', relay: $relay);
     }
 
     /** Only the allowlisted ChatGPT file origin may include signed queries. */
@@ -52,24 +53,24 @@ final class SafeHttpClient
      * @param  array<string, scalar|null>  $form
      * @param  array<string, string>  $headers
      */
-    public function postForm(string $url, array $form, array $headers = []): SafeHttpResponse
+    public function postForm(string $url, array $form, array $headers = [], ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
-        return $this->send('POST', $url, $headers, $form, 'form');
+        return $this->send('POST', $url, $headers, $form, 'form', relay: $relay);
     }
 
     /**
      * @param  array<string, mixed>  $json
      * @param  array<string, string>  $headers
      */
-    public function postJson(string $url, array $json, array $headers = [], ?int $responseLimitBytes = null, ?OperationTiming $timing = null): SafeHttpResponse
+    public function postJson(string $url, array $json, array $headers = [], ?int $responseLimitBytes = null, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
-        return $this->send('POST', $url, $headers, $json, 'json', $responseLimitBytes, $timing);
+        return $this->send('POST', $url, $headers, $json, 'json', $responseLimitBytes, $timing, relay: $relay);
     }
 
     /** @param array<string, string> $headers */
-    public function delete(string $url, array $headers = [], ?OperationTiming $timing = null): SafeHttpResponse
+    public function delete(string $url, array $headers = [], ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
-        return $this->send('DELETE', $url, $headers, [], 'none', null, $timing);
+        return $this->send('DELETE', $url, $headers, [], 'none', null, $timing, relay: $relay);
     }
 
     /**
@@ -77,7 +78,7 @@ final class SafeHttpClient
      * @param  array<string, mixed>  $payload
      * @param  'none'|'form'|'json'  $format
      */
-    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null, ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
         $network = $this->settings->httpTimeoutsSeconds();
         $connectTimeout = $network['connect'];
@@ -114,6 +115,13 @@ final class SafeHttpClient
         $responseBody = new BoundedResponseBody($maxBytes, $fileSink);
 
         try {
+            if ($relay !== null && ! extension_loaded('curl')) {
+                throw new OutboundRequestException('runtime', 'Validated SOCKS5 routing requires the cURL transport.', [], true);
+            }
+
+            // Guzzle's cURL handler forbids raw CURLOPT_PROXYTYPE and
+            // CURLOPT_NOPROXY; its scheme-prefixed proxy option controls both
+            // and overrides ambient NO_PROXY (verified against real handler).
             $curlOptions = [];
             if (filter_var($target->host, FILTER_VALIDATE_IP) === false) {
                 if (! defined('CURLOPT_RESOLVE')) {
@@ -131,7 +139,7 @@ final class SafeHttpClient
                 'verify' => true,
                 // Never transparently decompress an opaque signed-file byte stream.
                 ...($fileSink === null ? [] : ['decode_content' => false]),
-                'proxy' => '',
+                'proxy' => $relay?->httpProxyUri() ?? '',
                 'progress' => [$responseBody, 'progress'],
                 'sink' => $responseBody->stream(),
                 ...($curlOptions === [] ? [] : ['curl' => $curlOptions]),

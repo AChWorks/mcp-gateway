@@ -4,6 +4,7 @@ namespace App\Application\Targets;
 
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -17,9 +18,13 @@ use InvalidArgumentException;
  */
 final readonly class WpAiBridgeTargetRegistration
 {
-    public function __construct(private WpAiBridgeDiscovery $discovery) {}
+    public function __construct(
+        private WpAiBridgeDiscovery $discovery,
+        private ConnectionRelayRoutes $relays,
+        private ConnectionRelayTargetBinding $bindings,
+    ) {}
 
-    public function register(string $targetId, string $displayName, string $baseUrl, ?string $aiGuidance = null): Target
+    public function register(string $targetId, string $displayName, string $baseUrl, ?string $aiGuidance = null, ?string $relayId = null): Target
     {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -35,11 +40,11 @@ final readonly class WpAiBridgeTargetRegistration
 
         // Existing discovery enforces HTTPS, DNS pinning, public outbound policy,
         // bounded response sizes, same-origin OAuth URLs and supported protocols.
-        $metadata = $this->discovery->discover($baseUrl);
+        $metadata = $this->discovery->discover($baseUrl, $this->relays->routeForSelection($relayId));
         $hash = hash('sha256', $metadata->baseUrl);
 
         try {
-            return DB::transaction(static function () use ($targetId, $displayName, $aiGuidance, $metadata, $hash): Target {
+            return DB::transaction(function () use ($targetId, $displayName, $aiGuidance, $metadata, $hash, $relayId): Target {
                 // Connector-scoped reservation prevents same-endpoint registration
                 // racing against future reassignment, but never blocks SSH/Agent
                 // Targets at the same host.
@@ -59,6 +64,8 @@ final readonly class WpAiBridgeTargetRegistration
                     'connector_type' => 'wp_ai_bridge',
                     'connection_state' => TargetConnectionState::Disconnected,
                 ]);
+
+                $this->bindings->onRegistration($target, $relayId);
 
                 WpAiBridgeTargetConfig::query()->create([
                     'target_record_id' => $target->getKey(),

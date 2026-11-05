@@ -63,7 +63,8 @@ final readonly class SshVerificationState
             $currentConfig->forceFill([
                 'verification_attempt_id' => null,
                 // A local reverse listener is not the remote host IP.
-                'observed_peer_ip' => ($currentConfig->route_mode ?? 'direct') === 'reverse' ? null : $peerIp,
+                'observed_peer_ip' => ($currentConfig->route_mode ?? 'direct') === 'reverse'
+                    || $locked->getAttribute('relay_record_id') !== null ? null : $peerIp,
                 'observed_at' => $now,
             ])->save();
             $locked->forceFill([

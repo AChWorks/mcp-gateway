@@ -10,6 +10,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\SshDirect\SshFileAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
@@ -46,6 +47,7 @@ final readonly class SshFileRuntime
         private OperationalSettings $settings,
         private McpDispatchAdmission $dispatchAdmission,
         private SshReverseRoutePolicy $reverseRoutes,
+        private ConnectionRelayRoutes $relayRoutes,
     ) {}
 
     /** @return array<string,mixed> */
@@ -485,6 +487,7 @@ final readonly class SshFileRuntime
             }
 
             $route = $this->reverseRoutes->forTarget($fresh, $config);
+            $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $this->ensureFileDeadline($deadlineNs);
 
             return $this->transport->withAuthenticatedSftpSession(
@@ -531,7 +534,7 @@ final readonly class SshFileRuntime
                     );
                 },
                 $deadlineNs,
-                $route,
+                $route, $relay,
             );
         }, $deadlineNs);
     }
@@ -593,6 +596,7 @@ final readonly class SshFileRuntime
             // Re-approve at each post-login and staged-write authority fence,
             // not only before opening the socket. No extra DB reads required.
             $this->reverseRoutes->forTarget($target, $config);
+            $this->relayRoutes->sshRouteForTarget($target);
         }
 
         return $stillBound;

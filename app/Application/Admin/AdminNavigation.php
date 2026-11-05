@@ -27,6 +27,7 @@ final class AdminNavigation
             // Operations has always been Owner-only, independently of menu permissions.
             ['destination' => 'admin.operations.index', 'activePattern' => 'admin.operations.*', 'label' => 'Operational settings', 'icon' => 'settings', 'permission' => null],
             ['destination' => 'admin.reverse-ssh.index', 'activePattern' => 'admin.reverse-ssh.index', 'label' => 'Reverse SSH', 'icon' => 'settings', 'permission' => null],
+            ['destination' => 'admin.connection-relays.index', 'activePattern' => 'admin.connection-relays.*', 'label' => 'Connection Relays', 'icon' => 'connection', 'permission' => null],
         ]],
     ];
 

@@ -22,6 +22,7 @@ final readonly class SshTargetRegistration
         private SshTargetVault $vault,
         private ActivityRecorder $activity,
         private SshReverseRoutePolicy $reverseRoutes,
+        private ConnectionRelayTargetBinding $relayBindings,
     ) {}
 
     public function register(
@@ -29,6 +30,7 @@ final readonly class SshTargetRegistration
         string $username, string $hostPublicKey, string $authMethod,
         string $secret, ?string $passphrase, ?string $aiGuidance = null,
         string $routeMode = 'direct', ?int $reversePort = null, ?string $tunnelIdentity = null,
+        ?string $connectionRelayId = null,
     ): Target {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -37,6 +39,9 @@ final readonly class SshTargetRegistration
             || $displayName === '' || mb_strlen($displayName) > 160
             || ! in_array($authMethod, ['password', 'private_key'], true)) {
             throw new InvalidArgumentException('Invalid SSH Target registration fields.');
+        }
+        if ($connectionRelayId !== null && $connectionRelayId !== '' && $routeMode !== 'direct') {
+            throw new SshTargetConnectionException('relay_reverse_conflict');
         }
         $endpoint = SshRegisteredEndpoint::fromInput($host, $port, $username);
         $pin = SshHostKeyPin::fromLine($hostPublicKey);
@@ -48,7 +53,7 @@ final readonly class SshTargetRegistration
         try {
             return DB::transaction(function () use (
                 $targetId, $displayName, $aiGuidance, $endpoint, $pin, $authMethod, $secret, $passphrase,
-                $approvedRoute,
+                $approvedRoute, $connectionRelayId,
             ): Target {
                 $target = Target::query()->create([
                     'target_id' => $targetId,
@@ -57,6 +62,7 @@ final readonly class SshTargetRegistration
                     'connector_type' => 'ssh_direct',
                     'connection_state' => TargetConnectionState::Disconnected,
                 ]);
+                $this->relayBindings->onRegistration($target, $connectionRelayId);
                 $config = SshTargetConfig::query()->create([
                     'target_record_id' => $target->getKey(),
                     'host' => $endpoint->host,

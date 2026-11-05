@@ -24,4 +24,20 @@
                     @error('ai_guidance')<p class="field-error" role="alert" id="ai_guidance-error">{{ $message }}</p>@enderror
                 </div>
             </div>
+            @if(auth()->user()?->getRawOriginal('role') === 'owner')
+                <div class="target-subsection">
+                    <h3>{{ __('Connection route') }}</h3>
+                    @include('admin.targets.partials.connection-relay-selector', [
+                        'selectId' => 'connection_relay_id',
+                        'initialRelayId' => old('connection_relay_id'),
+                        'disabled' => $selected === 'ssh_direct' && $selectedSshMode !== 'direct',
+                    ])
+                    <div class="field" data-relay-owner-group>
+                        <label for="target-relay-owner-password">{{ __('Current Owner password (required when using a Relay)') }}</label>
+                        <input id="target-relay-owner-password" type="password" name="current_password" data-admin-requires-intent
+                            data-relay-owner-password maxlength="255" autocomplete="current-password"
+                            @if($selected === 'ssh_direct' && $selectedSshMode !== 'direct') disabled @endif>
+                    </div>
+                </div>
+            @endif
         </fieldset>

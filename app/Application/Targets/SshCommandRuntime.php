@@ -9,6 +9,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\SshDirect\SshCommandAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
@@ -31,6 +32,7 @@ final readonly class SshCommandRuntime
         private OperationalSettings $settings,
         private McpDispatchAdmission $dispatchAdmission,
         private SshReverseRoutePolicy $reverseRoutes,
+        private ConnectionRelayRoutes $relayRoutes,
     ) {}
 
     /** @return array<string,mixed> */
@@ -86,6 +88,7 @@ final readonly class SshCommandRuntime
             }
 
             $route = $this->reverseRoutes->forTarget($fresh, $config);
+            $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $started = microtime(true);
 
             return $this->transport->withAuthenticatedSession(
@@ -126,10 +129,11 @@ final readonly class SshCommandRuntime
                     // pinned end-host KEX/login is in progress. Recheck before
                     // sending even one effectful command.
                     $this->reverseRoutes->forTarget($currentTarget, $currentConfig);
+                    $this->relayRoutes->sshRouteForTarget($currentTarget);
 
                     return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started);
                 },
-                $route,
+                $route, $relay,
             );
         }, $timeoutSeconds);
     }
@@ -192,7 +196,7 @@ final readonly class SshCommandRuntime
 
         return [
             'status' => $status,
-            'connected_ip' => ($config->route_mode ?? 'direct') === 'reverse' ? null : $peerIp,
+            'connected_ip' => ($config->route_mode ?? 'direct') === 'reverse' || $peerIp === '' ? null : $peerIp,
             'route_mode' => $config->route_mode ?? 'direct',
             'registered_host' => $config->host,
             'username' => $config->username,

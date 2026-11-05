@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Sites;
 
+use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
@@ -423,6 +424,38 @@ final class SafeHttpClientTest extends TestCase
         self::assertIsCallable($progress);
         self::assertFalse($progress(0, 1024, 0, 0));
         self::assertTrue($progress(0, 1025, 0, 0));
+    }
+
+    public function test_explicit_target_relay_keeps_numeric_dns_pin_tls_and_ignores_ambient_proxy(): void
+    {
+        $factory = new CapturingHttpFactory;
+        Http::swap($factory);
+        $factory->preventStrayRequests();
+        $factory->fake(fn (Request $request) => Factory::response(['ok' => true], 200));
+
+        $relay = LocalSocks5Route::fromApprovedBinding('iran-gateway-relay', 49103);
+        $previous = getenv('HTTPS_PROXY');
+        $previousNoProxy = getenv('NO_PROXY');
+        putenv('HTTPS_PROXY=http://untrusted-proxy.invalid:8080');
+        putenv('NO_PROXY=wp.example.test');
+        try {
+            $response = app(SafeHttpClient::class)->postJson(
+                'https://wp.example.test/mcp', ['jsonrpc' => '2.0'], relay: $relay,
+            );
+            self::assertSame(200, $response->status);
+        } finally {
+            $this->restoreEnvironmentVariable('HTTPS_PROXY', $previous);
+            $this->restoreEnvironmentVariable('NO_PROXY', $previousNoProxy);
+        }
+
+        self::assertSame('socks5://127.0.0.1:49103', $factory->lastOptions[RequestOptions::PROXY] ?? null);
+        self::assertArrayNotHasKey(CURLOPT_PROXYTYPE, $factory->lastOptions['curl']);
+        self::assertArrayNotHasKey(CURLOPT_NOPROXY, $factory->lastOptions['curl']);
+        self::assertSame(
+            ['wp.example.test:443:1.1.1.1'], $factory->lastOptions['curl'][CURLOPT_RESOLVE] ?? null,
+        );
+        self::assertTrue($factory->lastOptions[RequestOptions::VERIFY] ?? false);
+        self::assertFalse($factory->lastOptions[RequestOptions::ALLOW_REDIRECTS] ?? true);
     }
 
     public function test_outbound_https_transport_uses_remaining_request_budget_after_dns(): void

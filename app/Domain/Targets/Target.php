@@ -48,6 +48,7 @@ final class Target extends Model
         return [
             'connection_state' => TargetConnectionState::class,
             'operations_paused' => 'boolean',
+            'relay_binding_revision' => 'integer',
             'last_tested_at' => MicrosecondImmutableDateTimeCast::class,
             'connected_at' => 'immutable_datetime',
             'last_success_at' => MicrosecondImmutableDateTimeCast::class,
@@ -59,7 +60,9 @@ final class Target extends Model
     {
         self::saving(static function (self $target): void {
             // Connector/Target identity may not be silently rebound by normal model updates.
-            if ($target->exists && ($target->isDirty('id') || $target->isDirty('target_id') || $target->isDirty('connector_type'))) {
+            if ($target->exists && ($target->isDirty('id') || $target->isDirty('target_id')
+                || $target->isDirty('connector_type') || $target->isDirty('relay_record_id')
+                || $target->isDirty('relay_binding_revision'))) {
                 throw new DomainException('Target identity and connector type are immutable; register a new Target.');
             }
 

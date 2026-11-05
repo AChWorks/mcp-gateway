@@ -19,6 +19,8 @@ final class TargetConfigurationRevision
             $target->target_id,
             $target->connector_type,
             $target->getRawOriginal('connection_state'),
+            $target->getAttribute('relay_record_id'),
+            (int) ($target->getAttribute('relay_binding_revision') ?? 0),
             $configuration,
             $credential?->getKey(),
             $credential?->encrypted_payload,
