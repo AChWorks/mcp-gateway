@@ -86,6 +86,15 @@ pinned in `config/connection_relays.php`. Updating the web app does NOT
 install or execute the privileged helper. The Owner must separately
 authorize the host change and compare the displayed digest against a
 **trusted release artifact**, not just the same web UI.
+The operator cleanup command first attempts an **exact current privileged Seal**:
+when the matching permanent fence/receipt already exists, it renews that
+proof without re-retirement. If Seal cannot certify the current revision,
+it runs exact Gateway-only resource retirement followed by Seal. Merely
+finding a fence file is **never** enough to skip retirement; a previous
+rotation fence can coexist with newly provisioned resources at a later
+revision. Any failed retirement or Seal leaves the record disabled/recoverable
+and never authorizes DB deletion or rotation.
+
 The helper source was revised for exact N+1-to-N retirement support. An
 older already-installed helper will **fail the release SHA256 check**; the
 application intentionally does not silently replace privileged binaries.

@@ -100,14 +100,11 @@ BASH;
         $retire = $verifiedPrefix.'retire '.$arguments.$prior;
         $sealDelete = $verifiedPrefix.'seal-delete '.$arguments;
         $sealRotate = $verifiedPrefix.'seal-rotate '.$arguments;
-        $fencePath = escapeshellarg('/etc/mcp-gateway/connection-relays/.fences/'.$recordId.'.json');
-        // Root-owned durable fences survive a failed DB transaction and an
-        // expired receipt. Re-seal (renew) instead of trying to re-retire a
-        // permanently fenced revision. The helper verifies all contents and
-        // host state: the shell existence check grants no authority.
-        $fenceExists = 'test -e '.$fencePath.' || test -L '.$fencePath;
-        $cleanupDelete = 'if '.$fenceExists.'; then '.$sealDelete.'; else '.$retire.' && '.$sealDelete.'; fi';
-        $cleanupRotate = 'if '.$fenceExists.'; then '.$sealRotate.'; else '.$retire.' && '.$sealRotate.'; fi';
+        // Only an exact, privileged Seal result can skip Retirement. An old
+        // rotation fence may still exist while the NEW revision owns live
+        // resources, so a shell `test -e` is not a lifecycle decision.
+        $cleanupDelete = self::cleanupSequence($sealDelete, $retire);
+        $cleanupRotate = self::cleanupSequence($sealRotate, $retire);
 
         return [
             'preflight' => $verifiedPrefix.'preflight '.$arguments.$prior,
@@ -123,5 +120,16 @@ BASH;
             'bootstrap' => $bootstrap,
             'sha256' => $expected,
         ];
+    }
+
+    /**
+     * Try the exact current Seal first for safe proof renewal. When it fails,
+     * inspect/retire exact claimed host resources and then Seal. The first
+     * failed probe's stderr is intentionally hidden because the actionable
+     * error comes from the subsequent privileged retirement/Seal attempt.
+     */
+    private static function cleanupSequence(string $seal, string $retire): string
+    {
+        return 'if sealed=$('.$seal.' 2>&1); then printf "%s\n" "$sealed"; else '.$retire.' && '.$seal.'; fi';
     }
 }
