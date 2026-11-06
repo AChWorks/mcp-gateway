@@ -11,7 +11,7 @@ final readonly class ConnectionRelayHostOperatorPlan
     private const INSTALLED_HELPER = '/usr/local/sbin/mcp-gateway-relay';
 
     /**
-     * @return array{preflight:string,audit_gateway:string,retire:string,prepare_setup:string,bootstrap:string,upgrade:string,upgrade_from_sha256:string,cleanup:string,cleanup_for_rotation:string,seal_delete:string,seal_rotate:string,sha256:string}|null
+     * @return array{preflight:string,audit_gateway:string,setup_gateway:string,retire:string,prepare_setup:string,bootstrap:string,upgrade:string,upgrade_from_sha256:string,cleanup:string,cleanup_for_rotation:string,seal_delete:string,seal_rotate:string,sha256:string}|null
      */
     public function commands(ConnectionRelay $relay): ?array
     {
@@ -216,6 +216,18 @@ BASH;
         $cleanupDelete = self::cleanupSequence($sealDelete, $retire);
         $cleanupRotate = self::cleanupSequence($sealRotate, $retire);
 
+        // The privileged helper independently recomputes the complete
+        // registered host fingerprint from these explicit, shell-escaped
+        // public endpoint/host-key inputs. No private key crosses PHP.
+        // The UID is the effective web PHP identity, not editable form data.
+        $phpUid = function_exists('posix_geteuid') ? max(0, posix_geteuid()) : 0;
+        $setupArguments = $arguments
+            .' --php-uid '.(string) $phpUid
+            .' --control-host '.escapeshellarg((string) $relay->control_host)
+            .' --control-port '.(string) (int) $relay->control_port
+            .' --control-user '.escapeshellarg((string) $relay->control_user)
+            .' --host-key '.escapeshellarg((string) $relay->control_host_key);
+
         return [
             'preflight' => $verifiedCommand('preflight '.$arguments.$prior),
             // A root-run local-policy audit never writes a readiness lease.
@@ -223,7 +235,8 @@ BASH;
             // form or mutable Relay metadata. CLI/queue identity must still
             // be independently confirmed by the host operator.
             'audit_gateway' => $verifiedCommand('audit-gateway '.$arguments
-                .' --php-uid '.(function_exists('posix_geteuid') ? (string) max(0, posix_geteuid()) : '0')),
+                .' --php-uid '.(string) $phpUid),
+            'setup_gateway' => $verifiedCommand('setup-gateway '.$setupArguments),
             'prepare_setup' => $verifiedCommand('prepare-setup '.$arguments),
             'retire' => $retire,
             // The final seal shares the privileged lock with prepare-setup.

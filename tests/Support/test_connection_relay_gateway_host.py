@@ -1,6 +1,7 @@
 """Isolated privileged-helper tests: no real systemd, firewall or host files."""
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -14,6 +15,7 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 sys.dont_write_bytecode = True
 source = pathlib.Path(__file__).resolve().parents[2] / "resources/host/connection-relay-gateway.py"
@@ -1589,3 +1591,351 @@ class GatewayPolicyAuditTests(unittest.TestCase):
         self.layout.evidence(self.relay, ".managed.json").unlink()
         with self.assertRaisesRegex(mod.Refusal, "claim"):
             self.op.audit(1010)
+
+
+class StagedSetupHost(AuditHost):
+    """Root-bound service/nft/useradd fixture with real disposable SSH keygen."""
+
+    def __init__(self, relay: mod.Relay):
+        super().__init__(relay)
+        self.nft = False
+        self.active = False
+        self.enabled = False
+        self.listener = False
+        self.stopped = False
+        self.user_created = False
+        self.nft_mutations = 0
+        self.setup_fail_command = None
+
+    def __call__(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if argv[:2] == ["/usr/sbin/useradd", "--system"]:
+            self.calls.append(argv)
+            if self.setup_fail_command == "useradd":
+                return subprocess.CompletedProcess(argv, 1, "", "simulated useradd failure")
+            self.user_created = True
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:3] == ["/usr/bin/ssh-keygen", "-q", "-t"]:
+            self.calls.append(argv)
+            if self.setup_fail_command == "keygen":
+                return subprocess.CompletedProcess(argv, 1, "", "simulated interrupted key generation")
+            return mod.run_checked(argv)
+        if argv[:2] == ["/usr/sbin/nft", "-f"]:
+            self.calls.append(argv)
+            assert pathlib.Path(argv[2]).is_file(), argv
+            if self.setup_fail_command == "nft":
+                return subprocess.CompletedProcess(argv, 1, "", "simulated nft load failure")
+            self.nft = True
+            self.nft_mutations += 1
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:2] == ["/usr/sbin/userdel", self.relay.ssh_user]:
+            self.calls.append(argv)
+            self.user_created = False
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:3] == ["systemctl", "enable", "--now"]:
+            self.calls.append(argv)
+            if self.setup_fail_command == "enable":
+                return subprocess.CompletedProcess(argv, 1, "", "host unreachable; cannot connect yet")
+            self.active = True
+            self.enabled = True
+            self.listener = True
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return super().__call__(argv)
+
+
+class GatewayStagedSetupTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = pathlib.Path(tmp.name)
+        self.hostkey = self.root / "server_ed25519"
+        subprocess.run(
+            ["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+             "-C", "", "-f", str(self.hostkey)],
+            capture_output=True, text=True, check=True,
+        )
+        self.pin = " ".join(self.hostkey.with_suffix(".pub").read_text().strip().split()[:2])
+        self.endpoint = ("192.0.2.9", 2222, "relay-control")
+        self.uid = 1010
+        self.relay_id = "iran-stage"
+        self.ulid = "01JAE000000000000000000077"
+        self.port = 46177
+        fp = hashlib.sha256("\0".join([
+            self.relay_id, self.endpoint[0], str(self.endpoint[1]),
+            self.endpoint[2], self.pin, str(self.port), "3",
+        ]).encode()).hexdigest()
+        self.relay = mod.Relay(self.relay_id, self.ulid, fp, 3, self.port)
+        self.layout = mod.Layout(self.root, os.geteuid())
+        for name in ("etc/mcp-gateway/connection-relays", "etc/systemd/system",
+                     "var/lib/mcp-gateway-relays", "run/mcp-gateway-relays"):
+            (self.root / name).mkdir(mode=0o755, parents=True, exist_ok=True)
+        for rel in ("etc", "etc/mcp-gateway", "etc/mcp-gateway/connection-relays"):
+            (self.root / rel).chmod(0o755)
+        (self.root / "proc/sys/kernel/random").mkdir(parents=True)
+        (self.root / "proc/sys/kernel/random/boot_id").write_text("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n")
+        (self.root / "proc/uptime").write_text("3601.50 100.00\n")
+        self.fake = StagedSetupHost(self.relay)
+        self.fake.unit_path = self.layout.unit(self.relay)
+        self.setup = self.make_setup()
+        self.fake.ssh_arguments = self.setup._ssh_argv()
+        self.fake.refresh_exec_start()
+        self.principal = SimpleNamespace(
+            pw_uid=1500, pw_name=self.relay.ssh_user, pw_shell="/usr/sbin/nologin",
+        )
+        def getpwnam(name):
+            if self.fake.user_created and name == self.relay.ssh_user:
+                return self.principal
+            raise KeyError(name)
+        def getpwuid(uid):
+            if self.fake.user_created and uid == 1500:
+                return self.principal
+            raise KeyError(uid)
+        for name, side_effect in (
+            ("getpwnam", getpwnam), ("getpwuid", getpwuid),
+            ("getpwall", lambda: [self.principal] if self.fake.user_created else []),
+        ):
+            patcher = mock.patch.object(mod.pwd, name, side_effect=side_effect)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        # Real prepare-setup creates a root-owned lock and same generation.
+        self.retirement = mod.Retirement(self.relay, self.layout, self.fake)
+        self.retirement._advance_generation("provisioning")
+        self.layout.lock_path(self.relay).write_text("")
+
+    def make_setup(self, fingerprint=None, port=None, host_key=None):
+        relay = (mod.Relay(self.relay_id, self.ulid, fingerprint, 3, self.port)
+                 if fingerprint else self.relay)
+        return mod.GatewaySetup(
+            relay, self.endpoint[0], port or self.endpoint[1],
+            self.endpoint[2], self.pin if host_key is None else host_key,
+            self.uid, self.layout, self.fake,
+        )
+
+    def test_one_command_stages_new_registration_without_separate_prepare(self):
+        generation = self.layout.evidence(self.relay, ".generation.json")
+        generation.unlink()
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertEqual("provisioning", self.retirement._generation()["state"])
+
+    def test_open_ssh_known_hosts_matches_default_and_custom_control_ports(self):
+        self.assertTrue(self.setup._expected_hostkey().startswith(b"[192.0.2.9]:2222 "))
+        fp = hashlib.sha256("\0".join([
+            self.relay_id, self.endpoint[0], "22",
+            self.endpoint[2], self.pin, str(self.port), "3",
+        ]).encode()).hexdigest()
+        standard = mod.GatewaySetup(
+            mod.Relay(self.relay_id, self.ulid, fp, 3, self.port),
+            self.endpoint[0], 22, self.endpoint[2], self.pin,
+            self.uid, self.layout, self.fake,
+        )
+        self.assertTrue(standard._expected_hostkey().startswith(b"192.0.2.9 "))
+        self.assertNotIn(b"[192.0.2.9]:22 ", standard._expected_hostkey())
+        file = self.root / "hostkeys-only"
+        for result, query in ((standard, "192.0.2.9"), (self.setup, "[192.0.2.9]:2222")):
+            file.write_bytes(result._expected_hostkey())
+            found = subprocess.run(
+                ["/usr/bin/ssh-keygen", "-F", query, "-f", str(file)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(0, found.returncode, found.stderr)
+
+    def test_generated_host_service_and_nft_scripts_are_scoped_and_stable(self):
+        nft = self.setup._nft_source().decode()
+        self.assertEqual(1, nft.count("add rule"))
+        self.assertIn("meta skuid != 1010", nft)
+        self.assertIn("flush table inet " + self.relay.firewall_table, nft)
+        unit = self.setup._unit_source().decode()
+        self.assertIn("User=" + self.relay.ssh_user, unit)
+        self.assertIn("LoadCredential=control_key:/var/lib/mcp-gateway-relays/" + self.relay_id, unit)
+        self.assertIn("ExecStartPre=+/usr/local/sbin/mcp-gateway-relay ensure-acl", unit)
+        self.assertIn("-D 127.0.0.1:46177", unit)
+        self.assertNotIn("0.0.0.0:46177", unit)
+        self.assertNotIn("PermitLocalCommand=yes", unit)
+        self.assertNotIn("PasswordAuthentication=yes", unit)
+
+    def test_setup_creates_isolated_material_and_exact_claim_without_attesting(self):
+        response = self.setup.setup()
+        self.assertIn("NO READINESS ISSUED", response)
+        self.assertTrue(self.fake.user_created)
+        self.assertEqual(1, self.fake.nft_mutations)
+        self.assertTrue(self.layout.unit(self.relay).exists())
+        self.assertEqual(0o700, self.layout.key_dir(self.relay).stat().st_mode & 0o777)
+        self.assertEqual(0o600, (self.layout.key_dir(self.relay) / "control_key").stat().st_mode & 0o777)
+        self.assertEqual(0o644, self.setup.nft_path.stat().st_mode & 0o777)
+        self.assertTrue(self.retirement._manifest())
+        self.assertFalse(self.layout.evidence(self.relay, ".json").exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".policy").exists())
+        self.assertEqual(self.pin, (self.layout.key_dir(self.relay) / "known_hosts").read_text().split(" ", 1)[1].strip())
+        self.assertFalse(any(x[:3] == ["systemctl", "enable", "--now"] for x in self.fake.calls))
+        self.assertFalse(self.fake.active)
+        self.assertFalse(self.fake.enabled)
+
+    def test_setup_retry_preserves_identity_key_and_owned_acl(self):
+        self.setup.setup()
+        key = (self.layout.key_dir(self.relay) / "control_key").read_bytes()
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertEqual(key, (self.layout.key_dir(self.relay) / "control_key").read_bytes())
+        self.assertEqual(1, self.fake.nft_mutations)
+
+    def test_interrupted_keygen_reuses_journal_without_new_generation(self):
+        generation = self.retirement._generation()
+        self.fake.setup_fail_command = "keygen"
+        with self.assertRaisesRegex(mod.Refusal, "generate"):
+            self.setup.setup()
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertTrue(self.fake.user_created)
+        self.assertEqual(generation, self.retirement._generation())
+        self.fake.setup_fail_command = None
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertEqual(1, self.fake.nft_mutations)
+
+    def test_interrupted_claim_write_resumes_existing_owned_acl(self):
+        original = self.setup._write_exact
+        def fail_claim(path, content, mode):
+            if path.name.endswith(".managed.json"):
+                raise OSError("simulated interruption before committing claim")
+            return original(path, content, mode)
+        with mock.patch.object(self.setup, "_write_exact", side_effect=fail_claim):
+            with self.assertRaisesRegex(OSError, "simulated interruption"):
+                self.setup.setup()
+        self.assertTrue(self.fake.nft)
+        self.assertFalse(self.layout.evidence(self.relay, ".managed.json").exists())
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertEqual(1, self.fake.nft_mutations)
+
+    def test_wrong_host_registration_fingerprint_and_mismatched_pin_fail_before_changes(self):
+        with self.assertRaisesRegex(mod.Refusal, "fingerprint"):
+            self.make_setup(fingerprint="b" * 64)
+        with self.assertRaisesRegex(mod.Refusal, "fingerprint"):
+            self.make_setup(port=22)
+        with self.assertRaises(mod.Refusal):
+            self.make_setup(host_key="ssh-ed25519 not-valid")
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_reserved_port_owned_by_other_local_service_is_not_claimed(self):
+        self.fake.listener = True
+        with self.assertRaisesRegex(mod.Refusal, "Unjournaled Relay port/service"):
+            self.setup.setup()
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_preexisting_foreign_loaded_systemd_unit_is_not_claimed(self):
+        self.fake.foreign_fragment = "/etc/systemd/system/foreign-other.service"
+        with self.assertRaisesRegex(mod.Refusal, "Foreign|foreign|FragmentPath"):
+            self.setup.setup()
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_control_user_root_is_rejected_before_any_host_changes(self):
+        with self.assertRaisesRegex(mod.Refusal, "non-root forwarding-only"):
+            mod.GatewaySetup(self.relay, self.endpoint[0], self.endpoint[1],
+                             "root", self.pin, self.uid, self.layout, self.fake)
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_delete_fence_prevents_reprovisioning_after_verified_retirement(self):
+        self.setup.setup()
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.retirement.seal("delete"))
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.setup.setup()
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.setup.nft_path.exists())
+
+    def test_unrelated_preexisting_account_is_not_adopted(self):
+        self.fake.user_created = True
+        with self.assertRaisesRegex(mod.Refusal, "pre-existing SSH principal"):
+            self.setup.setup()
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_fence_or_lifecycle_lock_prevents_new_setup(self):
+        lockpath = self.layout.lock_path(self.relay)
+        fd = os.open(lockpath, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(mod.Refusal, "lifecycle lock"):
+                self.setup.setup()
+        finally:
+            os.close(fd)
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_setup_never_enables_service_before_php_and_iran_admission(self):
+        result = self.setup.setup()
+        self.assertIn("STAGED INACTIVE", result)
+        self.assertIn("Service intentionally DISABLED", result)
+        self.assertFalse(self.fake.active)
+        self.assertFalse(self.fake.enabled)
+        self.assertFalse(self.layout.evidence(self.relay, ".json").exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".policy").exists())
+        self.assertIn("STAGED INACTIVE", self.setup.setup())
+        self.fake.active = True  # out-of-band host activation is untrusted
+        with self.assertRaisesRegex(mod.Refusal, "became active/enabled"):
+            self.setup.setup()
+
+    def test_ensure_acl_refuses_mismatch_and_restores_only_missing_table(self):
+        self.setup.setup()
+        verifier = mod.GatewayAclRecovery(self.relay, self.layout, self.fake)
+        self.assertIn("VERIFIED", verifier.ensure(self.uid))
+        self.assertEqual(1, self.fake.nft_mutations)
+        self.fake.nft = False  # reboot cleared runtime table
+        self.assertIn("RESTORED", verifier.ensure(self.uid))
+        self.assertEqual(2, self.fake.nft_mutations)
+        self.fake.extra_acl = [{"drop": None}]
+        with self.assertRaises(mod.Refusal):
+            verifier.ensure(self.uid)
+        self.assertEqual(2, self.fake.nft_mutations)
+        self.fake.extra_acl = None
+
+    def test_retirement_removes_scoped_service_identity_persistence_and_journal(self):
+        self.setup.setup()
+        response = self.retirement.retire()
+        self.assertIn("RETIREMENT VERIFIED", response)
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.setup.journal_path.exists())
+        self.assertFalse(self.setup.nft_path.exists())
+        self.assertFalse(self.layout.key_dir(self.relay).exists())
+        self.assertFalse(self.layout.unit(self.relay).exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".managed.json").exists())
+        self.assertTrue(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertFalse(self.fake.nft)
+        self.assertFalse(self.fake.active)
+
+    def test_retirement_does_not_delete_foreign_setup_acl_file(self):
+        self.setup.setup()
+        self.setup.nft_path.write_text("flush ruleset\\n")
+        with self.assertRaisesRegex(mod.Refusal, "persistence source changed"):
+            self.retirement.retire()
+        self.assertTrue(self.fake.user_created)
+        self.assertTrue(self.layout.unit(self.relay).exists())
+        self.assertTrue(self.fake.nft)
+
+    def test_retirement_refuses_unknown_canonical_nss_identity(self):
+        self.setup.setup()
+        with mock.patch.object(mod.pwd, "getpwuid", side_effect=KeyError(1500)):
+            with self.assertRaisesRegex(mod.Refusal, "Cannot prove exclusive Relay SSH identity"):
+                self.retirement.retire()
+        self.assertTrue(self.fake.user_created)
+
+    def test_setup_refuses_unknown_canonical_nss_identity(self):
+        with mock.patch.object(mod.pwd, "getpwuid", side_effect=KeyError(1500)):
+            with self.assertRaisesRegex(mod.Refusal, "Cannot prove dedicated Relay SSH UID ownership"):
+                self.setup.setup()
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertFalse(self.setup.nft_path.exists())
+
+    def test_retirement_refuses_to_delete_account_with_live_process(self):
+        self.setup.setup()
+        pid = self.root / "proc/4321"
+        pid.mkdir()
+        (pid / "status").write_text("Name:\tssh\nUid:\t1500\t1500\t1500\t1500\n")
+        with self.assertRaisesRegex(mod.Refusal, "still owns a process"):
+            self.retirement.retire()
+        self.assertTrue(self.fake.user_created)
+
+    def test_drifted_policy_file_fails_closed_without_loading(self):
+        self.setup.setup()
+        before = self.fake.nft_mutations
+        self.setup.nft_path.write_text("flush ruleset\n")
+        self.fake.nft = False
+        with self.assertRaisesRegex(mod.Refusal, "source is missing or modified"):
+            mod.GatewayAclRecovery(self.relay, self.layout, self.fake).ensure(self.uid)
+        self.assertEqual(before, self.fake.nft_mutations)

@@ -54,6 +54,9 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertOk()
             ->assertSee('Audit installed Gateway-local policy (read-only)')
             ->assertSee('audit-gateway')
+            ->assertSee('Stage / repair Gateway host resources')
+            ->assertSee('setup-gateway')
+            ->assertSee('It DOES NOT issue readiness')
             ->assertSee('A PASS does not issue readiness evidence');
         $this->post('/admin/settings/connection-relays/'.$relay->id.'/toggle', [
             'relay_revision' => 1, 'enable' => '1', 'current_password' => self::PASSWORD,
@@ -101,7 +104,7 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertSee('Degraded — routing blocked')
             ->assertSee('Bound Target operations fail closed')
             ->assertSee('disable this Relay now')
-            ->assertSee('Gateway Repair is not available yet')
+            ->assertSee('Retry the exact scoped Gateway Setup command')
             ->assertSee('a permanently fenced record must never be reprovisioned');
 
         $this->post($path.'/'.$relay->id.'/toggle', [
@@ -109,8 +112,8 @@ final class ConnectionRelayAdminTest extends TestCase
         ])->assertSessionHasNoErrors();
         $this->get($path)->assertOk()
             ->assertSee('Needs setup or re-verification')
-            ->assertSee('No supported Gateway Setup/Update/Repair or trusted attestation issuance is available yet')
-            ->assertSee('a separately approved host procedure and independent readiness proof')
+            ->assertSee('Gateway host Setup can stage a dedicated SSH identity')
+            ->assertSee('independently issued host evidence are verified')
             ->assertSee('Bound Targets never fall back to Direct');
     }
 
@@ -551,9 +554,19 @@ PYTHON;
         self::assertStringContainsString('audit-gateway', $commands['audit_gateway']);
         self::assertStringContainsString('--php-uid ', $commands['audit_gateway']);
         self::assertStringNotContainsString('--prior-fingerprint', $commands['audit_gateway']);
+        self::assertStringContainsString('"$destination" setup-gateway', $commands['setup_gateway']);
+        self::assertStringContainsString('--php-uid ', $commands['setup_gateway']);
+        self::assertStringContainsString('--control-host ', $commands['setup_gateway']);
+        self::assertStringContainsString('--control-port ', $commands['setup_gateway']);
+        self::assertStringContainsString('--control-user ', $commands['setup_gateway']);
+        self::assertStringContainsString('--host-key ', $commands['setup_gateway']);
+        self::assertStringContainsString(escapeshellarg((string) $relay->control_host_key), $commands['setup_gateway']);
+        self::assertStringContainsString($commands['sha256'], $commands['setup_gateway']);
+        self::assertStringNotContainsString('--prior-fingerprint', $commands['setup_gateway']);
+        self::assertStringNotContainsString('ssh-keygen -y -P ', $commands['setup_gateway']);
         self::assertStringContainsString($commands['sha256'], $commands['audit_gateway']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
-        self::assertSame('e0810d480ef43e278924422d9f478b804359313883fa4ec2abe8ca7fffb00efd', $commands['upgrade_from_sha256']);
+        self::assertSame('e329acf8076dade75696791c3a1d002b018612b2cd7155c2c09bbf95d0b84911', $commands['upgrade_from_sha256']);
         self::assertStringContainsString('mode=install', $commands['bootstrap']);
         self::assertStringContainsString('test -x "$destination"', $commands['bootstrap']);
         self::assertStringNotContainsString('mode=upgrade', $commands['bootstrap']);
