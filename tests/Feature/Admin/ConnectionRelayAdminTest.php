@@ -50,6 +50,11 @@ final class ConnectionRelayAdminTest extends TestCase
 
         $relay = ConnectionRelay::query()->sole();
         self::assertFalse($relay->enabled);
+        $this->get('/admin/settings/connection-relays')
+            ->assertOk()
+            ->assertSee('Audit installed Gateway-local policy (read-only)')
+            ->assertSee('audit-gateway')
+            ->assertSee('A PASS does not issue readiness evidence');
         $this->post('/admin/settings/connection-relays/'.$relay->id.'/toggle', [
             'relay_revision' => 1, 'enable' => '1', 'current_password' => self::PASSWORD,
         ])->assertSessionHasErrors('relay');
@@ -543,8 +548,12 @@ PYTHON;
         self::assertStringContainsString('"$destination" seal-rotate', $commands['cleanup_for_rotation']);
         self::assertStringContainsString('"$destination" seal-delete', $commands['seal_delete']);
         self::assertStringContainsString('"$destination" seal-rotate', $commands['seal_rotate']);
+        self::assertStringContainsString('audit-gateway', $commands['audit_gateway']);
+        self::assertStringContainsString('--php-uid ', $commands['audit_gateway']);
+        self::assertStringNotContainsString('--prior-fingerprint', $commands['audit_gateway']);
+        self::assertStringContainsString($commands['sha256'], $commands['audit_gateway']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
-        self::assertSame('369fe2369c23d19a3fc62ccf494cba3ff7bb91109fa14e92783873904a2d5364', $commands['upgrade_from_sha256']);
+        self::assertSame('e0810d480ef43e278924422d9f478b804359313883fa4ec2abe8ca7fffb00efd', $commands['upgrade_from_sha256']);
         self::assertStringContainsString('mode=install', $commands['bootstrap']);
         self::assertStringContainsString('test -x "$destination"', $commands['bootstrap']);
         self::assertStringNotContainsString('mode=upgrade', $commands['bootstrap']);

@@ -1,7 +1,7 @@
 #!/usr/bin/python3
-"""Privileged, explicitly invoked Gateway-side Relay retirement helper.
+"""Privileged, explicitly invoked Gateway-side Relay retirement and local audit.
 
-This is NOT an SSH client installer or a remote Iran cleanup tool. Runtime
+This is NOT an SSH client installer, readiness issuer or remote Iran cleanup tool. Runtime
 CLI paths are fixed; PHP never invokes it and cannot issue retirement proofs.
 The expected fields come from the Owner-facing command and are checked against
 owned resources. Do not use it to adopt third-party systemd/firewall state.
@@ -9,12 +9,15 @@ owned resources. Do not use it to adopt third-party systemd/firewall state.
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
 import os
+import pwd
 import re
 import secrets
+import shlex
 import stat
 import subprocess
 import sys
@@ -56,6 +59,12 @@ class Relay:
     @property
     def unit_name(self) -> str:
         return "mcp-gateway-relay-" + self.relay_id + ".service"
+
+    @property
+    def ssh_user(self) -> str:
+        # Record ULID, not mutable display/route name: new record means a
+        # different OS identity, even when a human reuses the Relay ID.
+        return "mcp-relay-" + hashlib.sha256(self.record_id.encode()).hexdigest()[:20]
 
 
 @dataclass(frozen=True)
@@ -794,14 +803,380 @@ class Retirement:
             os.close(fd)
 
 
+
+class GatewayPolicyAudit(Retirement):
+    """Read-only, fail-closed audit of provisioned Gateway host resources.
+
+    This is deliberately NOT readiness issuance. A matching root-owned claim
+    and effective local controls cannot prove the independent Iran egress
+    policy, dedicated FPM-pool ownership, or a fully authenticated Target.
+    The future Setup/Repair path must first create these owned resources;
+    there is no mechanism here to adopt foreign state.
+    """
+
+    @staticmethod
+    def _uid_match(expr: object, uid: int, op: str) -> bool:
+        return (isinstance(expr, dict) and expr.get("match") == {
+            "left": {"meta": {"key": "skuid"}}, "op": op, "right": uid,
+        })
+
+    @staticmethod
+    def _port_match(expr: object, port: int) -> bool:
+        if not isinstance(expr, dict) or not isinstance(expr.get("match"), dict):
+            return False
+        match = expr["match"]
+        return (match.get("left") == {"payload": {
+            "protocol": "tcp", "field": "dport",
+        }} and match.get("op") == "==" and match.get("right") == port)
+
+    @staticmethod
+    def _loopback_match(expr: object) -> bool:
+        return (isinstance(expr, dict) and expr.get("match") == {
+            "left": {"meta": {"key": "oifname"}}, "op": "==", "right": "lo",
+        })
+
+    def _require_effective_acl(self, php_uid: int) -> None:
+        """An inet/output hook with a pre-accept reject for every other UID.
+
+        Reject only the exact reviewed shape; a general nft digest may attest
+        a modified *insecure* policy otherwise. This single UID/port guard
+        applies to IPv4 and IPv6. Actual socket-negative tests are still an
+        independent acceptance requirement.
+        """
+        result = self.run(["nft", "-j", "list", "table", "inet", self.relay.firewall_table])
+        if result.returncode:
+            raise Refusal("Cannot read live Relay nftables rules for ACL audit.")
+        try:
+            doc = json.loads(result.stdout)
+            values = doc["nftables"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise Refusal("Malformed live Relay nftables ACL.") from error
+        chains = []
+        rules = []
+        for item in values:
+            if not isinstance(item, dict):
+                raise Refusal("Malformed ACL rule.")
+            if "chain" in item:
+                chains.append(item["chain"])
+            if "rule" in item:
+                rules.append(item["rule"])
+        if len(chains) != 1:
+            raise Refusal("Relay ACL must have exactly one dedicated output chain.")
+        chain = chains[0]
+        if (chain.get("name") != "output_guard" or chain.get("type") != "filter"
+            or chain.get("hook") != "output"
+            or chain.get("policy") != "accept"
+            or type(chain.get("prio")) is not int
+            or chain["prio"] != -150):
+            raise Refusal("Relay ACL has no verified inet/output base-chain hook.")
+        # This audited protocol has exactly ONE owned filter chain and ONE
+        # deny rule. A second rule could reject the legitimate PHP UID even
+        # though both the first rule and complete manifest digest agree.
+        if len(rules) != 1:
+            raise Refusal("Relay ACL has unsupported trailing or foreign rules.")
+        deny = rules[0]
+        if deny.get("chain") != "output_guard" or not isinstance(deny.get("expr"), list):
+            raise Refusal("First ACL rule is not a dedicated loopback deny.")
+        expr = deny["expr"]
+        if not (
+            len(expr) == 4
+            and self._loopback_match(expr[0])
+            and self._port_match(expr[1], self.relay.local_port)
+            and self._uid_match(expr[2], php_uid, "!=")
+            and expr[3] == {"reject": {"type": "icmpx", "expr": "admin-prohibited"}}
+        ):
+            raise Refusal("IPv4/IPv6 loopback SOCKS access is not denied to unrelated UIDs.")
+
+    def _require_ssh_invocation(self, effective: str, owner: dict) -> None:
+        # Match the WHOLE effective OpenSSH command, rather than a trusted
+        # digest of arbitrary but internally consistent generated bytes.
+        # The future Setup must render this exact argument contract.
+        host = owner["control_host"]
+        port = owner["control_port"]
+        user = owner["control_user"]
+        if (not isinstance(host, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.:-]{0,252}", host) is None
+            or ".." in host or host.endswith(".")
+            or type(port) is not int or not 1 <= port <= 65535
+            or not isinstance(user, str)
+            or re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,127}", user) is None):
+            raise Refusal("Invalid owner-bound SSH control endpoint.")
+        credential_root = "/run/credentials/" + self.relay.unit_name
+        expected = [
+            "/usr/bin/ssh", "-F", "/dev/null", "-N", "-T",
+            "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=yes", "-o", "ExitOnForwardFailure=yes",
+            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+            "-o", "ForwardAgent=no", "-o", "ForwardX11=no",
+            "-o", "ControlMaster=no", "-o", "ProxyCommand=none",
+            "-o", "ProxyJump=none",
+            "-o", "UserKnownHostsFile=" + credential_root + "/known_hosts",
+            "-o", "GlobalKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+            "-o", "ConnectTimeout=10",
+            "-i", credential_root + "/control_key",
+            "-D", "127.0.0.1:" + str(self.relay.local_port),
+            "-p", str(port), "-l", user, host,
+        ]
+        try:
+            actual = shlex.split(json.loads(self._canonical_exec(effective))["argv"])
+        except (ValueError, TypeError, KeyError) as error:
+            raise Refusal("Malformed effective OpenSSH invocation.") from error
+        if actual != expected:
+            raise Refusal("Effective OpenSSH arguments violate the reviewed single-loopback forwarding contract.")
+
+    def _require_principal_isolation(self, owner: dict) -> None:
+        """Reject NSS aliases and shared UIDs across root-owned Relay claims."""
+        expected = self.relay.ssh_user
+        try:
+            primary = pwd.getpwuid(owner["ssh_uid"])
+            accounts = pwd.getpwall()
+        except (KeyError, OSError) as error:
+            raise Refusal("Cannot prove exclusive system SSH UID ownership.") from error
+        if primary.pw_name != expected or any(
+            entry.pw_uid == owner["ssh_uid"] and entry.pw_name != expected
+            for entry in accounts
+        ):
+            raise Refusal("Dedicated SSH UID is reused by another system account.")
+        parent = self.layout.key_dir(self.relay).parent
+        owned_parents(parent, self.layout)
+        if not self._owned(parent, True):
+            raise Refusal("Cannot inspect Relay SSH principal reservations.")
+        entries = list(parent.iterdir())
+        if len(entries) > 1024:
+            raise Refusal("Too many Relay principal reservations to audit safely.")
+        for entry in entries:
+            if not self._owned(entry, True):
+                raise Refusal("Untrusted sibling Relay principal namespace.")
+            if entry == self.layout.key_dir(self.relay):
+                continue
+            sibling_owner = entry / "owner.json"
+            if not self._owned(sibling_owner):
+                raise Refusal("Sibling Relay lacks root-owned principal ownership proof.")
+            sibling = self._json(sibling_owner, 4096)
+            record = sibling.get("relay_record_id")
+            if (sibling.get("version") != 2
+                or sibling.get("relay_id") != entry.name
+                or not isinstance(record, str)
+                or re.fullmatch(r"[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}", record) is None
+                or sibling.get("ssh_user") !=
+                   "mcp-relay-" + hashlib.sha256(record.encode()).hexdigest()[:20]
+                or type(sibling.get("ssh_uid")) is not int
+                or sibling["ssh_uid"] < 1):
+                raise Refusal("Sibling Relay principal ownership proof is incomplete or malformed.")
+            if (record == self.relay.record_id
+                or sibling["ssh_user"] == expected
+                or sibling["ssh_uid"] == owner["ssh_uid"]):
+                raise Refusal("Dedicated SSH principal or UID is reused by another Relay.")
+
+    def _require_control_key_pair(self, keydir: Path) -> None:
+        private = keydir / "control_key"
+        public = keydir / "control_key.pub"
+        pubbytes = public.read_bytes()
+        if len(pubbytes) > 1024:
+            raise Refusal("Relay SSH public key exceeds bounded Ed25519 key length.")
+        try:
+            fields = pubbytes.decode("ascii").strip().split()
+        except UnicodeDecodeError as error:
+            raise Refusal("Relay SSH public key is not valid ASCII.") from error
+        if (len(fields) != 2 or fields[0] != "ssh-ed25519"
+            or re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", fields[1]) is None):
+            raise Refusal("Relay SSH public key must be an exact Ed25519 key without comment.")
+        try:
+            blob = base64.b64decode(fields[1], validate=True)
+        except ValueError as error:
+            raise Refusal("Invalid Relay SSH public-key encoding.") from error
+        if (len(blob) != 51 or blob[:4] != b"\x00\x00\x00\x0b"
+            or blob[4:15] != b"ssh-ed25519"):
+            raise Refusal("Relay SSH public-key wire format is invalid.")
+        response = self.run(["/usr/bin/ssh-keygen", "-y", "-P", "", "-f", str(private)])
+        if response.returncode != 0:
+            raise Refusal("Cannot derive public SSH key from the root-controlled private key.")
+        derived = response.stdout.strip().split()
+        if len(derived) < 2 or derived[:2] != fields:
+            raise Refusal("Relay SSH public key does not match the private control key.")
+
+    def _require_effective_listener(self, main_pid: int) -> None:
+        # Every listener owned by the service PID must be accounted for, not
+        # just sockets on the expected port. A second -D bound publicly is a
+        # false-positive if only the first port is inspected.
+        response = self.run(["ss", "-H", "-lntp"])
+        if response.returncode:
+            raise Refusal("Cannot inspect root-visible listening processes.")
+        expected = "127.0.0.1:" + str(self.relay.local_port)
+        service_listeners: list[str] = []
+        reserved_listeners: list[str] = []
+        for line in response.stdout.splitlines():
+            parts = line.split(maxsplit=5)
+            if len(parts) < 5 or parts[0] != "LISTEN":
+                raise Refusal("Malformed socket-listener inventory.")
+            address = parts[3]
+            owners = parts[5] if len(parts) > 5 else ""
+            # Root must see the owning PID/FD; unknown ownership on our
+            # reserved port is ambiguous and cannot establish local readiness.
+            matches = re.findall(r"\bpid=([0-9]+),fd=([0-9]+)\b", owners)
+            if "pid=" in owners and not matches:
+                raise Refusal("Cannot parse socket owner PID/FD.")
+            pids = {int(pid) for pid, _ in matches}
+            if address.rsplit(":", 1)[-1] == str(self.relay.local_port):
+                reserved_listeners.append(address)
+                if pids != {main_pid}:
+                    raise Refusal("SOCKS listener does not belong uniquely to verified systemd MainPID.")
+            if main_pid in pids:
+                if pids != {main_pid}:
+                    raise Refusal("SOCKS listener is shared with another process.")
+                service_listeners.append(address)
+        if reserved_listeners != [expected] or service_listeners != [expected]:
+            raise Refusal("OpenSSH has unexpected, missing or non-loopback listening sockets.")
+
+    def audit(self, php_uid: int) -> str:
+        if os.geteuid() != self.layout.owner_uid:
+            raise Refusal("The privileged Gateway host audit requires explicit root/sudo.")
+        if type(php_uid) is not int or php_uid < 1:
+            raise Refusal("A dedicated non-root Gateway PHP UID is required.")
+        lock = self.layout.lock_path(self.relay)
+        owned_parents(lock.parent, self.layout)
+        if not self._owned(lock):
+            raise Refusal("Root-owned Relay lifecycle lock is missing; cannot audit without a safe revision fence.")
+        fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            return self._audit_locked(php_uid)
+        except BlockingIOError as error:
+            raise Refusal("Relay lifecycle maintenance is active; retry audit after the operation.") from error
+        finally:
+            os.close(fd)
+
+    def _audit_locked(self, php_uid: int) -> str:
+        # A root-owned active claim can survive a historical delete/rotation
+        # fence due to interrupted host changes. Never let its local socket
+        # checks imply a current, mutable Relay security identity.
+        self._require_mutable_revision()
+        managed = self._preflight()
+        if managed is None:
+            raise Refusal("No exact root-owned installed claim; run the separately approved Gateway Setup.")
+        unit_path = self.layout.unit(self.relay)
+        if not self._owned(unit_path):
+            raise Refusal("No root-owned Relay service definition.")
+        if hashlib.sha256(unit_path.read_bytes()).hexdigest() != managed["unit_sha256"]:
+            raise Refusal("Relay systemd unit changed after its root-owned claim.")
+        info = self._systemd_info()
+        if (info["LoadState"] != "loaded" or info["ActiveState"] != "active"
+            or info["FragmentPath"] != str(unit_path)
+            or info["NeedDaemonReload"] != "no"
+            or hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest()
+                != managed["unit_exec_sha256"]):
+            raise Refusal("Effective Relay systemd service is not the approved active definition.")
+        if not self._unit_active() or not self._unit_enabled():
+            raise Refusal("Relay service is stopped or cannot survive reboot.")
+        keydir = self.layout.key_dir(self.relay)
+        if not self._owned(keydir, True):
+            raise Refusal("Dedicated SSH control credential namespace is missing.")
+        required = {"control_key", "control_key.pub", "known_hosts", "owner.json"}
+        if {entry.name for entry in keydir.iterdir()} != required:
+            raise Refusal("Dedicated SSH credential namespace is incomplete or contains unknown files.")
+        for name in required:
+            if not self._owned(keydir / name):
+                raise Refusal("Untrusted dedicated SSH control credential: " + name)
+        if (keydir.stat().st_mode & 0o777) != 0o700 or (
+            (keydir / "control_key").stat().st_mode & 0o777
+        ) != 0o600:
+            raise Refusal("Control private key is not isolated in the expected root-only directory.")
+        owner = self._json(keydir / "owner.json", 4096)
+        if (set(owner) != {"version", "relay_record_id", "relay_id", "ssh_user",
+                           "ssh_uid", "gateway_php_uid", "control_host",
+                           "control_port", "control_user",
+                           "control_key_sha256", "control_key_pub_sha256",
+                           "known_hosts_sha256"}
+            or owner["version"] != 2
+            or owner["relay_record_id"] != self.relay.record_id
+            or owner["relay_id"] != self.relay.relay_id
+            or owner["gateway_php_uid"] != php_uid
+            or owner["ssh_user"] != self.relay.ssh_user
+            or type(owner["ssh_uid"]) is not int
+            or owner["ssh_uid"] < 1 or owner["ssh_uid"] == php_uid
+            or any(not isinstance(owner[key], str)
+                   or re.fullmatch(r"[a-f0-9]{64}", owner[key]) is None
+                   for key in ("control_key_sha256", "control_key_pub_sha256",
+                               "known_hosts_sha256"))
+            or hashlib.sha256((keydir / "control_key").read_bytes()).hexdigest()
+               != owner["control_key_sha256"]
+            or hashlib.sha256((keydir / "control_key.pub").read_bytes()).hexdigest()
+               != owner["control_key_pub_sha256"]
+            or hashlib.sha256((keydir / "known_hosts").read_bytes()).hexdigest()
+               != owner["known_hosts_sha256"]):
+            raise Refusal("Relay SSH principal or key ownership record does not match live resources.")
+        self._require_control_key_pair(keydir)
+        self._require_ssh_invocation(info["ExecStart"], owner)
+        self._require_principal_isolation(owner)
+        if not self._verify_effective_nft(managed):
+            raise Refusal("Exact claimed Relay nftables ACL is not loaded.")
+        self._require_effective_acl(php_uid)
+        # A second independent systemd query binds the live listener to this
+        # one service instance rather than to any process reusing its port.
+        result = self.run(["systemctl", "show", self.relay.unit_name,
+                           "--property=MainPID,User,NoNewPrivileges,PrivateTmp",
+                           "--no-pager"])
+        if result.returncode:
+            raise Refusal("Cannot inspect effective systemd execution identity.")
+        lines = result.stdout.splitlines()
+        if any(line.count("=") != 1 for line in lines):
+            raise Refusal("Malformed systemd execution-identity response.")
+        properties = dict(line.split("=", 1) for line in lines)
+        if len(properties) != len(lines):
+            raise Refusal("Duplicate systemd execution-identity property.")
+        if set(properties) != {"MainPID", "User", "NoNewPrivileges", "PrivateTmp"}:
+            raise Refusal("Incomplete systemd execution-identity evidence.")
+        if (properties["User"] != self.relay.ssh_user
+            or properties["NoNewPrivileges"] != "yes"
+            or properties["PrivateTmp"] != "yes"):
+            raise Refusal("Relay SSH service lacks its dedicated restricted principal.")
+        try:
+            principal = pwd.getpwnam(properties["User"])
+        except KeyError as error:
+            raise Refusal("Dedicated SSH service principal does not exist.") from error
+        if (principal.pw_uid != owner["ssh_uid"] or principal.pw_uid <= 0
+            or principal.pw_uid == php_uid
+            or not principal.pw_shell.endswith(("/nologin", "/false"))):
+            raise Refusal("Actual SSH service principal has unsafe identity or login shell.")
+        try:
+            pid = int(properties["MainPID"])
+        except ValueError as error:
+            raise Refusal("Invalid live Relay service PID.") from error
+        if pid <= 1:
+            raise Refusal("Relay service has no proven live MainPID.")
+        # Cross-check the actual running process, not merely a name or
+        # systemd's intended User property.
+        try:
+            status = self.layout.at("/proc/" + str(pid) + "/status").read_text()
+            exe = os.readlink(self.layout.at("/proc/" + str(pid) + "/exe"))
+        except (OSError, UnicodeError) as error:
+            raise Refusal("Cannot inspect live Relay SSH process identity.") from error
+        uid_line = next((line for line in status.splitlines() if line.startswith("Uid:")), "")
+        ids = uid_line.split()[1:]
+        if (len(ids) != 4 or any(not value.isdecimal() for value in ids)
+            or any(int(value) != principal.pw_uid for value in ids)
+            or exe != "/usr/bin/ssh"):
+            raise Refusal("Actual Relay service process does not match the dedicated OpenSSH principal.")
+        self._require_effective_listener(pid)
+        generation = self._generation()
+        if generation is None or generation["state"] != "provisioning":
+            raise Refusal("Relay generation is no longer provisionable.")
+        return ("GATEWAY LOCAL POLICY AUDIT PASS for " + self.relay.relay_id
+                + ". NO READINESS ISSUED: dedicated PHP-FPM ownership, "
+                "Iran egress restrictions and Target authentication still "
+                "require independent verified evidence.")
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay retirement; never contacts Iran.")
-    parser.add_argument("action", choices=("preflight", "retire", "prepare-setup", "seal-delete", "seal-rotate"))
+    parser.add_argument("action", choices=("preflight", "audit-gateway", "retire", "prepare-setup", "seal-delete", "seal-rotate"))
     parser.add_argument("--relay-id", required=True)
     parser.add_argument("--record-id", required=True)
     parser.add_argument("--fingerprint", required=True)
     parser.add_argument("--revision", required=True, type=int)
     parser.add_argument("--local-port", required=True, type=int)
+    parser.add_argument("--php-uid", type=int, default=None,
+                        help="Required for root-only Gateway local policy audit.")
     parser.add_argument("--prior-fingerprint", default=None,
                         help="Read-only preflight or retire: exact N-1 installed fingerprint after DB Disable.")
     args = parser.parse_args()
@@ -813,7 +1188,13 @@ def main() -> int:
         if args.prior_fingerprint is not None and args.action not in {"preflight", "retire"}:
             raise Refusal("Prior host fingerprint is allowed only for local preflight or retirement.")
         operation = Retirement(relay, layout, prior_fingerprint=args.prior_fingerprint)
-        if args.action == "preflight":
+        if args.action == "audit-gateway":
+            if args.php_uid is None or args.prior_fingerprint is not None:
+                raise Refusal("Gateway audit requires --php-uid and does not accept prior revisions.")
+            print(GatewayPolicyAudit(relay, layout).audit(args.php_uid))
+        elif args.php_uid is not None:
+            raise Refusal("--php-uid is only accepted by audit-gateway.")
+        elif args.action == "preflight":
             print(operation.preview())
         elif args.action == "prepare-setup":
             print(operation.prepare_setup())

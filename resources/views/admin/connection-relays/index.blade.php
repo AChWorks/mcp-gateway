@@ -58,6 +58,17 @@
                 <div><dt>{{ __('Host evidence') }}</dt><dd>{{ $hostStates[$relay->id] ? __('Current for this PHP UID') : __('Not ready — missing, expired or mismatched') }}</dd></div>
             </dl>
             <p class="field-help">{{ $operationalStates[$relay->id]->nextAction() }}</p>
+            @if ($hostCommands[$relay->id] ?? null)
+                <details class="target-help-details">
+                    <summary>{{ __('Audit installed Gateway-local policy (read-only)') }}</summary>
+                    <p class="field-help">{{ __('Run only on the authorized Gateway host after privileged Setup. Checks root-owned host identity, effective systemd service, nftables loopback UID restrictions on IPv4/IPv6, and the actual listening process without changing host state. A PASS does not issue readiness evidence or prove the Iran egress policy, dedicated PHP-FPM ownership, or Target authentication.') }}</p>
+                    <div class="field">
+                        <label for="relay-audit-command-{{ $relay->id }}">{{ __('Verified, Relay-specific local audit command') }}</label>
+                        <textarea id="relay-audit-command-{{ $relay->id }}" rows="4" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['audit_gateway'] }}</textarea>
+                        <p class="field-help">{{ __('If the helper is not yet installed, use the separately verified installation action under Retire and remove Relay. Do not run it as part of routine browsing. The UID in this command is the present web-process UID; verify that dedicated FPM and CLI identities match before future host attestation.') }}</p>
+                    </div>
+                </details>
+            @endif
             @if ($rotationStates[$relay->id] ?? false)
                 <p class="field-help">{{ __('Old revision retirement is sealed. Save the pending connection change before requesting setup for the new revision.') }}</p>
             @endif
