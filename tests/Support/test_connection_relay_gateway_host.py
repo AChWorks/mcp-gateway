@@ -1134,13 +1134,44 @@ class AuditHost(FakeHost):
         self.listener = True
         self.php_uid = 1010
         self.main_pid = 7654
-        self.user = "mcp-relay-test"
+        self.user = relay.ssh_user
         self.no_new_privileges = "yes"
         self.private_tmp = "yes"
         self.loopback_guard = True
         self.chain_hook = "output"
+        self.chain_prio = -150
+        self.extra_acl = None
         self.listening_address = "127.0.0.1"
         self.listener_pid = 7654
+        self.extra_listeners: list[tuple[str, int]] = []
+        self.control_host = "192.0.2.1"
+        self.control_port = 22
+        self.control_user = "relay-control"
+        credentials = "/run/credentials/" + relay.unit_name
+        self.ssh_arguments = [
+            "/usr/bin/ssh", "-F", "/dev/null", "-N", "-T",
+            "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=yes", "-o", "ExitOnForwardFailure=yes",
+            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+            "-o", "ForwardAgent=no", "-o", "ForwardX11=no",
+            "-o", "ControlMaster=no", "-o", "ProxyCommand=none",
+            "-o", "ProxyJump=none",
+            "-o", "UserKnownHostsFile=" + credentials + "/known_hosts",
+            "-o", "GlobalKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+            "-o", "ConnectTimeout=10",
+            "-i", credentials + "/control_key",
+            "-D", "127.0.0.1:" + str(relay.local_port),
+            "-p", str(self.control_port), "-l", self.control_user, self.control_host,
+        ]
+        self.refresh_exec_start()
+
+    def refresh_exec_start(self):
+        self.exec_start = (
+            "{ path=/usr/bin/ssh ; argv[]=" + " ".join(self.ssh_arguments)
+            + " ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a]"
+            + " ; pid=0 ; code=(null) ; status=0/0 }"
+        )
 
     def nft_json(self) -> dict:
         items = [
@@ -1149,7 +1180,7 @@ class AuditHost(FakeHost):
             {"chain": {"family": "inet", "table": self.relay.firewall_table,
                        "name": "output_guard", "handle": 5,
                        "type": "filter", "hook": self.chain_hook,
-                       "prio": -150, "policy": "accept"}},
+                       "prio": self.chain_prio, "policy": "accept"}},
             {"rule": {"family": "inet", "table": self.relay.firewall_table,
                       "chain": "output_guard", "handle": 6,
                       "expr": [
@@ -1163,9 +1194,16 @@ class AuditHost(FakeHost):
                           {"reject": {"type": "icmpx", "expr": "admin-prohibited"}},
                       ]}},
         ]
+        if self.extra_acl is not None:
+            items.append({"rule": {"family": "inet", "table": self.relay.firewall_table,
+                                   "chain": "output_guard", "handle": 7,
+                                   "expr": self.extra_acl}})
         return {"nftables": items}
 
     def __call__(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if argv[:2] == ["/usr/bin/ssh-keygen", "-y"]:
+            self.calls.append(argv)
+            return mod.run_checked(argv)
         if (argv[0] == "systemctl" and argv[1] == "show"
                 and argv[3].startswith("--property=MainPID,")):
             self.calls.append(argv)
@@ -1175,10 +1213,15 @@ class AuditHost(FakeHost):
             ), "")
         if argv == ["ss", "-H", "-lntp"]:
             self.calls.append(argv)
-            return subprocess.CompletedProcess(argv, 0, (
-                f"LISTEN 0 128 {self.listening_address}:{self.relay.local_port}"
-                f" 0.0.0.0:* users:((\"ssh\",pid={self.listener_pid},fd=4))\n"
-            ) if self.listener else "", "")
+            listeners = []
+            if self.listener:
+                listeners.append((f"{self.listening_address}:{self.relay.local_port}",
+                                  self.listener_pid))
+            listeners.extend(self.extra_listeners)
+            lines = [f'LISTEN 0 128 {address} 0.0.0.0:* '
+                     + f'users:(("ssh",pid={pid},fd={i + 4}))'
+                     for i, (address, pid) in enumerate(listeners)]
+            return subprocess.CompletedProcess(argv, 0, "\n".join(lines) + "\n" if lines else "", "")
         return super().__call__(argv)
 
 
@@ -1199,26 +1242,38 @@ class GatewayPolicyAuditTests(unittest.TestCase):
         self.layout.lock_path(self.relay).write_text("", encoding="ascii")
         keydir = self.layout.key_dir(self.relay)
         keydir.mkdir(mode=0o700)
-        (keydir / "control_key").write_text("synthetic root-owned PRIVATE fixture only")
-        (keydir / "control_key").chmod(0o600)
-        (keydir / "control_key.pub").write_text("ssh-ed25519 synthetic-fixture")
+        generated = subprocess.run(
+            ["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+             "-C", "", "-f", str(keydir / "control_key")],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual("", generated.stderr)
         (keydir / "known_hosts").write_text("[192.0.2.1]:22 ssh-ed25519 synthetic-fixture")
         (keydir / "owner.json").write_text(json.dumps({
-            "version": 1,
+            "version": 2,
             "relay_record_id": self.relay.record_id, "relay_id": self.relay.relay_id,
-            "ssh_user": "mcp-relay-test", "ssh_uid": 1500, "gateway_php_uid": 1010,
+            "ssh_user": self.relay.ssh_user, "ssh_uid": 1500, "gateway_php_uid": 1010,
+            "control_host": self.fake.control_host, "control_port": self.fake.control_port,
+            "control_user": self.fake.control_user,
             "control_key_sha256": hashlib.sha256((keydir / "control_key").read_bytes()).hexdigest(),
+            "control_key_pub_sha256": hashlib.sha256((keydir / "control_key.pub").read_bytes()).hexdigest(),
             "known_hosts_sha256": hashlib.sha256((keydir / "known_hosts").read_bytes()).hexdigest(),
         }))
         (self.layout.at("/proc/7654")).mkdir(parents=True)
         (self.layout.at("/proc/7654/status")).write_text("Name:\tssh\nUid:\t1500\t1500\t1500\t1500\n")
         (self.layout.at("/proc/7654/exe")).symlink_to("/usr/bin/ssh")
         from types import SimpleNamespace
-        patcher = mock.patch.object(mod.pwd, "getpwnam", return_value=SimpleNamespace(
-            pw_uid=1500, pw_shell="/usr/sbin/nologin",
-        ))
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        principal = SimpleNamespace(
+            pw_uid=1500, pw_name=self.relay.ssh_user, pw_shell="/usr/sbin/nologin",
+        )
+        self.nss = principal
+        for name in ("getpwnam", "getpwuid", "getpwall"):
+            patcher = mock.patch.object(
+                mod.pwd, name,
+                side_effect=(lambda *args, n=name: [self.nss] if n == "getpwall" else self.nss),
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.layout.unit(self.relay).write_text(
             f"# MCP-GATEWAY-CONNECTION-RELAY {self.relay.record_id} {self.relay.relay_id}\n"
             "[Service]\nExecStart=/usr/bin/ssh -D 127.0.0.1:46109\n",
@@ -1270,14 +1325,14 @@ class GatewayPolicyAuditTests(unittest.TestCase):
         self.op._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), {
             **self.op._manifest(), "firewall_sha256": self.op._nft_policy_digest(),
         })
-        with self.assertRaisesRegex(mod.Refusal, "bound beyond IPv4 loopback"):
+        with self.assertRaisesRegex(mod.Refusal, "unexpected, missing or non-loopback"):
             self.op.audit(1010)
 
     def test_unknown_identity_unowned_service_and_wrong_listener_pid_fail(self):
         self.fake.user = "www-data"
         with self.assertRaisesRegex(mod.Refusal, "restricted principal"):
             self.op.audit(1010)
-        self.fake.user = "mcp-relay-test"
+        self.fake.user = self.relay.ssh_user
         self.fake.listener_pid = 9999
         with self.assertRaisesRegex(mod.Refusal, "systemd MainPID"):
             self.op.audit(1010)
@@ -1344,6 +1399,190 @@ class GatewayPolicyAuditTests(unittest.TestCase):
             "intent": "delete",
         })
         with self.assertRaisesRegex(mod.Refusal, "fence"):
+            self.op.audit(1010)
+
+    def _sync_exec_claim(self) -> None:
+        self.fake.refresh_exec_start()
+        claim = self.op._json(self.layout.evidence(self.relay, ".managed.json"))
+        claim["unit_exec_sha256"] = hashlib.sha256(
+            mod.Retirement._canonical_exec(self.fake.exec_start).encode()
+        ).hexdigest()
+        self.op._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), claim)
+
+    def _sync_nft_claim(self) -> None:
+        claim = self.op._json(self.layout.evidence(self.relay, ".managed.json"))
+        claim["firewall_sha256"] = self.op._nft_policy_digest()
+        self.op._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), claim)
+
+    def _sync_credential_claim(self) -> None:
+        keydir = self.layout.key_dir(self.relay)
+        owner = self.op._json(keydir / "owner.json")
+        owner["control_key_sha256"] = hashlib.sha256((keydir / "control_key").read_bytes()).hexdigest()
+        owner["control_key_pub_sha256"] = hashlib.sha256((keydir / "control_key.pub").read_bytes()).hexdigest()
+        self.op._write_json_atomic(keydir / "owner.json", owner)
+
+    def test_additional_public_or_private_listener_from_same_ssh_pid_is_refused(self):
+        for address in ("0.0.0.0:48712", "[::]:48712", "127.0.0.1:48712", "[::1]:48712"):
+            with self.subTest(address=address):
+                self.fake.extra_listeners = [(address, self.fake.main_pid)]
+                with self.assertRaisesRegex(mod.Refusal, "unexpected, missing or non-loopback"):
+                    self.op.audit(1010)
+        self.fake.extra_listeners = [("127.0.0.1:41000", 7999)]
+        self.assertIn("AUDIT PASS", self.op.audit(1010))
+
+    def test_extra_listener_same_reserved_port_but_foreign_pid_is_refused(self):
+        self.fake.extra_listeners = [("127.0.0.1:46109", 8888)]
+        with self.assertRaisesRegex(mod.Refusal, "uniquely to verified systemd MainPID"):
+            self.op.audit(1010)
+
+    def test_effective_ssh_arguments_must_match_exact_forwarding_contract(self):
+        changes = [
+            ("extra-dynamic-forward", ["-D", "0.0.0.0:48001"]),
+            ("shell-request", ["-o", "PermitLocalCommand=yes"]),
+            ("remote-reverse-forward", ["-R", "0.0.0.0:48002"]),
+            ("proxy-override", ["-o", "ProxyCommand=/usr/bin/true"]),
+        ]
+        original = list(self.fake.ssh_arguments)
+        for description, added in changes:
+            with self.subTest(description=description):
+                self.fake.ssh_arguments = original[:-1] + added + [original[-1]]
+                self._sync_exec_claim()
+                with self.assertRaisesRegex(mod.Refusal, "single-loopback forwarding contract"):
+                    self.op.audit(1010)
+        self.fake.ssh_arguments = original
+        self._sync_exec_claim()
+        self.assertIn("AUDIT PASS", self.op.audit(1010))
+
+    def test_same_chain_reject_and_unrecognized_trailing_rules_fail_with_matching_digest(self):
+        for trailing in (
+            [{"match": {"left": {"meta": {"key": "skuid"}}, "op": "==",
+                         "right": 1010}}, {"reject": {"type": "icmpx", "expr": "admin-prohibited"}}],
+            [{"drop": None}],
+            [{"return": None}],
+            [{"jump": {"target": "other"}}],
+            [{"accept": None}],
+        ):
+            with self.subTest(trailing=trailing):
+                self.fake.extra_acl = trailing
+                self._sync_nft_claim()
+                with self.assertRaisesRegex(mod.Refusal, "unsupported trailing"):
+                    self.op.audit(1010)
+        self.fake.extra_acl = None
+        self._sync_nft_claim()
+        self.assertIn("AUDIT PASS", self.op.audit(1010))
+
+    def test_nft_priority_drift_fails_even_with_matching_manifest_digest(self):
+        self.fake.chain_prio = -5
+        self._sync_nft_claim()
+        with self.assertRaisesRegex(mod.Refusal, "base-chain hook"):
+            self.op.audit(1010)
+
+    def test_dedicated_principal_is_record_scoped_not_prefix_only(self):
+        self.fake.user = "mcp-relay-foreign"
+        owner_path = self.layout.key_dir(self.relay) / "owner.json"
+        owner = self.op._json(owner_path)
+        owner["ssh_user"] = self.fake.user
+        self.op._write_json_atomic(owner_path, owner)
+        with self.assertRaisesRegex(mod.Refusal, "key ownership record"):
+            self.op.audit(1010)
+
+    def test_sibling_relay_claim_cannot_reuse_ssh_uid(self):
+        sibling = self.layout.key_dir(self.relay).parent / "unrelated"
+        sibling.mkdir(mode=0o700)
+        sibling_owner = sibling / "owner.json"
+        sibling_record = "01JAE000000000000000000099"
+        sibling_owner.write_text(json.dumps({
+            "version": 2, "relay_record_id": sibling_record, "relay_id": sibling.name,
+            "ssh_user": "mcp-relay-" + hashlib.sha256(sibling_record.encode()).hexdigest()[:20],
+            "ssh_uid": 1500,
+        }))
+        with self.assertRaisesRegex(mod.Refusal, "reused by another Relay"):
+            self.op.audit(1010)
+        sibling_owner.unlink()
+        with self.assertRaisesRegex(mod.Refusal, "lacks root-owned principal"):
+            self.op.audit(1010)
+
+    def test_sibling_with_distinct_principal_and_uid_remains_independent(self):
+        sibling = self.layout.key_dir(self.relay).parent / "another-relay"
+        sibling.mkdir(mode=0o700)
+        sibling_record = "01JAE000000000000000000098"
+        (sibling / "owner.json").write_text(json.dumps({
+            "version": 2, "relay_record_id": sibling_record, "relay_id": sibling.name,
+            "ssh_user": "mcp-relay-" + hashlib.sha256(sibling_record.encode()).hexdigest()[:20],
+            "ssh_uid": 1600,
+        }))
+        self.assertIn("AUDIT PASS", self.op.audit(1010))
+
+    def test_root_php_uid_and_login_shell_are_not_valid_ssh_service_identities(self):
+        owner_path = self.layout.key_dir(self.relay) / "owner.json"
+        owner = self.op._json(owner_path)
+        for uid in (0, 1010):
+            with self.subTest(uid=uid):
+                owner["ssh_uid"] = uid
+                self.op._write_json_atomic(owner_path, owner)
+                with self.assertRaisesRegex(mod.Refusal, "key ownership record"):
+                    self.op.audit(1010)
+        owner["ssh_uid"] = 1500
+        self.op._write_json_atomic(owner_path, owner)
+        from types import SimpleNamespace
+        self.nss = SimpleNamespace(
+            pw_uid=1500, pw_name=self.relay.ssh_user, pw_shell="/bin/bash",
+        )
+        with self.assertRaisesRegex(mod.Refusal, "unsafe identity or login shell"):
+            self.op.audit(1010)
+
+    def test_nss_alias_for_same_uid_blocks_dedicated_identity(self):
+        from types import SimpleNamespace
+        original = self.nss
+        self.nss = SimpleNamespace(pw_uid=1500, pw_name="foreign-alias",
+                                   pw_shell="/usr/sbin/nologin")
+        try:
+            with self.assertRaisesRegex(mod.Refusal, "reused by another system account"):
+                self.op.audit(1010)
+        finally:
+            self.nss = original
+
+    def test_public_key_is_cryptographically_matched_not_only_digest_pinned(self):
+        temp = self.layout.root / "other-identity"
+        generated = subprocess.run(
+            ["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+             "-C", "", "-f", str(temp)],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual("", generated.stderr)
+        keydir = self.layout.key_dir(self.relay)
+        original_pub = (keydir / "control_key.pub").read_bytes()
+        original_key = (keydir / "control_key").read_bytes()
+        (keydir / "control_key.pub").write_bytes((temp.parent / "other-identity.pub").read_bytes())
+        self._sync_credential_claim()
+        with self.assertRaisesRegex(mod.Refusal, "does not match the private"):
+            self.op.audit(1010)
+        (keydir / "control_key.pub").write_bytes(original_pub)
+        (keydir / "control_key").write_bytes(temp.read_bytes())
+        (keydir / "control_key").chmod(0o600)
+        self._sync_credential_claim()
+        with self.assertRaisesRegex(mod.Refusal, "does not match the private"):
+            self.op.audit(1010)
+        (keydir / "control_key").write_bytes(original_key)
+        self._sync_credential_claim()
+        self.assertIn("AUDIT PASS", self.op.audit(1010))
+
+    def test_malformed_public_key_and_private_key_are_not_accepted(self):
+        keydir = self.layout.key_dir(self.relay)
+        (keydir / "control_key.pub").write_text("ssh-ed25519 not-base64")
+        self._sync_credential_claim()
+        with self.assertRaisesRegex(mod.Refusal, "Ed25519 key"):
+            self.op.audit(1010)
+        original_pub = subprocess.run(
+            ["/usr/bin/ssh-keygen", "-y", "-P", "",
+             "-f", str(keydir / "control_key")], capture_output=True,
+            text=True, check=True,
+        ).stdout
+        keydir.joinpath("control_key.pub").write_text(" ".join(original_pub.split()[:2]) + "\n")
+        keydir.joinpath("control_key").write_text("tampered private key")
+        keydir.joinpath("control_key").chmod(0o600)
+        self._sync_credential_claim()
+        with self.assertRaises(mod.Refusal):
             self.op.audit(1010)
 
     def test_missing_install_claim_refuses_without_root_mutation(self):

@@ -91,21 +91,48 @@ previous source requires the explicit reviewed upgrade procedure below.
 
 The operator command uses the current web PHP effective UID, not a
 user-editable value. It acquires the Relay lifecycle lock in shared mode
-(refusing an overlapping Setup/Retire/Seal), then requires:
+(refusing overlapping Setup/Retire/Seal) and requires:
 
-- A root-owned v2 resource claim, active generation, exact immutable Relay
-  identity and revision, root-owned service definition, and matching effective
-  systemd ExecStart.
-- A dedicated non-root SSH client principal with no login shell, exact
-  root-owned key directory and owner manifest, intact control key/known-host
-  material, and no unknown files. The running OpenSSH process actual Unix UID
-  must match the dedicated principal. The single live listener must be
-  bound to 127.0.0.1 on the exact port and owned by that systemd MainPID.
-- The claimed nftables inet table must have an actual output base chain whose
-  first rule rejects unrelated socket UIDs reaching the local SOCKS port on
-  loopback, covering IPv4 and IPv6. A misordered, missing, foreign or modified
-  rule cannot pass because a manifest digest exists. The service must be
-  active and enabled, with restricted User, NoNewPrivileges and PrivateTmp.
+- A root-owned v2 resource claim, current unfenced generation, exact immutable
+  Relay identity/revision, root-owned unit definition, and matching *effective*
+  systemd ExecStart. A Delete fence permanently blocks this record; a Rotate
+  fence blocks its own and older revisions, while allowing a separately
+  verified newer configuration revision.
+- An exact, reviewed OpenSSH argv contract. The service must use
+  `/usr/bin/ssh -F /dev/null -N -T` with explicitly pinned non-interactive,
+  host-key, no-proxy and credential settings, and exactly ONE dynamic forward
+  bound to `127.0.0.1:<reserved-relay-port>`. The endpoint/port/user from
+  the root-controlled v2 `owner.json` must agree with that command. No
+  additional forwarding modes, command options or public listening sockets
+  are accepted even when the unit and effective-command digests agree.
+- One dedicated non-root SSH Unix principal named
+  `mcp-relay-<first-20-hex-of-SHA256(record-ULID)>`, different from PHP UID.
+  The actual NSS-resolved UID, canonical account, non-login shell and live
+  OpenSSH process UIDs must agree. The verifier checks existing root-owned
+  sibling Relay principal reservations and refuses reused UIDs/principals,
+  unsafe/unverifiable siblings or NSS aliases. The local listener inventory
+  must contain exactly one socket owned by this systemd MainPID and only at
+  this Relay's IPv4 loopback port; unrelated services' other ports remain
+  untouched.
+- A root-owned private control key (0600), bounded Ed25519 public key,
+  root-owned verified key/known-host material and v2 `owner.json` including
+  content SHA256 for private key, public key and known_hosts. The helper also
+  derives the public key with the pinned local `ssh-keygen -y` and verifies
+  that it matches the claimed public key. Unknown files, aliases or corrupted
+  keypairs fail closed; the private key is never shown to PHP.
+- The effective nftables `inet` table must have exactly one
+  `output_guard` output base chain (priority -150, policy accept) and exactly
+  one scoped reject rule: outgoing loopback TCP to the reserved SOCKS port
+  is rejected for socket UIDs other than the designated Gateway PHP UID.
+  IPv4 and IPv6 share this rule. A matching digest cannot justify an extra
+  rule rejecting the designated UID, an unrecognized jump/drop/return,
+  unexpected priority, foreign chain or policy.
+
+This strict one-rule check proves only the *owned Relay table's* semantics,
+not system-wide positive connectivity: another firewall table or a separate
+host firewall can still deny the approved UID. Real IPv4/IPv6 positive and
+negative socket tests and FPM/CLI/sibling-site UID isolation are separate
+host-acceptance requirements, not inferred from this source-level audit.
 
 Output is **GATEWAY LOCAL POLICY AUDIT PASS** or actionable **FAIL CLOSED**.
 Passing this check is deliberately NOT a readiness lease. The helper creates
@@ -117,10 +144,12 @@ Target authentication remains required. Setup, Update, Repair, trusted
 attestation issuer and real-host end-to-end acceptance are still unfinished.
 
 Root-only SSH private keys cannot be read by the unprivileged SSH service
-directly. A future host Setup must deliver the key via a trusted systemd
-credential mechanism (e.g. LoadCredential), without weakening its root-only
-storage, and verify its actual execution and authentication. Synthetic
-audit fixtures do not prove credential delivery or working SSH transport.
+directly. A future host Setup must deliver `control_key` and `known_hosts`
+via trusted systemd `LoadCredential=`, into the service-specific
+`/run/credentials/<unit>/` directory used by the audited argv. Do not weaken
+root-only storage or assume systemd dynamic credential paths are verified
+without on-host checks. Synthetic audit fixtures do not prove working SSH
+transport or credential delivery.
 
 ## Gateway-local retirement procedure (merged source, not deployed)
 
@@ -146,7 +175,7 @@ SHA256 check until the Owner separately runs the **Explicit verified helper
 upgrade** command (under the collapsed installation/diagnostics section).
 The upgrade permits exactly one pinned predecessor digest,
 `e0810d480ef43e278924422d9f478b804359313883fa4ec2abe8ca7fffb00efd`
-(the helper shipped with merged PR #286/#287), to be replaced with the
+(the helper integrated through merged PR #289), to be replaced with the
 current release-pinned source, only after the source bytes are copied to an
 isolated root-owned temporary inode and the copy matches the new SHA256.
 **Before upgrading a helper installed by an older release, enter a controlled
