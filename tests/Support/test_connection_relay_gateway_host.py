@@ -801,16 +801,21 @@ class BootstrapShellTests(unittest.TestCase):
         self.source.write_bytes(source.read_bytes())
         self.target = self.sbin / "mcp-gateway-relay"
         self.hash = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        self.previous_bytes = b"exact previously issued trusted fixture helper\n"
+        self.previous = hashlib.sha256(self.previous_bytes).hexdigest()
 
-    def script(self) -> str:
+    def script(self, upgrade: bool = False) -> str:
         php = (source.parents[2] / "app/Infrastructure/Connectors/Relay/"
                "ConnectionRelayHostOperatorPlan.php").read_text()
         m = re.search(r"\$bootstrapScript = <<<'BASH'\n(.*?)\nBASH;", php, re.S)
         assert m is not None
         body = m.group(1)
+        lock = self.sbin / ".helper-install.lock"
         replacements = {
             "source=__SOURCE__": "source=" + shlex.quote(str(self.source)),
             "expected=__SHA__": "expected=" + shlex.quote(self.hash),
+            "previous=__PREVIOUS__": "previous=" + shlex.quote(self.previous),
+            "mode=__MODE__": "mode=" + ("upgrade" if upgrade else "install"),
             "destination=/usr/local/sbin/mcp-gateway-relay":
                 "destination=" + shlex.quote(str(self.target)),
             "for parent in / /usr /usr/local /usr/local/sbin; do":
@@ -823,10 +828,21 @@ class BootstrapShellTests(unittest.TestCase):
                 'temp="$(mktemp ' + shlex.quote(str(self.sbin / '.relay.XXXXXXXX')) + ')"',
             'test "$(stat -c %u "$destination")" = 0':
                 'test "$(stat -c %u "$destination")" = ' + str(os.geteuid()),
+            "lock=/run/mcp-gateway-relay-helper-install.lock":
+                "lock=" + shlex.quote(str(lock)),
+            "test -d /run && test ! -L /run &&":
+                "test -d " + shlex.quote(str(self.sbin)) +
+                " && test ! -L " + shlex.quote(str(self.sbin)) + " &&",
+            'test "$(stat -c %u /run)" = 0':
+                'test "$(stat -c %u ' + shlex.quote(str(self.sbin)) + ')" = ' + str(os.geteuid()),
+            'test -z "$(find /run -maxdepth 0 -perm /022 -print)"':
+                'test -z "$(find ' + shlex.quote(str(self.sbin)) + ' -maxdepth 0 -perm /022 -print)"',
+            'test "$(stat -c %u "$lock")" = 0':
+                'test "$(stat -c %u "$lock")" = ' + str(os.geteuid()),
         }
         for old, new in replacements.items():
             self.assertIn(old, body)
-            body = body.replace(old, new, 1)
+            body = body.replace(old, new)
         return body
 
     def run_bash(self, body: str) -> subprocess.CompletedProcess[str]:
@@ -865,6 +881,110 @@ class BootstrapShellTests(unittest.TestCase):
         self.assertNotEqual(0, rejected.returncode)
         self.assertEqual("preserve", outside.read_text())
         self.assertTrue(self.target.is_symlink())
+
+    def test_explicit_upgrade_requires_exact_known_predecessor_and_is_idempotent(self):
+        self.target.write_bytes(self.previous_bytes)
+        first_inode = self.target.stat().st_ino
+        # Cleanup/bootstrap never upgrades an existing, even known tool.
+        refused = self.run_bash(self.script())
+        self.assertNotEqual(0, refused.returncode)
+        self.assertEqual(self.previous_bytes, self.target.read_bytes())
+        upgraded = self.run_bash(self.script(upgrade=True))
+        self.assertEqual(0, upgraded.returncode, upgraded.stderr)
+        self.assertEqual(self.source.read_bytes(), self.target.read_bytes())
+        self.assertNotEqual(first_inode, self.target.stat().st_ino,
+                            "Verified upgrade must publish a new inode atomically.")
+        self.assertEqual(0o755, self.target.stat().st_mode & 0o777)
+        self.assertEqual([], list(self.sbin.glob(".relay.*")))
+        again_inode = self.target.stat().st_ino
+        retry = self.run_bash(self.script(upgrade=True))
+        self.assertEqual(0, retry.returncode, retry.stderr)
+        self.assertEqual(again_inode, self.target.stat().st_ino,
+                         "A current tool must not be rewritten on retry.")
+
+    def test_upgrade_refuses_unknown_binary_and_preserves_siblings(self):
+        self.target.write_bytes(b"untrusted third party root executable\n")
+        sibling = self.sbin / "unrelated-daemon"
+        sibling.write_text("preserve unrelated code\n")
+        res = self.run_bash(self.script(upgrade=True))
+        self.assertNotEqual(0, res.returncode)
+        self.assertIn("Unknown or outdated installed host tool", res.stderr)
+        self.assertEqual(b"untrusted third party root executable\n", self.target.read_bytes())
+        self.assertEqual("preserve unrelated code\n", sibling.read_text())
+
+    def test_upgrade_rejects_tampered_source_without_changing_known_old_tool(self):
+        self.target.write_bytes(self.previous_bytes)
+        self.source.write_bytes(b"tampered source instead of pinned release\n")
+        res = self.run_bash(self.script(upgrade=True))
+        self.assertNotEqual(0, res.returncode)
+        self.assertIn("Copied helper SHA256 differs", res.stderr)
+        self.assertEqual(self.previous_bytes, self.target.read_bytes())
+        self.assertEqual([], list(self.sbin.glob(".relay.*")))
+
+    def test_upgrade_absent_tool_fails_closed_without_installing(self):
+        res = self.run_bash(self.script(upgrade=True))
+        self.assertNotEqual(0, res.returncode)
+        self.assertIn("No known predecessor to upgrade", res.stderr)
+        self.assertFalse(self.target.exists())
+        first = self.run_bash(self.script())
+        self.assertEqual(0, first.returncode, first.stderr)
+        self.assertEqual(self.source.read_bytes(), self.target.read_bytes())
+
+    def test_upgrade_rejects_untrusted_installer_lock(self):
+        self.target.write_bytes(self.previous_bytes)
+        lock = self.sbin / ".helper-install.lock"
+        outside = self.root / "outside"
+        outside.write_text("preserve")
+        lock.symlink_to(outside)
+        res = self.run_bash(self.script(upgrade=True))
+        self.assertNotEqual(0, res.returncode)
+        self.assertIn("Untrusted installer lock", res.stderr)
+        self.assertEqual(self.previous_bytes, self.target.read_bytes())
+        self.assertEqual("preserve", outside.read_text())
+
+    def test_concurrent_installer_lock_fails_without_replacing_helper(self):
+        self.target.write_bytes(self.previous_bytes)
+        lock = self.sbin / ".helper-install.lock"
+        with subprocess.Popen(
+            ["flock", "-x", str(lock), "bash", "-c", 'printf "LOCKED\n"; read -r release'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True,
+        ) as holder:
+            try:
+                assert holder.stdout is not None
+                self.assertEqual("LOCKED", holder.stdout.readline().strip())
+                # Test the exact failure branch without waiting the production
+                # 15-second bound; the installed helper must remain unchanged.
+                body = self.script(upgrade=True).replace(
+                    "flock -x -w 15 9", "flock -n 9"
+                )
+                res = self.run_bash(body)
+                self.assertNotEqual(0, res.returncode)
+                self.assertIn("Another Relay helper installer is active", res.stderr)
+                self.assertEqual(self.previous_bytes, self.target.read_bytes())
+            finally:
+                assert holder.stdin is not None
+                holder.stdin.write("release\n")
+                holder.stdin.flush()
+                holder.wait(timeout=3)
+
+    def test_upgrade_rejects_symlink_and_writable_parent(self):
+        outside = self.root / "foreign"
+        outside.write_text("preserve")
+        self.target.symlink_to(outside)
+        res = self.run_bash(self.script(upgrade=True))
+        self.assertNotEqual(0, res.returncode)
+        self.assertEqual("preserve", outside.read_text())
+        self.target.unlink()
+        self.target.write_bytes(self.previous_bytes)
+        self.sbin.chmod(0o777)
+        try:
+            res = self.run_bash(self.script(upgrade=True))
+            self.assertNotEqual(0, res.returncode)
+            self.assertIn("Untrusted host tool directory", res.stderr)
+            self.assertEqual(self.previous_bytes, self.target.read_bytes())
+        finally:
+            self.sbin.chmod(0o700)
 
 
 

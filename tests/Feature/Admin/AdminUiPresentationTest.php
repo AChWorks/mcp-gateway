@@ -41,6 +41,9 @@ final class AdminUiPresentationTest extends TestCase
         $this->get('/admin/settings/connection-relays')->assertOk()
             ->assertSee('One cleanup-and-seal-for-delete command')
             ->assertSee('One-time verified helper installation')
+            ->assertSee('Explicit verified helper upgrade')
+            ->assertSee('relay-retire-upgrade-'.$relay->getKey())
+            ->assertSee('An unknown or modified binary is never replaced')
             ->assertSee('/usr/bin/sudo /usr/bin/sha256sum --check --status')
             ->assertSee('A disconnected Iran host NEVER blocks this action');
 

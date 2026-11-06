@@ -541,8 +541,22 @@ PYTHON;
         self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-delete', $commands['seal_delete']);
         self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-rotate', $commands['seal_rotate']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
+        self::assertSame('369fe2369c23d19a3fc62ccf494cba3ff7bb91109fa14e92783873904a2d5364', $commands['upgrade_from_sha256']);
+        self::assertStringContainsString('mode=install', $commands['bootstrap']);
+        self::assertStringNotContainsString('mode=upgrade', $commands['bootstrap']);
+        self::assertStringContainsString('mode=upgrade', $commands['upgrade']);
+        self::assertStringContainsString('flock -x -w 15 9', $commands['upgrade']);
+        self::assertStringContainsString('mv -T --', $commands['upgrade']);
+        self::assertStringContainsString($commands['upgrade_from_sha256'], $commands['upgrade']);
+        self::assertStringContainsString($commands['sha256'], $commands['upgrade']);
+        self::assertStringNotContainsString('mode=upgrade', $commands['cleanup']);
+        self::assertStringNotContainsString('mode=upgrade', $commands['cleanup_for_rotation']);
 
+        $current = config('connection_relays.gateway_retirement_helper_sha256');
         config()->set('connection_relays.gateway_retirement_helper_sha256', str_repeat('0', 64));
+        self::assertNull(app(ConnectionRelayHostOperatorPlan::class)->commands($relay));
+        config()->set('connection_relays.gateway_retirement_helper_sha256', $current);
+        config()->set('connection_relays.gateway_retirement_helper_upgrade_from_sha256', $current);
         self::assertNull(app(ConnectionRelayHostOperatorPlan::class)->commands($relay));
     }
 
