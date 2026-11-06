@@ -138,6 +138,22 @@ is an idempotent scoped retry of the same configured state, **not** an override
 of foreign/malformed host state. On a first-ever clean host, Setup creates
 and validates the root-owned evidence directory **before** advancing the
 provisioning generation; no precreated `/etc/mcp-gateway` namespace is assumed.
+Each newly created privileged directory and its ancestors are fsynced before
+persistent provisioning; existing ancestors are also re-fsynced on retry if
+an earlier attempt was interrupted during the parent-directory barrier.
+No SSH Unix account is created until the root-owned evidence namespace and
+its generation/journal state can be durably recorded.
+
+Exact staged files use Linux anonymous `O_TMPFILE` in their own protected
+parent directory and atomic no-clobber `linkat` publication, followed by a
+parent-directory fsync. Interrupted unpublished inodes disappear without
+leaving named `.relay-setup-*` artifacts; a retry re-fsyncs any exact existing
+published file and directory after an interrupted link. This requires a
+filesystem supporting `O_TMPFILE` and accessible Linux `/proc/self/fd`;
+unsupported hosts fail closed before claiming readiness (and before `useradd`
+when journal publication is unsupported). Any unrelated or previously
+created temporary-looking files remain untrusted and are **never** purged by
+prefix; such a host state requires explicit investigation.
 The root-only `retire` command also
 supports a Setup interrupted **before** `.managed.json` was committed: an
 exact journal authorizes only a verified staged unit, pinned key materials

@@ -2161,6 +2161,149 @@ class GatewayStagedSetupTests(unittest.TestCase):
         self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
         self.assertEqual("KEEP", unrelated.read_text())
 
+    def test_fresh_evidence_parent_sync_failure_precedes_useradd_and_retry_resyncs(self):
+        generation = self.layout.evidence(self.relay, ".generation.json")
+        generation.unlink()
+        evidence = self.layout.evidence_dir
+        evidence.rmdir()
+        evidence.parent.rmdir()
+        unrelated = self.layout.at("/etc/unrelated-service.conf")
+        unrelated.write_text("KEEP")
+        original = mod.fsync_privileged_directory
+        def fail_parent(path, layout):
+            if path == evidence.parent:
+                raise OSError("simulated crash at new evidence parent fsync")
+            return original(path, layout)
+        with mock.patch.object(mod, "fsync_privileged_directory", side_effect=fail_parent):
+            with self.assertRaisesRegex(OSError, "evidence parent fsync"):
+                self.setup.setup()
+        self.assertTrue(evidence.is_dir())
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.setup.journal_path.exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        seen = []
+        def record_sync(path, layout):
+            seen.append(path)
+            return original(path, layout)
+        with mock.patch.object(mod, "fsync_privileged_directory", side_effect=record_sync):
+            self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        # Re-synchronize directories that already existed after interruption.
+        self.assertIn(evidence, seen)
+        self.assertIn(evidence.parent, seen)
+        self.assertEqual("KEEP", unrelated.read_text())
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertEqual("KEEP", unrelated.read_text())
+
+    def test_private_key_directory_parent_sync_failure_recovers_from_journal(self):
+        keydir = self.layout.key_dir(self.relay)
+        original = mod.fsync_privileged_directory
+        def fail_new_keydir_parent(path, layout):
+            if path == keydir.parent and keydir.is_dir():
+                raise OSError("simulated crash at credential parent fsync")
+            return original(path, layout)
+        with mock.patch.object(mod, "fsync_privileged_directory", side_effect=fail_new_keydir_parent):
+            with self.assertRaisesRegex(OSError, "credential parent fsync"):
+                self.setup.setup()
+        self.assertTrue(self.fake.user_created)
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertEqual(1500, self.retirement._json(self.setup.journal_path)["ssh_uid"])
+        self.assertEqual([], list(keydir.iterdir()))
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertEqual(1, sum(cmd[:2] == ["/usr/sbin/useradd", "--system"] for cmd in self.fake.calls))
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+
+    def test_anonymous_publication_crash_before_link_leaves_no_temporary_name(self):
+        original_link = mod.os.link
+        def fail_before_link(source, destination, **kwargs):
+            if destination == "known_hosts":
+                raise OSError("simulated interruption before anonymous link")
+            return original_link(source, destination, **kwargs)
+        with mock.patch.object(mod.os, "link", side_effect=fail_before_link):
+            with self.assertRaisesRegex(OSError, "before anonymous link"):
+                self.setup.setup()
+        keydir = self.layout.key_dir(self.relay)
+        self.assertTrue(self.setup.journal_path.is_file())
+        self.assertTrue(self.fake.user_created)
+        self.assertFalse((keydir / "known_hosts").exists())
+        self.assertFalse(any(name.startswith(".relay-setup-") for name in os.listdir(keydir)))
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertEqual({"control_key", "control_key.pub", "known_hosts", "owner.json"},
+                         {entry.name for entry in keydir.iterdir()})
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+
+    def test_anonymous_publication_crash_after_link_recovers_durable_existing_entry(self):
+        keydir = self.layout.key_dir(self.relay)
+        known = keydir / "known_hosts"
+        original_fsync = mod.os.fsync
+        def fail_after_link(fd):
+            try:
+                directory = os.readlink("/proc/self/fd/" + str(fd))
+            except OSError:
+                directory = ""
+            if directory == str(keydir) and known.is_file() and not (keydir / "owner.json").exists():
+                raise OSError("simulated crash after link before directory fsync")
+            return original_fsync(fd)
+        with mock.patch.object(mod.os, "fsync", side_effect=fail_after_link):
+            with self.assertRaisesRegex(OSError, "after link before directory fsync"):
+                self.setup.setup()
+        self.assertTrue(known.is_file())
+        self.assertEqual(self.setup._expected_hostkey(), known.read_bytes())
+        self.assertFalse(any(name.startswith(".relay-setup-") for name in os.listdir(keydir)))
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        seen = []
+        def record_retry_fsync(fd):
+            seen.append(os.readlink("/proc/self/fd/" + str(fd)))
+            return original_fsync(fd)
+        with mock.patch.object(mod.os, "fsync", side_effect=record_retry_fsync):
+            self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertIn(str(known), seen)
+        self.assertIn(str(keydir), seen)
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+
+    def test_foreign_and_symlinked_old_temp_names_remain_protected(self):
+        self.fake.setup_fail_command = "keygen"
+        with self.assertRaisesRegex(mod.Refusal, "generate"):
+            self.setup.setup()
+        keydir = self.layout.key_dir(self.relay)
+        sibling = keydir.parent / "unrelated-relay"
+        sibling.mkdir()
+        unrelated = sibling / "unknown"
+        unrelated.write_text("KEEP SIBLING")
+        foreign = keydir / ".relay-setup-foreign"
+        for symlink in (False, True):
+            if symlink:
+                foreign.symlink_to(unrelated)
+            else:
+                foreign.write_text("NOT PROVEN HELPER OUTPUT")
+            with self.assertRaisesRegex(mod.Refusal, "Foreign file"):
+                self.setup.setup()
+            with self.assertRaisesRegex(mod.Refusal, "Foreign file"):
+                self.retirement.retire()
+            self.assertEqual("KEEP SIBLING", unrelated.read_text())
+            self.assertTrue(foreign.is_symlink() if symlink else foreign.is_file())
+            self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+            foreign.unlink()
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertEqual("KEEP SIBLING", unrelated.read_text())
+
+    def test_unsupported_anonymous_publication_fails_closed_before_useradd(self):
+        original_open = mod.os.open
+        def no_tmpfile(path, flags, *args, **kwargs):
+            if (flags & os.O_TMPFILE) == os.O_TMPFILE:
+                raise OSError(95, "Operation not supported")
+            return original_open(path, flags, *args, **kwargs)
+        with mock.patch.object(mod.os, "open", side_effect=no_tmpfile):
+            with self.assertRaisesRegex(mod.Refusal, "O_TMPFILE"):
+                self.setup.setup()
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.setup.journal_path.exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+
     def test_durable_cleanup_syncs_each_file_and_parent_before_receipt(self):
         self.setup.setup()
         syncs = []

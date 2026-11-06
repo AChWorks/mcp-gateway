@@ -148,6 +148,16 @@ def owned_parents(path: Path, layout: Layout) -> None:
         current = current.parent
 
 
+def fsync_privileged_directory(path: Path, layout: Layout) -> None:
+    """Commit a trusted directory's metadata and namespace entries."""
+    trusted(path, True, layout.owner_uid, True)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def make_privileged_directory(
     path: Path, layout: Layout, php_traversable: bool = False,
 ) -> None:
@@ -175,6 +185,15 @@ def make_privileged_directory(
             folder.chmod(mode)
             trusted(folder, True, layout.owner_uid, True)
     owned_parents(path, layout)
+    # fsync of a child file cannot make the child's newly created ancestor
+    # directory entries durable. Flush every namespace from leaf to root,
+    # including existing paths on retry after an interrupted parent fsync.
+    current = path
+    while current.is_relative_to(layout.root):
+        fsync_privileged_directory(current, layout)
+        if current == layout.root:
+            break
+        current = current.parent
 
 
 def run_checked(argv: list[str]) -> subprocess.CompletedProcess[str]:
@@ -628,12 +647,7 @@ class Retirement:
     def _fsync_directory(self, path: Path) -> None:
         # A successful unlink/rmdir is NOT a durable cleanup barrier until
         # its parent namespace has been flushed to disk.
-        trusted(path, True, self.layout.owner_uid, True)
-        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        fsync_privileged_directory(path, self.layout)
 
     def _unlink_owned_durable(self, path: Path) -> None:
         if self._owned(path):
@@ -1784,32 +1798,47 @@ class GatewaySetup(GatewayPolicyAudit):
         return (identity + " " + self.host_key + "\n").encode("ascii")
 
     def _write_exact(self, path: Path, contents: bytes, mode: int) -> None:
-        # Existing bytes are never overwritten, even with a matching journal.
-        # Unfamiliar state requires operator investigation rather than adoption.
+        # Never overwrite a published path. Re-fsync exact existing files and
+        # their parent on retry: a prior process may have crashed after the
+        # hard link was made, but before its directory entry was committed.
         if self._owned(path):
             if path.read_bytes() != contents or path.stat().st_mode & 0o777 != mode:
                 raise Refusal("Owned Relay Setup file differs from reviewed bytes: " + str(path))
+            file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                os.fsync(file_fd)
+            finally:
+                os.close(file_fd)
+            self._fsync_directory(path.parent)
             return
         if path.exists() or path.is_symlink():
             raise Refusal("Untrusted existing Relay Setup file: " + str(path))
-        fd, temp = tempfile.mkstemp(prefix=".relay-setup-", dir=path.parent)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            with os.fdopen(fd, "wb") as destination:
-                destination.write(contents)
-                destination.flush()
-                os.fchmod(destination.fileno(), mode)
-                os.fsync(destination.fileno())
-            os.link(temp, path)
-            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            # Linux O_TMPFILE has no directory entry until linkat publishes it.
+            # A crash before publication leaves no .relay-setup-* artifact to
+            # strand Setup or Retirement. dir_fd forces linkat(AT_SYMLINK_FOLLOW)
+            # on /proc/self/fd, preserving atomic no-clobber link semantics.
             try:
-                os.fsync(directory)
+                temporary_fd = os.open(".", os.O_TMPFILE | os.O_WRONLY, 0o600,
+                                       dir_fd=directory_fd)
+            except OSError as error:
+                raise Refusal("Relay Setup requires filesystem support for anonymous O_TMPFILE publication.") from error
+            try:
+                with os.fdopen(os.dup(temporary_fd), "wb") as destination:
+                    destination.write(contents)
+                    destination.flush()
+                    os.fchmod(destination.fileno(), mode)
+                    os.fsync(destination.fileno())
+                os.link("/proc/self/fd/" + str(temporary_fd), path.name,
+                        dst_dir_fd=directory_fd, follow_symlinks=True)
+                os.fsync(directory_fd)
+            except FileExistsError as error:
+                raise Refusal("Concurrent Relay Setup file mutation; retry after operator review.") from error
             finally:
-                os.close(directory)
-        except FileExistsError as error:
-            raise Refusal("Concurrent Relay Setup file mutation; retry after operator review.") from error
+                os.close(temporary_fd)
         finally:
-            if os.path.lexists(temp):
-                os.unlink(temp)
+            os.close(directory_fd)
 
     def _identity(self, journal: dict) -> int:
         marker = account_generation_marker(self.relay, journal["host_generation"])
