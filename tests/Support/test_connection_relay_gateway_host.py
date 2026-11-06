@@ -1786,6 +1786,235 @@ class GatewayStagedSetupTests(unittest.TestCase):
         self.assertFalse(self.fake.active)
         self.assertFalse(self.fake.enabled)
 
+
+    def _assert_public_export_refused_readonly(self):
+        """No incomplete export may mutate local host state or produce a receipt."""
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        public = (self.layout.key_dir(self.relay) / "control_key.pub").read_bytes()
+        private = (self.layout.key_dir(self.relay) / "control_key").read_bytes()
+        owner = (self.layout.key_dir(self.relay) / "owner.json").read_bytes()
+        before_calls = len(self.fake.calls)
+        before_mutations = self.fake.nft_mutations
+        before_active = self.fake.active
+        before_enabled = self.fake.enabled
+        with self.assertRaises(mod.Refusal):
+            checker.public_enrollment()
+        self.assertEqual(public, (self.layout.key_dir(self.relay) / "control_key.pub").read_bytes())
+        self.assertEqual(private, (self.layout.key_dir(self.relay) / "control_key").read_bytes())
+        self.assertEqual(owner, (self.layout.key_dir(self.relay) / "owner.json").read_bytes())
+        self.assertTrue(self.fake.user_created)
+        self.assertEqual(before_mutations, self.fake.nft_mutations)
+        self.assertEqual(before_active, self.fake.active)
+        self.assertEqual(before_enabled, self.fake.enabled)
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        for argv in self.fake.calls[before_calls:]:
+            self.assertFalse(argv[:2] in (
+                ["/usr/sbin/useradd", "--system"], ["/usr/sbin/userdel", self.relay.ssh_user],
+                ["systemctl", "daemon-reload"], ["systemctl", "disable"],
+                ["/usr/sbin/nft", "-f"], ["nft", "delete"],
+            ), "Public export must be strictly read-only: " + repr(argv))
+
+    def test_public_enrollment_refuses_missing_unit_even_with_live_claim(self):
+        self.setup.setup()
+        self.layout.unit(self.relay).unlink()
+        self._assert_public_export_refused_readonly()
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_missing_nft_persistence_even_with_claim(self):
+        self.setup.setup()
+        self.setup.nft_path.unlink()
+        self._assert_public_export_refused_readonly()
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_absent_live_nft_table_and_allows_repair(self):
+        self.setup.setup()
+        self.fake.nft = False
+        self._assert_public_export_refused_readonly()
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_drifted_owned_unit_bytes(self):
+        self.setup.setup()
+        unit = self.layout.unit(self.relay)
+        original = unit.read_bytes()
+        unit.write_bytes(original + b"# unrelated override\\n")
+        self._assert_public_export_refused_readonly()
+        unit.write_bytes(original)
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_drifted_nft_persistence_source(self):
+        self.setup.setup()
+        source = self.setup.nft_path
+        original = source.read_bytes()
+        source.write_text("flush ruleset\\n")
+        self._assert_public_export_refused_readonly()
+        source.write_bytes(original)
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_modified_effective_nft_policy(self):
+        self.setup.setup()
+        self.fake.extra_acl = [{"accept": None}]
+        self._assert_public_export_refused_readonly()
+        self.fake.extra_acl = None
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_unsafe_effective_acl_even_if_digest_is_claimed(self):
+        self.setup.setup()
+        self.fake.loopback_guard = False
+        claim = self.retirement._manifest()
+        claim["firewall_sha256"] = self.retirement._nft_policy_digest()
+        self.retirement._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), claim)
+        self._assert_public_export_refused_readonly()
+        self.fake.loopback_guard = True
+        # The untrusted claim was overwritten in this isolated fixture; repair
+        # the fixture's exact original digest, not the live host from export.
+        claim["firewall_sha256"] = self.retirement._nft_policy_digest()
+        self.retirement._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), claim)
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_foreign_or_stale_systemd_definition(self):
+        self.setup.setup()
+        for name, value in (
+            ("foreign_fragment", "/etc/systemd/system/unrelated.service"),
+            ("foreign_dropin", True),
+        ):
+            with self.subTest(name=name):
+                setattr(self.fake, name, value)
+                self._assert_public_export_refused_readonly()
+                setattr(self.fake, name, None if name == "foreign_fragment" else False)
+        original_exec = self.fake.exec_start
+        self.fake.exec_start = original_exec.replace(
+            "-D 127.0.0.1:" + str(self.relay.local_port),
+            "-D 0.0.0.0:" + str(self.relay.local_port),
+        )
+        self._assert_public_export_refused_readonly()
+        self.fake.exec_start = original_exec
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_unexpected_activation_of_staged_unit(self):
+        self.setup.setup()
+        self.fake.active = True
+        self._assert_public_export_refused_readonly()
+        self.fake.active = False
+        self.fake.enabled = True
+        self._assert_public_export_refused_readonly()
+        self.fake.enabled = False
+        self.assertIn("PUBLIC ONLY", mod.GatewayPolicyAudit(
+            self.relay, self.layout, self.fake).public_enrollment())
+
+    def test_public_enrollment_refuses_interrupted_retirement_before_account_deletion(self):
+        self.setup.setup()
+        sibling = self.root / "other-work-preserve"
+        sibling.write_text("DO NOT TOUCH")
+        self.fake.fail_daemon_reload = True
+        with self.assertRaisesRegex(mod.Refusal, "daemon-reload"):
+            self.retirement.retire()
+        self.assertFalse(self.layout.unit(self.relay).exists())
+        self.assertFalse(self.fake.nft)
+        self.assertTrue(self.retirement._manifest())
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertTrue(self.fake.user_created)
+        self._assert_public_export_refused_readonly()
+        self.assertEqual("DO NOT TOUCH", sibling.read_text())
+        self.fake.fail_daemon_reload = False
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.retirement.seal("delete"))
+        self.assertEqual("DO NOT TOUCH", sibling.read_text())
+
+    def test_public_enrollment_exports_only_current_stage_public_key(self):
+        self.setup.setup()
+        before = len(self.fake.calls)
+        result = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake).public_enrollment()
+        public = (self.layout.key_dir(self.relay) / "control_key.pub").read_text().strip()
+        private = (self.layout.key_dir(self.relay) / "control_key").read_text()
+        self.assertIn("PUBLIC ONLY", result)
+        self.assertIn(public, result)
+        self.assertIn(self.relay.record_id, result)
+        self.assertIn("relay-control", result)
+        self.assertIn("NOT ENROLLED", result)
+        self.assertNotIn(private, result)
+        self.assertNotIn("OPENSSH PRIVATE KEY", result)
+        for argv in self.fake.calls[before:]:
+            self.assertNotIn(argv[0], {"/usr/sbin/useradd", "/usr/sbin/userdel"})
+            self.assertFalse(argv[:2] == ["systemctl", "daemon-reload"])
+            self.assertFalse(argv[:2] == ["/usr/sbin/nft", "-f"])
+        self.assertFalse(self.fake.active)
+        self.assertFalse(self.fake.enabled)
+
+    def test_public_enrollment_refuses_incomplete_stage_without_mutation(self):
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        with self.assertRaisesRegex(mod.Refusal, "staged Relay resource claim"):
+            checker.public_enrollment()
+        # Metadata/nft/systemd inventory reads are permitted; no host writes.
+        for argv in self.fake.calls:
+            self.assertNotIn(argv[0], {"/usr/sbin/useradd", "/usr/sbin/userdel"})
+            self.assertFalse(argv[:2] == ["systemctl", "daemon-reload"])
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+
+    def test_public_enrollment_rejects_tampered_public_or_foreign_entries(self):
+        self.setup.setup()
+        keydir = self.layout.key_dir(self.relay)
+        public = keydir / "control_key.pub"
+        original = public.read_bytes()
+        public.write_text("ssh-ed25519 AAAAFORGED")
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        with self.assertRaises(mod.Refusal):
+            checker.public_enrollment()
+        public.write_bytes(original)
+        foreign = keydir / ".relay-setup-foreign"
+        foreign.write_text("DO NOT DELETE")
+        with self.assertRaisesRegex(mod.Refusal, "Unknown or unsafe Relay private file"):
+            checker.public_enrollment()
+        self.assertEqual("DO NOT DELETE", foreign.read_text())
+        foreign.unlink()
+        self.assertIn("PUBLIC ONLY", checker.public_enrollment())
+
+    def test_public_enrollment_rejects_replaced_account_and_stale_fence(self):
+        self.setup.setup()
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        self.principal.pw_uid = 1999
+        with self.assertRaises(mod.Refusal):
+            checker.public_enrollment()
+        self.principal.pw_uid = 1500
+        self.assertIn("PUBLIC ONLY", checker.public_enrollment())
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.retirement.seal("delete"))
+        with self.assertRaises(mod.Refusal):
+            checker.public_enrollment()
+
+    def test_public_enrollment_does_not_require_sibling_relay_setup_completion(self):
+        self.setup.setup()
+        sibling = self.layout.key_dir(self.relay).parent / "separately-staged"
+        sibling.mkdir(mode=0o700)
+        (sibling / "incomplete").write_text("SIBLING NOT YET PROVISIONED")
+        result = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake).public_enrollment()
+        self.assertIn("PUBLIC ONLY", result)
+        self.assertEqual("SIBLING NOT YET PROVISIONED", (sibling / "incomplete").read_text())
+        self.assertTrue(self.fake.user_created)
+
+    def test_public_enrollment_serializes_with_lifecycle_changes(self):
+        self.setup.setup()
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        fd = os.open(self.layout.lock_path(self.relay), os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(mod.Refusal, "lifecycle maintenance"):
+                checker.public_enrollment()
+        finally:
+            os.close(fd)
+        self.assertIn("PUBLIC ONLY", checker.public_enrollment())
+
     def test_setup_retry_preserves_identity_key_and_owned_acl(self):
         self.setup.setup()
         key = (self.layout.key_dir(self.relay) / "control_key").read_bytes()
