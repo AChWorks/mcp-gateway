@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ipaddress
 import fcntl
 import hashlib
 import json
@@ -65,6 +66,29 @@ class Relay:
         # Record ULID, not mutable display/route name: new record means a
         # different OS identity, even when a human reuses the Relay ID.
         return "mcp-relay-" + hashlib.sha256(self.record_id.encode()).hexdigest()[:20]
+
+
+def account_generation_marker(relay: Relay, generation: str) -> str:
+    # GECOS is a colon-delimited /etc/passwd field: useradd --comment must
+    # never contain ':' (or newline). Restrict to these validated hex/ULID
+    # and hyphen bytes for a portable durable account-generation marker.
+    return "mcp-gateway-relay-" + relay.record_id + "-" + generation
+
+
+def nft_policy_source(relay: Relay, php_uid: int) -> bytes:
+    if type(php_uid) is not int or php_uid <= 0:
+        raise Refusal("A dedicated non-root PHP UID is required for the ACL.")
+    table = relay.firewall_table
+    return (
+        "add table inet " + table + "\n"
+        "flush table inet " + table + "\n"
+        "add chain inet " + table +
+        " output_guard { type filter hook output priority -150; policy accept; }\n"
+        "add rule inet " + table + " output_guard"
+        " oifname \"lo\" tcp dport " + str(relay.local_port) +
+        " meta skuid != " + str(php_uid) +
+        " reject with icmpx type admin-prohibited\n"
+    ).encode("ascii")
 
 
 @dataclass(frozen=True)
@@ -124,6 +148,16 @@ def owned_parents(path: Path, layout: Layout) -> None:
         current = current.parent
 
 
+def fsync_privileged_directory(path: Path, layout: Layout) -> None:
+    """Commit a trusted directory's metadata and namespace entries."""
+    trusted(path, True, layout.owner_uid, True)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def make_privileged_directory(
     path: Path, layout: Layout, php_traversable: bool = False,
 ) -> None:
@@ -140,10 +174,26 @@ def make_privileged_directory(
         # traversed by the unprivileged PHP UID (receipt carries no secrets);
         # keep runtime locks private to root.
         mode = 0o755 if php_traversable else 0o700
-        folder.mkdir(mode=mode)
-        folder.chmod(mode)
-        trusted(folder, True, layout.owner_uid, True)
+        try:
+            folder.mkdir(mode=mode)
+        except FileExistsError:
+            # Concurrent cold-boot recovery by another Relay may have just
+            # created this shared parent. Accept it ONLY after root ownership,
+            # true directory type and safe permissions are independently proven.
+            trusted(folder, True, layout.owner_uid, True)
+        else:
+            folder.chmod(mode)
+            trusted(folder, True, layout.owner_uid, True)
     owned_parents(path, layout)
+    # fsync of a child file cannot make the child's newly created ancestor
+    # directory entries durable. Flush every namespace from leaf to root,
+    # including existing paths on retry after an interrupted parent fsync.
+    current = path
+    while current.is_relative_to(layout.root):
+        fsync_privileged_directory(current, layout)
+        if current == layout.root:
+            break
+        current = current.parent
 
 
 def run_checked(argv: list[str]) -> subprocess.CompletedProcess[str]:
@@ -571,6 +621,337 @@ class Retirement:
             + ". No remote Iran access is attempted."
         )
 
+    def _require_unjournaled_legacy_safe(self) -> None:
+        """An old managed claim does not own the new dedicated SSH principal.
+
+        Without the root Setup journal, we cannot prove a same-name account's
+        immutable UID or the origin of credential files. Preserve them and
+        refuse a false Gateway-host retirement receipt. Empty, root-owned
+        legacy key directories are safe to remove, but NOT their contents.
+        """
+        try:
+            pwd.getpwnam(self.relay.ssh_user)
+        except KeyError:
+            pass
+        except OSError as error:
+            raise Refusal("Cannot verify absent dedicated SSH account without Setup journal.") from error
+        else:
+            raise Refusal("Dedicated SSH account exists without UID-bound Setup journal; refuse cleanup proof.")
+        keydir = self.layout.key_dir(self.relay)
+        if self._owned(keydir, True):
+            if any(keydir.iterdir()):
+                raise Refusal("Unjournaled Relay credential files cannot be proven owned; preserve them.")
+        elif keydir.exists() or keydir.is_symlink():
+            raise Refusal("Unknown unjournaled Relay credential namespace.")
+
+    def _fsync_directory(self, path: Path) -> None:
+        # A successful unlink/rmdir is NOT a durable cleanup barrier until
+        # its parent namespace has been flushed to disk.
+        fsync_privileged_directory(path, self.layout)
+
+    def _unlink_owned_durable(self, path: Path) -> None:
+        if self._owned(path):
+            path.unlink()
+            self._fsync_directory(path.parent)
+
+    def _rmdir_owned_durable(self, path: Path) -> None:
+        if self._owned(path, True):
+            path.rmdir()
+            self._fsync_directory(path.parent)
+
+    def _owned_setup_for_retirement(self, managed: dict | None) -> dict | None:
+        """Validate a durable Setup journal, including a pre-claim interruption."""
+        journal_path = self.layout.evidence(self.relay, ".setup.json")
+        nft_path = self.layout.evidence(self.relay, ".nft")
+        if not self._owned(journal_path):
+            if self._owned(nft_path):
+                raise Refusal("Unknown Relay nftables persistence file without an owned Setup journal.")
+            keydir = self.layout.key_dir(self.relay)
+            if (self._owned(keydir, True)
+                and self._owned(keydir / "owner.json")):
+                raise Refusal("Dedicated SSH principal claim survives without its root-owned UID journal.")
+            return None
+        journal = self._json(journal_path)
+        expected = {
+            "version", "relay_record_id", "relay_id", "host_fingerprint",
+            "configuration_revision", "host_generation", "ssh_user",
+            "ssh_uid", "gateway_php_uid", "control_host", "control_port",
+            "control_user", "host_key_sha256", "unit_sha256",
+        }
+        accepted = {(self.relay.revision, self.relay.fingerprint)}
+        if self.prior_fingerprint is not None:
+            accepted.add((self.relay.revision - 1, self.prior_fingerprint))
+        generation = self._generation()
+        if (set(journal) != expected or journal["version"] != 2
+            or journal["relay_record_id"] != self.relay.record_id
+            or journal["relay_id"] != self.relay.relay_id
+            or (journal["configuration_revision"], journal["host_fingerprint"]) not in accepted
+            or generation is None or generation["state"] != "provisioning"
+            or journal["host_generation"] != generation["host_generation"]
+            or journal["ssh_user"] != self.relay.ssh_user
+            or (journal["ssh_uid"] is not None
+                and (type(journal["ssh_uid"]) is not int or journal["ssh_uid"] < 1))
+            or type(journal["gateway_php_uid"]) is not int
+            or journal["gateway_php_uid"] < 1
+            or not isinstance(journal["control_host"], str)
+            or not isinstance(journal["control_user"], str)
+            or type(journal["control_port"]) is not int
+            or not 1 <= journal["control_port"] <= 65535
+            or any(not isinstance(journal[k], str)
+                   or re.fullmatch(r"[a-f0-9]{64}", journal[k]) is None
+                   for k in ("host_key_sha256", "unit_sha256"))):
+            raise Refusal("Incompatible Relay Setup journal; refusing host cleanup of unclaimed resources.")
+        if managed is not None and (
+            journal["configuration_revision"] != managed["configuration_revision"]
+            or journal["host_fingerprint"] != managed["host_fingerprint"]
+            or journal["host_generation"] != managed["host_generation"]
+        ):
+            raise Refusal("Managed claim and Setup journal have different host identities.")
+        if self._owned(nft_path):
+            if nft_path.read_bytes() != nft_policy_source(self.relay, journal["gateway_php_uid"]):
+                raise Refusal("Relay nftables persistence source changed; refusing deletion.")
+        unit = self.layout.unit(self.relay)
+        if self._owned(unit):
+            if hashlib.sha256(unit.read_bytes()).hexdigest() != journal["unit_sha256"]:
+                raise Refusal("Staged Relay unit differs from the immutable Setup journal.")
+        self._validate_setup_keydir(journal)
+        return journal
+
+    def _validate_setup_keydir(self, journal: dict) -> None:
+        """Verify each staged private artifact BEFORE touching firewall/unit."""
+        keydir = self.layout.key_dir(self.relay)
+        if not self._owned(keydir, True):
+            return
+        if (keydir.stat().st_mode & 0o777) != 0o700:
+            raise Refusal("Staged Relay credential directory must be mode 0700.")
+        allowed = {"control_key", "control_key.pub", "known_hosts", "owner.json"}
+        entries = {entry.name: entry for entry in keydir.iterdir()}
+        if not set(entries).issubset(allowed):
+            raise Refusal("Foreign file in interrupted Relay credential namespace.")
+        for entry in entries.values():
+            if not self._owned(entry):
+                raise Refusal("Untrusted staged Relay private credential.")
+        private = entries.get("control_key")
+        public = entries.get("control_key.pub")
+        if public is not None and private is None:
+            # ssh-keygen may have been interrupted between writing the
+            # public and private files. An exact root-owned Setup journal,
+            # the private 0700 namespace and a valid, narrowly typed Ed25519
+            # public blob are sufficient to retire this harmless partial
+            # artifact; a complete owner.json would instead be inconsistent.
+            if "owner.json" in entries:
+                raise Refusal("Complete Relay principal claim has an orphaned public key.")
+            if (public.stat().st_mode & 0o777) not in {0o600, 0o640, 0o644}:
+                raise Refusal("Orphaned Relay public key has unsafe permissions.")
+            try:
+                fields = public.read_bytes().decode("ascii").strip().split()
+                blob = base64.b64decode(fields[1], validate=True) if len(fields) == 2 else b""
+            except (ValueError, UnicodeError):
+                raise Refusal("Unrecognized orphaned Relay public key.")
+            if (len(fields) != 2 or fields[0] != "ssh-ed25519"
+                or len(blob) != 51 or blob[:4] != b"\x00\x00\x00\x0b"
+                or blob[4:15] != b"ssh-ed25519"):
+                raise Refusal("Unrecognized orphaned Relay public key.")
+        if private is not None:
+            if (private.stat().st_mode & 0o777) != 0o600:
+                raise Refusal("Interrupted Relay private key has unsafe permissions.")
+            derived = self.run(["/usr/bin/ssh-keygen", "-y", "-P", "", "-f", str(private)])
+            if derived.returncode or len(derived.stdout.split()) < 2 or derived.stdout.split()[0] != "ssh-ed25519":
+                raise Refusal("Unrecognized interrupted Relay SSH private key.")
+            if public is not None:
+                if ((public.stat().st_mode & 0o777) not in {0o600, 0o640, 0o644}
+                    or public.read_text().split()[:2] != derived.stdout.split()[:2]):
+                    raise Refusal("Interrupted Relay SSH public/private key mismatch.")
+        known_hosts = entries.get("known_hosts")
+        if known_hosts is not None:
+            if known_hosts.stat().st_mode & 0o777 != 0o644:
+                raise Refusal("Staged Relay pinned known_hosts permissions changed.")
+            host = journal["control_host"]
+            port = journal["control_port"]
+            pin = known_hosts.read_bytes()
+            identity = (host if port == 22 else "[" + host + "]:" + str(port))
+            prefix = (identity + " ").encode("ascii")
+            if (not pin.startswith(prefix) or not pin.endswith(b"\n")
+                or hashlib.sha256(pin[len(prefix):-1]).hexdigest() != journal["host_key_sha256"]):
+                raise Refusal("Staged Relay SSH host key no longer matches its journal pin.")
+        owner = entries.get("owner.json")
+        if owner is not None:
+            claim = self._json(owner)
+            if (claim.get("version") != 2
+                or claim.get("relay_record_id") != self.relay.record_id
+                or claim.get("relay_id") != self.relay.relay_id
+                or claim.get("ssh_user") != self.relay.ssh_user
+                or type(claim.get("ssh_uid")) is not int
+                or claim["ssh_uid"] != journal["ssh_uid"]
+                or claim.get("gateway_php_uid") != journal["gateway_php_uid"]
+                or claim.get("control_host") != journal["control_host"]
+                or claim.get("control_port") != journal["control_port"]
+                or claim.get("control_user") != journal["control_user"]):
+                raise Refusal("Relay owner.json identity disagrees with immutable setup SSH UID.")
+            # An interrupted retirement may have already deleted files AFTER
+            # userdel. Before account deletion, every ownership digest must
+            # still match its exact material.
+            try:
+                account_exists = pwd.getpwnam(self.relay.ssh_user) is not None
+            except KeyError:
+                account_exists = False
+            for name, field in (
+                ("control_key", "control_key_sha256"),
+                ("control_key.pub", "control_key_pub_sha256"),
+                ("known_hosts", "known_hosts_sha256"),
+            ):
+                entry = entries.get(name)
+                if entry is None:
+                    if account_exists:
+                        raise Refusal("Relay control credential missing before account retirement.")
+                    continue
+                if (not isinstance(claim.get(field), str)
+                    or hashlib.sha256(entry.read_bytes()).hexdigest() != claim[field]):
+                    raise Refusal("Relay owner.json credential digest mismatch.")
+
+    def _retire_ssh_principal(self, journal: dict, remove: bool = True) -> dict:
+        """Never delete a replaced same-name UID; retain journal until userdel."""
+        try:
+            account = pwd.getpwnam(self.relay.ssh_user)
+        except KeyError:
+            return journal  # Prior verified userdel or no account created yet.
+        uid = account.pw_uid
+        marker = account_generation_marker(self.relay, journal["host_generation"])
+        expected_uid = journal["ssh_uid"]
+        try:
+            canonical = pwd.getpwuid(uid)
+            names = pwd.getpwall()
+        except (KeyError, OSError) as error:
+            raise Refusal("Cannot prove exclusive Relay SSH identity before account removal.") from error
+        if (uid < 1 or uid == journal["gateway_php_uid"]
+            or (expected_uid is not None and expected_uid != uid)
+            or account.pw_gecos != marker
+            or not account.pw_shell.endswith(("/nologin", "/false"))
+            or canonical.pw_name != self.relay.ssh_user
+            or any(user.pw_uid == uid and user.pw_name != self.relay.ssh_user
+                   for user in names)):
+            raise Refusal("Refusing deletion of replaced/unclaimed Relay SSH username or UID.")
+        if expected_uid is None:
+            # Power may have failed immediately after useradd, before UID
+            # journaling. The per-generation passwd marker proves which
+            # creation attempt this exact username belongs to. Bind once.
+            journal = {**journal, "ssh_uid": uid}
+            self._write_json_atomic(self.layout.evidence(self.relay, ".setup.json"), journal)
+        if not remove:
+            return journal
+        proc = self.layout.at("/proc")
+        for entry in proc.iterdir():
+            if not entry.name.isdecimal():
+                continue
+            try:
+                content = (entry / "status").read_text()
+            except FileNotFoundError:
+                if not entry.exists():
+                    continue
+                raise Refusal("Process identity changed while verifying Relay account retirement.")
+            except (OSError, UnicodeError) as error:
+                raise Refusal("Cannot prove dedicated SSH principal has no live process.") from error
+            line = next((line for line in content.splitlines() if line.startswith("Uid:")), "")
+            fields = line.split()[1:]
+            if len(fields) != 4 or any(not field.isdecimal() for field in fields):
+                raise Refusal("Cannot inspect actual process UID before userdel.")
+            if uid in (int(field) for field in fields):
+                raise Refusal("Dedicated Relay SSH identity still owns a process; preserve account.")
+        deleted = self.run(["/usr/sbin/userdel", self.relay.ssh_user])
+        if deleted.returncode:
+            raise Refusal("Could not retire dedicated Relay SSH user: " + deleted.stderr[:140])
+        try:
+            pwd.getpwnam(self.relay.ssh_user)
+        except KeyError:
+            return journal
+        raise Refusal("Relay SSH account still resolves after userdel.")
+
+    def _retire_unclaimed_stage(self, journal: dict) -> dict:
+        """Rollback an interrupted Setup with a valid journal but NO managed claim.
+
+        Never infer ownership merely from names. Check the journal's exact
+        unit digest, effective SSH argv, known-host pin, keypair and strict
+        single-rule nft policy before deleting anything. A foreign artifact
+        is retained and causes a refusal, not a generalized purge.
+        """
+        if (self._owned(self.layout.evidence(self.relay, ".json"))
+            or self._owned(self.layout.evidence(self.relay, ".policy"))):
+            raise Refusal("Unclaimed readiness evidence exists; staged rollback cannot adopt it.")
+        owned_parents(self.layout.key_dir(self.relay), self.layout)
+        owned_parents(self.layout.unit(self.relay).parent, self.layout)
+        journal = self._retire_ssh_principal(journal, remove=False)
+        unit = self.layout.unit(self.relay)
+        info = self._systemd_info()
+        if info["LoadState"] == "loaded":
+            if info["FragmentPath"] != str(unit):
+                raise Refusal("A foreign loaded systemd unit occupies the staged Relay name.")
+            # A unit could remain cached after a prior rollback crash between
+            # unlink and daemon-reload. Validate the ENTIRE effective SSH
+            # command before removing this cached definition.
+            GatewayPolicyAudit(self.relay, self.layout, self.run)._require_ssh_invocation(info["ExecStart"], journal)
+        elif info["ExecStart"] or info["FragmentPath"]:
+            raise Refusal("Unexpected unloaded systemd definition in staged rollback.")
+        if self._unit_active() or self._unit_enabled():
+            raise Refusal("Unclaimed staged Relay service is active or enabled; refusing rollback.")
+        if self._listening({self.relay.local_port}):
+            raise Refusal("SOCKS listener remains on the reserved port; preserve ACL.")
+        nft_source = self.layout.evidence(self.relay, ".nft")
+        has_table = self._nft_table_exists()
+        if has_table:
+            if not self._owned(nft_source):
+                raise Refusal("Live nftables table has no matching journal-owned persistence source.")
+            GatewayPolicyAudit(self.relay, self.layout, self.run)._require_effective_acl(journal["gateway_php_uid"])
+            # Reject additional foreign nftables structures, even when
+            # a superficially matching output_guard rule was found.
+            self._nft_policy_digest()
+        if has_table:
+            removed = self.run(["nft", "delete", "table", "inet", self.relay.firewall_table])
+            if removed.returncode:
+                raise Refusal("Could not delete exactly claimed partially staged nftables ACL.")
+        if self._nft_table_exists():
+            raise Refusal("Partial-stage nftables table remains after deletion.")
+        if self._listening({self.relay.local_port}):
+            raise Refusal("Local SOCKS listener appeared during partial rollback.")
+        if self._owned(unit):
+            if hashlib.sha256(unit.read_bytes()).hexdigest() != journal["unit_sha256"]:
+                raise Refusal("Staged service file changed before rollback.")
+            self._unlink_owned_durable(unit)
+        # Reload is needed even if the unit file was already absent, because
+        # systemd may still hold an inactive cached definition from a crash.
+        reloaded = self.run(["systemctl", "daemon-reload"])
+        if reloaded.returncode:
+            raise Refusal("Could not unload partially staged Relay systemd unit.")
+        if self._unit_active() or self._unit_enabled():
+            raise Refusal("Partially staged Relay service remained enabled/active.")
+        self._assert_no_loaded_same_name_unit()
+        journal = self._retire_ssh_principal(journal, remove=True)
+        self._delete_setup_keydir()
+        self._unlink_owned_durable(nft_source)
+        return journal
+
+    def _delete_setup_keydir(self) -> None:
+        """Discard only proven staged files, AFTER the SSH UID is retired."""
+        keydir = self.layout.key_dir(self.relay)
+        if not self._owned(keydir, True):
+            return
+        allowed = {"control_key", "control_key.pub", "known_hosts", "owner.json"}
+        files = {entry.name: entry for entry in keydir.iterdir()}
+        if not set(files).issubset(allowed):
+            raise Refusal("Refusing to erase unrecognized files in staged Relay keydir.")
+        # owner.json can disappear only after account deletion; the root-owned
+        # journal still carries the exact numeric original SSH UID until the
+        # final host cleanup verification completes.
+        # Keep the private key until LAST. If power fails mid-cleanup, a
+        # remaining private-only prefix can still be validated by ssh-keygen.
+        # Removing private before public strands an unprovable orphaned pubkey.
+        for name in ("owner.json", "control_key.pub", "known_hosts", "control_key"):
+            entry = files.get(name)
+            if entry is not None:
+                if not self._owned(entry):
+                    raise Refusal("Untrusted private Relay file during staged cleanup.")
+                self._unlink_owned_durable(entry)
+        self._rmdir_owned_durable(keydir)
+
     def retire(self) -> str:
         if os.geteuid() != self.layout.owner_uid:
             raise Refusal("Explicit root/sudo privileges are required.")
@@ -595,7 +976,24 @@ class Retirement:
                 raise Refusal("Unsafe Relay lock ownership.")
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._require_mutable_revision()
-            managed = self._preflight()
+            # _preflight rejects unclaimed unit/keydir/table namespaces by
+            # design. An exact root-owned Setup journal is the ONLY narrow
+            # exception, and its artifacts receive separate complete proof.
+            owned_parents(self.layout.unit(self.relay).parent, self.layout)
+            owned_parents(self.layout.key_dir(self.relay), self.layout)
+            managed = self._manifest()
+            setup_journal = self._owned_setup_for_retirement(managed)
+            if managed is not None or setup_journal is None:
+                self._preflight()
+            if setup_journal is None:
+                # A v2 managed claim alone cannot authenticate a later
+                # dedicated account or mystery credentials. Check before
+                # stopping any service, deleting ACL or writing a receipt.
+                self._require_unjournaled_legacy_safe()
+            if setup_journal is not None:
+                # Catch replaced same-name UIDs and mismatched owner.json
+                # BEFORE service stop, firewall mutation or file deletion.
+                setup_journal = self._retire_ssh_principal(setup_journal, remove=False)
             unit = self.layout.unit(self.relay)
             ports = {self.relay.local_port}
             if managed:
@@ -623,8 +1021,7 @@ class Retirement:
                     raise Refusal("Relay firewall table still exists after deletion.")
                 if self._listening(ports):
                     raise Refusal("A local port is still listening; do not issue false cleanup evidence.")
-                if self._owned(unit):
-                    unit.unlink()
+                self._unlink_owned_durable(unit)
                 # A prior interrupted attempt may have unlinked the unit
                 # before reload completed. Repeat reload even when missing
                 # so stale systemd unit caches cannot strand recovery.
@@ -633,13 +1030,13 @@ class Retirement:
                     raise Refusal("systemd daemon-reload failed; retry cleanup.")
                 if self._unit_enabled():
                     raise Refusal("Relay systemd service remains enabled after local cleanup.")
-                keydir = self.layout.key_dir(self.relay)
-                if self._owned(keydir, True):
-                    for entry in list(keydir.iterdir()):
-                        if not self._owned(entry):
-                            raise Refusal("Unsafe Relay key file.")
-                        entry.unlink()
-                    keydir.rmdir()
+                if setup_journal is not None:
+                    setup_journal = self._retire_ssh_principal(setup_journal, remove=True)
+                    persistence = self.layout.evidence(self.relay, ".nft")
+                    self._unlink_owned_durable(persistence)
+                self._delete_setup_keydir()
+            elif setup_journal is not None:
+                setup_journal = self._retire_unclaimed_stage(setup_journal)
             else:
                 if self._unit_active():
                     raise Refusal("A Relay service is still active without a recognized owned claim.")
@@ -647,19 +1044,37 @@ class Retirement:
                     raise Refusal("SOCKS5 listener is still active; refuse false retirement proof.")
             for ext in [".json", ".policy"]:
                 path = self.layout.evidence(self.relay, ext)
-                if self._owned(path):
-                    path.unlink()
+                self._unlink_owned_durable(path)
             if self._unit_active() or self._unit_enabled() or self._nft_table_exists() or self._listening(ports):
                 raise Refusal("Cleanup verification did not reach the disabled/inactive/absent state.")
             # A systemd daemon-reload can expose a foreign replacement unit
             # under the same name. Never issue a clean-host proof while any
             # effective definition is still loaded, even if inactive.
             self._assert_no_loaded_same_name_unit()
+            if setup_journal is None:
+                self._require_unjournaled_legacy_safe()
             # Preserve the v2 ownership claim until final host checks pass;
             # a foreign unit discovered after daemon-reload must remain
             # diagnosable and must not be mistaken for an unclaimed draft.
             if managed:
-                self.layout.evidence(self.relay, ".managed.json").unlink()
+                self._unlink_owned_durable(self.layout.evidence(self.relay, ".managed.json"))
+            # Keep the UID-bound root-owned Setup journal through ALL service,
+            # keydir and account removal, and through final listener/systemd/
+            # nft checks. If power is lost after managed-claim deletion but
+            # before journal deletion, the pre-claim rollback path can resume.
+            if setup_journal is not None:
+                self._unlink_owned_durable(self.layout.evidence(self.relay, ".setup.json"))
+            # The previous action might have crashed immediately after an
+            # unlink and before its directory fsync. On retry, that path is
+            # already absent in memory: flush ALL affected durable namespaces
+            # again before changing the generation or issuing a receipt.
+            for parent in (
+                self.layout.unit(self.relay).parent,
+                self.layout.key_dir(self.relay).parent,
+                self.layout.evidence_dir,
+            ):
+                if self._owned(parent, True):
+                    self._fsync_directory(parent)
             generation = self._advance_generation("retired")
             self._receipt(generation)
             return ("RETIREMENT VERIFIED for Gateway Relay " + self.relay.relay_id
@@ -785,6 +1200,8 @@ class Retirement:
                 raise Refusal("Unsafe Relay lock ownership.")
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._require_mutable_revision()
+            if self._owned(self.layout.evidence(self.relay, ".setup.json")):
+                raise Refusal("A Relay Setup journal is active; resume the exact Setup or verified local retirement.")
             if self._preflight() is not None:
                 raise Refusal("Managed Relay claim exists; retire it before new Setup.")
             if self._unit_active() or self._unit_enabled() or self._nft_table_exists() or self._listening({self.relay.local_port}):
@@ -1167,16 +1584,503 @@ class GatewayPolicyAudit(Retirement):
                 "Iran egress restrictions and Target authentication still "
                 "require independent verified evidence.")
 
+
+
+class GatewayAclRecovery(GatewayPolicyAudit):
+    """Systemd ExecStartPre helper: refuse foreign ACLs, repair absence only."""
+
+    def ensure(self, php_uid: int) -> str:
+        if os.geteuid() != self.layout.owner_uid or type(php_uid) is not int or php_uid <= 0:
+            raise Refusal("Gateway ACL recovery requires dedicated PHP UID and root execution.")
+
+        # This helper is a systemd ExecStartPre command. The Setup action
+        # stages a DISABLED unit and never starts it, so there is no need
+        # for an unlocked fast path. Both the already-present and absent-
+        # table cases must serialize against Retirement/Seal/Setup to avoid
+        # a stale PASS while an external operator retires the Relay.
+        lock = self.layout.lock_path(self.relay)
+        owned_parents(lock.parent, self.layout)
+        # /run is tmpfs on typical hosts: after a real reboot both the
+        # directory and the lock inode can be missing. Recreate exactly the
+        # SAME per-Relay lock used by Setup/Retire/Seal, under trusted root-
+        # owned parents, before reading the generation or changing nftables.
+        make_privileged_directory(lock.parent, self.layout)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            if not self._owned(lock):
+                raise Refusal("Untrusted Relay lifecycle lock after cold boot.")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._require_mutable_revision()
+            managed = self._manifest()
+            if managed is None:
+                raise Refusal("No exact owned provisioned Relay claim for ACL recovery.")
+            journal = self._json(self.layout.evidence(self.relay, ".setup.json"), 4096)
+            if (journal.get("relay_record_id") != self.relay.record_id
+                or journal.get("relay_id") != self.relay.relay_id
+                or journal.get("configuration_revision") != self.relay.revision
+                or journal.get("host_fingerprint") != self.relay.fingerprint
+                or journal.get("host_generation") != managed["host_generation"]
+                or journal.get("gateway_php_uid") != php_uid):
+                raise Refusal("ACL recovery journal is inconsistent with current Relay ownership.")
+            nft_file = self.layout.evidence(self.relay, ".nft")
+            if not self._owned(nft_file) or nft_file.read_bytes() != nft_policy_source(self.relay, php_uid):
+                raise Refusal("Pinned root-owned Relay nftables source is missing or modified.")
+            unit = self.layout.unit(self.relay)
+            if not self._owned(unit) or hashlib.sha256(unit.read_bytes()).hexdigest() != managed["unit_sha256"]:
+                raise Refusal("Relay unit is missing or changed during ACL recovery.")
+
+            if self._nft_table_exists():
+                if not self._verify_effective_nft(managed):
+                    raise Refusal("Relay ACL does not match its provisioned digest.")
+                self._require_effective_acl(php_uid)
+                return "RELAY ACL VERIFIED: existing exact owned IPv4/IPv6 guard preserved."
+
+            result = self.run(["/usr/sbin/nft", "-f", str(nft_file)])
+            if result.returncode != 0:
+                raise Refusal("Could not restore exact Relay ACL: " + result.stderr[:140])
+            if not self._verify_effective_nft(managed):
+                raise Refusal("Restored Relay ACL differs from the claimed full policy.")
+            self._require_effective_acl(php_uid)
+            return "RELAY ACL RESTORED: exact owned IPv4/IPv6 output guard."
+        except BlockingIOError as error:
+            raise Refusal("Relay lifecycle maintenance is active; systemd can retry later.") from error
+        finally:
+            os.close(fd)
+
+
+class GatewaySetup(GatewayPolicyAudit):
+    """Explicit Owner-operated Gateway-only Setup/Repair. Never issues readiness.
+
+    This helper owns the initial generation transition under the lifecycle
+    lock and records a root-owned journal before allocating an account/files.
+    A partial phase is resumable only for the same Relay, revision and inputs.
+    """
+
+    def __init__(
+        self, relay: Relay, control_host: str, control_port: int,
+        control_user: str, host_key: str, php_uid: int,
+        layout: Layout = Layout(),
+        run: Callable[[list[str]], subprocess.CompletedProcess[str]] = run_checked,
+    ):
+        super().__init__(relay, layout, run)
+        if type(php_uid) is not int or php_uid < 1:
+            raise Refusal("Gateway setup needs the actual dedicated non-root PHP UID.")
+        try:
+            ipaddress.ip_address(control_host)
+        except ValueError:
+            labels = control_host.split(".")
+            if (len(control_host) > 253 or len(labels) < 2 or
+                any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                    for label in labels)):
+                raise Refusal("Gateway Setup requires an exact canonical SSH host.")
+        if type(control_port) is not int or not 1 <= control_port <= 65535:
+            raise Refusal("Gateway Setup control port is invalid.")
+        if (not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,127}", control_user)
+            or control_user == "root"):
+            raise Refusal("Gateway Setup requires a dedicated non-root forwarding-only SSH control user.")
+        if "\n" in host_key or "\\r" in host_key or len(host_key) > 4096:
+            raise Refusal("Gateway Setup requires one independently pinned host key.")
+        items = host_key.split(" ")
+        allowed = {"ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256",
+                   "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}
+        if len(items) != 2 or items[0] not in allowed:
+            raise Refusal("Unsupported pinned SSH server host key.")
+        try:
+            binary = base64.b64decode(items[1], validate=True)
+        except (ValueError, UnicodeError) as error:
+            raise Refusal("Invalid pinned SSH host key.") from error
+        label = items[0].encode()
+        if (len(binary) < 16 or len(binary) > 3072
+            or binary[:4] != len(label).to_bytes(4, "big")
+            or binary[4:4 + len(label)] != label):
+            raise Refusal("Pinned SSH host key algorithm and wire bytes differ.")
+        canonical_key = items[0] + " " + base64.b64encode(binary).decode()
+        expected_fingerprint = hashlib.sha256("\0".join((
+            relay.relay_id, control_host, str(control_port), control_user,
+            canonical_key, str(relay.local_port), str(relay.revision),
+        )).encode()).hexdigest()
+        if expected_fingerprint != relay.fingerprint:
+            raise Refusal("Setup metadata does not match exact current Gateway registration fingerprint.")
+        self.control_host = control_host
+        self.control_port = control_port
+        self.control_user = control_user
+        self.host_key = canonical_key
+        self.php_uid = php_uid
+
+    @property
+    def journal_path(self) -> Path:
+        return self.layout.evidence(self.relay, ".setup.json")
+
+    @property
+    def nft_path(self) -> Path:
+        return self.layout.evidence(self.relay, ".nft")
+
+    def _journal_payload(self, generation: str) -> dict:
+        return {
+            "version": 2,
+            "relay_record_id": self.relay.record_id,
+            "relay_id": self.relay.relay_id,
+            "host_fingerprint": self.relay.fingerprint,
+            "configuration_revision": self.relay.revision,
+            "host_generation": generation,
+            "ssh_user": self.relay.ssh_user,
+            "ssh_uid": None,  # Atomically bound immediately after useradd/NSS proof.
+            "gateway_php_uid": self.php_uid,
+            "control_host": self.control_host,
+            "control_port": self.control_port,
+            "control_user": self.control_user,
+            "host_key_sha256": hashlib.sha256(self.host_key.encode()).hexdigest(),
+            "unit_sha256": hashlib.sha256(self._unit_source()).hexdigest(),
+        }
+
+    def _nft_source(self) -> bytes:
+        return nft_policy_source(self.relay, self.php_uid)
+
+    def _ssh_argv(self) -> list[str]:
+        credential_root = "/run/credentials/" + self.relay.unit_name
+        return [
+            "/usr/bin/ssh", "-F", "/dev/null", "-N", "-T",
+            "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=yes", "-o", "ExitOnForwardFailure=yes",
+            "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+            "-o", "ForwardAgent=no", "-o", "ForwardX11=no",
+            "-o", "ControlMaster=no", "-o", "ProxyCommand=none",
+            "-o", "ProxyJump=none",
+            "-o", "UserKnownHostsFile=" + credential_root + "/known_hosts",
+            "-o", "GlobalKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+            "-o", "ConnectTimeout=10",
+            "-i", credential_root + "/control_key",
+            "-D", "127.0.0.1:" + str(self.relay.local_port),
+            "-p", str(self.control_port), "-l", self.control_user, self.control_host,
+        ]
+
+    def _unit_source(self) -> bytes:
+        keydir = "/var/lib/mcp-gateway-relays/" + self.relay.relay_id
+        # Use no arbitrary shell text: every rendered argument is strictly
+        # validated, and the prestart nft command operates on only this table.
+        source = (
+            "# MCP-GATEWAY-CONNECTION-RELAY " + self.relay.record_id + " " + self.relay.relay_id + "\n"
+            "[Unit]\n"
+            "Description=Gateway Connection Relay " + self.relay.relay_id + "\n"
+            "Wants=network-online.target\n"
+            "After=network-online.target\n"
+            "[Service]\n"
+            "Type=simple\n"
+            "User=" + self.relay.ssh_user + "\n"
+            "NoNewPrivileges=yes\n"
+            "PrivateTmp=yes\n"
+            "ProtectSystem=strict\n"
+            "ProtectHome=yes\n"
+            "LoadCredential=control_key:" + keydir + "/control_key\n"
+            "LoadCredential=known_hosts:" + keydir + "/known_hosts\n"
+            "ExecStartPre=+/usr/local/sbin/mcp-gateway-relay ensure-acl"
+            " --relay-id " + self.relay.relay_id +
+            " --record-id " + self.relay.record_id +
+            " --fingerprint " + self.relay.fingerprint +
+            " --revision " + str(self.relay.revision) +
+            " --local-port " + str(self.relay.local_port) +
+            " --php-uid " + str(self.php_uid) + "\n"
+            "ExecStart=" + " ".join(self._ssh_argv()) + "\n"
+            "Restart=always\n"
+            "RestartSec=5\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n"
+        )
+        return source.encode("ascii")
+
+    def _expected_hostkey(self) -> bytes:
+        # OpenSSH's default-port lookup uses the literal hostname/IP, while
+        # nondefault ports require [host]:port (also for IPv6 literals).
+        # A bracketed :22 entry does NOT match the default-port lookup.
+        identity = (self.control_host if self.control_port == 22 else
+                    "[" + self.control_host + "]:" + str(self.control_port))
+        return (identity + " " + self.host_key + "\n").encode("ascii")
+
+    def _write_exact(self, path: Path, contents: bytes, mode: int) -> None:
+        # Never overwrite a published path. Re-fsync exact existing files and
+        # their parent on retry: a prior process may have crashed after the
+        # hard link was made, but before its directory entry was committed.
+        if self._owned(path):
+            if path.read_bytes() != contents or path.stat().st_mode & 0o777 != mode:
+                raise Refusal("Owned Relay Setup file differs from reviewed bytes: " + str(path))
+            file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                os.fsync(file_fd)
+            finally:
+                os.close(file_fd)
+            self._fsync_directory(path.parent)
+            return
+        if path.exists() or path.is_symlink():
+            raise Refusal("Untrusted existing Relay Setup file: " + str(path))
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            # Linux O_TMPFILE has no directory entry until linkat publishes it.
+            # A crash before publication leaves no .relay-setup-* artifact to
+            # strand Setup or Retirement. dir_fd forces linkat(AT_SYMLINK_FOLLOW)
+            # on /proc/self/fd, preserving atomic no-clobber link semantics.
+            try:
+                temporary_fd = os.open(".", os.O_TMPFILE | os.O_WRONLY, 0o600,
+                                       dir_fd=directory_fd)
+            except OSError as error:
+                raise Refusal("Relay Setup requires filesystem support for anonymous O_TMPFILE publication.") from error
+            try:
+                with os.fdopen(os.dup(temporary_fd), "wb") as destination:
+                    destination.write(contents)
+                    destination.flush()
+                    os.fchmod(destination.fileno(), mode)
+                    os.fsync(destination.fileno())
+                os.link("/proc/self/fd/" + str(temporary_fd), path.name,
+                        dst_dir_fd=directory_fd, follow_symlinks=True)
+                os.fsync(directory_fd)
+            except FileExistsError as error:
+                raise Refusal("Concurrent Relay Setup file mutation; retry after operator review.") from error
+            finally:
+                os.close(temporary_fd)
+        finally:
+            os.close(directory_fd)
+
+    def _identity(self, journal: dict) -> int:
+        marker = account_generation_marker(self.relay, journal["host_generation"])
+        expected_uid = journal["ssh_uid"]
+        try:
+            account = pwd.getpwnam(self.relay.ssh_user)
+        except KeyError:
+            account = None
+        if account is None:
+            if expected_uid is not None:
+                raise Refusal("A journal-bound Relay SSH UID disappeared; refuse replacement or adoption.")
+            # The unique generation is stored in the durable root journal
+            # before useradd. An interrupted useradd can be recovered only if
+            # the current account has this exact immutable GECOS marker.
+            result = self.run(["/usr/sbin/useradd", "--system", "--no-create-home",
+                               "--user-group", "--shell", "/usr/sbin/nologin",
+                               "--comment", marker, self.relay.ssh_user])
+            if result.returncode:
+                raise Refusal("Unable to create the dedicated per-Relay SSH identity: " + result.stderr[:140])
+            try:
+                account = pwd.getpwnam(self.relay.ssh_user)
+            except KeyError as error:
+                raise Refusal("Created SSH account cannot be independently resolved.") from error
+        try:
+            canonical = pwd.getpwuid(account.pw_uid)
+            accounts = pwd.getpwall()
+        except (KeyError, OSError) as error:
+            raise Refusal("Cannot prove dedicated Relay SSH UID ownership.") from error
+        if (account.pw_uid < 1 or account.pw_uid == self.php_uid
+            or (expected_uid is not None and account.pw_uid != expected_uid)
+            or account.pw_gecos != marker
+            or not account.pw_shell.endswith(("/nologin", "/false"))
+            or canonical.pw_name != self.relay.ssh_user
+            or any(user.pw_uid == account.pw_uid and user.pw_name != self.relay.ssh_user
+                   for user in accounts)):
+            raise Refusal("Dedicated Relay SSH principal differs from its root-owned generation/UID claim.")
+        if expected_uid is None:
+            # This record survives full/partial retirement even after owner.json
+            # and the key directory are gone. No earlier UID may be overwritten.
+            bound = {**journal, "ssh_uid": account.pw_uid}
+            self._write_json_atomic(self.journal_path, bound)
+        return account.pw_uid
+
+    def _material(self, ssh_uid: int) -> None:
+        parent = self.layout.key_dir(self.relay).parent
+        owned_parents(parent, self.layout)
+        make_privileged_directory(parent, self.layout)
+        make_privileged_directory(self.layout.key_dir(self.relay), self.layout)
+        keydir = self.layout.key_dir(self.relay)
+        if keydir.stat().st_mode & 0o777 != 0o700:
+            raise Refusal("Relay private key directory is not mode 0700.")
+        required = {"control_key", "control_key.pub", "known_hosts", "owner.json"}
+        if any(e.name not in required or not self._owned(e) for e in keydir.iterdir()):
+            raise Refusal("Foreign file exists in Relay SSH material directory.")
+        private = keydir / "control_key"
+        public = keydir / "control_key.pub"
+        if not self._owned(private):
+            if self._owned(public):
+                raise Refusal("Orphaned public key requires explicit operator recovery.")
+            result = self.run(["/usr/bin/ssh-keygen", "-q", "-t", "ed25519",
+                               "-N", "", "-C", "", "-f", str(private)])
+            if result.returncode:
+                raise Refusal("Unable to generate dedicated root-controlled Relay SSH key.")
+        if not self._owned(private) or private.stat().st_mode & 0o777 != 0o600:
+            raise Refusal("Dedicated Relay private key is unsafe.")
+        derived = self.run(["/usr/bin/ssh-keygen", "-y", "-P", "", "-f", str(private)])
+        if derived.returncode or not derived.stdout.startswith("ssh-ed25519 "):
+            raise Refusal("Cannot independently derive the Relay control public key.")
+        pub_fields = derived.stdout.strip().split()
+        if len(pub_fields) < 2:
+            raise Refusal("Invalid derived Relay public key.")
+        if self._owned(public):
+            try:
+                installed_fields = public.read_bytes().decode("ascii").strip().split()
+            except UnicodeDecodeError as error:
+                raise Refusal("Invalid installed Relay public key.") from error
+            if (installed_fields != pub_fields[:2]
+                or (public.stat().st_mode & 0o777) not in {0o600, 0o640, 0o644}):
+                raise Refusal("Installed Relay public key differs from its private control key.")
+        else:
+            publine = " ".join(pub_fields[:2]) + "\n"
+            self._write_exact(public, publine.encode("ascii"), 0o644)
+        self._write_exact(keydir / "known_hosts", self._expected_hostkey(), 0o644)
+        owner = {
+            "version": 2, "relay_record_id": self.relay.record_id,
+            "relay_id": self.relay.relay_id, "ssh_user": self.relay.ssh_user,
+            "ssh_uid": ssh_uid, "gateway_php_uid": self.php_uid,
+            "control_host": self.control_host, "control_port": self.control_port,
+            "control_user": self.control_user,
+            "control_key_sha256": hashlib.sha256(private.read_bytes()).hexdigest(),
+            "control_key_pub_sha256": hashlib.sha256(public.read_bytes()).hexdigest(),
+            "known_hosts_sha256": hashlib.sha256((keydir / "known_hosts").read_bytes()).hexdigest(),
+        }
+        self._write_exact(keydir / "owner.json",
+                          (json.dumps(owner, sort_keys=True, separators=(",", ":")) + "\n").encode(), 0o644)
+
+    def setup(self) -> str:
+        if os.geteuid() != self.layout.owner_uid:
+            raise Refusal("Explicit root execution is required to provision Gateway Relay resources.")
+        lockpath = self.layout.lock_path(self.relay)
+        owned_parents(lockpath.parent, self.layout)
+        make_privileged_directory(lockpath.parent, self.layout)
+        fd = os.open(lockpath, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            if not self._owned(lockpath):
+                raise Refusal("Unsafe Relay Setup lock ownership.")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # A first-ever Gateway Setup has no /etc/mcp-gateway evidence
+            # namespace. Create and check it before the first atomic
+            # generation transition (which fsyncs the directory).
+            make_privileged_directory(self.layout.evidence_dir, self.layout, php_traversable=True)
+            self._require_mutable_revision()
+            generation = self._generation()
+            if generation is None or generation["state"] == "retired":
+                # One Owner command owns both the generation barrier and
+                # staged resources. Previously issued readiness/retirement
+                # receipts are invalidated BEFORE host resources are added.
+                if self._preflight() is not None:
+                    raise Refusal("A managed Relay still exists; verified retirement is required.")
+                if (self._unit_active() or self._unit_enabled() or self._nft_table_exists()
+                    or self._listening({self.relay.local_port})):
+                    raise Refusal("Cannot begin Setup while unclaimed host resources remain.")
+                token = self._advance_generation("provisioning")
+                retired = self.layout.evidence(self.relay, ".retired.json")
+                if self._owned(retired):
+                    retired.unlink()
+                generation = self._generation()
+                if generation is None or generation["host_generation"] != token:
+                    raise Refusal("Could not establish current Relay Setup generation.")
+            elif generation["state"] != "provisioning":
+                raise Refusal("Invalid host generation state for a new Setup.")
+            make_privileged_directory(self.layout.evidence_dir, self.layout, php_traversable=True)
+            existing = self._owned(self.journal_path)
+            expected = self._journal_payload(generation["host_generation"])
+            if existing:
+                journal = self._json(self.journal_path)
+                expected_claim = {**expected, "ssh_uid": journal.get("ssh_uid")}
+                if (journal != expected_claim
+                    or (journal["ssh_uid"] is not None
+                        and (type(journal["ssh_uid"]) is not int or journal["ssh_uid"] < 1))):
+                    raise Refusal("Setup journal belongs to a different Relay configuration or SSH identity.")
+            else:
+                # A previously prepared generation is not permission to
+                # claim a foreign listener, loaded unit or firewall. Refuse
+                # any unjournaled resource BEFORE account or ACL changes.
+                if (self._preflight() is not None
+                    or self.layout.key_dir(self.relay).exists()
+                    or self.layout.unit(self.relay).exists()
+                    or self._nft_table_exists() or self.nft_path.exists()
+                    or self._unit_active() or self._unit_enabled()
+                    or self._listening({self.relay.local_port})):
+                    raise Refusal("Unjournaled Relay port/service/firewall resources may not be adopted by Setup.")
+                try:
+                    pwd.getpwnam(self.relay.ssh_user)
+                except KeyError:
+                    pass
+                else:
+                    raise Refusal("Refusing to adopt a pre-existing SSH principal without a matching setup journal.")
+                self._write_exact(self.journal_path,
+                                  (json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n").encode(), 0o644)
+                journal = expected
+            # A crash between useradd and durable UID recording is recovered
+            # through the exact per-generation passwd GECOS marker.
+            uid = self._identity(journal)
+            self._material(uid)
+            self._write_exact(self.nft_path, self._nft_source(), 0o644)
+            self._write_exact(self.layout.unit(self.relay), self._unit_source(), 0o644)
+            reloaded = self.run(["systemctl", "daemon-reload"])
+            if reloaded.returncode:
+                raise Refusal("Could not reload newly staged Relay unit; exact journal retained for Repair.")
+            info = self._systemd_info()
+            if info["LoadState"] != "loaded" or info["FragmentPath"] != str(self.layout.unit(self.relay)):
+                raise Refusal("systemd did not load the exact staged Relay unit.")
+            self._require_ssh_invocation(info["ExecStart"], self._json(self.layout.key_dir(self.relay) / "owner.json"))
+            managed = self._manifest()
+            if managed is None:
+                if not self._nft_table_exists():
+                    created = self.run(["/usr/sbin/nft", "-f", str(self.nft_path)])
+                    if created.returncode:
+                        raise Refusal("Could not provision exact scoped nftables ACL: " + created.stderr[:140])
+                # An interrupted staged setup may have loaded the table but
+                # not yet written the claim. Reuse ONLY the single reviewed
+                # rule shape and this exact root-owned journal, never flush a
+                # foreign or malformed live table on retry.
+                self._require_effective_acl(self.php_uid)
+                token = generation["host_generation"]
+                claim = {
+                    "version": 2, "relay_record_id": self.relay.record_id,
+                    "relay_id": self.relay.relay_id,
+                    "service_unit": self.relay.unit_name,
+                    "firewall_table": self.relay.firewall_table,
+                    "local_socks_port": self.relay.local_port,
+                    "host_fingerprint": self.relay.fingerprint,
+                    "configuration_revision": self.relay.revision,
+                    "host_generation": token,
+                    "unit_sha256": hashlib.sha256(self.layout.unit(self.relay).read_bytes()).hexdigest(),
+                    "unit_exec_sha256": hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest(),
+                    "firewall_sha256": self._nft_policy_digest(),
+                }
+                self._write_exact(self.layout.evidence(self.relay, ".managed.json"),
+                                  (json.dumps(claim, sort_keys=True, separators=(",", ":")) + "\n").encode(), 0o644)
+            else:
+                if not self._verify_effective_systemd(managed):
+                    raise Refusal("Staged Relay unit is not the claimed effective service.")
+                if not self._nft_table_exists():
+                    restored = self.run(["/usr/sbin/nft", "-f", str(self.nft_path)])
+                    if restored.returncode:
+                        raise Refusal("Unable to restore missing owned Relay ACL.")
+                if not self._verify_effective_nft(managed):
+                    raise Refusal("Staged Relay ACL differs from its exact claim; refuse policy reset.")
+                self._require_effective_acl(self.php_uid)
+            # Deliberately do NOT enable or start the SOCKS transport here.
+            # The Gateway's current PHP UID could be shared by sibling sites.
+            # Opening even a loopback listener before independently proving
+            # FPM/CLI isolation and Iran egress could grant those sites access.
+            if self._unit_active() or self._unit_enabled():
+                raise Refusal("Staged Relay service became active/enabled without verified admission; investigate host drift.")
+            return ("GATEWAY RESOURCES STAGED INACTIVE for " + self.relay.relay_id
+                    + ". Service intentionally DISABLED. Dedicated PHP-FPM isolation, "
+                    "Iran egress, operator-controlled activation and separate "
+                    "trusted attestation are still required. NO READINESS ISSUED.")
+        except BlockingIOError as error:
+            raise Refusal("Another Relay operation holds the lifecycle lock.") from error
+        finally:
+            os.close(fd)
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay retirement; never contacts Iran.")
-    parser.add_argument("action", choices=("preflight", "audit-gateway", "retire", "prepare-setup", "seal-delete", "seal-rotate"))
+    parser.add_argument("action", choices=("preflight", "audit-gateway", "setup-gateway", "ensure-acl",
+                                            "retire", "prepare-setup", "seal-delete", "seal-rotate"))
     parser.add_argument("--relay-id", required=True)
     parser.add_argument("--record-id", required=True)
     parser.add_argument("--fingerprint", required=True)
     parser.add_argument("--revision", required=True, type=int)
     parser.add_argument("--local-port", required=True, type=int)
     parser.add_argument("--php-uid", type=int, default=None,
-                        help="Required for root-only Gateway local policy audit.")
+                        help="Required for root-only Gateway audit or staged setup.")
+    parser.add_argument("--control-host", default=None)
+    parser.add_argument("--control-port", type=int, default=None)
+    parser.add_argument("--control-user", default=None)
+    parser.add_argument("--host-key", default=None,
+                        help="Public SSH server host-key pin; never a secret/private key.")
     parser.add_argument("--prior-fingerprint", default=None,
                         help="Read-only preflight or retire: exact N-1 installed fingerprint after DB Disable.")
     args = parser.parse_args()
@@ -1189,11 +2093,28 @@ def main() -> int:
             raise Refusal("Prior host fingerprint is allowed only for local preflight or retirement.")
         operation = Retirement(relay, layout, prior_fingerprint=args.prior_fingerprint)
         if args.action == "audit-gateway":
-            if args.php_uid is None or args.prior_fingerprint is not None:
-                raise Refusal("Gateway audit requires --php-uid and does not accept prior revisions.")
+            if (args.php_uid is None or args.prior_fingerprint is not None
+                or any(value is not None for value in
+                       (args.control_host, args.control_port, args.control_user, args.host_key))):
+                raise Refusal("Gateway audit requires only --php-uid, never prior revisions.")
             print(GatewayPolicyAudit(relay, layout).audit(args.php_uid))
-        elif args.php_uid is not None:
-            raise Refusal("--php-uid is only accepted by audit-gateway.")
+        elif args.action == "ensure-acl":
+            if (args.php_uid is None or args.prior_fingerprint is not None
+                or any(value is not None for value in
+                       (args.control_host, args.control_port, args.control_user, args.host_key))):
+                raise Refusal("ACL recovery takes only the exact Relay identity and Gateway PHP UID.")
+            print(GatewayAclRecovery(relay, layout).ensure(args.php_uid))
+        elif args.action == "setup-gateway":
+            if (args.php_uid is None or args.prior_fingerprint is not None
+                or any(value is None for value in
+                       (args.control_host, args.control_port, args.control_user, args.host_key))):
+                raise Refusal("Gateway staged Setup needs the exact control endpoint, pinned public key and dedicated PHP UID.")
+            print(GatewaySetup(relay, args.control_host, args.control_port,
+                               args.control_user, args.host_key, args.php_uid, layout).setup())
+        elif (args.php_uid is not None
+              or any(value is not None for value in
+                     (args.control_host, args.control_port, args.control_user, args.host_key))):
+            raise Refusal("Host setup identity options are accepted only by setup-gateway.")
         elif args.action == "preflight":
             print(operation.preview())
         elif args.action == "prepare-setup":

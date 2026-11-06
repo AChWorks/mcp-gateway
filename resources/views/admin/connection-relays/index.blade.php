@@ -69,6 +69,17 @@
                     </div>
                 </details>
             @endif
+            @if (! $relay->enabled && ! ($deletionFencedStates[$relay->id] ?? false) && ($hostCommands[$relay->id] ?? null))
+                <details class="target-help-details">
+                    <summary>{{ __('Stage / repair Gateway host resources (Owner command)') }}</summary>
+                    <p class="field-help">{{ __('A dedicated root-run Gateway operation installs or resumes this Relay’s Unix SSH identity, root-controlled credentials, supervised local OpenSSH service and scoped IPv4/IPv6 nftables access rule. It DOES NOT issue readiness or verify Iran egress, PHP-FPM isolation or Target login. Never run this on Production without separate host-maintenance approval.') }}</p>
+                    <div class="field">
+                        <label for="relay-setup-command-{{ $relay->id }}">{{ __('Verified, Relay-specific staged Setup/Retry command') }}</label>
+                        <textarea id="relay-setup-command-{{ $relay->id }}" rows="6" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['setup_gateway'] }}</textarea>
+                        <p class="field-help">{{ __('First install the exact verified helper under Retire and remove Relay. For an older installed helper, use the separate reviewed Upgrade command; never paste an outdated Setup command. The helper creates no Iranian user or forwarding permission and never sets this Relay Ready/Enabled.') }}</p>
+                    </div>
+                </details>
+            @endif
             @if ($rotationStates[$relay->id] ?? false)
                 <p class="field-help">{{ __('Old revision retirement is sealed. Save the pending connection change before requesting setup for the new revision.') }}</p>
             @endif

@@ -83,6 +83,38 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Rename Relay');
     }
 
+    public function test_staged_relay_setup_has_accessible_readonly_owner_command_without_provisioning_on_page_load(): void
+    {
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'ui-stage-relay',
+            'display_name' => 'Inactive Iran Relay',
+            'control_host' => '192.0.2.20',
+            'control_port' => 22,
+            'control_user' => 'relay-control',
+            'control_host_key' => 'ssh-ed25519 public-test-placeholder',
+            'local_socks_port' => 46902,
+        ]);
+        $this->actingAs($this->owner());
+        $html = $this->get('/admin/settings/connection-relays')
+            ->assertOk()
+            ->assertSee('Stage / repair Gateway host resources (Owner command)')
+            ->assertSee('It DOES NOT issue readiness')
+            ->assertSee('setup-gateway')
+            ->getContent();
+
+        $dom = new \DOMDocument;
+        $dom->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($dom);
+        $id = 'relay-setup-command-'.$relay->getKey();
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//label[@for="'.$id.'"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//textarea[@id="'.$id.'"][@readonly][@autocomplete="off"])',
+        ));
+        self::assertFalse($relay->fresh()->enabled);
+    }
+
     public function test_all_admin_owner_reauthentication_fields_share_the_explicit_intent_guard(): void
     {
         $covered = 0;
