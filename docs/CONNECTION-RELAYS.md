@@ -1,6 +1,6 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Core Relay routing and staged Gateway Setup/Retry source are merged through PR #291, but the capability has not been published, deployed or accepted on real hosts.** The root-only retirement/fencing helper and staged inactive Setup/Retry are code, not installed transport. Independent operational readiness attestation and Iran enrollment remain unfinished. The additional public-key export described below is a new source candidate requiring its own review. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
+**Core Relay routing and staged Gateway Setup/Retry source are merged through PR #291; the reviewed read-only public-key export was merged in PR #292. Neither capability has been published, deployed or accepted on real hosts.** The root-only retirement/fencing helper and inactive Setup/Retry are source code, not installed transport. Independent operational readiness attestation and actual Iran enrollment remain unfinished. The new Iran-side public-only staging helper below is a distinct source candidate, not a deployed or approved live SSH admission path. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
 
 ## Intent and architecture
 
@@ -198,7 +198,7 @@ approved trusted readiness issuer before enabling. Do not run source
 unpublished host commands on Production; deployment and operational host
 modifications require separate Owner authorization.
 
-## Offline Iran public-key handoff (source candidate; no Iran mutation)
+## Offline Iran public-key handoff (merged source; no Iran mutation)
 
 After the independently authorized Gateway host operator completes `setup-gateway`, the
 Owner may run the exact release-pinned, read-only `public-enrollment` command shown in
@@ -234,6 +234,165 @@ operator-controlled activation and separately privileged readiness issuance.
 Gateway-only retirement and metadata deletion must continue to work without
 contacting Iran. No production host operation is approved by this source
 candidate.
+
+## Offline Iran-side public-identity staging (new source candidate; no SSH admission)
+
+**This helper does NOT enroll an SSH login or enable a Relay.** The offline
+resources/host/connection-relay-iran.py script stages only the **public**
+Ed25519 identity exported by the reviewed Gateway public-enrollment action.
+Use it only after separately authorized host maintenance; the source is not
+a published release or an installed host service. Iran needs no connection to
+Gateway, GitHub or a foreign CDN.
+
+The operator transfers two items over an independently trusted offline channel:
+(1) the exact, complete, public-only eight-line Gateway operator-terminal export
+as a plain-text file, and (2) the reviewed Iran helper source from the same
+approved repository revision. **Never run the transferred Python file under
+sudo or use a split checksum/execute procedure in a writable transfer
+directory.** Only an expressly authorized Iran host operator may perform the
+following installation and execution. This is **not** an automatically invoked
+installer, live SSH enrollment, or permission to change Production.
+
+For the current source candidate the exact Python helper SHA256 is:
+
+    989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
+
+**First install only**, from the directory containing the transferred public
+source file (the file may be untrusted; it is never executed there):
+
+    /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
+    set -euo pipefail
+    umask 077
+    source=$1
+    expected=989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
+    base=/usr/local/libexec
+    directory=$base/mcp-gateway-iran-relay
+    destination=$directory/connection-relay-iran.py
+    trusted_dir() {
+        test -d "$1" && test ! -L "$1" &&
+        test "$(/usr/bin/stat -c %u -- "$1")" = 0 &&
+        test -z "$(/usr/bin/find "$1" -maxdepth 0 -perm /022 -print)"
+    }
+    for parent in / /usr /usr/local; do
+        trusted_dir "$parent" || { echo "Unsafe root-owned ancestor" >&2; exit 1; }
+    done
+    if test -e "$base" || test -L "$base"; then
+        trusted_dir "$base" || { echo "Unsafe libexec directory" >&2; exit 1; }
+    else
+        /usr/bin/install -d -o root -g root -m 0755 -- "$base"
+    fi
+    if test -e "$directory" || test -L "$directory"; then
+        trusted_dir "$directory" &&
+        test "$(/usr/bin/stat -c %a "$directory")" = 700 ||
+            { echo "Unsafe dedicated helper directory" >&2; exit 1; }
+    else
+        /usr/bin/install -d -o root -g root -m 0700 -- "$directory"
+    fi
+    test -f "$source" && test ! -L "$source" ||
+        { echo "Transferred source must be a regular non-symlink" >&2; exit 1; }
+    test ! -e "$destination" && test ! -L "$destination" ||
+        { echo "Existing helper is never overwritten; use a reviewed upgrade" >&2; exit 1; }
+    temp=$(/usr/bin/mktemp "$directory/.iran-helper.XXXXXXXX")
+    trap "/usr/bin/rm -f -- $temp" EXIT
+    /usr/bin/install -o root -g root -m 0500 -- "$source" "$temp"
+    printf "%s  %s\n" "$expected" "$temp" |
+        /usr/bin/sha256sum --check --status ||
+        { echo "Copied source SHA256 mismatch; installation refused" >&2; exit 1; }
+    /usr/bin/ln -- "$temp" "$destination"
+    /usr/bin/sync -f "$destination"
+    test "$(/usr/bin/stat -c %u "$destination")" = 0 &&
+    test "$(/usr/bin/stat -c %a "$destination")" = 500 &&
+    printf "%s  %s\n" "$expected" "$destination" |
+        /usr/bin/sha256sum --check --status ||
+        { echo "Installed source verification failed" >&2; exit 1; }
+    echo "Root-owned, hash-verified Iran public-only helper installed; no SSH admission."
+    ' bash "$PWD/connection-relay-iran.py"
+
+If the destination already exists, **do not overwrite it** or run a version
+upgrade implicitly. Inspect its provenance and use a separately reviewed
+upgrade procedure. Installing from a source candidate requires the normal
+review/release and operator-authorization gates.
+
+**For each action**, define this wrapper in the authorized operator's shell
+and invoke it below. The wrapper revalidates the root-owned ancestor chain and
+dedicated file, opens a pinned descriptor, hashes **that descriptor**, then
+executes those exact bytes with isolated Python imports. Even if the pathname
+changes after opening, Python runs the originally verified inode. Do not
+replace this with a direct sudo Python call.
+
+    iran_relay_public() {
+      /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
+      set -euo pipefail
+      expected=989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
+      directory=/usr/local/libexec/mcp-gateway-iran-relay
+      destination=$directory/connection-relay-iran.py
+      trusted_dir() {
+          test -d "$1" && test ! -L "$1" &&
+          test "$(/usr/bin/stat -c %u -- "$1")" = 0 &&
+          test -z "$(/usr/bin/find "$1" -maxdepth 0 -perm /022 -print)"
+      }
+      for parent in / /usr /usr/local /usr/local/libexec "$directory"; do
+          trusted_dir "$parent" ||
+              { echo "Untrusted helper path" >&2; exit 1; }
+      done
+      test "$(/usr/bin/stat -c %a "$directory")" = 700 &&
+      test -f "$destination" && test ! -L "$destination" ||
+          { echo "Missing or untrusted installed helper" >&2; exit 1; }
+      exec 9< "$destination"
+      test "$(/usr/bin/stat -Lc %F /proc/self/fd/9)" = "regular file" &&
+      test "$(/usr/bin/stat -Lc %u /proc/self/fd/9)" = 0 &&
+      test "$(/usr/bin/stat -Lc %a /proc/self/fd/9)" = 500 &&
+      test "$(/usr/bin/stat -Lc %d:%i /proc/self/fd/9)" = "$(/usr/bin/stat -Lc %d:%i "$destination")" ||
+          { echo "Installed helper inode/ownership changed" >&2; exit 1; }
+      printf "%s  /proc/self/fd/9\n" "$expected" |
+          /usr/bin/sha256sum --check --status ||
+          { echo "Opened helper SHA256 mismatch" >&2; exit 1; }
+      exec /usr/bin/python3 -I /proc/self/fd/9 "$@"
+      ' bash "$@"
+    }
+    iran_relay_public stage --input "$PWD/gateway-public-export.txt"
+    iran_relay_public inspect --input "$PWD/gateway-public-export.txt"
+    # Optional offline public-stage rollback only:
+    iran_relay_public retire --input "$PWD/gateway-public-export.txt"
+
+On unsupported Linux filesystems lacking O_TMPFILE and
+linkat(AT_EMPTY_PATH), retirement must fail closed **before deletion**; it
+must not fall back to a visible, partially written retirement marker.
+
+The public export is parsed with its exact Relay ID, immutable record ULID,
+control endpoint, control username and wire-validated Ed25519 key. It is public
+data, **not a cryptographically signed freshness certificate**. Obtain it
+directly from a trusted, current Gateway operator session; never accept an
+unverified third-party replacement or assume an old export remains current
+after Relay rotation. No private key should ever be transferred to Iran.
+
+Stage stores exactly control_key.pub and owner.json, both inside a
+root-owned 0700 directory at
+/var/lib/mcp-gateway-iran-relays/<record-ULID>/, keyed by the immutable
+record rather than the display name. A per-record root-owned lock serializes
+staging, inspection and retirement. Repeat with identical identity is
+idempotent; changed endpoints, keys, foreign files, symlinks and unsafe
+ownership refuse without adoption or cleanup. An interrupted retirement uses
+an exact durable retiring.json marker and can resume removing only the two
+owned public artifacts. If publication was interrupted after linkat but before
+a successful directory fsync, retry revalidates the existing marker's exact
+content, trusted inode and parent and fsyncs both marker and stage directory
+*before* unlinking any public artifact; failed synchronization refuses deletion.
+Unexpected incomplete staging or a pending directory is intentionally **not**
+recursively deleted: inspect the exact root-owned
+namespace before any separately approved recovery.
+
+No Linux SSH principal is created, no authorized_keys or sshd configuration
+is installed or reloaded, no listener, service or nftables policy is enabled,
+and no privileged readiness evidence is produced. The actual Iran account
+**must be exclusive to the Relay**, not a reused shared SSH principal, and
+its AllowTcpForwarding, key-only restrictions and public-destination egress
+policy must still be independently installed, positively and negatively
+tested, and linked to a fresh Gateway/host generation before any forwarding
+activation. The next host-admission/attestation step must not treat a staged
+public key as proof of Iran connectivity, restricted egress or authenticated
+Target access. Gateway-only deletion does not depend on Iran-side staging or
+cleanup.
 
 ## Gateway-local privileged policy audit (merged source; not installed)
 
