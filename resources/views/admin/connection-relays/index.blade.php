@@ -156,13 +156,18 @@
                                 <p class="field-help">{{ __('Expected final output: LIFECYCLE FENCE VERIFIED (delete); the first run also prints RETIREMENT VERIFIED. Re-running can renew expired evidence without lifting the fence. Delete remains blocked unless the root-owned fence matches this record. A deletion fence is permanent, so never use it when you intend to edit this registration.') }}</p>
                             </div>
                             <details class="target-help-details">
-                                <summary>{{ __('First-time helper installation and optional preflight') }}</summary>
-                                <p class="field-help">{{ __('The primary command installs the helper when missing, or verifies an existing installation without replacing unknown files. The separate steps below are for diagnosis. Independently confirm the trusted release SHA256 and application path before executing privileged material.') }}</p>
+                                <summary>{{ __('Verified host helper installation, upgrade and preflight') }}</summary>
+                                <p class="field-help">{{ __('The Cleanup command installs a missing helper or validates the exact current version; it NEVER replaces an existing helper. The optional upgrade command below explicitly replaces only the one known previous release after verification. Confirm trusted release SHA256 and the application path before any privileged action.') }}</p>
                                 <div class="field">
                                     <label for="relay-retire-bootstrap-{{ $relay->id }}">{{ __('One-time verified helper installation') }}</label>
                                     <textarea id="relay-retire-bootstrap-{{ $relay->id }}" rows="3" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['bootstrap'] }}</textarea>
                                 </div>
                                 <p class="field-help">{{ __('Helper release SHA256') }}: <code>{{ $hostCommands[$relay->id]['sha256'] }}</code></p>
+                                <div class="field">
+                                    <label for="relay-retire-upgrade-{{ $relay->id }}">{{ __('Explicit verified helper upgrade — Gateway host only') }}</label>
+                                    <textarea id="relay-retire-upgrade-{{ $relay->id }}" rows="5" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['upgrade'] }}</textarea>
+                                    <p class="field-help">{{ __('This is a separate authorized host-wide action, not part of ordinary Cleanup. Run only if the installed tool has the known previous SHA256 :previous. An unknown or modified binary is never replaced. Before upgrading a legacy helper, stop issuing old commands and let all historical operator sessions finish; they do not hold the new shared lock. After upgrading, refresh this page and use only newly generated commands. Compare the destination SHA256 with the trusted release before retrying Cleanup.', ['previous' => $hostCommands[$relay->id]['upgrade_from_sha256']]) }}</p>
+                                </div>
                                 <div class="field">
                                     <label for="relay-retire-preflight-{{ $relay->id }}">{{ __('Optional read-only local preflight') }}</label>
                                     <textarea id="relay-retire-preflight-{{ $relay->id }}" rows="3" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['preflight'] }}</textarea>

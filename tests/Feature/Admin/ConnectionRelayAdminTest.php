@@ -516,8 +516,11 @@ PYTHON;
         self::assertIsArray($commands);
         self::assertSame(hash_file('sha256', base_path('resources/host/connection-relay-gateway.py')), $commands['sha256']);
         foreach (['preflight', 'retire'] as $action) {
-            self::assertStringContainsString('/usr/bin/sudo /usr/bin/sha256sum --check --status', $commands[$action]);
-            self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay '.$action, $commands[$action]);
+            self::assertStringContainsString('/usr/bin/sudo /usr/bin/bash -c', $commands[$action]);
+            self::assertStringContainsString('flock -s -w 15 9', $commands[$action]);
+            self::assertStringContainsString('/usr/bin/sha256sum --check --status', $commands[$action]);
+            self::assertStringContainsString('"$destination" '.$action, $commands[$action]);
+            self::assertStringContainsString('test -x "$destination"', $commands[$action]);
             self::assertStringContainsString($relay->relay_id, $commands[$action]);
             self::assertStringContainsString($relay->getKey(), $commands[$action]);
             self::assertStringContainsString($relay->hostFingerprint(), $commands[$action]);
@@ -529,20 +532,35 @@ PYTHON;
         self::assertStringContainsString('Untrusted host tool directory', $commands['bootstrap']);
         self::assertStringContainsString('Unknown or outdated installed host tool', $commands['bootstrap']);
         self::assertStringContainsString(
-            '/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay prepare-setup',
+            '"$destination" prepare-setup',
             $commands['prepare_setup'],
         );
         self::assertStringContainsString('if sealed=$(', $commands['cleanup']);
         self::assertStringNotContainsString('/etc/mcp-gateway/connection-relays/.fences/'.$relay->getKey().'.json', $commands['cleanup']);
         self::assertStringContainsString('if sealed=$(', $commands['cleanup_for_rotation']);
-        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay retire', $commands['cleanup']);
-        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-delete', $commands['cleanup']);
-        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-rotate', $commands['cleanup_for_rotation']);
-        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-delete', $commands['seal_delete']);
-        self::assertStringContainsString('/usr/bin/sudo /usr/local/sbin/mcp-gateway-relay seal-rotate', $commands['seal_rotate']);
+        self::assertStringContainsString('"$destination" retire', $commands['cleanup']);
+        self::assertStringContainsString('"$destination" seal-delete', $commands['cleanup']);
+        self::assertStringContainsString('"$destination" seal-rotate', $commands['cleanup_for_rotation']);
+        self::assertStringContainsString('"$destination" seal-delete', $commands['seal_delete']);
+        self::assertStringContainsString('"$destination" seal-rotate', $commands['seal_rotate']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
+        self::assertSame('369fe2369c23d19a3fc62ccf494cba3ff7bb91109fa14e92783873904a2d5364', $commands['upgrade_from_sha256']);
+        self::assertStringContainsString('mode=install', $commands['bootstrap']);
+        self::assertStringContainsString('test -x "$destination"', $commands['bootstrap']);
+        self::assertStringNotContainsString('mode=upgrade', $commands['bootstrap']);
+        self::assertStringContainsString('mode=upgrade', $commands['upgrade']);
+        self::assertStringContainsString('flock -x -w 15 9', $commands['upgrade']);
+        self::assertStringContainsString('mv -T --', $commands['upgrade']);
+        self::assertStringContainsString($commands['upgrade_from_sha256'], $commands['upgrade']);
+        self::assertStringContainsString($commands['sha256'], $commands['upgrade']);
+        self::assertStringNotContainsString('mode=upgrade', $commands['cleanup']);
+        self::assertStringNotContainsString('mode=upgrade', $commands['cleanup_for_rotation']);
 
+        $current = config('connection_relays.gateway_retirement_helper_sha256');
         config()->set('connection_relays.gateway_retirement_helper_sha256', str_repeat('0', 64));
+        self::assertNull(app(ConnectionRelayHostOperatorPlan::class)->commands($relay));
+        config()->set('connection_relays.gateway_retirement_helper_sha256', $current);
+        config()->set('connection_relays.gateway_retirement_helper_upgrade_from_sha256', $current);
         self::assertNull(app(ConnectionRelayHostOperatorPlan::class)->commands($relay));
     }
 
@@ -600,7 +618,8 @@ PYTHON;
         self::assertIsArray($commands);
         // The cleanup command may inspect N or N+1 owned host claims; the
         // permanent root fence is issued only for the new DB revision N+1.
-        self::assertStringContainsString('--revision 2 --local-port 46081 --prior-fingerprint '."'".$original."'", $commands['retire']);
+        self::assertStringContainsString('--revision 2 --local-port 46081 --prior-fingerprint', $commands['retire']);
+        self::assertStringContainsString($original, $commands['retire']);
         self::assertStringContainsString('--revision 2 --local-port 46081', $commands['seal_delete']);
         self::assertStringNotContainsString('--prior-fingerprint', $commands['seal_delete']);
         self::assertStringNotContainsString('--prior-fingerprint', $commands['seal_rotate']);

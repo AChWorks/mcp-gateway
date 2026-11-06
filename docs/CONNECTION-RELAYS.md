@@ -95,12 +95,53 @@ rotation fence can coexist with newly provisioned resources at a later
 revision. Any failed retirement or Seal leaves the record disabled/recoverable
 and never authorizes DB deletion or rotation.
 
-The helper source was revised for exact N+1-to-N retirement support. An
-older already-installed helper will **fail the release SHA256 check**; the
-application intentionally does not silently replace privileged binaries.
-Any installed-helper version change needs separate host-operator approval,
-independent provenance/digest verification and a deliberate scoped update.
-Do not disable the hash check to make an older helper accept a new command.
+The helper source was revised for exact N+1-to-N retirement support. The
+Cleanup/bootstrap command **never** replaces an installed executable, even
+one from a known older release. An older helper fails the current release
+SHA256 check until the Owner separately runs the **Explicit verified helper
+upgrade** command (under the collapsed installation/diagnostics section).
+The upgrade permits exactly one pinned predecessor digest,
+`369fe2369c23d19a3fc62ccf494cba3ff7bb91109fa14e92783873904a2d5364`
+(the helper shipped with merged PR #286/#287), to be replaced with the
+current release-pinned source, only after the source bytes are copied to an
+isolated root-owned temporary inode and the copy matches the new SHA256.
+**Before upgrading a helper installed by an older release, enter a controlled
+operator maintenance window.** Pause all Gateway Relay host operator
+workflows; stop issuing historic copy/paste commands and let **all** already
+issued old command and sudo sessions finish before proceeding. Prevent anyone
+from starting another historic command until upgrade completes. Merely
+checking that no helper process is currently visible is insufficient: an old
+shell might have passed SHA256 verification but not yet executed the helper.
+After upgrade, discard old command copies, refresh the Admin page, and use
+only newly generated commands. If the operator cannot positively control
+old command admission and drain, **do not upgrade**. The old commands have no
+installer lock and cannot be retroactively protected by new PHP code.
+
+The installer obtains an **exclusive** root-owned lock at
+`/run/mcp-gateway-relay-helper-install.lock`; every newly generated
+`/usr/bin/sudo /usr/bin/bash -c` host-operation command obtains a
+**shared** lock at that exact path **before** checking the helper SHA256,
+and holds the same lock through the helper's exit. Thus a cooperating Upgrade
+cannot replace the executable between digest verification and execution, and
+concurrent Relay operations still use their separate scoped per-Relay
+lifecycle locks. This installer lock is **not** a cross-invocation lifecycle
+transaction: each `retire`, `seal-delete` or `seal-rotate` invocation
+acquires/releases it independently. A non-cooperating older command or a
+privileged out-of-band mutation remains outside this guarantee; the
+maintenance window controls the former, and trusted-host boundaries
+govern the latter.
+
+Under its exclusive lock, Upgrade rechecks the exact predecessor digest
+and uses an atomic same-directory rename. It never adopts unknown, tampered,
+linked, non-executable, unsafe-permission or third-party helper files. Both
+the installer and newly issued operator commands require a root-owned
+executable of the expected `0755` mode. Already-running processes keep their
+original inode; a successfully executed Upgrade is idempotent on the
+current hash. The previous helper code is recoverable from its reviewed
+GitHub commit, but the installer does not silently roll back. Compare both
+old and new expected digests against a trusted release artifact and obtain
+separate host-operator approval before running. Do not bypass the digest
+check to force an upgrade. No host update occurs when this code is merged.
 
 1. Disable the selected Relay, reconcile and explicitly detach/reassign all
    Targets; never silently fall back to Direct. Open **Retire and remove Relay**.
@@ -109,7 +150,9 @@ Do not disable the hash check to make an older helper accept a new command.
    exact release-pinned helper; if missing, it first copies the source into
    a root-owned temporary inode, SHA256-checks the copied bytes and atomically
    publishes it. An unknown, stale, linked or unsafe installed tool causes
-   an explicit refusal. No existing binary is overwritten.
+   an explicit refusal. No existing binary is overwritten. If a known older
+   helper is installed, run the separate **Explicit verified helper upgrade**
+   command first, verify the installed SHA256 and then retry Cleanup.
 3. The command first attempts an exact-current `seal-delete` using
    the release-pinned privileged helper. If the current permanent fence and
    retired generation already match, Seal **renews the receipt only**; no
