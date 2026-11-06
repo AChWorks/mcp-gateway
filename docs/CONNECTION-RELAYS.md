@@ -208,9 +208,21 @@ control endpoint and dedicated Iran account name in the operator terminal;
 **no private key is sent to PHP, displayed by the Admin page, copied to Iran
 or written to logs by this helper**. A root-owned current-generation UID journal,
 matching key pair and credentials, authentic local account marker and the
-shared lifecycle lock are required. Incomplete, modified, retired, fenced or
-foreign resources are refused; the command never creates, repairs, restarts,
-removes or activates any host resource.
+shared lifecycle lock are required. **A surviving managed claim, Setup journal
+and public/private key pair are NOT enough:** a read-only host check must also
+find the root-owned staged systemd unit with its exact journal/claim digest,
+the loaded, unmodified OpenSSH ExecStart with no foreign drop-ins or pending
+daemon-reload, a service that is inactive and disabled, the exact root-owned
+nftables persistence file, and the currently loaded `inet` table with both
+the claimed digest and the reviewed IPv4/IPv6 loopback UID-deny rule. Any
+missing, foreign, drifted, partially retired, unexpectedly activated or
+fenced state is refused **before any public key is printed**. The export only
+queries state (systemctl show/is-active/is-enabled; nft -j list); it never
+runs daemon-reload, installs/restores ACLs, restarts a unit, creates an
+identity, writes evidence, or issues readiness. For a recoverable interrupted
+Setup or missing ACL, use the separate, explicitly authorized Setup/Retry
+procedure; for interrupted Retirement, finish Gateway-only Retirement/Seal.
+Never present a stale public key for Iran enrollment.
 
 This handoff is **not Iran enrollment**. The operator must separately install
 and restrict the public key on the specifically authorized Iran host, with a

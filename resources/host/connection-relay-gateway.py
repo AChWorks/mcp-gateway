@@ -1610,6 +1610,36 @@ class GatewayPolicyAudit(Retirement):
                 or journal["configuration_revision"] != self.relay.revision
                 or journal["host_fingerprint"] != self.relay.fingerprint):
                 raise Refusal("No current UID-bound Setup journal; refusing an unproven public key.")
+            # Retirement intentionally keeps the managed claim and original
+            # UID-bound journal until AFTER unit/ACL teardown and SSH-account
+            # removal. They are necessary but insufficient evidence that a
+            # Gateway Setup stage remains complete. Never use the reusable
+            # _verify_effective_systemd(): it may daemon-reload as a Repair
+            # side effect. A public-key handoff must be STRICTLY read-only.
+            unit = self.layout.unit(self.relay)
+            nft_source = self.layout.evidence(self.relay, ".nft")
+            unit_digest = hashlib.sha256(unit.read_bytes()).hexdigest() if self._owned(unit) else None
+            if (unit_digest is None
+                or unit_digest != managed["unit_sha256"]
+                or unit_digest != journal["unit_sha256"]):
+                raise Refusal("Staged Relay systemd unit is missing or differs from its original journal and claim.")
+            if (not self._owned(nft_source)
+                or nft_source.read_bytes() != nft_policy_source(
+                    self.relay, journal["gateway_php_uid"])):
+                raise Refusal("Staged Relay nftables persistence source is missing or changed.")
+            info = self._systemd_info()
+            if (info["LoadState"] != "loaded"
+                or info["ActiveState"] != "inactive"
+                or info["FragmentPath"] != str(unit)
+                or info["NeedDaemonReload"] != "no"
+                or hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest()
+                   != managed["unit_exec_sha256"]):
+                raise Refusal("Effective staged Relay systemd definition is missing, stale or foreign.")
+            if self._unit_active() or self._unit_enabled():
+                raise Refusal("Relay service is not in its expected inactive, disabled staged state.")
+            if not self._verify_effective_nft(managed):
+                raise Refusal("Effective staged Relay nftables policy is absent; run controlled Setup/Repair.")
+            self._require_effective_acl(journal["gateway_php_uid"])
             keydir = self.layout.key_dir(self.relay)
             required = {"control_key", "control_key.pub", "known_hosts", "owner.json"}
             if (not self._owned(keydir, True)
@@ -1628,6 +1658,7 @@ class GatewayPolicyAudit(Retirement):
                 or owner["gateway_php_uid"] != journal["gateway_php_uid"]):
                 raise Refusal("Staged Relay public key lacks its exact root-owned ownership claim.")
             self._require_control_key_pair(keydir)
+            self._require_ssh_invocation(info["ExecStart"], owner)
             # Verify the local NSS identity without requiring an unrelated
             # sibling Relay's partially staged keydir to be fully provisioned.
             try:

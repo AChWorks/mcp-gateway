@@ -81,7 +81,7 @@
                     <div class="field">
                         <label for="relay-public-enrollment-command-{{ $relay->id }}">{{ __('Retrieve staged public SSH key for offline Iran enrollment (read-only)') }}</label>
                         <textarea id="relay-public-enrollment-command-{{ $relay->id }}" rows="5" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['public_enrollment'] }}</textarea>
-                        <p class="field-help">{{ __('Run on the authorized Gateway host only AFTER Setup. The root-only command validates this Relay’s journal, UID and exact SSH key pair, then prints PUBLIC material in the operator terminal, never in this web page. It does not configure Iran, enable forwarding or issue readiness. Enroll Iran separately with restricted SSHD and verified egress; never send the private key.') }}</p>
+                        <p class="field-help">{{ __('Run on the authorized Gateway host only AFTER Setup. The root-only command validates this Relay’s journal, UID, exact SSH key pair, disabled systemd unit and live IPv4/IPv6 nftables policy before printing PUBLIC material in the operator terminal, never in this web page. Missing or partially retired host resources block export; use separately approved Setup/Retry or Retirement recovery. It does not configure Iran, enable forwarding or issue readiness. Enroll Iran separately with restricted SSHD and verified egress; never send the private key.') }}</p>
                     </div>
                 </details>
             @endif
