@@ -247,19 +247,117 @@ Gateway, GitHub or a foreign CDN.
 The operator transfers two items over an independently trusted offline channel:
 (1) the exact, complete, public-only eight-line Gateway operator-terminal export
 as a plain-text file, and (2) the reviewed Iran helper source from the same
-approved repository revision. Verify the helper's SHA256 before running it.
-For the source candidate in this PR the checksum is:
+approved repository revision. **Never run the transferred Python file under
+sudo or use a split checksum/execute procedure in a writable transfer
+directory.** Only an expressly authorized Iran host operator may perform the
+following installation and execution. This is **not** an automatically invoked
+installer, live SSH enrollment, or permission to change Production.
 
-    c4c82ad6d3e381038152e6b2388b0e9e6ce70f5f619e34ab3647cb9e3c733dcc
+For the current source candidate the exact Python helper SHA256 is:
 
-On the **authorized Iran host only**, after separately staging those files:
+    556c33500ef335c4a96ea5e82d27d706b2f3e2b3cba8472689530b803cbcded9
 
-    sha256sum connection-relay-iran.py
-    # Compare to the reviewed SHA256 above; refuse any mismatch.
-    sudo python3 connection-relay-iran.py stage --input gateway-public-export.txt
-    sudo python3 connection-relay-iran.py inspect --input gateway-public-export.txt
-    # If this public-only stage must be rolled back:
-    sudo python3 connection-relay-iran.py retire --input gateway-public-export.txt
+**First install only**, from the directory containing the transferred public
+source file (the file may be untrusted; it is never executed there):
+
+    /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
+    set -euo pipefail
+    umask 077
+    source=$1
+    expected=556c33500ef335c4a96ea5e82d27d706b2f3e2b3cba8472689530b803cbcded9
+    base=/usr/local/libexec
+    directory=$base/mcp-gateway-iran-relay
+    destination=$directory/connection-relay-iran.py
+    trusted_dir() {
+        test -d "$1" && test ! -L "$1" &&
+        test "$(/usr/bin/stat -c %u -- "$1")" = 0 &&
+        test -z "$(/usr/bin/find "$1" -maxdepth 0 -perm /022 -print)"
+    }
+    for parent in / /usr /usr/local; do
+        trusted_dir "$parent" || { echo "Unsafe root-owned ancestor" >&2; exit 1; }
+    done
+    if test -e "$base" || test -L "$base"; then
+        trusted_dir "$base" || { echo "Unsafe libexec directory" >&2; exit 1; }
+    else
+        /usr/bin/install -d -o root -g root -m 0755 -- "$base"
+    fi
+    if test -e "$directory" || test -L "$directory"; then
+        trusted_dir "$directory" &&
+        test "$(/usr/bin/stat -c %a "$directory")" = 700 ||
+            { echo "Unsafe dedicated helper directory" >&2; exit 1; }
+    else
+        /usr/bin/install -d -o root -g root -m 0700 -- "$directory"
+    fi
+    test -f "$source" && test ! -L "$source" ||
+        { echo "Transferred source must be a regular non-symlink" >&2; exit 1; }
+    test ! -e "$destination" && test ! -L "$destination" ||
+        { echo "Existing helper is never overwritten; use a reviewed upgrade" >&2; exit 1; }
+    temp=$(/usr/bin/mktemp "$directory/.iran-helper.XXXXXXXX")
+    trap "/usr/bin/rm -f -- $temp" EXIT
+    /usr/bin/install -o root -g root -m 0500 -- "$source" "$temp"
+    printf "%s  %s\n" "$expected" "$temp" |
+        /usr/bin/sha256sum --check --status ||
+        { echo "Copied source SHA256 mismatch; installation refused" >&2; exit 1; }
+    /usr/bin/ln -- "$temp" "$destination"
+    /usr/bin/sync -f "$destination"
+    test "$(/usr/bin/stat -c %u "$destination")" = 0 &&
+    test "$(/usr/bin/stat -c %a "$destination")" = 500 &&
+    printf "%s  %s\n" "$expected" "$destination" |
+        /usr/bin/sha256sum --check --status ||
+        { echo "Installed source verification failed" >&2; exit 1; }
+    echo "Root-owned, hash-verified Iran public-only helper installed; no SSH admission."
+    ' bash "$PWD/connection-relay-iran.py"
+
+If the destination already exists, **do not overwrite it** or run a version
+upgrade implicitly. Inspect its provenance and use a separately reviewed
+upgrade procedure. Installing from a source candidate requires the normal
+review/release and operator-authorization gates.
+
+**For each action**, define this wrapper in the authorized operator's shell
+and invoke it below. The wrapper revalidates the root-owned ancestor chain and
+dedicated file, opens a pinned descriptor, hashes **that descriptor**, then
+executes those exact bytes with isolated Python imports. Even if the pathname
+changes after opening, Python runs the originally verified inode. Do not
+replace this with a direct sudo Python call.
+
+    iran_relay_public() {
+      /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
+      set -euo pipefail
+      expected=556c33500ef335c4a96ea5e82d27d706b2f3e2b3cba8472689530b803cbcded9
+      directory=/usr/local/libexec/mcp-gateway-iran-relay
+      destination=$directory/connection-relay-iran.py
+      trusted_dir() {
+          test -d "$1" && test ! -L "$1" &&
+          test "$(/usr/bin/stat -c %u -- "$1")" = 0 &&
+          test -z "$(/usr/bin/find "$1" -maxdepth 0 -perm /022 -print)"
+      }
+      for parent in / /usr /usr/local /usr/local/libexec "$directory"; do
+          trusted_dir "$parent" ||
+              { echo "Untrusted helper path" >&2; exit 1; }
+      done
+      test "$(/usr/bin/stat -c %a "$directory")" = 700 &&
+      test -f "$destination" && test ! -L "$destination" ||
+          { echo "Missing or untrusted installed helper" >&2; exit 1; }
+      exec 9< "$destination"
+      test "$(/usr/bin/stat -Lc %F /proc/self/fd/9)" = "regular file" &&
+      test "$(/usr/bin/stat -Lc %u /proc/self/fd/9)" = 0 &&
+      test "$(/usr/bin/stat -Lc %a /proc/self/fd/9)" = 500 &&
+      test "$(/usr/bin/stat -Lc %d:%i /proc/self/fd/9)" = "$(/usr/bin/stat -Lc %d:%i "$destination")" ||
+          { echo "Installed helper inode/ownership changed" >&2; exit 1; }
+      printf "%s  /proc/self/fd/9\n" "$expected" |
+          /usr/bin/sha256sum --check --status ||
+          { echo "Opened helper SHA256 mismatch" >&2; exit 1; }
+      exec /usr/bin/python3 -I /proc/self/fd/9 "$@"
+      ' bash "$@"
+    }
+    iran_relay_public stage --input "$PWD/gateway-public-export.txt"
+    iran_relay_public inspect --input "$PWD/gateway-public-export.txt"
+    # Optional offline public-stage rollback only:
+    iran_relay_public retire --input "$PWD/gateway-public-export.txt"
+
+On unsupported Linux filesystems lacking O_TMPFILE and
+linkat(AT_EMPTY_PATH), retirement must fail closed **before deletion**; it
+must not fall back to a visible, partially written retirement marker.
 
 The public export is parsed with its exact Relay ID, immutable record ULID,
 control endpoint, control username and wire-validated Ed25519 key. It is public

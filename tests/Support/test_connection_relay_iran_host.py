@@ -252,6 +252,135 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.assertTrue(self.layout.stage(self.snapshot).is_dir())
         self.assertIn("NOT ENROLLED", self.inspect())
 
+    def test_retirement_crash_during_marker_write_never_leaves_partial_name(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        public = (stage / "control_key.pub").read_bytes()
+        claim = (stage / "owner.json").read_bytes()
+        native_write = os.write
+
+        def interrupted_write(fd, data):
+            native_write(fd, bytes(data[:3]))
+            raise OSError("simulated power loss during anonymous marker write")
+
+        with mock.patch.object(mod.os, "write", side_effect=interrupted_write):
+            with self.assertRaisesRegex(OSError, "simulated power loss"):
+                self.retire()
+        self.assertFalse((stage / "retiring.json").exists())
+        self.assertEqual(public, (stage / "control_key.pub").read_bytes())
+        self.assertEqual(claim, (stage / "owner.json").read_bytes())
+        self.assertEqual({"control_key.pub", "owner.json"}, {p.name for p in stage.iterdir()})
+        self.assertIn("STAGE RETIRED", self.retire())
+
+    def test_retirement_crash_before_anonymous_creation_preserves_stage(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        real_open = mod.os.open
+
+        def fail_tmpfile(path, flags, *args, **kwargs):
+            if flags & os.O_TMPFILE == os.O_TMPFILE:
+                raise OSError("simulated failure opening anonymous marker")
+            return real_open(path, flags, *args, **kwargs)
+
+        with mock.patch.object(mod.os, "open", side_effect=fail_tmpfile):
+            with self.assertRaisesRegex(mod.Refusal, "cannot safely stage|Filesystem cannot safely"):
+                self.retire()
+        self.assertEqual({"owner.json", "control_key.pub"}, {p.name for p in stage.iterdir()})
+        self.assertIn("STAGE RETIRED", self.retire())
+
+    def test_retirement_crash_after_marker_write_before_publish_is_recoverable(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        with mock.patch.object(
+            mod, "_link_anonymous_marker",
+            side_effect=OSError("simulated crash before atomic link"),
+        ):
+            with self.assertRaisesRegex(OSError, "simulated crash"):
+                self.retire()
+        self.assertFalse((stage / "retiring.json").exists())
+        self.assertEqual({"owner.json", "control_key.pub"}, {p.name for p in stage.iterdir()})
+        self.assertIn("STAGE RETIRED", self.retire())
+
+    def test_retirement_crash_after_marker_publish_is_recoverable(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        real_link = mod._link_anonymous_marker
+
+        def interrupted_link(source_fd, stage_fd):
+            real_link(source_fd, stage_fd)
+            raise OSError("simulated crash immediately after atomic publish")
+
+        with mock.patch.object(mod, "_link_anonymous_marker", side_effect=interrupted_link):
+            with self.assertRaisesRegex(OSError, "simulated crash"):
+                self.retire()
+        self.assertEqual(
+            mod._encode(self.snapshot.owner_record()),
+            (stage / "retiring.json").read_bytes(),
+        )
+        self.assertEqual({"owner.json", "control_key.pub", "retiring.json"},
+                         {p.name for p in stage.iterdir()})
+        self.assertIn("STAGE RETIRED", self.retire())
+
+    def test_retirement_crash_at_each_artifact_boundary_recovers(self):
+        native_unlink = Path.unlink
+        for boundary in ("control_key.pub", "owner.json", "retiring.json"):
+            with self.subTest(boundary=boundary):
+                self.stage()
+                stage = self.layout.stage(self.snapshot)
+
+                def interrupt_unlink(path, *args, **kwargs):
+                    native_unlink(path, *args, **kwargs)
+                    if path == stage / boundary:
+                        raise OSError("simulated crash after " + boundary)
+
+                with mock.patch.object(Path, "unlink", new=interrupt_unlink):
+                    with self.assertRaisesRegex(OSError, "simulated crash"):
+                        self.retire()
+                self.assertIn("STAGE RETIRED", self.retire())
+                self.assertFalse(stage.exists())
+
+    def test_retirement_crash_before_final_rmdir_and_after_rmdir_is_recoverable(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        native_rmdir = Path.rmdir
+
+        def refuse_rmdir(path, *args, **kwargs):
+            if path == stage:
+                raise OSError("simulated crash before rmdir")
+            return native_rmdir(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "rmdir", new=refuse_rmdir):
+            with self.assertRaisesRegex(OSError, "simulated crash"):
+                self.retire()
+        self.assertTrue(stage.is_dir())
+        self.assertEqual([], list(stage.iterdir()))
+        # Reset and repeat at the boundary *after* the final rmdir.
+        self.assertIn("EMPTY IRAN PUBLIC STAGE RETIRED", self.retire())
+        self.stage()
+        real_sync = mod.sync_dir
+
+        def refuse_sync(path, layout):
+            if path == self.layout.stages and not stage.exists():
+                raise OSError("simulated crash after final rmdir")
+            return real_sync(path, layout)
+
+        with mock.patch.object(mod, "sync_dir", side_effect=refuse_sync):
+            with self.assertRaisesRegex(OSError, "simulated crash"):
+                self.retire()
+        self.assertFalse(stage.exists())
+        self.assertIn("NO IRAN STAGE PRESENT", self.retire())
+
+    def test_truncated_foreign_retirement_marker_is_preserved(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        mod.write_new(stage / "retiring.json", b"{", 0o600)
+        for action in (self.retire, self.inspect, self.stage):
+            with self.assertRaises(mod.Refusal):
+                action()
+        self.assertEqual(b"{", (stage / "retiring.json").read_bytes())
+        self.assertTrue((stage / "control_key.pub").is_file())
+        self.assertTrue((stage / "owner.json").is_file())
+
     def test_interrupted_retirement_resumes_only_exact_owned_public_files(self):
         self.stage()
         base = self.layout.stage(self.snapshot)
@@ -297,6 +426,161 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         finally:
             os.close(fd)
         self.assertIn("NOT ENROLLED", self.inspect())
+
+    @staticmethod
+    def _operator_runbook_scripts():
+        """Execute the real documented Bash bodies with disposable test paths."""
+        doc = (Path(__file__).resolve().parents[2] /
+               "docs/CONNECTION-RELAYS.md").read_text()
+        section = doc.split("## Offline Iran-side public-identity staging", 1)[1]
+        section = section.split("## Gateway-local privileged policy audit", 1)[0]
+        installer = section.split(
+            "    /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C "
+            "/usr/bin/bash -c '\n", 1,
+        )[1].split("\n    ' bash \"$PWD/connection-relay-iran.py\"", 1)[0]
+        runner = section.split(
+            "    iran_relay_public() {\n"
+            "      /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin "
+            "LC_ALL=C /usr/bin/bash -c '\n", 1,
+        )[1].split("\n      ' bash \"$@\"", 1)[0]
+        import textwrap
+        return textwrap.dedent(installer), textwrap.dedent(runner), section
+
+    def _sandbox_operator_scripts(self):
+        installer, runner, section = self._operator_runbook_scripts()
+        uid = os.geteuid()
+        root = self.root
+        directory = root / "libexec/mcp-gateway-iran-relay"
+        installer = (installer
+                     .replace("base=/usr/local/libexec", "base=" + str(root / "libexec"))
+                     .replace("for parent in / /usr /usr/local; do",
+                              "for parent in " + str(root) + "; do")
+                     .replace("-o root -g root", "")
+                     .replace('")" = 0 &&', '")" = ' + str(uid) + ' &&')
+                     .replace(')" = 0 &&', ')" = ' + str(uid) + ' &&'))
+        runner = (runner
+                  .replace("directory=/usr/local/libexec/mcp-gateway-iran-relay",
+                           "directory=" + str(directory))
+                  .replace('for parent in / /usr /usr/local /usr/local/libexec "$directory"; do',
+                           'for parent in "$directory"; do')
+                  .replace('")" = 0 &&', '")" = ' + str(uid) + ' &&')
+                  .replace(')" = 0 &&', ')" = ' + str(uid) + ' &&'))
+        return installer, runner, section, directory
+
+    def _operator_shell(self, script, *args, env=None):
+        return subprocess.run(
+            ["/usr/bin/bash", "-c", script, "bash", *map(str, args)],
+            text=True, capture_output=True, timeout=7,
+            env=env or {"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"},
+        )
+
+    def test_documented_root_operator_contract_is_syntactically_valid(self):
+        installer, runner, section = self._operator_runbook_scripts()
+        for part in (installer, runner):
+            syntax = subprocess.run(
+                ["/usr/bin/bash", "-n"], input=part, text=True,
+                capture_output=True, timeout=5,
+            )
+            self.assertEqual(0, syntax.returncode, syntax.stderr)
+        self.assertIn("sudo /usr/bin/env -i", section)
+        self.assertIn("root-owned", section)
+        self.assertIn("test ! -L", section)
+        self.assertIn("/usr/bin/ln --", installer)
+        self.assertIn("/usr/bin/sha256sum --check --status", installer)
+        self.assertIn("/usr/bin/sha256sum --check --status", runner)
+        self.assertIn("exec 9< \"$destination\"", runner)
+        self.assertIn("exec /usr/bin/python3 -I /proc/self/fd/9", runner)
+        self.assertNotIn("sudo python3 connection-relay-iran.py", section)
+        import hashlib
+        sha = hashlib.sha256(source.read_bytes()).hexdigest()
+        self.assertEqual(2, section.count("expected=" + sha))
+
+    def test_documented_install_and_isolated_fd_execute_accept_pinned_source(self):
+        installer, runner, section, directory = self._sandbox_operator_scripts()
+        installed = directory / "connection-relay-iran.py"
+        # The transferred source may reside next to a malicious Python module.
+        transfer = self.root / "connection-relay-iran.py"
+        transfer.write_bytes(source.read_bytes())
+        (self.root / "hashlib.py").write_text(
+            "raise RuntimeError('attacker-controlled transfer module imported')\n"
+        )
+        installed_result = self._operator_shell(installer, transfer)
+        self.assertEqual(0, installed_result.returncode, installed_result.stderr)
+        self.assertEqual(source.read_bytes(), installed.read_bytes())
+        self.assertEqual(0o500, installed.stat().st_mode & 0o777)
+        self.assertEqual(0o700, directory.stat().st_mode & 0o777)
+        self.assertEqual({"connection-relay-iran.py"}, {p.name for p in directory.iterdir()})
+        execution = self._operator_shell(
+            runner, "--help",
+            env={"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C",
+                 "PYTHONPATH": str(self.root), "PYTHONINSPECT": "1"},
+        )
+        self.assertEqual(0, execution.returncode, execution.stderr)
+        self.assertIn("Offline, inactive Iran Relay public-identity", execution.stdout)
+        self.assertFalse((self.root / "var").exists())
+
+    def test_documented_install_refuses_mismatch_and_existing_destination(self):
+        installer, runner, section, directory = self._sandbox_operator_scripts()
+        destination = directory / "connection-relay-iran.py"
+        bad = self.root / "bad-iran-helper.py"
+        bad.write_text("print('unknown code')\n")
+        result = self._operator_shell(installer, bad)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("SHA256 mismatch", result.stderr)
+        self.assertFalse(destination.exists())
+        self.assertEqual([], list(directory.iterdir()))
+        destination.write_bytes(b"untouched foreign helper")
+        destination.chmod(0o500)
+        result = self._operator_shell(installer, source)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("never overwritten", result.stderr)
+        self.assertEqual(b"untouched foreign helper", destination.read_bytes())
+
+    def test_documented_execution_refuses_untrusted_directory_and_drift(self):
+        installer, runner, section, directory = self._sandbox_operator_scripts()
+        self.assertEqual(0, self._operator_shell(installer, source).returncode)
+        directory.chmod(0o777)
+        bad = self._operator_shell(runner, "--help")
+        self.assertNotEqual(0, bad.returncode)
+        self.assertIn("Untrusted helper path", bad.stderr)
+        directory.chmod(0o700)
+        installed = directory / "connection-relay-iran.py"
+        installed.chmod(0o600)
+        installed.write_bytes(b"foreign code\n")
+        installed.chmod(0o500)
+        bad = self._operator_shell(runner, "--help")
+        self.assertNotEqual(0, bad.returncode)
+        self.assertIn("SHA256 mismatch", bad.stderr)
+
+    def test_pinned_descriptor_runs_verified_inode_after_path_replacement(self):
+        # Simulate a name swap AFTER opening/checking the trusted source.
+        directory = self.root / "trusted"
+        directory.mkdir(mode=0o700)
+        installed = directory / "connection-relay-iran.py"
+        installed.write_bytes(source.read_bytes())
+        installed.chmod(0o500)
+        fd = os.open(installed, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            import hashlib
+            with open("/proc/self/fd/" + str(fd), "rb") as opened:
+                self.assertEqual(
+                    hashlib.sha256(source.read_bytes()).hexdigest(),
+                    hashlib.sha256(opened.read()).hexdigest(),
+                )
+            replacement = directory / "unknown.py"
+            replacement.write_text("raise SystemExit(66)\n")
+            os.replace(replacement, installed)
+            proc = subprocess.run(
+                ["/usr/bin/python3", "-I", "/proc/self/fd/" + str(fd), "--help"],
+                pass_fds=(fd,), text=True, capture_output=True, timeout=7,
+                env={"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C",
+                     "PYTHONPATH": str(self.root)},
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertIn("Offline, inactive Iran Relay public-identity", proc.stdout)
+            self.assertEqual(b"raise SystemExit(66)\n", installed.read_bytes())
+        finally:
+            os.close(fd)
 
     def test_non_root_request_is_rejected_before_mutation(self):
         with mock.patch.object(mod.os, "geteuid", return_value=self.layout.owner_uid + 1):

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import fcntl
 import hashlib
 import json
@@ -236,6 +237,76 @@ def write_new(path: Path, content: bytes, mode: int) -> None:
         os.close(fd)
 
 
+def _link_anonymous_marker(source_fd: int, stage_fd: int) -> None:
+    """Linux linkat(AT_EMPTY_PATH): publish a fully-fsynced O_TMPFILE once.
+
+    An ordinary visible temporary name could survive a crash as an unknown
+    entry inside the exact staging allowlist. No temporary pathname is used.
+    On unsupported filesystems/OSes fail closed *before* public file removal.
+    """
+    import ctypes
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        linkat = libc.linkat
+    except (AttributeError, OSError) as error:
+        raise Refusal("Linux anonymous retirement-marker publication is unavailable.") from error
+    linkat.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+        ctypes.c_char_p, ctypes.c_int,
+    ]
+    linkat.restype = ctypes.c_int
+    at_empty_path = 0x1000  # Linux AT_EMPTY_PATH
+    if linkat(source_fd, b"", stage_fd, b"retiring.json", at_empty_path) != 0:
+        error_code = ctypes.get_errno()
+        if error_code == errno.EEXIST:  # never replace or adopt an unknown marker
+            raise Refusal("Existing retirement marker changed; refusing overwrite.")
+        raise Refusal(
+            "Cannot safely publish anonymous retirement marker: "
+            + os.strerror(error_code)
+        )
+
+
+def publish_retiring_marker(stage: Path, snapshot: Snapshot, layout: Layout) -> None:
+    """Durable *complete or absent* retirement marker, before any deletion.
+
+    O_TMPFILE creates an unlinked inode. A crash during its write/fsync leaves
+    no visible truncated marker. linkat(AT_EMPTY_PATH) atomically exposes its
+    complete bytes only after file fsync, with no replace-on-existing behavior.
+    A crash after link, before directory fsync, leaves either a valid marker
+    or no marker; no public artifact is removed until directory fsync passes.
+    """
+    if not hasattr(os, "O_TMPFILE"):
+        raise Refusal("Linux O_TMPFILE support is required for safe retirement.")
+    try:
+        fd = os.open(stage, os.O_TMPFILE | os.O_WRONLY | os.O_CLOEXEC, 0o600)
+    except OSError as error:
+        raise Refusal("Filesystem cannot safely stage an anonymous retirement marker.") from error
+    try:
+        os.fchmod(fd, 0o600)
+        remaining = memoryview(_encode(snapshot.owner_record()))
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise OSError("Unable to complete retirement marker write.")
+            remaining = remaining[written:]
+        os.fsync(fd)
+        stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            owned(stage, layout, True)
+            actual = os.fstat(stage_fd)
+            expected = stage.lstat()
+            if ((actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
+                or actual.st_mode & 0o777 != 0o700):
+                raise Refusal("Iran public staging directory changed before marker publication.")
+            _link_anonymous_marker(fd, stage_fd)
+            os.fsync(stage_fd)
+        finally:
+            os.close(stage_fd)
+    finally:
+        os.close(fd)
+
+
 def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
     if os.geteuid() != layout.owner_uid:
         raise Refusal("Iran Relay staging requires explicit root execution.")
@@ -270,8 +341,7 @@ def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
             exact_stage(snapshot, layout, allow_retiring=True)
             marker = stage / "retiring.json"
             if not marker.exists():
-                write_new(marker, _encode(snapshot.owner_record()), 0o600)
-                sync_dir(stage, layout)
+                publish_retiring_marker(stage, snapshot, layout)
             # A crash after the marker is durable can safely resume deletion
             # of only the two exact public staging files, never unknown files.
             for name in ("control_key.pub", "owner.json"):
