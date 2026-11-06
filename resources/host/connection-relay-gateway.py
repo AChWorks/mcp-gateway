@@ -602,6 +602,49 @@ class Retirement:
             + ". No remote Iran access is attempted."
         )
 
+    def _require_unjournaled_legacy_safe(self) -> None:
+        """An old managed claim does not own the new dedicated SSH principal.
+
+        Without the root Setup journal, we cannot prove a same-name account's
+        immutable UID or the origin of credential files. Preserve them and
+        refuse a false Gateway-host retirement receipt. Empty, root-owned
+        legacy key directories are safe to remove, but NOT their contents.
+        """
+        try:
+            pwd.getpwnam(self.relay.ssh_user)
+        except KeyError:
+            pass
+        except OSError as error:
+            raise Refusal("Cannot verify absent dedicated SSH account without Setup journal.") from error
+        else:
+            raise Refusal("Dedicated SSH account exists without UID-bound Setup journal; refuse cleanup proof.")
+        keydir = self.layout.key_dir(self.relay)
+        if self._owned(keydir, True):
+            if any(keydir.iterdir()):
+                raise Refusal("Unjournaled Relay credential files cannot be proven owned; preserve them.")
+        elif keydir.exists() or keydir.is_symlink():
+            raise Refusal("Unknown unjournaled Relay credential namespace.")
+
+    def _fsync_directory(self, path: Path) -> None:
+        # A successful unlink/rmdir is NOT a durable cleanup barrier until
+        # its parent namespace has been flushed to disk.
+        trusted(path, True, self.layout.owner_uid, True)
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _unlink_owned_durable(self, path: Path) -> None:
+        if self._owned(path):
+            path.unlink()
+            self._fsync_directory(path.parent)
+
+    def _rmdir_owned_durable(self, path: Path) -> None:
+        if self._owned(path, True):
+            path.rmdir()
+            self._fsync_directory(path.parent)
+
     def _owned_setup_for_retirement(self, managed: dict | None) -> dict | None:
         """Validate a durable Setup journal, including a pre-claim interruption."""
         journal_path = self.layout.evidence(self.relay, ".setup.json")
@@ -858,7 +901,7 @@ class Retirement:
         if self._owned(unit):
             if hashlib.sha256(unit.read_bytes()).hexdigest() != journal["unit_sha256"]:
                 raise Refusal("Staged service file changed before rollback.")
-            unit.unlink()
+            self._unlink_owned_durable(unit)
         # Reload is needed even if the unit file was already absent, because
         # systemd may still hold an inactive cached definition from a crash.
         reloaded = self.run(["systemctl", "daemon-reload"])
@@ -869,8 +912,7 @@ class Retirement:
         self._assert_no_loaded_same_name_unit()
         journal = self._retire_ssh_principal(journal, remove=True)
         self._delete_setup_keydir()
-        if self._owned(nft_source):
-            nft_source.unlink()
+        self._unlink_owned_durable(nft_source)
         return journal
 
     def _delete_setup_keydir(self) -> None:
@@ -893,8 +935,8 @@ class Retirement:
             if entry is not None:
                 if not self._owned(entry):
                     raise Refusal("Untrusted private Relay file during staged cleanup.")
-                entry.unlink()
-        keydir.rmdir()
+                self._unlink_owned_durable(entry)
+        self._rmdir_owned_durable(keydir)
 
     def retire(self) -> str:
         if os.geteuid() != self.layout.owner_uid:
@@ -929,6 +971,11 @@ class Retirement:
             setup_journal = self._owned_setup_for_retirement(managed)
             if managed is not None or setup_journal is None:
                 self._preflight()
+            if setup_journal is None:
+                # A v2 managed claim alone cannot authenticate a later
+                # dedicated account or mystery credentials. Check before
+                # stopping any service, deleting ACL or writing a receipt.
+                self._require_unjournaled_legacy_safe()
             if setup_journal is not None:
                 # Catch replaced same-name UIDs and mismatched owner.json
                 # BEFORE service stop, firewall mutation or file deletion.
@@ -960,8 +1007,7 @@ class Retirement:
                     raise Refusal("Relay firewall table still exists after deletion.")
                 if self._listening(ports):
                     raise Refusal("A local port is still listening; do not issue false cleanup evidence.")
-                if self._owned(unit):
-                    unit.unlink()
+                self._unlink_owned_durable(unit)
                 # A prior interrupted attempt may have unlinked the unit
                 # before reload completed. Repeat reload even when missing
                 # so stale systemd unit caches cannot strand recovery.
@@ -973,8 +1019,7 @@ class Retirement:
                 if setup_journal is not None:
                     setup_journal = self._retire_ssh_principal(setup_journal, remove=True)
                     persistence = self.layout.evidence(self.relay, ".nft")
-                    if self._owned(persistence):
-                        persistence.unlink()
+                    self._unlink_owned_durable(persistence)
                 self._delete_setup_keydir()
             elif setup_journal is not None:
                 setup_journal = self._retire_unclaimed_stage(setup_journal)
@@ -985,25 +1030,37 @@ class Retirement:
                     raise Refusal("SOCKS5 listener is still active; refuse false retirement proof.")
             for ext in [".json", ".policy"]:
                 path = self.layout.evidence(self.relay, ext)
-                if self._owned(path):
-                    path.unlink()
+                self._unlink_owned_durable(path)
             if self._unit_active() or self._unit_enabled() or self._nft_table_exists() or self._listening(ports):
                 raise Refusal("Cleanup verification did not reach the disabled/inactive/absent state.")
             # A systemd daemon-reload can expose a foreign replacement unit
             # under the same name. Never issue a clean-host proof while any
             # effective definition is still loaded, even if inactive.
             self._assert_no_loaded_same_name_unit()
+            if setup_journal is None:
+                self._require_unjournaled_legacy_safe()
             # Preserve the v2 ownership claim until final host checks pass;
             # a foreign unit discovered after daemon-reload must remain
             # diagnosable and must not be mistaken for an unclaimed draft.
             if managed:
-                self.layout.evidence(self.relay, ".managed.json").unlink()
+                self._unlink_owned_durable(self.layout.evidence(self.relay, ".managed.json"))
             # Keep the UID-bound root-owned Setup journal through ALL service,
             # keydir and account removal, and through final listener/systemd/
             # nft checks. If power is lost after managed-claim deletion but
             # before journal deletion, the pre-claim rollback path can resume.
             if setup_journal is not None:
-                self.layout.evidence(self.relay, ".setup.json").unlink()
+                self._unlink_owned_durable(self.layout.evidence(self.relay, ".setup.json"))
+            # The previous action might have crashed immediately after an
+            # unlink and before its directory fsync. On retry, that path is
+            # already absent in memory: flush ALL affected durable namespaces
+            # again before changing the generation or issuing a receipt.
+            for parent in (
+                self.layout.unit(self.relay).parent,
+                self.layout.key_dir(self.relay).parent,
+                self.layout.evidence_dir,
+            ):
+                if self._owned(parent, True):
+                    self._fsync_directory(parent)
             generation = self._advance_generation("retired")
             self._receipt(generation)
             return ("RETIREMENT VERIFIED for Gateway Relay " + self.relay.relay_id
@@ -1860,6 +1917,10 @@ class GatewaySetup(GatewayPolicyAudit):
             if not self._owned(lockpath):
                 raise Refusal("Unsafe Relay Setup lock ownership.")
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # A first-ever Gateway Setup has no /etc/mcp-gateway evidence
+            # namespace. Create and check it before the first atomic
+            # generation transition (which fsyncs the directory).
+            make_privileged_directory(self.layout.evidence_dir, self.layout, php_traversable=True)
             self._require_mutable_revision()
             generation = self._generation()
             if generation is None or generation["state"] == "retired":

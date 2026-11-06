@@ -135,7 +135,10 @@ Iran forwarding restrictions would violate the security boundary. Source
 support for operator-controlled activation and an independent trusted
 readiness issuer remains a separate acceptance requirement. `setup-gateway`
 is an idempotent scoped retry of the same configured state, **not** an override
-of foreign/malformed host state. The root-only `retire` command also
+of foreign/malformed host state. On a first-ever clean host, Setup creates
+and validates the root-owned evidence directory **before** advancing the
+provisioning generation; no precreated `/etc/mcp-gateway` namespace is assumed.
+The root-only `retire` command also
 supports a Setup interrupted **before** `.managed.json` was committed: an
 exact journal authorizes only a verified staged unit, pinned key materials
 and an exact one-rule nftables ACL; an unknown resource is preserved and
@@ -145,6 +148,25 @@ disappears, **before** attempting `userdel`; a recreated same-name account
 with a different UID is never deleted. The journal remains until final
 service/firewall/key/account cleanup is independently verified. Key files
 are removed in a crash-recoverable order, with the private key last.
+A managed claim **without** a Setup journal never authorizes cleanup of a
+possibly still-present dedicated SSH Unix account or unverified key files:
+the helper checks NSS and refuses any residual account or nonempty ambiguous
+key namespace **before** stopping the unit or mutating the firewall. An
+existing journal-backed account must first be retired with its exact saved
+UID; no successful cleanup receipt may conceal an orphaned identity.
+Legacy managed-only resources without a dedicated account or credential
+content remain retireable via the existing Gateway-only path. For crash
+durability, each credential unlink fsyncs its directory; removing the
+credential directory fsyncs its parent. Unit/persistence/managed-claim
+deletions, then Setup-journal deletion, each fsync their parent namespace.
+The journal is retained until dependent resource/account cleanup has been
+durably recorded. Before the final retired generation is recorded, all affected unit, private
+credential-parent and evidence namespaces are fsynced once more even on a
+retry that finds earlier file paths already absent. The final retired generation
+and retirement receipt are then written atomically with file and directory
+fsync barriers. If interrupted,
+the exact recorded generation and remaining resources are verified again on
+retry; no unverified identity is adopted or false receipt issued.
 Retirement then emits the normal Gateway-only cleanup receipt and supports
 the existing Delete/Rotate seal contract. It never contacts Iran. Incomplete
 or unknown host state is retained for explicit operator investigation, not

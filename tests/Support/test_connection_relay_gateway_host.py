@@ -280,9 +280,11 @@ class RetirementTests(unittest.TestCase):
             + " " + self.relay.relay_id + "\n[Unit]\nDescription=owned\n"
         )
         self.write_managed_claim()
+        # A legacy managed claim without the Setup UID journal may retire
+        # an empty, safely owned key namespace. Arbitrary legacy key bytes
+        # have no independent digest and must instead be preserved.
         keys = self.layout.key_dir(self.relay)
         keys.mkdir(mode=0o700)
-        (keys / "control_key").write_text("synthetic fixture key\n")
         policy = self.layout.evidence(self.relay, ".policy")
         policy.write_text("a" * 64)
         attestation = self.layout.evidence(self.relay, ".json")
@@ -2091,6 +2093,162 @@ class GatewayStagedSetupTests(unittest.TestCase):
                              for x in self.fake.calls))
         self.assertTrue(self.fake.user_created)
         self.assertTrue(self.setup.journal_path.exists())
+
+    def test_unjournaled_managed_with_surviving_ssh_user_is_not_retired(self):
+        self.setup.setup()
+        keydir = self.layout.key_dir(self.relay)
+        self.setup.journal_path.unlink()
+        self.setup.nft_path.unlink()
+        for entry in list(keydir.iterdir()):
+            entry.unlink()
+        keydir.rmdir()
+        self.fake.calls.clear()
+        with self.assertRaisesRegex(mod.Refusal, "account exists without UID-bound Setup journal"):
+            self.retirement.retire()
+        self.assertTrue(self.fake.user_created)
+        self.assertTrue(self.fake.nft)
+        self.assertTrue(self.layout.unit(self.relay).is_file())
+        self.assertTrue(self.layout.evidence(self.relay, ".managed.json").is_file())
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertFalse(any(command[:2] == ["/usr/sbin/userdel", self.relay.ssh_user]
+                             or command[:3] == ["nft", "delete", "table"]
+                             or command[:2] == ["systemctl", "disable"]
+                             for command in self.fake.calls))
+
+    def test_unjournaled_managed_without_account_preserves_ambiguous_credential_files(self):
+        self.setup.setup()
+        self.setup.journal_path.unlink()
+        self.setup.nft_path.unlink()
+        keydir = self.layout.key_dir(self.relay)
+        (keydir / "owner.json").unlink()
+        (keydir / "control_key").write_bytes(b"FOREIGN SECRET BYTES")
+        self.fake.user_created = False
+        self.fake.calls.clear()
+        with self.assertRaisesRegex(mod.Refusal, "Unjournaled Relay credential files"):
+            self.retirement.retire()
+        self.assertEqual(b"FOREIGN SECRET BYTES", (keydir / "control_key").read_bytes())
+        self.assertTrue(self.fake.nft)
+        self.assertTrue(self.layout.unit(self.relay).exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertFalse(any(command[:3] == ["nft", "delete", "table"] for command in self.fake.calls))
+
+    def test_unjournaled_legacy_empty_key_namespace_is_retireable(self):
+        self.setup.setup()
+        self.setup.journal_path.unlink()
+        self.setup.nft_path.unlink()
+        keydir = self.layout.key_dir(self.relay)
+        for entry in list(keydir.iterdir()):
+            entry.unlink()
+        self.fake.user_created = False
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertFalse(keydir.exists())
+        self.assertTrue(self.layout.evidence(self.relay, ".retired.json").exists())
+
+    def test_fresh_setup_creates_missing_evidence_directory_before_generation(self):
+        generation = self.layout.evidence(self.relay, ".generation.json")
+        generation.unlink()
+        self.layout.evidence_dir.rmdir()
+        self.layout.evidence_dir.parent.rmdir()
+        unrelated = self.layout.at("/etc/unrelated-service.conf")
+        unrelated.write_text("KEEP")
+        self.assertIn("NO READINESS ISSUED", self.setup.setup())
+        evidence = self.layout.evidence_dir
+        self.assertTrue(evidence.is_dir())
+        self.assertEqual(self.layout.owner_uid, evidence.stat().st_uid)
+        self.assertEqual(0o755, evidence.stat().st_mode & 0o777)
+        self.assertTrue(generation.is_file())
+        self.assertEqual("KEEP", unrelated.read_text())
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertEqual("KEEP", unrelated.read_text())
+
+    def test_durable_cleanup_syncs_each_file_and_parent_before_receipt(self):
+        self.setup.setup()
+        syncs = []
+        original = self.retirement._fsync_directory
+        def spy(path):
+            syncs.append(path)
+            return original(path)
+        with mock.patch.object(self.retirement, "_fsync_directory", side_effect=spy):
+            self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        keydir = self.layout.key_dir(self.relay)
+        evidence = self.layout.evidence_dir
+        self.assertGreaterEqual(syncs.count(keydir), 4)
+        self.assertIn(keydir.parent, syncs)  # keydir removal was made durable
+        self.assertGreaterEqual(syncs.count(evidence), 3)  # nft, claim, journal
+        self.assertIn(self.layout.unit(self.relay).parent, syncs)
+        self.assertTrue(self.layout.evidence(self.relay, ".retired.json").is_file())
+
+    def test_power_loss_at_managed_claim_fsync_keeps_journal_recoverable(self):
+        self.setup.setup()
+        evidence = self.layout.evidence_dir
+        claim = self.layout.evidence(self.relay, ".managed.json")
+        original = self.retirement._fsync_directory
+        def fail_after_claim_unlink(path):
+            if path == evidence and not claim.exists():
+                raise OSError("simulated power loss at managed-claim fsync")
+            return original(path)
+        with mock.patch.object(self.retirement, "_fsync_directory", side_effect=fail_after_claim_unlink):
+            with self.assertRaisesRegex(OSError, "managed-claim fsync"):
+                self.retirement.retire()
+        self.assertTrue(self.setup.journal_path.is_file())
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_power_loss_at_journal_fsync_does_not_issue_false_receipt(self):
+        self.setup.setup()
+        evidence = self.layout.evidence_dir
+        journal = self.setup.journal_path
+        original = self.retirement._fsync_directory
+        def fail_after_journal_unlink(path):
+            if path == evidence and not journal.exists():
+                raise OSError("simulated interruption at journal fsync")
+            return original(path)
+        with mock.patch.object(self.retirement, "_fsync_directory", side_effect=fail_after_journal_unlink):
+            with self.assertRaisesRegex(OSError, "journal fsync"):
+                self.retirement.retire()
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertFalse(self.fake.user_created)
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertTrue(self.layout.evidence(self.relay, ".retired.json").exists())
+
+    def test_final_namespace_fsync_failure_blocks_cleanup_receipt_and_recovers(self):
+        self.setup.setup()
+        systemd_parent = self.layout.unit(self.relay).parent
+        original = self.retirement._fsync_directory
+        seen = 0
+        def fail_final_flush(path):
+            nonlocal seen
+            if path == systemd_parent:
+                seen += 1
+                if seen == 2:
+                    raise OSError("simulated power loss at final namespace barrier")
+            return original(path)
+        with mock.patch.object(self.retirement, "_fsync_directory", side_effect=fail_final_flush):
+            with self.assertRaisesRegex(OSError, "final namespace barrier"):
+                self.retirement.retire()
+        self.assertEqual(2, seen)
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertEqual("provisioning", self.retirement._generation()["state"])
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertTrue(self.layout.evidence(self.relay, ".retired.json").exists())
+
+    def test_power_loss_on_credential_fsync_keeps_original_uid_journal(self):
+        self.setup.setup()
+        keydir = self.layout.key_dir(self.relay)
+        original = self.retirement._fsync_directory
+        def fail_first_keyfile_fsync(path):
+            if path == keydir:
+                raise OSError("simulated power loss during credential fsync")
+            return original(path)
+        with mock.patch.object(self.retirement, "_fsync_directory", side_effect=fail_first_keyfile_fsync):
+            with self.assertRaisesRegex(OSError, "credential fsync"):
+                self.retirement.retire()
+        self.assertFalse(self.fake.user_created)
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
 
     def test_managed_claim_cannot_retire_without_ssh_uid_journal(self):
         self.setup.setup()
