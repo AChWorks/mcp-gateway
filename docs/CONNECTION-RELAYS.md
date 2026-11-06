@@ -255,7 +255,7 @@ installer, live SSH enrollment, or permission to change Production.
 
 For the current source candidate the exact Python helper SHA256 is:
 
-    556c33500ef335c4a96ea5e82d27d706b2f3e2b3cba8472689530b803cbcded9
+    989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
 
 **First install only**, from the directory containing the transferred public
 source file (the file may be untrusted; it is never executed there):
@@ -264,7 +264,7 @@ source file (the file may be untrusted; it is never executed there):
     set -euo pipefail
     umask 077
     source=$1
-    expected=556c33500ef335c4a96ea5e82d27d706b2f3e2b3cba8472689530b803cbcded9
+    expected=989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
     base=/usr/local/libexec
     directory=$base/mcp-gateway-iran-relay
     destination=$directory/connection-relay-iran.py
@@ -323,7 +323,7 @@ replace this with a direct sudo Python call.
     iran_relay_public() {
       /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
       set -euo pipefail
-      expected=556c33500ef335c4a96ea5e82d27d706b2f3e2b3cba8472689530b803cbcded9
+      expected=989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
       directory=/usr/local/libexec/mcp-gateway-iran-relay
       destination=$directory/connection-relay-iran.py
       trusted_dir() {
@@ -374,8 +374,12 @@ staging, inspection and retirement. Repeat with identical identity is
 idempotent; changed endpoints, keys, foreign files, symlinks and unsafe
 ownership refuse without adoption or cleanup. An interrupted retirement uses
 an exact durable retiring.json marker and can resume removing only the two
-owned public artifacts. Unexpected incomplete staging or a pending directory
-is intentionally **not** recursively deleted: inspect the exact root-owned
+owned public artifacts. If publication was interrupted after linkat but before
+a successful directory fsync, retry revalidates the existing marker's exact
+content, trusted inode and parent and fsyncs both marker and stage directory
+*before* unlinking any public artifact; failed synchronization refuses deletion.
+Unexpected incomplete staging or a pending directory is intentionally **not**
+recursively deleted: inspect the exact root-owned
 namespace before any separately approved recovery.
 
 No Linux SSH principal is created, no authorized_keys or sshd configuration

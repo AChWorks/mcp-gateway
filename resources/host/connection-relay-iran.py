@@ -307,6 +307,50 @@ def publish_retiring_marker(stage: Path, snapshot: Snapshot, layout: Layout) -> 
         os.close(fd)
 
 
+def sync_existing_retiring_marker(stage: Path, snapshot: Snapshot, layout: Layout) -> None:
+    """Re-establish the retry durability barrier before unlinking public artifacts.
+
+    An earlier linkat may have succeeded even when the directory fsync failed.
+    A visible, content-matching marker is therefore not proof of a durable
+    directory entry. Re-fsync its exact trusted inode and parent on every retry.
+    """
+    marker = stage / "retiring.json"
+    expected_bytes = _encode(snapshot.owner_record())
+    marker_fd = os.open(
+        marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+    )
+    try:
+        owned(marker, layout, False)
+        actual = os.fstat(marker_fd)
+        named = marker.lstat()
+        if (not stat.S_ISREG(actual.st_mode)
+            or actual.st_uid != layout.owner_uid
+            or actual.st_mode & 0o777 != 0o600
+            or (actual.st_dev, actual.st_ino) != (named.st_dev, named.st_ino)
+            or actual.st_size != len(expected_bytes)
+            or os.read(marker_fd, len(expected_bytes) + 1) != expected_bytes):
+            raise Refusal("Existing retirement marker identity or contents changed.")
+        os.fsync(marker_fd)
+        stage_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            owned(stage, layout, True)
+            current_stage = os.fstat(stage_fd)
+            named_stage = stage.lstat()
+            current_marker = marker.lstat()
+            if ((current_stage.st_dev, current_stage.st_ino)
+                != (named_stage.st_dev, named_stage.st_ino)
+                or current_stage.st_uid != layout.owner_uid
+                or current_stage.st_mode & 0o777 != 0o700
+                or (actual.st_dev, actual.st_ino)
+                != (current_marker.st_dev, current_marker.st_ino)):
+                raise Refusal("Retirement marker namespace changed before durability sync.")
+            os.fsync(stage_fd)
+        finally:
+            os.close(stage_fd)
+    finally:
+        os.close(marker_fd)
+
+
 def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
     if os.geteuid() != layout.owner_uid:
         raise Refusal("Iran Relay staging requires explicit root execution.")
@@ -340,7 +384,9 @@ def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
                 return "EMPTY IRAN PUBLIC STAGE RETIRED. No live SSH policy was touched."
             exact_stage(snapshot, layout, allow_retiring=True)
             marker = stage / "retiring.json"
-            if not marker.exists():
+            if marker.exists():
+                sync_existing_retiring_marker(stage, snapshot, layout)
+            else:
                 publish_retiring_marker(stage, snapshot, layout)
             # A crash after the marker is durable can safely resume deletion
             # of only the two exact public staging files, never unknown files.

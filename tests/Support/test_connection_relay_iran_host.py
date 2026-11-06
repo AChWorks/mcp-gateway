@@ -321,6 +321,91 @@ class IranOfflinePublicStageTests(unittest.TestCase):
                          {p.name for p in stage.iterdir()})
         self.assertIn("STAGE RETIRED", self.retire())
 
+    def _retry_with_unproven_marker_directory_sync(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        native_fsync = mod.os.fsync
+        stage_identity = (stage.stat().st_dev, stage.stat().st_ino)
+
+        def fail_first_marker_directory_sync(fd):
+            info = os.fstat(fd)
+            if ((info.st_dev, info.st_ino) == stage_identity
+                and (stage / "retiring.json").exists()):
+                raise OSError("simulated directory fsync failure after linkat")
+            return native_fsync(fd)
+
+        with mock.patch.object(mod.os, "fsync", side_effect=fail_first_marker_directory_sync):
+            with self.assertRaisesRegex(OSError, "directory fsync failure after linkat"):
+                self.retire()
+        self.assertEqual(
+            {"control_key.pub", "owner.json", "retiring.json"},
+            {item.name for item in stage.iterdir()},
+        )
+        self.assertEqual(
+            mod._encode(self.snapshot.owner_record()),
+            (stage / "retiring.json").read_bytes(),
+        )
+        return stage
+
+    def test_retirement_retry_reestablishes_marker_durability_before_first_unlink(self):
+        stage = self._retry_with_unproven_marker_directory_sync()
+        marker = stage / "retiring.json"
+        marker_info, stage_info = marker.stat(), stage.stat()
+        marker_identity = (marker_info.st_dev, marker_info.st_ino)
+        stage_identity = (stage_info.st_dev, stage_info.st_ino)
+        native_fsync = mod.os.fsync
+        native_unlink = Path.unlink
+        events = []
+
+        def trace_fsync(fd):
+            info = os.fstat(fd)
+            identity = (info.st_dev, info.st_ino)
+            if identity == marker_identity:
+                events.append("marker_fsync")
+            if identity == stage_identity:
+                events.append("stage_fsync")
+            return native_fsync(fd)
+
+        def trace_unlink(path, *args, **kwargs):
+            if path == stage / "control_key.pub":
+                events.append("first_unlink")
+            return native_unlink(path, *args, **kwargs)
+
+        with (mock.patch.object(mod.os, "fsync", side_effect=trace_fsync),
+              mock.patch.object(Path, "unlink", new=trace_unlink)):
+            self.assertIn("STAGE RETIRED", self.retire())
+        self.assertLess(events.index("marker_fsync"), events.index("stage_fsync"))
+        self.assertLess(events.index("stage_fsync"), events.index("first_unlink"))
+        self.assertFalse(stage.exists())
+
+    def test_retirement_retry_fsync_failure_preserves_public_artifacts(self):
+        stage = self._retry_with_unproven_marker_directory_sync()
+        marker = stage / "retiring.json"
+        marker_info, stage_info = marker.stat(), stage.stat()
+        identities = {
+            "marker": (marker_info.st_dev, marker_info.st_ino),
+            "directory": (stage_info.st_dev, stage_info.st_ino),
+        }
+        before = {name: (stage / name).read_bytes()
+                  for name in ("control_key.pub", "owner.json", "retiring.json")}
+        native_fsync = mod.os.fsync
+
+        for boundary in ("marker", "directory"):
+            with self.subTest(boundary=boundary):
+                def fail_retry_sync(fd):
+                    info = os.fstat(fd)
+                    if (info.st_dev, info.st_ino) == identities[boundary]:
+                        raise OSError("simulated retry fsync failure")
+                    return native_fsync(fd)
+
+                with mock.patch.object(mod.os, "fsync", side_effect=fail_retry_sync):
+                    with self.assertRaisesRegex(OSError, "simulated retry fsync failure"):
+                        self.retire()
+                self.assertEqual(before, {name: (stage / name).read_bytes()
+                                          for name in before})
+        self.assertIn("STAGE RETIRED", self.retire())
+        self.assertFalse(stage.exists())
+
     def test_retirement_crash_at_each_artifact_boundary_recovers(self):
         native_unlink = Path.unlink
         for boundary in ("control_key.pub", "owner.json", "retiring.json"):
