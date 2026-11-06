@@ -11,6 +11,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -816,7 +817,7 @@ class BootstrapShellTests(unittest.TestCase):
             "expected=__SHA__": "expected=" + shlex.quote(self.hash),
             "previous=__PREVIOUS__": "previous=" + shlex.quote(self.previous),
             "mode=__MODE__": "mode=" + ("upgrade" if upgrade else "install"),
-            "destination=/usr/local/sbin/mcp-gateway-relay":
+            "destination=__DESTINATION__":
                 "destination=" + shlex.quote(str(self.target)),
             "for parent in / /usr /usr/local /usr/local/sbin; do":
                 "for parent in " + shlex.quote(str(self.sbin)) + "; do",
@@ -884,6 +885,7 @@ class BootstrapShellTests(unittest.TestCase):
 
     def test_explicit_upgrade_requires_exact_known_predecessor_and_is_idempotent(self):
         self.target.write_bytes(self.previous_bytes)
+        self.target.chmod(0o755)
         first_inode = self.target.stat().st_ino
         # Cleanup/bootstrap never upgrades an existing, even known tool.
         refused = self.run_bash(self.script())
@@ -914,6 +916,7 @@ class BootstrapShellTests(unittest.TestCase):
 
     def test_upgrade_rejects_tampered_source_without_changing_known_old_tool(self):
         self.target.write_bytes(self.previous_bytes)
+        self.target.chmod(0o755)
         self.source.write_bytes(b"tampered source instead of pinned release\n")
         res = self.run_bash(self.script(upgrade=True))
         self.assertNotEqual(0, res.returncode)
@@ -987,6 +990,133 @@ class BootstrapShellTests(unittest.TestCase):
             self.sbin.chmod(0o700)
 
 
+
+
+
+class VerifiedOperatorInvocationTests(unittest.TestCase):
+    """Run the PHP-generated privileged operation body against isolated tools."""
+
+    def setUp(self):
+        self.installer = BootstrapShellTests("runTest")
+        self.installer.setUp()
+        self.addCleanup(self.installer.doCleanups)
+        self.old_bytes = b'#!/bin/sh\nprintf "OLD_VERIFIED\\n"\n'
+        self.new_bytes = b'#!/bin/sh\nprintf "NEW_VERIFIED\\n"\n'
+        self.installer.previous_bytes = self.old_bytes
+        self.installer.previous = hashlib.sha256(self.old_bytes).hexdigest()
+        self.installer.source.write_bytes(self.new_bytes)
+        self.installer.hash = hashlib.sha256(self.new_bytes).hexdigest()
+        self.installer.target.write_bytes(self.old_bytes)
+        self.installer.target.chmod(0o755)
+        self.lock = self.installer.sbin / ".helper-install.lock"
+
+    def invocation(self, expected: str) -> str:
+        php = (source.parents[2] / "app/Infrastructure/Connectors/Relay/"
+               "ConnectionRelayHostOperatorPlan.php").read_text()
+        match = re.search(r"\$verifiedScript = <<<'BASH'\n(.*?)\nBASH;", php, re.S)
+        self.assertIsNotNone(match)
+        body = match.group(1)
+        directory = shlex.quote(str(self.installer.sbin))
+        changes = {
+            "expected=__SHA__": "expected=" + shlex.quote(expected),
+            "destination=__DESTINATION__":
+                "destination=" + shlex.quote(str(self.installer.target)),
+            "lock=/run/mcp-gateway-relay-helper-install.lock":
+                "lock=" + shlex.quote(str(self.lock)),
+            "for parent in / /usr /usr/local /usr/local/sbin /run; do":
+                "for parent in " + directory + "; do",
+            'test "$(stat -c %u "$parent")" = 0':
+                'test "$(stat -c %u "$parent")" = ' + str(os.geteuid()),
+            'test "$(stat -c %u "$lock")" = 0':
+                'test "$(stat -c %u "$lock")" = ' + str(os.geteuid()),
+            'test "$(stat -c %u "$destination")" = 0':
+                'test "$(stat -c %u "$destination")" = ' + str(os.geteuid()),
+            '"$destination" __ACTION__': '"$destination" test-operation',
+        }
+        for before, after in changes.items():
+            self.assertIn(before, body)
+            body = body.replace(before, after)
+        return body
+
+    def run_script(self, body: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["bash", "-c", body], text=True,
+                              capture_output=True, check=False, timeout=5)
+
+    def test_upgrade_blocked_between_successful_digest_and_helper_execution(self):
+        # Exact race: command has verified the OLD digest, but has not yet
+        # invoked the OLD helper. An EXCLUSIVE installer must be blocked while
+        # the command still holds its SHARED installer lock.
+        marker = self.installer.root / "checked"
+        release = self.installer.root / "continue"
+        old_body = self.invocation(self.installer.previous)
+        old_body = old_body.replace(
+            '"$destination" test-operation',
+            'printf "DIGEST_CHECKED" > ' + shlex.quote(str(marker)) + '\n'
+            'while test ! -e ' + shlex.quote(str(release)) +
+            '; do sleep 0.02; done\n'
+            '"$destination" test-operation',
+        )
+        self.assertIn("DIGEST_CHECKED", old_body)
+        runner = subprocess.Popen(["bash", "-c", old_body],
+                                  stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True)
+        try:
+            for _ in range(100):
+                if marker.exists():
+                    break
+                if runner.poll() is not None:
+                    break
+                time.sleep(0.025)
+            self.assertTrue(marker.exists(), "Failed to reach the after-digest/ before-exec barrier.")
+            self.assertIsNone(runner.poll())
+            # Test the exact wait/refusal branch without a 15-second sleep.
+            upgrade = self.installer.script(upgrade=True).replace(
+                "flock -x -w 15 9", "flock -n 9"
+            )
+            refused = self.run_script(upgrade)
+            self.assertNotEqual(0, refused.returncode)
+            self.assertIn("Another Relay helper installer is active", refused.stderr)
+            self.assertEqual(self.old_bytes, self.installer.target.read_bytes())
+        finally:
+            release.touch()
+            stdout, stderr = runner.communicate(timeout=3)
+        self.assertEqual(0, runner.returncode, stderr)
+        self.assertEqual("OLD_VERIFIED", stdout.strip())
+        upgraded = self.run_script(self.installer.script(upgrade=True))
+        self.assertEqual(0, upgraded.returncode, upgraded.stderr)
+        self.assertEqual(self.new_bytes, self.installer.target.read_bytes())
+        # A stale command cannot run the new file based on its former digest.
+        stale = self.run_script(self.invocation(self.installer.previous))
+        self.assertNotEqual(0, stale.returncode)
+        self.assertNotIn("NEW_VERIFIED", stale.stdout)
+        self.assertIn("differs from the pinned release", stale.stderr)
+        fresh = self.run_script(self.invocation(self.installer.hash))
+        self.assertEqual(0, fresh.returncode, fresh.stderr)
+        self.assertEqual("NEW_VERIFIED", fresh.stdout.strip())
+
+    def test_correct_digest_without_executable_mode_never_reports_success(self):
+        self.installer.target.write_bytes(self.new_bytes)
+        self.installer.target.chmod(0o644)
+        attempt = self.run_script(self.invocation(self.installer.hash))
+        self.assertNotEqual(0, attempt.returncode)
+        self.assertIn("non-executable installed Gateway Relay helper", attempt.stderr)
+        self.assertNotIn("NEW_VERIFIED", attempt.stdout)
+        # A matching digest with wrong permissions must not be accepted by
+        # ordinary bootstrap or idempotent Upgrade either.
+        for upgrade in (False, True):
+            command = self.installer.script(upgrade=upgrade)
+            rejected = self.run_script(command)
+            self.assertNotEqual(0, rejected.returncode)
+            self.assertIn("invalid executable permissions", rejected.stderr)
+            self.assertEqual(self.new_bytes, self.installer.target.read_bytes())
+
+    def test_legacy_helper_with_wrong_executable_permissions_is_preserved(self):
+        self.installer.target.chmod(0o644)
+        rejected = self.run_script(self.installer.script(upgrade=True))
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("Previous helper has invalid executable permissions", rejected.stderr)
+        self.assertEqual(self.old_bytes, self.installer.target.read_bytes())
+        self.assertEqual(0o644, self.installer.target.stat().st_mode & 0o777)
 
 
 if __name__ == "__main__":

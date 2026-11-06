@@ -44,7 +44,7 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Explicit verified helper upgrade')
             ->assertSee('relay-retire-upgrade-'.$relay->getKey())
             ->assertSee('An unknown or modified binary is never replaced')
-            ->assertSee('/usr/bin/sudo /usr/bin/sha256sum --check --status')
+            ->assertSee('flock -s -w 15 9')
             ->assertSee('A disconnected Iran host NEVER blocks this action');
 
         // The real host evidence is issued only by a privileged host

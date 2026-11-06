@@ -166,7 +166,7 @@
                                 <div class="field">
                                     <label for="relay-retire-upgrade-{{ $relay->id }}">{{ __('Explicit verified helper upgrade — Gateway host only') }}</label>
                                     <textarea id="relay-retire-upgrade-{{ $relay->id }}" rows="5" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['upgrade'] }}</textarea>
-                                    <p class="field-help">{{ __('This is a separate authorized host-wide action, not part of ordinary Cleanup. Run only if the installed tool has the known previous SHA256 :previous. An unknown or modified binary is never replaced. Compare the destination SHA256 with the trusted release before retrying Cleanup. Do not overlap host operator operations.', ['previous' => $hostCommands[$relay->id]['upgrade_from_sha256']]) }}</p>
+                                    <p class="field-help">{{ __('This is a separate authorized host-wide action, not part of ordinary Cleanup. Run only if the installed tool has the known previous SHA256 :previous. An unknown or modified binary is never replaced. Before upgrading a legacy helper, stop issuing old commands and let all historical operator sessions finish; they do not hold the new shared lock. After upgrading, refresh this page and use only newly generated commands. Compare the destination SHA256 with the trusted release before retrying Cleanup.', ['previous' => $hostCommands[$relay->id]['upgrade_from_sha256']]) }}</p>
                                 </div>
                                 <div class="field">
                                     <label for="relay-retire-preflight-{{ $relay->id }}">{{ __('Optional read-only local preflight') }}</label>
