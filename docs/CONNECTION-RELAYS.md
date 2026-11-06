@@ -78,6 +78,50 @@ adoption or removal of the old permanent fence.
 against an authorized Root actor that deliberately writes host resources
 outside the helper. No release or real-host test has occurred.
 
+## Gateway-local privileged policy audit (source candidate; not installed)
+
+After a separately authorized host provisioning procedure creates root-owned
+Relay resources, the Admin disclosure **Audit installed Gateway-local policy
+(read-only)** provides a Relay/revision-bound command. It uses the same
+release-SHA256-verified privileged executable and shared installation lock as
+retirement; it neither provisions a service nor renews readiness evidence.
+Do not run it on Production before a separately approved host maintenance
+window and verified helper install/upgrade. An installed helper from the
+previous source requires the explicit reviewed upgrade procedure below.
+
+The operator command uses the current web PHP effective UID, not a
+user-editable value. It acquires the Relay lifecycle lock in shared mode
+(refusing an overlapping Setup/Retire/Seal), then requires:
+
+- A root-owned v2 resource claim, active generation, exact immutable Relay
+  identity and revision, root-owned service definition, and matching effective
+  systemd ExecStart.
+- A dedicated non-root SSH client principal with no login shell, exact
+  root-owned key directory and owner manifest, intact control key/known-host
+  material, and no unknown files. The running OpenSSH process actual Unix UID
+  must match the dedicated principal. The single live listener must be
+  bound to 127.0.0.1 on the exact port and owned by that systemd MainPID.
+- The claimed nftables inet table must have an actual output base chain whose
+  first rule rejects unrelated socket UIDs reaching the local SOCKS port on
+  loopback, covering IPv4 and IPv6. A misordered, missing, foreign or modified
+  rule cannot pass because a manifest digest exists. The service must be
+  active and enabled, with restricted User, NoNewPrivileges and PrivateTmp.
+
+Output is **GATEWAY LOCAL POLICY AUDIT PASS** or actionable **FAIL CLOSED**.
+Passing this check is deliberately NOT a readiness lease. The helper creates
+no policy marker or eleven-field readiness manifest and cannot itself set a
+Relay Ready/Enabled. Separate effective verification of the dedicated
+Gateway PHP-FPM/CLI UID and sibling-site isolation, Iran forwarding-only
+control account and permitted egress, SSH control connectivity, and actual
+Target authentication remains required. Setup, Update, Repair, trusted
+attestation issuer and real-host end-to-end acceptance are still unfinished.
+
+Root-only SSH private keys cannot be read by the unprivileged SSH service
+directly. A future host Setup must deliver the key via a trusted systemd
+credential mechanism (e.g. LoadCredential), without weakening its root-only
+storage, and verify its actual execution and authentication. Synthetic
+audit fixtures do not prove credential delivery or working SSH transport.
+
 ## Gateway-local retirement procedure (merged source, not deployed)
 
 The reviewed helper source is shipped with the normal release and update
@@ -101,7 +145,7 @@ one from a known older release. An older helper fails the current release
 SHA256 check until the Owner separately runs the **Explicit verified helper
 upgrade** command (under the collapsed installation/diagnostics section).
 The upgrade permits exactly one pinned predecessor digest,
-`369fe2369c23d19a3fc62ccf494cba3ff7bb91109fa14e92783873904a2d5364`
+`e0810d480ef43e278924422d9f478b804359313883fa4ec2abe8ca7fffb00efd`
 (the helper shipped with merged PR #286/#287), to be replaced with the
 current release-pinned source, only after the source bytes are copied to an
 isolated root-owned temporary inode and the copy matches the new SHA256.

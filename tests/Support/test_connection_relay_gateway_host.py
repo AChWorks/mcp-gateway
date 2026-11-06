@@ -1121,3 +1121,232 @@ class VerifiedOperatorInvocationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuditHost(FakeHost):
+    """Synthetic effective host evidence; never creates a real socket."""
+
+    def __init__(self, relay: mod.Relay):
+        super().__init__(relay)
+        self.active = True
+        self.enabled = True
+        self.nft = True
+        self.listener = True
+        self.php_uid = 1010
+        self.main_pid = 7654
+        self.user = "mcp-relay-test"
+        self.no_new_privileges = "yes"
+        self.private_tmp = "yes"
+        self.loopback_guard = True
+        self.chain_hook = "output"
+        self.listening_address = "127.0.0.1"
+        self.listener_pid = 7654
+
+    def nft_json(self) -> dict:
+        items = [
+            {"metainfo": {"version": "1.0"}},
+            {"table": {"family": "inet", "name": self.relay.firewall_table, "handle": 4}},
+            {"chain": {"family": "inet", "table": self.relay.firewall_table,
+                       "name": "output_guard", "handle": 5,
+                       "type": "filter", "hook": self.chain_hook,
+                       "prio": -150, "policy": "accept"}},
+            {"rule": {"family": "inet", "table": self.relay.firewall_table,
+                      "chain": "output_guard", "handle": 6,
+                      "expr": [
+                          {"match": {"left": {"meta": {"key": "oifname"}},
+                                     "op": "==", "right": "lo"}},
+                          {"match": {"left": {"payload": {"protocol": "tcp", "field": "dport"}},
+                                     "op": "==", "right": self.relay.local_port}},
+                          {"match": {"left": {"meta": {"key": "skuid"}},
+                                     "op": "!=" if self.loopback_guard else "==",
+                                     "right": self.php_uid}},
+                          {"reject": {"type": "icmpx", "expr": "admin-prohibited"}},
+                      ]}},
+        ]
+        return {"nftables": items}
+
+    def __call__(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if (argv[0] == "systemctl" and argv[1] == "show"
+                and argv[3].startswith("--property=MainPID,")):
+            self.calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, (
+                f"MainPID={self.main_pid}\nUser={self.user}\n"
+                f"NoNewPrivileges={self.no_new_privileges}\nPrivateTmp={self.private_tmp}\n"
+            ), "")
+        if argv == ["ss", "-H", "-lntp"]:
+            self.calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, (
+                f"LISTEN 0 128 {self.listening_address}:{self.relay.local_port}"
+                f" 0.0.0.0:* users:((\"ssh\",pid={self.listener_pid},fd=4))\n"
+            ) if self.listener else "", "")
+        return super().__call__(argv)
+
+
+class GatewayPolicyAuditTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+        self.relay = mod.Relay("iran-audit", "01JAE000000000000000000009", "e" * 64, 4, 46109)
+        self.layout = mod.Layout(root, os.geteuid())
+        for rel in ("etc/mcp-gateway/connection-relays", "etc/systemd/system",
+                    "var/lib/mcp-gateway-relays", "run/mcp-gateway-relays"):
+            path = root / rel
+            path.mkdir(mode=0o755, parents=True, exist_ok=True)
+        self.fake = AuditHost(self.relay)
+        self.fake.unit_path = self.layout.unit(self.relay)
+        self.op = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        self.layout.lock_path(self.relay).write_text("", encoding="ascii")
+        keydir = self.layout.key_dir(self.relay)
+        keydir.mkdir(mode=0o700)
+        (keydir / "control_key").write_text("synthetic root-owned PRIVATE fixture only")
+        (keydir / "control_key").chmod(0o600)
+        (keydir / "control_key.pub").write_text("ssh-ed25519 synthetic-fixture")
+        (keydir / "known_hosts").write_text("[192.0.2.1]:22 ssh-ed25519 synthetic-fixture")
+        (keydir / "owner.json").write_text(json.dumps({
+            "version": 1,
+            "relay_record_id": self.relay.record_id, "relay_id": self.relay.relay_id,
+            "ssh_user": "mcp-relay-test", "ssh_uid": 1500, "gateway_php_uid": 1010,
+            "control_key_sha256": hashlib.sha256((keydir / "control_key").read_bytes()).hexdigest(),
+            "known_hosts_sha256": hashlib.sha256((keydir / "known_hosts").read_bytes()).hexdigest(),
+        }))
+        (self.layout.at("/proc/7654")).mkdir(parents=True)
+        (self.layout.at("/proc/7654/status")).write_text("Name:\tssh\nUid:\t1500\t1500\t1500\t1500\n")
+        (self.layout.at("/proc/7654/exe")).symlink_to("/usr/bin/ssh")
+        from types import SimpleNamespace
+        patcher = mock.patch.object(mod.pwd, "getpwnam", return_value=SimpleNamespace(
+            pw_uid=1500, pw_shell="/usr/sbin/nologin",
+        ))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.layout.unit(self.relay).write_text(
+            f"# MCP-GATEWAY-CONNECTION-RELAY {self.relay.record_id} {self.relay.relay_id}\n"
+            "[Service]\nExecStart=/usr/bin/ssh -D 127.0.0.1:46109\n",
+        )
+        generation = self.op._advance_generation("provisioning")
+        self.layout.evidence(self.relay, ".managed.json").write_text(json.dumps({
+            "version": 2,
+            "relay_record_id": self.relay.record_id,
+            "relay_id": self.relay.relay_id,
+            "service_unit": self.relay.unit_name,
+            "firewall_table": self.relay.firewall_table,
+            "local_socks_port": self.relay.local_port,
+            "host_fingerprint": self.relay.fingerprint,
+            "configuration_revision": self.relay.revision,
+            "host_generation": generation,
+            "unit_sha256": hashlib.sha256(self.layout.unit(self.relay).read_bytes()).hexdigest(),
+            "unit_exec_sha256": hashlib.sha256(
+                mod.Retirement._canonical_exec(self.fake.exec_start).encode(),
+            ).hexdigest(),
+            "firewall_sha256": self.op._nft_policy_digest(),
+        }))
+
+    def test_valid_local_host_checks_do_not_issue_false_ready_attestation(self):
+        self.assertIn("GATEWAY LOCAL POLICY AUDIT PASS", self.op.audit(1010))
+        self.assertFalse(self.layout.evidence(self.relay, ".json").exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".policy").exists())
+        self.assertEqual([], [cmd for cmd in self.fake.calls if cmd[0] in ("ssh", "curl", "nft") and cmd[0:2] == ["nft", "add"]])
+
+    def test_wrong_php_uid_or_unrestricted_acl_is_refused(self):
+        with self.assertRaisesRegex(mod.Refusal, "key ownership record"):
+            self.op.audit(1011)
+        self.fake.loopback_guard = False
+        self.op._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), {
+            **self.op._manifest(),
+            "firewall_sha256": self.op._nft_policy_digest(),
+        })
+        with self.assertRaisesRegex(mod.Refusal, "unrelated UIDs"):
+            self.op.audit(1010)
+
+    def test_ipv6_unsafe_input_chain_and_wrong_listener_both_fail(self):
+        self.fake.chain_hook = "input"
+        self.op._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), {
+            **self.op._manifest(), "firewall_sha256": self.op._nft_policy_digest(),
+        })
+        with self.assertRaisesRegex(mod.Refusal, "base-chain hook"):
+            self.op.audit(1010)
+        self.fake.chain_hook = "output"
+        self.fake.listening_address = "0.0.0.0"
+        self.op._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), {
+            **self.op._manifest(), "firewall_sha256": self.op._nft_policy_digest(),
+        })
+        with self.assertRaisesRegex(mod.Refusal, "bound beyond IPv4 loopback"):
+            self.op.audit(1010)
+
+    def test_unknown_identity_unowned_service_and_wrong_listener_pid_fail(self):
+        self.fake.user = "www-data"
+        with self.assertRaisesRegex(mod.Refusal, "restricted principal"):
+            self.op.audit(1010)
+        self.fake.user = "mcp-relay-test"
+        self.fake.listener_pid = 9999
+        with self.assertRaisesRegex(mod.Refusal, "systemd MainPID"):
+            self.op.audit(1010)
+        self.fake.listener_pid = 7654
+        self.layout.unit(self.relay).write_text("OTHER UNIT")
+        with self.assertRaisesRegex(mod.Refusal, "systemd unit"):
+            self.op.audit(1010)
+
+    def test_active_retirement_lock_blocks_audit(self):
+        fd = os.open(self.layout.lock_path(self.relay), os.O_RDONLY)
+        try:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(mod.Refusal, "maintenance is active"):
+                self.op.audit(1010)
+        finally:
+            os.close(fd)
+
+    def test_root_audit_refuses_hidden_process_privileges(self):
+        self.layout.at("/proc/7654/status").write_text(
+            "Name:\tssh\nUid:\t0\t1500\t0\t1500\n"
+        )
+        with self.assertRaisesRegex(mod.Refusal, "process does not match"):
+            self.op.audit(1010)
+
+    def test_owner_keys_fail_when_modified_without_claim_update(self):
+        (self.layout.key_dir(self.relay) / "known_hosts").write_text("tampered host identity")
+        with self.assertRaisesRegex(mod.Refusal, "key ownership record"):
+            self.op.audit(1010)
+
+    def test_unrecognized_credential_namespace_or_weak_private_mode_refuses(self):
+        keydir = self.layout.key_dir(self.relay)
+        (keydir / "unexpected").write_text("foreign secret")
+        with self.assertRaisesRegex(mod.Refusal, "Unknown or unsafe Relay private file"):
+            self.op.audit(1010)
+        (keydir / "unexpected").unlink()
+        (keydir / "control_key").chmod(0o644)
+        with self.assertRaisesRegex(mod.Refusal, "private key"):
+            self.op.audit(1010)
+
+    def test_claimed_firewall_policy_drift_blocks_positive_audit(self):
+        self.fake.loopback_guard = False
+        with self.assertRaisesRegex(mod.Refusal, "unowned or modified rules"):
+            self.op.audit(1010)
+
+    def test_retired_generation_and_delete_fence_both_block_audit(self):
+        self.op._advance_generation("retired")
+        with self.assertRaisesRegex(mod.Refusal, "provisioning"):
+            self.op.audit(1010)
+        current = self.op._advance_generation("provisioning")
+        self.op._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), {
+            **self.op._json(self.layout.evidence(self.relay, ".managed.json")),
+            "host_generation": current,
+        })
+        fence = self.layout.fence(self.relay)
+        mod.make_privileged_directory(fence.parent, self.layout, php_traversable=True)
+        self.op._write_json_atomic(fence, {
+            "version": 1,
+            "relay_record_id": self.relay.record_id,
+            "relay_id": self.relay.relay_id,
+            "host_fingerprint": self.relay.fingerprint,
+            "configuration_revision": self.relay.revision,
+            "host_generation": current,
+            "intent": "delete",
+        })
+        with self.assertRaisesRegex(mod.Refusal, "fence"):
+            self.op.audit(1010)
+
+    def test_missing_install_claim_refuses_without_root_mutation(self):
+        self.layout.evidence(self.relay, ".managed.json").unlink()
+        with self.assertRaisesRegex(mod.Refusal, "claim"):
+            self.op.audit(1010)
