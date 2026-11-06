@@ -104,7 +104,7 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertSee('Degraded — routing blocked')
             ->assertSee('Bound Target operations fail closed')
             ->assertSee('disable this Relay now')
-            ->assertSee('Retry the exact scoped Gateway Setup command')
+            ->assertSee('Gateway Repair is not available yet')
             ->assertSee('a permanently fenced record must never be reprovisioned');
 
         $this->post($path.'/'.$relay->id.'/toggle', [
