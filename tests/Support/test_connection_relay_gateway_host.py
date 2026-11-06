@@ -1267,6 +1267,7 @@ class GatewayPolicyAuditTests(unittest.TestCase):
         from types import SimpleNamespace
         principal = SimpleNamespace(
             pw_uid=1500, pw_name=self.relay.ssh_user, pw_shell="/usr/sbin/nologin",
+            pw_gecos="",
         )
         self.nss = principal
         for name in ("getpwnam", "getpwuid", "getpwall"):
@@ -1604,6 +1605,7 @@ class StagedSetupHost(AuditHost):
         self.listener = False
         self.stopped = False
         self.user_created = False
+        self.account_marker = ""
         self.nft_mutations = 0
         self.setup_fail_command = None
 
@@ -1613,6 +1615,7 @@ class StagedSetupHost(AuditHost):
             if self.setup_fail_command == "useradd":
                 return subprocess.CompletedProcess(argv, 1, "", "simulated useradd failure")
             self.user_created = True
+            self.account_marker = argv[argv.index("--comment") + 1]
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv[:3] == ["/usr/bin/ssh-keygen", "-q", "-t"]:
             self.calls.append(argv)
@@ -1683,10 +1686,11 @@ class GatewayStagedSetupTests(unittest.TestCase):
         )
         def getpwnam(name):
             if self.fake.user_created and name == self.relay.ssh_user:
+                self.principal.pw_gecos = self.fake.account_marker
                 return self.principal
             raise KeyError(name)
         def getpwuid(uid):
-            if self.fake.user_created and uid == 1500:
+            if self.fake.user_created and uid == self.principal.pw_uid:
                 return self.principal
             raise KeyError(uid)
         for name, side_effect in (
@@ -1709,6 +1713,16 @@ class GatewayStagedSetupTests(unittest.TestCase):
             self.endpoint[2], self.pin if host_key is None else host_key,
             self.uid, self.layout, self.fake,
         )
+
+    def test_useradd_comment_is_valid_passwd_gecos_without_colon(self):
+        self.setup.setup()
+        account_create = next(x for x in self.fake.calls if x[:2] == ["/usr/sbin/useradd", "--system"])
+        marker = account_create[account_create.index("--comment") + 1]
+        self.assertTrue(marker.startswith("mcp-gateway-relay-"))
+        self.assertNotIn(":", marker)
+        self.assertNotIn("\\n", marker)
+        self.assertEqual(self.fake.account_marker, marker)
+        self.assertEqual(self.retirement._generation()["host_generation"], marker.split("-")[-1])
 
     def test_one_command_stages_new_registration_without_separate_prepare(self):
         generation = self.layout.evidence(self.relay, ".generation.json")
@@ -1884,6 +1898,282 @@ class GatewayStagedSetupTests(unittest.TestCase):
             verifier.ensure(self.uid)
         self.assertEqual(2, self.fake.nft_mutations)
         self.fake.extra_acl = None
+
+    def _assert_partial_rollback(self):
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertFalse(self.layout.evidence(self.relay, ".managed.json").exists())
+        # Even a failed halfway Setup must be retireable without Iran contact
+        # and without leaving a privileged UID or an orphaned firewall table.
+        self.fake.setup_fail_command = None
+        self.fake.fail_daemon_reload = False
+        result = self.retirement.retire()
+        self.assertIn("RETIREMENT VERIFIED", result)
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.layout.unit(self.relay).exists())
+        self.assertFalse(self.layout.key_dir(self.relay).exists())
+        self.assertFalse(self.setup.journal_path.exists())
+        self.assertFalse(self.setup.nft_path.exists())
+        self.assertFalse(self.fake.nft)
+        self.assertFalse(self.fake.active)
+        self.assertFalse(self.fake.enabled)
+        self.assertTrue(self.layout.evidence(self.relay, ".retired.json").exists())
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.retirement.seal("delete"))
+        with self.assertRaisesRegex(mod.Refusal, "permanently fenced"):
+            self.setup.setup()
+
+    def test_partial_setup_useradd_failure_retirement_and_seal(self):
+        self.fake.setup_fail_command = "useradd"
+        with self.assertRaisesRegex(mod.Refusal, "Unable to create"):
+            self.setup.setup()
+        self._assert_partial_rollback()
+
+    def test_partial_setup_keygen_failure_retirement_and_seal(self):
+        self.fake.setup_fail_command = "keygen"
+        with self.assertRaisesRegex(mod.Refusal, "generate"):
+            self.setup.setup()
+        self._assert_partial_rollback()
+
+    def test_orphaned_valid_public_key_after_interrupted_keygen_can_retire(self):
+        self.fake.setup_fail_command = "keygen"
+        with self.assertRaisesRegex(mod.Refusal, "generate"):
+            self.setup.setup()
+        public = self.layout.key_dir(self.relay) / "control_key.pub"
+        public.write_bytes(self.hostkey.with_suffix(".pub").read_bytes())
+        public.chmod(0o640)
+        self._assert_partial_rollback()
+
+    def test_orphaned_foreign_public_key_after_interrupted_keygen_is_preserved(self):
+        self.fake.setup_fail_command = "keygen"
+        with self.assertRaisesRegex(mod.Refusal, "generate"):
+            self.setup.setup()
+        public = self.layout.key_dir(self.relay) / "control_key.pub"
+        public.write_text("foreign material, not an Ed25519 key")
+        with self.assertRaisesRegex(mod.Refusal, "Unrecognized orphaned"):
+            self.retirement.retire()
+        self.assertTrue(public.is_file())
+        self.assertTrue(self.fake.user_created)
+
+    def test_partial_setup_unit_write_failure_retirement_and_seal(self):
+        original = self.setup._write_exact
+        def fail_unit(path, content, mode):
+            if path.name == self.relay.unit_name:
+                raise OSError("synthetic interrupted unit creation")
+            return original(path, content, mode)
+        with mock.patch.object(self.setup, "_write_exact", side_effect=fail_unit):
+            with self.assertRaisesRegex(OSError, "unit creation"):
+                self.setup.setup()
+        self._assert_partial_rollback()
+
+    def test_partial_setup_daemon_reload_failure_retirement_and_seal(self):
+        self.fake.fail_daemon_reload = True
+        with self.assertRaisesRegex(mod.Refusal, "reload"):
+            self.setup.setup()
+        self._assert_partial_rollback()
+
+    def test_partial_setup_nft_load_failure_retirement_and_seal(self):
+        self.fake.setup_fail_command = "nft"
+        with self.assertRaisesRegex(mod.Refusal, "nftables ACL"):
+            self.setup.setup()
+        self._assert_partial_rollback()
+
+    def test_partial_setup_claim_write_failure_retirement_and_seal(self):
+        original = self.setup._write_exact
+        def fail_managed(path, content, mode):
+            if path.name.endswith(".managed.json"):
+                raise OSError("synthetic interrupted managed claim")
+            return original(path, content, mode)
+        with mock.patch.object(self.setup, "_write_exact", side_effect=fail_managed):
+            with self.assertRaisesRegex(OSError, "managed claim"):
+                self.setup.setup()
+        self.assertTrue(self.fake.nft)
+        self._assert_partial_rollback()
+
+    def test_power_cut_between_useradd_and_recording_uid_recovers_without_adoption(self):
+        original = self.setup._write_json_atomic
+        def fail_uid(path, content):
+            if path == self.setup.journal_path and content.get("ssh_uid") is not None:
+                raise OSError("synthetic crash before durable UID journal")
+            return original(path, content)
+        with mock.patch.object(self.setup, "_write_json_atomic", side_effect=fail_uid):
+            with self.assertRaisesRegex(OSError, "durable UID"):
+                self.setup.setup()
+        self.assertTrue(self.fake.user_created)
+        self.assertIsNone(self.retirement._json(self.setup.journal_path)["ssh_uid"])
+        self._assert_partial_rollback()
+
+    def test_partial_setup_retry_does_not_adopt_different_generation_account(self):
+        self.fake.setup_fail_command = "keygen"
+        with self.assertRaises(mod.Refusal):
+            self.setup.setup()
+        self.fake.account_marker = "a foreign identity marker"
+        self.fake.setup_fail_command = None
+        with self.assertRaisesRegex(mod.Refusal, "generation/UID claim"):
+            self.setup.setup()
+        with self.assertRaisesRegex(mod.Refusal, "replaced/unclaimed"):
+            self.retirement.retire()
+        self.assertFalse(any(x[:2] == ["/usr/sbin/userdel", self.relay.ssh_user] for x in self.fake.calls))
+        self.assertTrue(self.setup.journal_path.exists())
+
+    def test_partial_setup_foreign_keyfile_and_sibling_relay_are_preserved(self):
+        self.fake.setup_fail_command = "keygen"
+        with self.assertRaises(mod.Refusal):
+            self.setup.setup()
+        sibling = self.root / "var/lib/mcp-gateway-relays" / "unrelated-relay"
+        sibling.mkdir()
+        foreign = sibling / "owned-by-other"
+        foreign.write_text("KEEP OTHER RELAY")
+        intruder = self.layout.key_dir(self.relay) / "foreign.txt"
+        intruder.write_text("KEEP UNKNOWN")
+        with self.assertRaisesRegex(mod.Refusal, "Foreign file"):
+            self.retirement.retire()
+        self.assertEqual("KEEP UNKNOWN", intruder.read_text())
+        self.assertEqual("KEEP OTHER RELAY", foreign.read_text())
+        self.assertTrue(self.fake.user_created)
+        intruder.unlink()
+        self._assert_partial_rollback()
+        self.assertEqual("KEEP OTHER RELAY", foreign.read_text())
+
+    def test_replaced_same_name_uid_is_preserved_and_userdel_not_run(self):
+        self.setup.setup()
+        self.assertEqual(1500, self.retirement._json(self.setup.journal_path)["ssh_uid"])
+        self.principal.pw_uid = 1555
+        self.fake.calls.clear()
+        with self.assertRaisesRegex(mod.Refusal, "replaced/unclaimed"):
+            self.retirement.retire()
+        self.assertFalse(any(x[:2] == ["/usr/sbin/userdel", self.relay.ssh_user] for x in self.fake.calls))
+        self.assertTrue(self.fake.user_created)
+        self.assertTrue(self.layout.unit(self.relay).exists())
+        self.assertTrue(self.fake.nft)
+        self.assertTrue((self.layout.key_dir(self.relay) / "owner.json").exists())
+
+    def test_crash_after_userdel_before_keydir_cleanup_is_recoverable(self):
+        self.setup.setup()
+        original = self.retirement._delete_setup_keydir
+        with mock.patch.object(self.retirement, "_delete_setup_keydir", side_effect=OSError("crash after userdel")):
+            with self.assertRaisesRegex(OSError, "crash after userdel"):
+                self.retirement.retire()
+        self.assertFalse(self.fake.user_created)
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertEqual(1500, self.retirement._json(self.setup.journal_path)["ssh_uid"])
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_crash_mid_keyfile_deletion_recovers_with_private_key_retained(self):
+        self.setup.setup()
+        keydir = self.layout.key_dir(self.relay)
+        def crash_after_public_key_removed():
+            (keydir / "owner.json").unlink()
+            (keydir / "control_key.pub").unlink()
+            raise OSError("power failed during staged key material cleanup")
+        with mock.patch.object(self.retirement, "_delete_setup_keydir",
+                               side_effect=crash_after_public_key_removed):
+            with self.assertRaisesRegex(OSError, "power failed"):
+                self.retirement.retire()
+        self.assertFalse(self.fake.user_created)
+        self.assertTrue((keydir / "control_key").is_file())
+        self.assertTrue((keydir / "known_hosts").is_file())
+        self.assertTrue(self.setup.journal_path.exists())
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertFalse(keydir.exists())
+        self.assertFalse(self.setup.journal_path.exists())
+
+    def test_replaced_uid_is_rejected_even_if_keydir_was_removed_after_crash(self):
+        self.setup.setup()
+        keydir = self.layout.key_dir(self.relay)
+        for entry in keydir.iterdir():
+            entry.unlink()
+        keydir.rmdir()
+        self.principal.pw_uid = 2200
+        self.fake.calls.clear()
+        with self.assertRaisesRegex(mod.Refusal, "replaced/unclaimed"):
+            self.retirement.retire()
+        self.assertFalse(any(x[:2] == ["/usr/sbin/userdel", self.relay.ssh_user]
+                             for x in self.fake.calls))
+        self.assertTrue(self.fake.user_created)
+        self.assertTrue(self.setup.journal_path.exists())
+
+    def test_managed_claim_cannot_retire_without_ssh_uid_journal(self):
+        self.setup.setup()
+        self.setup.journal_path.unlink()
+        # Even after an unrelated loss of the persistence file, the owner
+        # claim alone must never authorize SSH account deletion.
+        self.setup.nft_path.unlink()
+        self.fake.calls.clear()
+        with self.assertRaisesRegex(mod.Refusal, "principal claim survives"):
+            self.retirement.retire()
+        self.assertTrue(self.fake.user_created)
+        self.assertTrue(self.fake.nft)
+        self.assertTrue(self.layout.unit(self.relay).exists())
+
+    def test_foreign_acl_in_partial_stage_fails_without_unrelated_mutation(self):
+        original = self.setup._write_exact
+        def crash_before_claim(path, content, mode):
+            if path.name.endswith(".managed.json"):
+                raise OSError("simulated interruption")
+            return original(path, content, mode)
+        with mock.patch.object(self.setup, "_write_exact", side_effect=crash_before_claim):
+            with self.assertRaisesRegex(OSError, "interruption"):
+                self.setup.setup()
+        self.fake.extra_acl = [{"accept": None}]
+        self.fake.calls.clear()
+        with self.assertRaises(mod.Refusal):
+            self.retirement.retire()
+        self.assertFalse(any(x[:3] == ["nft", "delete", "table"] for x in self.fake.calls))
+        self.assertFalse(any(x[:2] == ["/usr/sbin/userdel", self.relay.ssh_user]
+                             for x in self.fake.calls))
+        self.assertTrue(self.fake.nft)
+        self.assertTrue(self.fake.user_created)
+        self.fake.extra_acl = None
+        self._assert_partial_rollback()
+
+    def test_cold_boot_recovers_missing_runtime_lock_and_acl_when_already_present(self):
+        self.setup.setup()
+        directory = self.layout.lock_path(self.relay).parent
+        self.layout.lock_path(self.relay).unlink()
+        directory.rmdir()
+        verifier = mod.GatewayAclRecovery(self.relay, self.layout, self.fake)
+        self.assertIn("VERIFIED", verifier.ensure(self.uid))
+        lock = self.layout.lock_path(self.relay)
+        self.assertTrue(lock.is_file())
+        self.assertEqual(self.layout.owner_uid, lock.stat().st_uid)
+        self.assertFalse(lock.stat().st_mode & 0o022)
+        self.assertEqual(1, self.fake.nft_mutations)
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.retirement.seal("delete"))
+        with self.assertRaises(mod.Refusal):
+            verifier.ensure(self.uid)
+
+    def test_cold_boot_recovers_absent_runtime_lock_and_absent_acl_under_same_lock(self):
+        self.setup.setup()
+        self.fake.nft = False
+        directory = self.layout.lock_path(self.relay).parent
+        self.layout.lock_path(self.relay).unlink()
+        directory.rmdir()
+        verifier = mod.GatewayAclRecovery(self.relay, self.layout, self.fake)
+        self.assertIn("RESTORED", verifier.ensure(self.uid))
+        self.assertEqual(2, self.fake.nft_mutations)
+        with self.assertRaisesRegex(mod.Refusal, "lifecycle maintenance"):
+            fd = os.open(self.layout.lock_path(self.relay), os.O_RDONLY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                verifier.ensure(self.uid)
+            finally:
+                os.close(fd)
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.retirement.seal("delete"))
+
+    def test_cold_boot_symlink_lock_refused_without_modifying_other_file(self):
+        self.setup.setup()
+        parent = self.layout.lock_path(self.relay).parent
+        destination = self.root / "foreign-root-lock"
+        destination.write_text("unrelated")
+        self.layout.lock_path(self.relay).unlink()
+        self.layout.lock_path(self.relay).symlink_to(destination)
+        verifier = mod.GatewayAclRecovery(self.relay, self.layout, self.fake)
+        with self.assertRaises((OSError, mod.Refusal)):
+            verifier.ensure(self.uid)
+        self.assertEqual("unrelated", destination.read_text())
+        self.assertEqual(1, self.fake.nft_mutations)
 
     def test_retirement_removes_scoped_service_identity_persistence_and_journal(self):
         self.setup.setup()

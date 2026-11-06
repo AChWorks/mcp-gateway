@@ -94,11 +94,16 @@ Under the **same exclusive per-Relay root lifecycle lock** as Cleanup/Seal,
 the stager checks the permanent Delete/Rotate fences and creates a new
 random root-owned generation **before** touching service, credentials or
 firewall. An exact root-owned `<relay-id>.setup.json` journal records the
-active generation and all nonsecret inputs before user creation. On retry,
-a journal with different registration, revision, PHP UID, endpoint or host
-key digest causes refusal. A pre-existing SSH principal without the journal
-is never adopted. An interrupted attempt can resume from the same generation
-without regenerating the control key or appending duplicate nftables rules.
+active generation, exact planned systemd unit digest, and all nonsecret inputs
+before user creation. Immediately after creating the non-login Unix identity,
+the helper durably binds its numeric UID to the journal; the passwd GECOS
+field carries the exact per-record/per-generation ownership marker so an
+interruption between useradd and journal update remains recoverable. On retry,
+a journal with different registration, revision, PHP UID, endpoint, host key
+digest or original SSH UID causes refusal. A pre-existing or replacement SSH
+principal without matching root-journal identity is never adopted. An
+interrupted attempt can resume from the same generation without regenerating
+the control key or appending duplicate nftables rules.
 Owner may retry the SAME `setup-gateway` command; `prepare-setup` remains a
 separate legacy generation-barrier action and must not be reissued over an
 active Setup journal.
@@ -111,13 +116,16 @@ OpenSSH uses a single `-D 127.0.0.1:<port>`, no session/proxy/jump,
 `NoNewPrivileges`, `PrivateTmp` and systemd `LoadCredential=` for the
 root-owned key and host pin. The staged unit's `ExecStartPre` invokes the
 same root-only installed helper's `ensure-acl` for reboot/restart recovery:
-it verifies the claimed table without mutation when present; in **both**
-the existing-table and missing-table paths it holds the same exclusive Relay
-lifecycle lock as Setup/Retire. When absent, it proves exact current
-journal/manifest/unit and policy-source identity before restoring that one
-table. Any drifted
-foreign rule, missing claim, changed unit or revoked generation fails
-closed; no `flush ruleset` or sibling Relay table is allowed.
+it securely recreates the **same root-owned per-Relay lock directory/file**
+when `/run` has been emptied by a reboot, never a separate lock or an
+unlocked fast path. Concurrent first-boot creation accepts only a previously
+created root-owned, non-writable directory. It verifies the claimed table
+without mutation when present; in **both** existing-table and missing-table
+paths it holds the same exclusive Relay lifecycle lock as Setup/Retire/Seal.
+When the table is absent, it proves exact current journal/manifest/unit and
+policy-source identity before restoring only that table. Any drifted foreign
+rule, missing claim, changed unit or revoked generation fails closed; no
+`flush ruleset` or sibling Relay table is allowed.
 
 The setup script intentionally leaves the new service **INACTIVE and
 DISABLED**, without executing a remote connection. The present Gateway may
@@ -127,11 +135,20 @@ Iran forwarding restrictions would violate the security boundary. Source
 support for operator-controlled activation and an independent trusted
 readiness issuer remains a separate acceptance requirement. `setup-gateway`
 is an idempotent scoped retry of the same configured state, **not** an override
-of foreign/malformed host state. Cleanup uses the existing Gateway-only
-retirement proof and additionally removes exact journal-owned persistence
-and the dedicated SSH account after positively proving no process still
-uses that UID. It never contacts Iran. Incomplete/unknown host state is
-retained for explicit operator investigation, not removed by generic purge.
+of foreign/malformed host state. The root-only `retire` command also
+supports a Setup interrupted **before** `.managed.json` was committed: an
+exact journal authorizes only a verified staged unit, pinned key materials
+and an exact one-rule nftables ACL; an unknown resource is preserved and
+rejected. Full or partial retirement verifies the original journal-bound
+numeric SSH UID (and generation marker), including after the key directory
+disappears, **before** attempting `userdel`; a recreated same-name account
+with a different UID is never deleted. The journal remains until final
+service/firewall/key/account cleanup is independently verified. Key files
+are removed in a crash-recoverable order, with the private key last.
+Retirement then emits the normal Gateway-only cleanup receipt and supports
+the existing Delete/Rotate seal contract. It never contacts Iran. Incomplete
+or unknown host state is retained for explicit operator investigation, not
+removed by generic purge.
 
 **NO READINESS IS ISSUED.** Neither a staged service nor even
 `GATEWAY LOCAL POLICY AUDIT PASS` proves an isolated production FPM/CLI
