@@ -1931,6 +1931,23 @@ class GatewayStagedSetupTests(unittest.TestCase):
             self.retirement.retire()
         self.assertTrue(self.fake.user_created)
 
+    def test_acl_guard_serializes_existing_table_verification_with_retirement(self):
+        self.setup.setup()
+        verifier = mod.GatewayAclRecovery(self.relay, self.layout, self.fake)
+        fd = os.open(self.layout.lock_path(self.relay), os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(mod.Refusal, "lifecycle maintenance"):
+                verifier.ensure(self.uid)
+            self.assertEqual(1, self.fake.nft_mutations)
+        finally:
+            os.close(fd)
+        self.assertIn("VERIFIED", verifier.ensure(self.uid))
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        with self.assertRaisesRegex(mod.Refusal, "no longer|provisioning|provisioned"):
+            verifier.ensure(self.uid)
+        self.assertFalse(self.fake.nft)
+
     def test_drifted_policy_file_fails_closed_without_loading(self):
         self.setup.setup()
         before = self.fake.nft_mutations

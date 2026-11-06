@@ -1289,34 +1289,12 @@ class GatewayAclRecovery(GatewayPolicyAudit):
     def ensure(self, php_uid: int) -> str:
         if os.geteuid() != self.layout.owner_uid or type(php_uid) is not int or php_uid <= 0:
             raise Refusal("Gateway ACL recovery requires dedicated PHP UID and root execution.")
-        self._require_mutable_revision()
-        managed = self._manifest()
-        if managed is None:
-            raise Refusal("No exact owned provisioned Relay claim for ACL recovery.")
-        journal = self._json(self.layout.evidence(self.relay, ".setup.json"), 4096)
-        if (journal.get("relay_record_id") != self.relay.record_id
-            or journal.get("relay_id") != self.relay.relay_id
-            or journal.get("configuration_revision") != self.relay.revision
-            or journal.get("host_fingerprint") != self.relay.fingerprint
-            or journal.get("host_generation") != managed["host_generation"]
-            or journal.get("gateway_php_uid") != php_uid):
-            raise Refusal("ACL recovery journal is inconsistent with current Relay ownership.")
-        nft_file = self.layout.evidence(self.relay, ".nft")
-        if not self._owned(nft_file) or nft_file.read_bytes() != nft_policy_source(self.relay, php_uid):
-            raise Refusal("Pinned root-owned Relay nftables source is missing or modified.")
-        if not self._owned(self.layout.unit(self.relay)):
-            raise Refusal("Missing root-owned Relay unit; do not reinstall its firewall blindly.")
-        if hashlib.sha256(self.layout.unit(self.relay).read_bytes()).hexdigest() != managed["unit_sha256"]:
-            raise Refusal("Relay unit changed while preparing nftables recovery.")
 
-        # Fast path is read-only: systemd may call ExecStartPre while Setup
-        # still holds the exclusive per-Relay lock. It must not deadlock.
-        if self._nft_table_exists():
-            if not self._verify_effective_nft(managed):
-                raise Refusal("Relay ACL does not match its provisioned digest.")
-            self._require_effective_acl(php_uid)
-            return "RELAY ACL VERIFIED: existing exact owned IPv4/IPv6 guard preserved."
-
+        # This helper is a systemd ExecStartPre command. The Setup action
+        # stages a DISABLED unit and never starts it, so there is no need
+        # for an unlocked fast path. Both the already-present and absent-
+        # table cases must serialize against Retirement/Seal/Setup to avoid
+        # a stale PASS while an external operator retires the Relay.
         lock = self.layout.lock_path(self.relay)
         owned_parents(lock.parent, self.layout)
         if not self._owned(lock):
@@ -1325,24 +1303,33 @@ class GatewayAclRecovery(GatewayPolicyAudit):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self._require_mutable_revision()
-            # Retirement may have completed between the initial read-only
-            # table-absence probe and acquiring the lifecycle lock. Re-read
-            # the claim and generation UNDER the lock; never recreate a table
-            # belonging to an already retired Relay.
-            fresh_managed = self._manifest()
-            if fresh_managed is None or fresh_managed != managed:
-                raise Refusal("Relay generation or managed claim changed during ACL recovery.")
-            if self._json(self.layout.evidence(self.relay, ".setup.json")) != journal:
-                raise Refusal("Relay Setup journal changed before ACL recovery.")
+            managed = self._manifest()
+            if managed is None:
+                raise Refusal("No exact owned provisioned Relay claim for ACL recovery.")
+            journal = self._json(self.layout.evidence(self.relay, ".setup.json"), 4096)
+            if (journal.get("relay_record_id") != self.relay.record_id
+                or journal.get("relay_id") != self.relay.relay_id
+                or journal.get("configuration_revision") != self.relay.revision
+                or journal.get("host_fingerprint") != self.relay.fingerprint
+                or journal.get("host_generation") != managed["host_generation"]
+                or journal.get("gateway_php_uid") != php_uid):
+                raise Refusal("ACL recovery journal is inconsistent with current Relay ownership.")
+            nft_file = self.layout.evidence(self.relay, ".nft")
             if not self._owned(nft_file) or nft_file.read_bytes() != nft_policy_source(self.relay, php_uid):
-                raise Refusal("Relay nftables file changed during locked ACL recovery.")
+                raise Refusal("Pinned root-owned Relay nftables source is missing or modified.")
+            unit = self.layout.unit(self.relay)
+            if not self._owned(unit) or hashlib.sha256(unit.read_bytes()).hexdigest() != managed["unit_sha256"]:
+                raise Refusal("Relay unit is missing or changed during ACL recovery.")
+
             if self._nft_table_exists():
                 if not self._verify_effective_nft(managed):
-                    raise Refusal("Relay ACL changed during guarded repair.")
-            else:
-                command = self.run(["/usr/sbin/nft", "-f", str(nft_file)])
-                if command.returncode != 0:
-                    raise Refusal("Could not restore exact Relay ACL: " + command.stderr[:140])
+                    raise Refusal("Relay ACL does not match its provisioned digest.")
+                self._require_effective_acl(php_uid)
+                return "RELAY ACL VERIFIED: existing exact owned IPv4/IPv6 guard preserved."
+
+            result = self.run(["/usr/sbin/nft", "-f", str(nft_file)])
+            if result.returncode != 0:
+                raise Refusal("Could not restore exact Relay ACL: " + result.stderr[:140])
             if not self._verify_effective_nft(managed):
                 raise Refusal("Restored Relay ACL differs from the claimed full policy.")
             self._require_effective_acl(php_uid)

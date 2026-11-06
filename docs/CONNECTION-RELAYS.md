@@ -111,9 +111,11 @@ OpenSSH uses a single `-D 127.0.0.1:<port>`, no session/proxy/jump,
 `NoNewPrivileges`, `PrivateTmp` and systemd `LoadCredential=` for the
 root-owned key and host pin. The staged unit's `ExecStartPre` invokes the
 same root-only installed helper's `ensure-acl` for reboot/restart recovery:
-it verifies the claimed table without mutation when present; when absent,
-it must hold the Relay lifecycle lock and prove exact journal/manifest/unit
-and policy-source identity before restoring that one table. Any drifted
+it verifies the claimed table without mutation when present; in **both**
+the existing-table and missing-table paths it holds the same exclusive Relay
+lifecycle lock as Setup/Retire. When absent, it proves exact current
+journal/manifest/unit and policy-source identity before restoring that one
+table. Any drifted
 foreign rule, missing claim, changed unit or revoked generation fails
 closed; no `flush ruleset` or sibling Relay table is allowed.
 
