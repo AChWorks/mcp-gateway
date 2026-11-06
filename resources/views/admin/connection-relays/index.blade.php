@@ -78,6 +78,11 @@
                         <textarea id="relay-setup-command-{{ $relay->id }}" rows="6" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['setup_gateway'] }}</textarea>
                         <p class="field-help">{{ __('First install the exact verified helper under Retire and remove Relay. For an older installed helper, use the separate reviewed Upgrade command; never paste an outdated Setup command. The helper creates no Iranian user or forwarding permission and never sets this Relay Ready/Enabled.') }}</p>
                     </div>
+                    <div class="field">
+                        <label for="relay-public-enrollment-command-{{ $relay->id }}">{{ __('Retrieve staged public SSH key for offline Iran enrollment (read-only)') }}</label>
+                        <textarea id="relay-public-enrollment-command-{{ $relay->id }}" rows="5" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['public_enrollment'] }}</textarea>
+                        <p class="field-help">{{ __('Run on the authorized Gateway host only AFTER Setup. The root-only command validates this Relay’s journal, UID and exact SSH key pair, then prints PUBLIC material in the operator terminal, never in this web page. It does not configure Iran, enable forwarding or issue readiness. Enroll Iran separately with restricted SSHD and verified egress; never send the private key.') }}</p>
+                    </div>
                 </details>
             @endif
             @if ($rotationStates[$relay->id] ?? false)

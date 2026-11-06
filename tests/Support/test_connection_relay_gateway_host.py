@@ -1786,6 +1786,91 @@ class GatewayStagedSetupTests(unittest.TestCase):
         self.assertFalse(self.fake.active)
         self.assertFalse(self.fake.enabled)
 
+
+    def test_public_enrollment_exports_only_current_stage_public_key(self):
+        self.setup.setup()
+        before = len(self.fake.calls)
+        result = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake).public_enrollment()
+        public = (self.layout.key_dir(self.relay) / "control_key.pub").read_text().strip()
+        private = (self.layout.key_dir(self.relay) / "control_key").read_text()
+        self.assertIn("PUBLIC ONLY", result)
+        self.assertIn(public, result)
+        self.assertIn(self.relay.record_id, result)
+        self.assertIn("relay-control", result)
+        self.assertIn("NOT ENROLLED", result)
+        self.assertNotIn(private, result)
+        self.assertNotIn("OPENSSH PRIVATE KEY", result)
+        for argv in self.fake.calls[before:]:
+            self.assertNotIn(argv[0], {"/usr/sbin/useradd", "/usr/sbin/userdel"})
+            self.assertFalse(argv[:2] == ["systemctl", "daemon-reload"])
+            self.assertFalse(argv[:2] == ["/usr/sbin/nft", "-f"])
+        self.assertFalse(self.fake.active)
+        self.assertFalse(self.fake.enabled)
+
+    def test_public_enrollment_refuses_incomplete_stage_without_mutation(self):
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        with self.assertRaisesRegex(mod.Refusal, "staged Relay resource claim"):
+            checker.public_enrollment()
+        # Metadata/nft/systemd inventory reads are permitted; no host writes.
+        for argv in self.fake.calls:
+            self.assertNotIn(argv[0], {"/usr/sbin/useradd", "/usr/sbin/userdel"})
+            self.assertFalse(argv[:2] == ["systemctl", "daemon-reload"])
+        self.assertFalse(self.fake.user_created)
+        self.assertFalse(self.layout.evidence(self.relay, ".retired.json").exists())
+
+    def test_public_enrollment_rejects_tampered_public_or_foreign_entries(self):
+        self.setup.setup()
+        keydir = self.layout.key_dir(self.relay)
+        public = keydir / "control_key.pub"
+        original = public.read_bytes()
+        public.write_text("ssh-ed25519 AAAAFORGED")
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        with self.assertRaises(mod.Refusal):
+            checker.public_enrollment()
+        public.write_bytes(original)
+        foreign = keydir / ".relay-setup-foreign"
+        foreign.write_text("DO NOT DELETE")
+        with self.assertRaisesRegex(mod.Refusal, "Unknown or unsafe Relay private file"):
+            checker.public_enrollment()
+        self.assertEqual("DO NOT DELETE", foreign.read_text())
+        foreign.unlink()
+        self.assertIn("PUBLIC ONLY", checker.public_enrollment())
+
+    def test_public_enrollment_rejects_replaced_account_and_stale_fence(self):
+        self.setup.setup()
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        self.principal.pw_uid = 1999
+        with self.assertRaises(mod.Refusal):
+            checker.public_enrollment()
+        self.principal.pw_uid = 1500
+        self.assertIn("PUBLIC ONLY", checker.public_enrollment())
+        self.assertIn("RETIREMENT VERIFIED", self.retirement.retire())
+        self.assertIn("LIFECYCLE FENCE VERIFIED", self.retirement.seal("delete"))
+        with self.assertRaises(mod.Refusal):
+            checker.public_enrollment()
+
+    def test_public_enrollment_does_not_require_sibling_relay_setup_completion(self):
+        self.setup.setup()
+        sibling = self.layout.key_dir(self.relay).parent / "separately-staged"
+        sibling.mkdir(mode=0o700)
+        (sibling / "incomplete").write_text("SIBLING NOT YET PROVISIONED")
+        result = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake).public_enrollment()
+        self.assertIn("PUBLIC ONLY", result)
+        self.assertEqual("SIBLING NOT YET PROVISIONED", (sibling / "incomplete").read_text())
+        self.assertTrue(self.fake.user_created)
+
+    def test_public_enrollment_serializes_with_lifecycle_changes(self):
+        self.setup.setup()
+        checker = mod.GatewayPolicyAudit(self.relay, self.layout, self.fake)
+        fd = os.open(self.layout.lock_path(self.relay), os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(mod.Refusal, "lifecycle maintenance"):
+                checker.public_enrollment()
+        finally:
+            os.close(fd)
+        self.assertIn("PUBLIC ONLY", checker.public_enrollment())
+
     def test_setup_retry_preserves_identity_key_and_owned_acl(self):
         self.setup.setup()
         key = (self.layout.key_dir(self.relay) / "control_key").read_bytes()

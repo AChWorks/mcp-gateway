@@ -1586,6 +1586,86 @@ class GatewayPolicyAudit(Retirement):
 
 
 
+    def public_enrollment(self) -> str:
+        """Export only the exact staged Ed25519 public key for offline Iran setup.
+
+        This is a read-only, current-generation inspection, NOT Iran
+        enrollment, service activation, or host readiness attestation.
+        """
+        if os.geteuid() != self.layout.owner_uid:
+            raise Refusal("Public Relay enrollment export requires explicit root execution.")
+        lock = self.layout.lock_path(self.relay)
+        owned_parents(lock.parent, self.layout)
+        if not self._owned(lock):
+            raise Refusal("Root-owned Relay lifecycle lock is missing; cannot export staged identity.")
+        fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            self._require_mutable_revision()
+            managed = self._preflight()
+            if managed is None:
+                raise Refusal("No exact staged Relay resource claim; finish Gateway Setup before exporting the public key.")
+            journal = self._owned_setup_for_retirement(managed)
+            if (journal is None or journal["ssh_uid"] is None
+                or journal["configuration_revision"] != self.relay.revision
+                or journal["host_fingerprint"] != self.relay.fingerprint):
+                raise Refusal("No current UID-bound Setup journal; refusing an unproven public key.")
+            keydir = self.layout.key_dir(self.relay)
+            required = {"control_key", "control_key.pub", "known_hosts", "owner.json"}
+            if (not self._owned(keydir, True)
+                or keydir.stat().st_mode & 0o777 != 0o700
+                or {entry.name for entry in keydir.iterdir()} != required):
+                raise Refusal("Staged Relay credential namespace is not complete and isolated.")
+            owner = self._json(keydir / "owner.json")
+            expected = {
+                "version", "relay_record_id", "relay_id", "ssh_user",
+                "ssh_uid", "gateway_php_uid", "control_host", "control_port",
+                "control_user", "control_key_sha256", "control_key_pub_sha256",
+                "known_hosts_sha256",
+            }
+            if (set(owner) != expected
+                or owner["ssh_uid"] != journal["ssh_uid"]
+                or owner["gateway_php_uid"] != journal["gateway_php_uid"]):
+                raise Refusal("Staged Relay public key lacks its exact root-owned ownership claim.")
+            self._require_control_key_pair(keydir)
+            # Verify the local NSS identity without requiring an unrelated
+            # sibling Relay's partially staged keydir to be fully provisioned.
+            try:
+                account = pwd.getpwnam(self.relay.ssh_user)
+                canonical = pwd.getpwuid(account.pw_uid)
+                accounts = pwd.getpwall()
+            except (KeyError, OSError) as error:
+                raise Refusal("Dedicated Relay SSH account cannot be verified for public-key export.") from error
+            if (account.pw_uid != journal["ssh_uid"] or account.pw_uid <= 0
+                or account.pw_gecos != account_generation_marker(self.relay, journal["host_generation"])
+                or not account.pw_shell.endswith(("/nologin", "/false"))
+                or canonical.pw_name != self.relay.ssh_user
+                or any(user.pw_uid == account.pw_uid and user.pw_name != self.relay.ssh_user
+                       for user in accounts)):
+                raise Refusal("Dedicated Relay SSH account no longer matches its staged generation.")
+            public = (keydir / "control_key.pub").read_bytes()
+            if len(public) > 1024:
+                raise Refusal("Staged public key exceeds reviewed Ed25519 length.")
+            try:
+                line = public.decode("ascii").strip()
+            except UnicodeDecodeError as error:
+                raise Refusal("Staged public key is not valid ASCII.") from error
+            return (
+                "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT\n"
+                "Relay: " + self.relay.relay_id + "\n"
+                "Record: " + self.relay.record_id + "\n"
+                "Control endpoint: " + journal["control_host"] + ":" + str(journal["control_port"]) + "\n"
+                "Control user on Iran: " + journal["control_user"] + "\n"
+                "Ed25519 PUBLIC KEY (never copy the private key):\n" + line + "\n"
+                "NOT ENROLLED. Restrict Iran SSHD forwarding and public egress separately; "
+                "verify both hosts and issue independent readiness before enabling."
+            )
+        except BlockingIOError as error:
+            raise Refusal("Relay lifecycle maintenance is active; retry public-key export afterward.") from error
+        finally:
+            os.close(fd)
+
+
 class GatewayAclRecovery(GatewayPolicyAudit):
     """Systemd ExecStartPre helper: refuse foreign ACLs, repair absence only."""
 
@@ -2066,9 +2146,9 @@ class GatewaySetup(GatewayPolicyAudit):
             os.close(fd)
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay retirement; never contacts Iran.")
-    parser.add_argument("action", choices=("preflight", "audit-gateway", "setup-gateway", "ensure-acl",
-                                            "retire", "prepare-setup", "seal-delete", "seal-rotate"))
+    parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay operator actions; never contacts Iran.")
+    parser.add_argument("action", choices=("preflight", "audit-gateway", "setup-gateway", "public-enrollment",
+                                            "ensure-acl", "retire", "prepare-setup", "seal-delete", "seal-rotate"))
     parser.add_argument("--relay-id", required=True)
     parser.add_argument("--record-id", required=True)
     parser.add_argument("--fingerprint", required=True)
@@ -2115,6 +2195,8 @@ def main() -> int:
               or any(value is not None for value in
                      (args.control_host, args.control_port, args.control_user, args.host_key))):
             raise Refusal("Host setup identity options are accepted only by setup-gateway.")
+        elif args.action == "public-enrollment":
+            print(GatewayPolicyAudit(relay, layout).public_enrollment())
         elif args.action == "preflight":
             print(operation.preview())
         elif args.action == "prepare-setup":

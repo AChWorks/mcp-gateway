@@ -100,6 +100,8 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Stage / repair Gateway host resources (Owner command)')
             ->assertSee('It DOES NOT issue readiness')
             ->assertSee('setup-gateway')
+            ->assertSee('Retrieve staged public SSH key for offline Iran enrollment (read-only)')
+            ->assertSee('public-enrollment')
             ->getContent();
 
         $dom = new \DOMDocument;
@@ -111,6 +113,13 @@ final class AdminUiPresentationTest extends TestCase
         ));
         self::assertSame(1, (int) $xpath->evaluate(
             'count(//textarea[@id="'.$id.'"][@readonly][@autocomplete="off"])',
+        ));
+        $publicId = 'relay-public-enrollment-command-'.$relay->getKey();
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//label[@for="'.$publicId.'"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//textarea[@id="'.$publicId.'"][@readonly][@autocomplete="off"])',
         ));
         self::assertFalse($relay->fresh()->enabled);
     }
