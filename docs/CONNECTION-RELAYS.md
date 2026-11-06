@@ -1,6 +1,6 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Core Relay routing and staged Gateway Setup/Retry source are merged through PR #291, but the capability has not been published, deployed or accepted on real hosts.** The root-only retirement/fencing helper and staged inactive Setup/Retry are code, not installed transport. Independent operational readiness attestation and Iran enrollment remain unfinished. The additional public-key export described below is a new source candidate requiring its own review. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
+**Core Relay routing and staged Gateway Setup/Retry source are merged through PR #291; the reviewed read-only public-key export was merged in PR #292. Neither capability has been published, deployed or accepted on real hosts.** The root-only retirement/fencing helper and inactive Setup/Retry are source code, not installed transport. Independent operational readiness attestation and actual Iran enrollment remain unfinished. The new Iran-side public-only staging helper below is a distinct source candidate, not a deployed or approved live SSH admission path. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
 
 ## Intent and architecture
 
@@ -198,7 +198,7 @@ approved trusted readiness issuer before enabling. Do not run source
 unpublished host commands on Production; deployment and operational host
 modifications require separate Owner authorization.
 
-## Offline Iran public-key handoff (source candidate; no Iran mutation)
+## Offline Iran public-key handoff (merged source; no Iran mutation)
 
 After the independently authorized Gateway host operator completes `setup-gateway`, the
 Owner may run the exact release-pinned, read-only `public-enrollment` command shown in
@@ -234,6 +234,63 @@ operator-controlled activation and separately privileged readiness issuance.
 Gateway-only retirement and metadata deletion must continue to work without
 contacting Iran. No production host operation is approved by this source
 candidate.
+
+## Offline Iran-side public-identity staging (new source candidate; no SSH admission)
+
+**This helper does NOT enroll an SSH login or enable a Relay.** The offline
+resources/host/connection-relay-iran.py script stages only the **public**
+Ed25519 identity exported by the reviewed Gateway public-enrollment action.
+Use it only after separately authorized host maintenance; the source is not
+a published release or an installed host service. Iran needs no connection to
+Gateway, GitHub or a foreign CDN.
+
+The operator transfers two items over an independently trusted offline channel:
+(1) the exact, complete, public-only eight-line Gateway operator-terminal export
+as a plain-text file, and (2) the reviewed Iran helper source from the same
+approved repository revision. Verify the helper's SHA256 before running it.
+For the source candidate in this PR the checksum is:
+
+    c4c82ad6d3e381038152e6b2388b0e9e6ce70f5f619e34ab3647cb9e3c733dcc
+
+On the **authorized Iran host only**, after separately staging those files:
+
+    sha256sum connection-relay-iran.py
+    # Compare to the reviewed SHA256 above; refuse any mismatch.
+    sudo python3 connection-relay-iran.py stage --input gateway-public-export.txt
+    sudo python3 connection-relay-iran.py inspect --input gateway-public-export.txt
+    # If this public-only stage must be rolled back:
+    sudo python3 connection-relay-iran.py retire --input gateway-public-export.txt
+
+The public export is parsed with its exact Relay ID, immutable record ULID,
+control endpoint, control username and wire-validated Ed25519 key. It is public
+data, **not a cryptographically signed freshness certificate**. Obtain it
+directly from a trusted, current Gateway operator session; never accept an
+unverified third-party replacement or assume an old export remains current
+after Relay rotation. No private key should ever be transferred to Iran.
+
+Stage stores exactly control_key.pub and owner.json, both inside a
+root-owned 0700 directory at
+/var/lib/mcp-gateway-iran-relays/<record-ULID>/, keyed by the immutable
+record rather than the display name. A per-record root-owned lock serializes
+staging, inspection and retirement. Repeat with identical identity is
+idempotent; changed endpoints, keys, foreign files, symlinks and unsafe
+ownership refuse without adoption or cleanup. An interrupted retirement uses
+an exact durable retiring.json marker and can resume removing only the two
+owned public artifacts. Unexpected incomplete staging or a pending directory
+is intentionally **not** recursively deleted: inspect the exact root-owned
+namespace before any separately approved recovery.
+
+No Linux SSH principal is created, no authorized_keys or sshd configuration
+is installed or reloaded, no listener, service or nftables policy is enabled,
+and no privileged readiness evidence is produced. The actual Iran account
+**must be exclusive to the Relay**, not a reused shared SSH principal, and
+its AllowTcpForwarding, key-only restrictions and public-destination egress
+policy must still be independently installed, positively and negatively
+tested, and linked to a fresh Gateway/host generation before any forwarding
+activation. The next host-admission/attestation step must not treat a staged
+public key as proof of Iran connectivity, restricted egress or authenticated
+Target access. Gateway-only deletion does not depend on Iran-side staging or
+cleanup.
 
 ## Gateway-local privileged policy audit (merged source; not installed)
 

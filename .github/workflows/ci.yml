@@ -62,8 +62,8 @@ jobs:
       - name: Validate configuration reference matches .env.example
         run: python3 bin/test-configuration-docs.py
 
-      - name: Verify isolated Relay host retirement helper
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/Support -p 'test_connection_relay_gateway_host.py'
+      - name: Verify isolated Gateway and Iran Relay host helpers
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/Support -p 'test_connection_relay_*_host.py'
 
       - name: Verify Relay readiness against real root-owned 0700/0755 filesystem as non-root PHP
         run: bash tests/Support/relay-readiness-filesystem-ci.sh
