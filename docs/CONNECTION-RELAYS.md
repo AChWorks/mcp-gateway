@@ -1,6 +1,6 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Core Relay routing and staged Gateway Setup/Retry source are merged through PR #291; the reviewed read-only public-key export was merged in PR #292. Neither capability has been published, deployed or accepted on real hosts.** The root-only retirement/fencing helper and inactive Setup/Retry are source code, not installed transport. Independent operational readiness attestation and actual Iran enrollment remain unfinished. The new Iran-side public-only staging helper below is a distinct source candidate, not a deployed or approved live SSH admission path. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require distinct approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
+**Core Relay routing, inactive Gateway Setup/Retry, root-verified public-key export and inert Iran-side staging are merged through PR #293, but not published, installed or accepted on real hosts.** This runbook now documents a proposed v2 offline export bound to the exact configuration revision, fingerprint and Gateway host generation; it is a source candidate until independently reviewed and merged. Independent operational readiness attestation and restricted live Iran enrollment remain unfinished. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require separate approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
 
 ## Intent and architecture
 
@@ -235,7 +235,7 @@ Gateway-only retirement and metadata deletion must continue to work without
 contacting Iran. No production host operation is approved by this source
 candidate.
 
-## Offline Iran-side public-identity staging (new source candidate; no SSH admission)
+## Offline Iran-side public-identity staging (proposed v2 format; no SSH admission)
 
 **This helper does NOT enroll an SSH login or enable a Relay.** The offline
 resources/host/connection-relay-iran.py script stages only the **public**
@@ -245,17 +245,28 @@ a published release or an installed host service. Iran needs no connection to
 Gateway, GitHub or a foreign CDN.
 
 The operator transfers two items over an independently trusted offline channel:
-(1) the exact, complete, public-only eight-line Gateway operator-terminal export
-as a plain-text file, and (2) the reviewed Iran helper source from the same
-approved repository revision. **Never run the transferred Python file under
+(1) the exact, complete, public-only **11-line v2** Gateway operator-terminal
+export as a plain-text file, and (2) the reviewed Iran helper source from
+the same approved repository revision. The v2 export binds the immutable
+record ULID to its current configuration revision, configuration fingerprint,
+Gateway host generation, public key and Iran control endpoint/user. An older
+eight-line export is deliberately refused rather than silently adopted.
+These fields provide **exact identity binding, not cryptographic authenticity
+or a signed freshness guarantee**: the operator must obtain the export from
+a verified current Gateway session and independently recheck its revision
+before any future live enrollment. **Never run the transferred Python file under
 sudo or use a split checksum/execute procedure in a writable transfer
 directory.** Only an expressly authorized Iran host operator may perform the
 following installation and execution. This is **not** an automatically invoked
 installer, live SSH enrollment, or permission to change Production.
 
-For the current source candidate the exact Python helper SHA256 is:
+For the current v2 source candidate the exact Python helper SHA256 is.
+A previously installed v1 helper is **not** overwritten by the first-install
+procedure. If v1 staging files or an installed v1 helper exist, suspend its
+use and obtain a separately approved, source-pinned migration/cleanup plan;
+the new helper must not silently adopt or destroy old staged evidence.
 
-    989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
+    8871c617abd09ff94dc40c9d40d23501ddf376d69efa55228d40e88125986e67
 
 **First install only**, from the directory containing the transferred public
 source file (the file may be untrusted; it is never executed there):
@@ -264,7 +275,7 @@ source file (the file may be untrusted; it is never executed there):
     set -euo pipefail
     umask 077
     source=$1
-    expected=989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
+    expected=8871c617abd09ff94dc40c9d40d23501ddf376d69efa55228d40e88125986e67
     base=/usr/local/libexec
     directory=$base/mcp-gateway-iran-relay
     destination=$directory/connection-relay-iran.py
@@ -323,7 +334,7 @@ replace this with a direct sudo Python call.
     iran_relay_public() {
       /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
       set -euo pipefail
-      expected=989aff0604704eb38d3b14821fddd50fa9f1e3853feb4aec9425efad90fa16dc
+      expected=8871c617abd09ff94dc40c9d40d23501ddf376d69efa55228d40e88125986e67
       directory=/usr/local/libexec/mcp-gateway-iran-relay
       destination=$directory/connection-relay-iran.py
       trusted_dir() {
@@ -360,19 +371,25 @@ linkat(AT_EMPTY_PATH), retirement must fail closed **before deletion**; it
 must not fall back to a visible, partially written retirement marker.
 
 The public export is parsed with its exact Relay ID, immutable record ULID,
-control endpoint, control username and wire-validated Ed25519 key. It is public
-data, **not a cryptographically signed freshness certificate**. Obtain it
-directly from a trusted, current Gateway operator session; never accept an
-unverified third-party replacement or assume an old export remains current
-after Relay rotation. No private key should ever be transferred to Iran.
+configuration revision, host fingerprint, generation, control endpoint,
+control username and wire-validated Ed25519 key. It is public data, **not a
+cryptographically signed freshness certificate**. Obtain it directly from a
+trusted, current Gateway operator session; never accept an unverified third-
+party replacement or assume an old export remains current after Relay
+rotation. No private key should ever be transferred to Iran.
 
 Stage stores exactly control_key.pub and owner.json, both inside a
 root-owned 0700 directory at
 /var/lib/mcp-gateway-iran-relays/<record-ULID>/, keyed by the immutable
 record rather than the display name. A per-record root-owned lock serializes
 staging, inspection and retirement. Repeat with identical identity is
-idempotent; changed endpoints, keys, foreign files, symlinks and unsafe
-ownership refuse without adoption or cleanup. An interrupted retirement uses
+idempotent; changed revisions, host fingerprints, host generations, endpoints,
+keys, foreign files, symlinks and unsafe ownership refuse without adoption
+or cleanup. Existing inert v1 records cannot be migrated or automatically
+retired with v2 proof; if any were installed, preserve their exact earlier
+export and use a separately approved version-pinned offline cleanup procedure
+before staging a replacement. Never treat deletion of a local v1 stage as
+proof that a live Iran identity was revoked. An interrupted retirement uses
 an exact durable retiring.json marker and can resume removing only the two
 owned public artifacts. If publication was interrupted after linkat but before
 a successful directory fsync, retry revalidates the existing marker's exact
@@ -489,11 +506,15 @@ Cleanup/bootstrap command **never** replaces an installed executable, even
 one from a known older release. An older helper fails the current release
 SHA256 check until the Owner separately runs the **Explicit verified helper
 upgrade** command (under the collapsed installation/diagnostics section).
-The upgrade permits exactly one pinned predecessor digest,
-`e0810d480ef43e278924422d9f478b804359313883fa4ec2abe8ca7fffb00efd`
-(the helper integrated through merged PR #289), to be replaced with the
-current release-pinned source, only after the source bytes are copied to an
-isolated root-owned temporary inode and the copy matches the new SHA256.
+The upgrade permits exactly one pinned predecessor digest, recorded in
+`config/connection_relays.php` as
+`gateway_retirement_helper_upgrade_from_sha256`. For the proposed v2 source
+candidate this is the helper integrated through PR #293; older/unknown
+binaries are **not** accepted by a one-step upgrade. A separately approved,
+version-pinned transition is required if a host actually has an earlier helper.
+The exact predecessor may be replaced with the current release-pinned source
+only after the source bytes are copied to an isolated root-owned temporary
+inode and the copy matches the new SHA256.
 **Before upgrading a helper installed by an older release, enter a controlled
 operator maintenance window.** Pause all Gateway Relay host operator
 workflows; stop issuing historic copy/paste commands and let **all** already
@@ -742,7 +763,7 @@ The verifier also checks whether `<relay-id>.retired.json` exists (which rejects
 
 All four artifacts and their parent directories must be root-owned, non-symlink, not group/world writable, and actually accessible to the effective Gateway PHP UID. The evidence directory and optional `.fences` directory must be **readable and searchable** (or the Relay fails closed); the private key and lock directories must **not** be opened to PHP. A root-owned `0700` `.fences` directory with a concealed fence is explicitly unsafe: reconcile operator permissions rather than interpreting it as an empty directory. The `.policy` file contains the **same fresh 256-bit generation** as the `provisioning` v1 record, never an independently invented token. Before any FPM/CLI identity, service, SSH principal, firewall, routing, egress or binding policy change, a privileged helper must invalidate the old generation under the same exclusive root-only lock used for the entire Setup/Repair lifecycle. Post-change effective OS checks must finish before an independent privileged verifier issues/renews the lease; PHP writes none of these artifacts.
 
-Merged main provides the **source-side validator, retirement/fence helper and staged Gateway-local Setup/Retry resources**. Neither these merged resources nor the candidate public-key export issue/renew authoritative readiness, enroll or restrict the Iran SSH principal, or prove a live end-to-end Target path. A syntactically valid root-owned claim is not proof of actual SOCKS, Iran reachability or Target identity.
+Merged main provides the **source-side validator, retirement/fence helper and staged Gateway-local Setup/Retry resources**. Neither these merged resources nor the proposed v2 public-key export issue/renew authoritative readiness, enroll or restrict the Iran SSH principal, or prove a live end-to-end Target path. A syntactically valid root-owned claim is not proof of actual SOCKS, Iran reachability or Target identity.
 
 The manifest has exactly **11** keys (illustrative schema, not real values; never copy as-is). **Existing 10-key manifests are invalid and must be reissued by the independently privileged operator**; do not migrate or extend them automatically:
 

@@ -1681,10 +1681,19 @@ class GatewayPolicyAudit(Retirement):
                 line = public.decode("ascii").strip()
             except UnicodeDecodeError as error:
                 raise Refusal("Staged public key is not valid ASCII.") from error
+            if (journal["configuration_revision"] != self.relay.revision
+                or journal["host_fingerprint"] != self.relay.fingerprint
+                or managed["configuration_revision"] != self.relay.revision
+                or managed["host_fingerprint"] != self.relay.fingerprint
+                or managed["host_generation"] != journal["host_generation"]):
+                raise Refusal("Staged Relay enrollment identity is not current-generation bound.")
             return (
-                "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT\n"
+                "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT V2\n"
                 "Relay: " + self.relay.relay_id + "\n"
                 "Record: " + self.relay.record_id + "\n"
+                "Configuration revision: " + str(self.relay.revision) + "\n"
+                "Host fingerprint: " + self.relay.fingerprint + "\n"
+                "Host generation: " + journal["host_generation"] + "\n"
                 "Control endpoint: " + journal["control_host"] + ":" + str(journal["control_port"]) + "\n"
                 "Control user on Iran: " + journal["control_user"] + "\n"
                 "Ed25519 PUBLIC KEY (never copy the private key):\n" + line + "\n"

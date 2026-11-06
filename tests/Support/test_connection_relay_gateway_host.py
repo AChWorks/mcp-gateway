@@ -1940,6 +1940,11 @@ class GatewayStagedSetupTests(unittest.TestCase):
         self.assertIn("PUBLIC ONLY", result)
         self.assertIn(public, result)
         self.assertIn(self.relay.record_id, result)
+        self.assertIn("Configuration revision: " + str(self.relay.revision), result)
+        self.assertIn("Host fingerprint: " + self.relay.fingerprint, result)
+        self.assertIn(
+            "Host generation: " + self.setup._generation()["host_generation"], result,
+        )
         self.assertIn("relay-control", result)
         self.assertIn("NOT ENROLLED", result)
         self.assertNotIn(private, result)
