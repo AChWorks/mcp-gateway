@@ -251,7 +251,7 @@ class RetirementTests(unittest.TestCase):
         self.assertIn("claim=absent", self.operator.preview().replace("resource claim", "claim"))
         self.assertEqual([], [x for x in self.fake.calls if x[0] in ("ssh", "curl")])
         result = self.operator.retire()
-        self.assertIn("Iran was not contacted", result)
+        self.assertIn("Relay peer was not contacted", result)
         output = self.layout.evidence(self.relay, ".retired.json")
         receipt = json.loads(output.read_text())
         self.assertEqual(set(receipt), {
@@ -270,7 +270,7 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(3601, receipt["verified_at_boot_seconds"])
         self.assertLessEqual(receipt["expires_at_unix"]-receipt["verified_at_unix"], 900)
         self.assertEqual([], [x for x in self.fake.calls if x[0] in ("ssh", "curl", "scp")])
-        self.assertEqual(0, self.operator.retire().count("Iran was not contacted") - 1)
+        self.assertEqual(0, self.operator.retire().count("Relay peer was not contacted") - 1)
 
     def test_owned_managed_relay_is_removed_without_affecting_another(self):
         self.fake.active = self.fake.enabled = self.fake.listener = self.fake.nft = True
@@ -2138,7 +2138,7 @@ class GatewayStagedSetupTests(unittest.TestCase):
     def _assert_partial_rollback(self):
         self.assertTrue(self.setup.journal_path.exists())
         self.assertFalse(self.layout.evidence(self.relay, ".managed.json").exists())
-        # Even a failed halfway Setup must be retireable without Iran contact
+        # Even a failed halfway Setup must be retireable without intermediary contact
         # and without leaving a privileged UID or an orphaned firewall table.
         self.fake.setup_fail_command = None
         self.fake.fail_daemon_reload = False

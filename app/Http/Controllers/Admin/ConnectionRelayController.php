@@ -385,10 +385,10 @@ final class ConnectionRelayController extends Controller
             }
             // Owner acknowledgement alone cannot prove retirement of the
             // Relay's local resources. An independent privileged helper
-            // verifies this Gateway host; Iranian reachability is irrelevant.
+            // verifies this Gateway host; intermediary reachability is irrelevant.
             if (! $retirement->verifiedForDeletion($current)) {
                 throw ValidationException::withMessages([
-                    'relay' => __('Verified Gateway-host deletion fence is missing or stale. Run the local cleanup-and-seal-for-delete command first; a retirement receipt alone is insufficient. Iran reachability is not required.'),
+                    'relay' => __('Verified Gateway-host deletion fence is missing or stale. Run the local cleanup-and-seal-for-delete command first; a retirement receipt alone is insufficient. Intermediary reachability is not required.'),
                 ]);
             }
             $current->delete();
@@ -396,7 +396,7 @@ final class ConnectionRelayController extends Controller
         }, 3);
 
         return redirect()->route('admin.connection-relays.index')
-            ->with('status', __('Relay registration removed after verified Gateway-host cleanup and Owner confirmation. Iran-side cleanup was not checked.'));
+            ->with('status', __('Relay registration removed after verified Gateway-host cleanup and Owner confirmation. Remote intermediary cleanup was not checked.'));
     }
 
     /** @param array<string,mixed> $fields

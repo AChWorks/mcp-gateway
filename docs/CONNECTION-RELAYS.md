@@ -1,13 +1,13 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Core Relay routing, inactive Gateway Setup/Retry, root-verified public-key export and inert Iran-side staging are merged through PR #293, but not published, installed or accepted on real hosts.** This runbook now documents a proposed v2 offline export bound to the exact configuration revision, fingerprint and Gateway host generation; it is a source candidate until independently reviewed and merged. Independent operational readiness attestation and restricted live Iran enrollment remain unfinished. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require separate approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
+**Core Relay routing, inactive Gateway Setup/Retry, root-verified V2 public-key export and inert peer-side staging are merged through PR #294, but have not been published, installed or accepted on real hosts.** The exported public key is bound to the exact configuration revision, fingerprint and Gateway host generation. This runbook's generic peer-host naming is a source change pending independent review. Independent operational readiness attestation and restricted live intermediary enrollment remain unfinished. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require separate approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
 
 ## Intent and architecture
 
 Connection Relay is a reusable per-Target transport route, not a third connector, a per-Target tunnel, a generic HTTP proxy or a VPN. Direct remains the default. Existing Managed and Manual Reverse SSH remain intact and cannot be combined with the new Relay for the same SSH Target.
 
     Gateway dedicated PHP-FPM UID -> 127.0.0.1:<relay-SOCKS-port>
-    -> restricted Gateway OpenSSH client -D -> Iran restricted SSH control user
+    -> restricted Gateway OpenSSH client -D -> intermediary restricted SSH control user
     -> validated numeric public Target IP:port
     -> end-to-end SSH host-key pin or HTTPS TLS SNI and certificate check
 
@@ -19,17 +19,17 @@ Gateway is the **unprivileged control plane**, not a root-level package manager.
 
 | Owner action | What Gateway may do | Privileged host action and proof |
 | --- | --- | --- |
-| Create | Save an inactive draft and prepare a scoped, easy-to-copy Setup instruction | Prepare dedicated UID/ACL, SSH identity, keys and supervised listener; constrain Iran principal/egress; independently verify both sides; issue root-owned short-lived readiness evidence |
+| Create | Save an inactive draft and prepare a scoped, easy-to-copy Setup instruction | Prepare dedicated UID/ACL, SSH identity, keys and supervised listener; constrain intermediary principal/egress; independently verify both sides; issue root-owned short-lived readiness evidence |
 | Rename | Change only the display name with Owner reauthentication and optimistic revision check | **No host command**, no connection interruption or Target epoch reset |
 | Edit host, port, key, username, identity or local listener | Disable/detach Targets, require verified root-owned `rotate` fence for the old revision before DB commit | **Gateway-only cleanup + `seal-rotate` under the same root lock as Setup**; old revision cannot be provisioned after fencing; only a newer revision can proceed to future Setup/attestation |
 | Disable or diagnose | Fail closed for explicitly bound Targets and show distinct host/control/Target status | Host service changes require a reviewed privileged action; no implicit Direct fallback |
-| Delete | Require explicit Target detach/reassignment, disable, Owner confirmation, fresh exact-registration cleanup receipt **and irreversible `delete` fence** | **Scoped cleanup + `seal-delete` on the Gateway host** permanently forbids any future Setup/Repair for that exact DB ULID, including after DB deletion. No Iran connectivity, remote cleanup, or sibling/Reverse SSH resource change |
+| Delete | Require explicit Target detach/reassignment, disable, Owner confirmation, fresh exact-registration cleanup receipt **and irreversible `delete` fence** | **Scoped cleanup + `seal-delete` on the Gateway host** permanently forbids any future Setup/Repair for that exact DB ULID, including after DB deletion. No intermediary connectivity, remote cleanup, or sibling/Reverse SSH resource change |
 
-The command must be generated for the exact Relay and checked revision; support an independently transferred/offline Iran-side package when Iran cannot fetch code from foreign endpoints. No arbitrary shell construction from form inputs, production root execution by PHP, generic destructive purge or silently claimed success. Failure leaves a recoverable disabled registration with an actionable Retry/Repair. Host resource changes must be idempotent, ownership-scoped and positively verified. A successful response from a script alone is not evidence that the Target was authenticated.
+The command must be generated for the exact Relay and checked revision; support an independently transferred/offline intermediary-side package when intermediary cannot fetch code from foreign endpoints. No arbitrary shell construction from form inputs, production root execution by PHP, generic destructive purge or silently claimed success. Failure leaves a recoverable disabled registration with an actionable Retry/Repair. Host resource changes must be idempotent, ownership-scoped and positively verified. A successful response from a script alone is not evidence that the Target was authenticated.
 
-**Interim security boundary:** The application now separates display-only rename from sensitive route changes and forbids hard deletion based on an Owner checkbox or absent attestation file. Final deletion requires Owner acknowledgement, a **privileged, short-lived root-owned Gateway-host cleanup receipt** AND an **irreversible, root-owned `delete` fence** bound to exact DB ULID, Relay ID, fingerprint, revision and host generation. An ordinary receipt alone never authorizes DB deletion or sensitive identity rotation. It does **not** require Iran reachability, remote cleanup evidence or Iranian SSH credentials. The exact-receipt verifier and scoped Gateway-host-only retirement helper were merged in PR #286, but are not installed or operationally accepted. The helper must be installed by the separately authorized host operator; it is NOT a tunnel installer or host-readiness attester. **Do not present Create/Edit/Setup as finished or claim this is deployed.** The UI preserves records instead of fabricating cleanup. This receipt is never to be hand-authored by PHP or fabricated by an operator.
+**Interim security boundary:** The application now separates display-only rename from sensitive route changes and forbids hard deletion based on an Owner checkbox or absent attestation file. Final deletion requires Owner acknowledgement, a **privileged, short-lived root-owned Gateway-host cleanup receipt** AND an **irreversible, root-owned `delete` fence** bound to exact DB ULID, Relay ID, fingerprint, revision and host generation. An ordinary receipt alone never authorizes DB deletion or sensitive identity rotation. It does **not** require intermediary reachability, remote cleanup evidence or intermediary SSH credentials. The exact-receipt verifier and scoped Gateway-host-only retirement helper were merged in PR #286, but are not installed or operationally accepted. The helper must be installed by the separately authorized host operator; it is NOT a tunnel installer or host-readiness attester. **Do not present Create/Edit/Setup as finished or claim this is deployed.** The UI preserves records instead of fabricating cleanup. This receipt is never to be hand-authored by PHP or fabricated by an operator.
 
-The receipt is located at `/etc/mcp-gateway/connection-relays/<relay-id>.retired.json` (fixed root-owned, symlink-free namespace) and contains exactly `relay_record_id`, `relay_id`, `host_fingerprint`, `configuration_revision`, `host_generation`, `verified_boot_id`, `verified_at_unix`, `verified_at_boot_seconds`, `expires_at_unix`, `gateway_cleanup_verified`. The single boolean must be true **based on independent privileged verification on the Gateway host**. The lease is valid for no more than 900 seconds, with no significant wall-clock/boot-clock divergence. Active policy and readiness files must be gone. There is no Iranian cleanup field or network check: an unreachable Iran server must never prevent Gateway-side deletion after local verification and Owner confirmation. Remote cleanup, if desired, is an optional separate follow-up. Real-host operational acceptance and a distinct setup/update helper are still required before whole-product acceptance.
+The receipt is located at `/etc/mcp-gateway/connection-relays/<relay-id>.retired.json` (fixed root-owned, symlink-free namespace) and contains exactly `relay_record_id`, `relay_id`, `host_fingerprint`, `configuration_revision`, `host_generation`, `verified_boot_id`, `verified_at_unix`, `verified_at_boot_seconds`, `expires_at_unix`, `gateway_cleanup_verified`. The single boolean must be true **based on independent privileged verification on the Gateway host**. The lease is valid for no more than 900 seconds, with no significant wall-clock/boot-clock divergence. Active policy and readiness files must be gone. There is no intermediary cleanup field or network check: an unreachable intermediary server must never prevent Gateway-side deletion after local verification and Owner confirmation. Remote cleanup, if desired, is an optional separate follow-up. Real-host operational acceptance and a distinct setup/update helper are still required before whole-product acceptance.
 
 ### Durable cross-process lifecycle fence (R1 race closure)
 
@@ -82,7 +82,7 @@ outside the helper. No release or real-host test has occurred.
 
 The exact, root-only `setup-gateway` command now generated by the Owner's
 Connection Relays page is a **Gateway resource stager**, not a readiness
-issuer or Iran enrollment script. The command is bound to the immutable DB
+issuer or intermediary enrollment script. The command is bound to the immutable DB
 record ULID, Relay namespace, current revision/fingerprint, local SOCKS port,
 separately verified pinned server host key, requested control endpoint, and
 the web process's effective PHP UID. The helper **recomputes the full PHP
@@ -131,7 +131,7 @@ The setup script intentionally leaves the new service **INACTIVE and
 DISABLED**, without executing a remote connection. The present Gateway may
 still share a PHP UID with sibling websites; staging a reachable SOCKS
 listener before independently verifying a dedicated FPM/CLI identity and
-Iran forwarding restrictions would violate the security boundary. Source
+intermediary forwarding restrictions would violate the security boundary. Source
 support for operator-controlled activation and an independent trusted
 readiness issuer remains a separate acceptance requirement. `setup-gateway`
 is an idempotent scoped retry of the same configured state, **not** an override
@@ -184,28 +184,28 @@ fsync barriers. If interrupted,
 the exact recorded generation and remaining resources are verified again on
 retry; no unverified identity is adopted or false receipt issued.
 Retirement then emits the normal Gateway-only cleanup receipt and supports
-the existing Delete/Rotate seal contract. It never contacts Iran. Incomplete
+the existing Delete/Rotate seal contract. It never contacts intermediary. Incomplete
 or unknown host state is retained for explicit operator investigation, not
 removed by generic purge.
 
 **NO READINESS IS ISSUED.** Neither a staged service nor even
 `GATEWAY LOCAL POLICY AUDIT PASS` proves an isolated production FPM/CLI
-UID, allowed/denied Iran forwarding egress, authenticated SSH/SFTP/WordPress
+UID, allowed/denied intermediary forwarding egress, authenticated SSH/SFTP/WordPress
 Target traffic, reboot persistence or a trusted 11-field lease. The Owner
-must independently arrange Iran-side offline enrollment and permitted
+must independently arrange intermediary-side offline enrollment and permitted
 egress, complete positive/negative host tests, and obtain a separately
 approved trusted readiness issuer before enabling. Do not run source
 unpublished host commands on Production; deployment and operational host
 modifications require separate Owner authorization.
 
-## Offline Iran public-key handoff (merged source; no Iran mutation)
+## Offline intermediary public-key handoff (merged source; no intermediary mutation)
 
 After the independently authorized Gateway host operator completes `setup-gateway`, the
 Owner may run the exact release-pinned, read-only `public-enrollment` command shown in
 **System > Connection Relays > Stage / repair Gateway host resources**. It prints
 only this Relay's verified Ed25519 **public** control key, immutable record ULID,
-control endpoint and dedicated Iran account name in the operator terminal;
-**no private key is sent to PHP, displayed by the Admin page, copied to Iran
+control endpoint and dedicated intermediary account name in the operator terminal;
+**no private key is sent to PHP, displayed by the Admin page, copied to intermediary
 or written to logs by this helper**. A root-owned current-generation UID journal,
 matching key pair and credentials, authentic local account marker and the
 shared lifecycle lock are required. **A surviving managed claim, Setup journal
@@ -222,51 +222,54 @@ runs daemon-reload, installs/restores ACLs, restarts a unit, creates an
 identity, writes evidence, or issues readiness. For a recoverable interrupted
 Setup or missing ACL, use the separate, explicitly authorized Setup/Retry
 procedure; for interrupted Retirement, finish Gateway-only Retirement/Seal.
-Never present a stale public key for Iran enrollment.
+Never present a stale public key for intermediary enrollment.
 
-This handoff is **not Iran enrollment**. The operator must separately install
-and restrict the public key on the specifically authorized Iran host, with a
+This handoff is **not intermediary enrollment**. The operator must separately install
+and restrict the public key on the specifically authorized intermediary host, with a
 dedicated key-only forwarding principal, effective SSHD forwarding limits and
 independently verified destination/port egress policy. Where Internet access
 is blocked, carry only the public text over a trusted offline channel. Validate
 positive and negative egress with the real account and host policy before
 operator-controlled activation and separately privileged readiness issuance.
 Gateway-only retirement and metadata deletion must continue to work without
-contacting Iran. No production host operation is approved by this source
+contacting intermediary. No production host operation is approved by this source
 candidate.
 
-## Offline Iran-side public-identity staging (proposed v2 format; no SSH admission)
+## Offline Relay peer public-identity staging (V2; no SSH admission)
 
 **This helper does NOT enroll an SSH login or enable a Relay.** The offline
-resources/host/connection-relay-iran.py script stages only the **public**
+resources/host/connection-relay-peer.py script stages only the **public**
 Ed25519 identity exported by the reviewed Gateway public-enrollment action.
 Use it only after separately authorized host maintenance; the source is not
-a published release or an installed host service. Iran needs no connection to
+a published release or an installed host service. The intermediary needs no connection to
 Gateway, GitHub or a foreign CDN.
 
 The operator transfers two items over an independently trusted offline channel:
 (1) the exact, complete, public-only **11-line v2** Gateway operator-terminal
-export as a plain-text file, and (2) the reviewed Iran helper source from
+export as a plain-text file, and (2) the reviewed intermediary helper source from
 the same approved repository revision. The v2 export binds the immutable
 record ULID to its current configuration revision, configuration fingerprint,
-Gateway host generation, public key and Iran control endpoint/user. An older
+Gateway host generation, public key and intermediary control endpoint/user. An older
 eight-line export is deliberately refused rather than silently adopted.
 These fields provide **exact identity binding, not cryptographic authenticity
 or a signed freshness guarantee**: the operator must obtain the export from
 a verified current Gateway session and independently recheck its revision
 before any future live enrollment. **Never run the transferred Python file under
 sudo or use a split checksum/execute procedure in a writable transfer
-directory.** Only an expressly authorized Iran host operator may perform the
+directory.** Only an expressly authorized intermediary host operator may perform the
 following installation and execution. This is **not** an automatically invoked
 installer, live SSH enrollment, or permission to change Production.
 
-For the current v2 source candidate the exact Python helper SHA256 is.
-A previously installed v1 helper is **not** overwritten by the first-install
+For this peer helper, the exact reviewed-source SHA256 is:
+A previously installed geography-specific or v1 helper is **not** overwritten by the first-install
 procedure. If v1 staging files or an installed v1 helper exist, suspend its
 use and obtain a separately approved, source-pinned migration/cleanup plan;
-the new helper must not silently adopt or destroy old staged evidence.
+the new helper must not silently adopt or destroy old staged evidence. Earlier
+`/var/lib/mcp-gateway-iran-relays` state and the earlier operator installation
+path are left untouched by the new generic `/var/lib/mcp-gateway-relay-peers`
+namespace; absence of the new path does not prove the old path is empty.
 
-    8871c617abd09ff94dc40c9d40d23501ddf376d69efa55228d40e88125986e67
+    a0d1fb3a12c98f35a41d60f1e55c562c75ec5ad20f5531e12e7e8b326b72eb7b
 
 **First install only**, from the directory containing the transferred public
 source file (the file may be untrusted; it is never executed there):
@@ -275,10 +278,10 @@ source file (the file may be untrusted; it is never executed there):
     set -euo pipefail
     umask 077
     source=$1
-    expected=8871c617abd09ff94dc40c9d40d23501ddf376d69efa55228d40e88125986e67
+    expected=a0d1fb3a12c98f35a41d60f1e55c562c75ec5ad20f5531e12e7e8b326b72eb7b
     base=/usr/local/libexec
-    directory=$base/mcp-gateway-iran-relay
-    destination=$directory/connection-relay-iran.py
+    directory=$base/mcp-gateway-relay-peer
+    destination=$directory/connection-relay-peer.py
     trusted_dir() {
         test -d "$1" && test ! -L "$1" &&
         test "$(/usr/bin/stat -c %u -- "$1")" = 0 &&
@@ -303,7 +306,7 @@ source file (the file may be untrusted; it is never executed there):
         { echo "Transferred source must be a regular non-symlink" >&2; exit 1; }
     test ! -e "$destination" && test ! -L "$destination" ||
         { echo "Existing helper is never overwritten; use a reviewed upgrade" >&2; exit 1; }
-    temp=$(/usr/bin/mktemp "$directory/.iran-helper.XXXXXXXX")
+    temp=$(/usr/bin/mktemp "$directory/.relay-peer-helper.XXXXXXXX")
     trap "/usr/bin/rm -f -- $temp" EXIT
     /usr/bin/install -o root -g root -m 0500 -- "$source" "$temp"
     printf "%s  %s\n" "$expected" "$temp" |
@@ -316,8 +319,8 @@ source file (the file may be untrusted; it is never executed there):
     printf "%s  %s\n" "$expected" "$destination" |
         /usr/bin/sha256sum --check --status ||
         { echo "Installed source verification failed" >&2; exit 1; }
-    echo "Root-owned, hash-verified Iran public-only helper installed; no SSH admission."
-    ' bash "$PWD/connection-relay-iran.py"
+    echo "Root-owned, hash-verified intermediary public-only helper installed; no SSH admission."
+    ' bash "$PWD/connection-relay-peer.py"
 
 If the destination already exists, **do not overwrite it** or run a version
 upgrade implicitly. Inspect its provenance and use a separately reviewed
@@ -331,12 +334,12 @@ executes those exact bytes with isolated Python imports. Even if the pathname
 changes after opening, Python runs the originally verified inode. Do not
 replace this with a direct sudo Python call.
 
-    iran_relay_public() {
+    relay_peer_public() {
       /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
       set -euo pipefail
-      expected=8871c617abd09ff94dc40c9d40d23501ddf376d69efa55228d40e88125986e67
-      directory=/usr/local/libexec/mcp-gateway-iran-relay
-      destination=$directory/connection-relay-iran.py
+      expected=a0d1fb3a12c98f35a41d60f1e55c562c75ec5ad20f5531e12e7e8b326b72eb7b
+      directory=/usr/local/libexec/mcp-gateway-relay-peer
+      destination=$directory/connection-relay-peer.py
       trusted_dir() {
           test -d "$1" && test ! -L "$1" &&
           test "$(/usr/bin/stat -c %u -- "$1")" = 0 &&
@@ -361,10 +364,10 @@ replace this with a direct sudo Python call.
       exec /usr/bin/python3 -I /proc/self/fd/9 "$@"
       ' bash "$@"
     }
-    iran_relay_public stage --input "$PWD/gateway-public-export.txt"
-    iran_relay_public inspect --input "$PWD/gateway-public-export.txt"
+    relay_peer_public stage --input "$PWD/gateway-public-export.txt"
+    relay_peer_public inspect --input "$PWD/gateway-public-export.txt"
     # Optional offline public-stage rollback only:
-    iran_relay_public retire --input "$PWD/gateway-public-export.txt"
+    relay_peer_public retire --input "$PWD/gateway-public-export.txt"
 
 On unsupported Linux filesystems lacking O_TMPFILE and
 linkat(AT_EMPTY_PATH), retirement must fail closed **before deletion**; it
@@ -376,11 +379,11 @@ control username and wire-validated Ed25519 key. It is public data, **not a
 cryptographically signed freshness certificate**. Obtain it directly from a
 trusted, current Gateway operator session; never accept an unverified third-
 party replacement or assume an old export remains current after Relay
-rotation. No private key should ever be transferred to Iran.
+rotation. No private key should ever be transferred to intermediary.
 
 Stage stores exactly control_key.pub and owner.json, both inside a
 root-owned 0700 directory at
-/var/lib/mcp-gateway-iran-relays/<record-ULID>/, keyed by the immutable
+/var/lib/mcp-gateway-relay-peers/<record-ULID>/, keyed by the immutable
 record rather than the display name. A per-record root-owned lock serializes
 staging, inspection and retirement. Repeat with identical identity is
 idempotent; changed revisions, host fingerprints, host generations, endpoints,
@@ -389,7 +392,7 @@ or cleanup. Existing inert v1 records cannot be migrated or automatically
 retired with v2 proof; if any were installed, preserve their exact earlier
 export and use a separately approved version-pinned offline cleanup procedure
 before staging a replacement. Never treat deletion of a local v1 stage as
-proof that a live Iran identity was revoked. An interrupted retirement uses
+proof that a live intermediary identity was revoked. An interrupted retirement uses
 an exact durable retiring.json marker and can resume removing only the two
 owned public artifacts. If publication was interrupted after linkat but before
 a successful directory fsync, retry revalidates the existing marker's exact
@@ -401,14 +404,14 @@ namespace before any separately approved recovery.
 
 No Linux SSH principal is created, no authorized_keys or sshd configuration
 is installed or reloaded, no listener, service or nftables policy is enabled,
-and no privileged readiness evidence is produced. The actual Iran account
+and no privileged readiness evidence is produced. The actual intermediary account
 **must be exclusive to the Relay**, not a reused shared SSH principal, and
 its AllowTcpForwarding, key-only restrictions and public-destination egress
 policy must still be independently installed, positively and negatively
 tested, and linked to a fresh Gateway/host generation before any forwarding
 activation. The next host-admission/attestation step must not treat a staged
-public key as proof of Iran connectivity, restricted egress or authenticated
-Target access. Gateway-only deletion does not depend on Iran-side staging or
+public key as proof of intermediary connectivity, restricted egress or authenticated
+Target access. Gateway-only deletion does not depend on intermediary-side staging or
 cleanup.
 
 ## Gateway-local privileged policy audit (merged source; not installed)
@@ -471,7 +474,7 @@ Output is **GATEWAY LOCAL POLICY AUDIT PASS** or actionable **FAIL CLOSED**.
 Passing this check is deliberately NOT a readiness lease. The helper creates
 no policy marker or eleven-field readiness manifest and cannot itself set a
 Relay Ready/Enabled. Separate effective verification of the dedicated
-Gateway PHP-FPM/CLI UID and sibling-site isolation, Iran forwarding-only
+Gateway PHP-FPM/CLI UID and sibling-site isolation, intermediary forwarding-only
 control account and permitted egress, SSH control connectivity, and actual
 Target authentication remains required. Setup, Update, Repair, trusted
 attestation issuer and real-host end-to-end acceptance are still unfinished.
@@ -586,7 +589,7 @@ check to force an upgrade. No host update occurs when this code is merged.
    preserves the managed resource claim for safe diagnosis/retry. Unknown
    resources, unsafe ownership/symlinks, active listeners and failed
    operations are rejected instead of purged.
-   No SSH connection to Iran is attempted.
+   No SSH connection to intermediary is attempted.
 5. On the **first successful cleanup**, `retire` issues a root-owned,
    boot-bound retirement receipt (600-second lease) after verifying removal
    of the exact Gateway resources; `seal-delete` verifies that clean host,
@@ -598,8 +601,8 @@ check to force an upgrade. No host update occurs when this code is merged.
    foreign or historical rotation fence is never sufficient to skip cleanup.
    Refresh Admin. With no bound Targets, exact ID, Owner password, Owner
    acknowledgement and a current matching fence + receipt, the DB record
-   can be deleted. An offline Iran host NEVER prevents this.
-   Cleanup of old Iran-side accounts/keys is optional and independent.
+   can be deleted. An offline intermediary host NEVER prevents this.
+   Cleanup of old intermediary-side accounts/keys is optional and independent.
 
 ### Generation invalidation: mandatory BEFORE new Setup or Repair
 
@@ -709,7 +712,7 @@ attestation implementation are still outstanding.
 
 Tests of this helper currently use disposable directories and fake
 `systemctl`, `nft` and `ss`; those tests are **not a claim of
-production host, systemd, firewall or Iran setup verification**.
+production host, systemd, firewall or intermediary setup verification**.
 
 ### Evidence-bounded Admin operational states (merged source; not deployed)
 
@@ -724,31 +727,31 @@ unexpected terminal deletion fence; **Cleanup required** means an inactive
 registration has a durable deletion fence and awaits proof renewal or final
 metadata removal. Each state displays a concrete next action. These
 application-facing labels neither install resources nor assert SOCKS
-availability, Iran reachability, or end-to-end Target authentication.
+availability, intermediary reachability, or end-to-end Target authentication.
 
 ## User workflow
 
-1. Open **System > Connection Relays**. Register stable Relay ID, display name, Iran control SSH endpoint and independently verified *public* SSH host key, dedicated user and reserved NL local SOCKS5 port (46000–60999). The metadata is saved disabled, without changing hosts.
-2. Obtain separately authorized host setup. The privileged operator provisions dedicated identities, daemon and ACL below. Only the *public* client key may be sent to Iran; private keys stay out of the web root and logs. Perform isolation/egress/host-key tests before the operator signs a root-owned attestation.
+1. Open **System > Connection Relays**. Register stable Relay ID, display name, intermediary control SSH endpoint and independently verified *public* SSH host key, dedicated user and reserved Gateway local SOCKS5 port (46000–60999). The metadata is saved disabled, without changing hosts.
+2. Obtain separately authorized host setup. The privileged operator provisions dedicated identities, daemon and ACL below. Only the *public* client key may be sent to the intermediary; private keys stay out of the web root and logs. Perform isolation/egress/host-key tests before the operator signs a root-owned attestation.
 3. Enable with the Owner password. The app rejects missing or stale attestation and does not claim remote connectivity. The optional control listener test checks only that SOCKS5 responds.
 4. On **Targets > Add Target**, choose SSH or WordPress connector, then optionally a ready Relay, and confirm Owner password. For SSH, choose Direct rather than Managed/Manual Reverse. Authenticate/test the actual Target separately.
 5. On Target Edit, change route only after disconnect and reconciliation. The Owner/password-gated workflow increments a persistent route epoch and re-seals SSH login secret. WordPress requires no active OAuth credential/flow/refresh/revoke intent. A->B->A cannot reactivate historical retained SSH Jobs.
 6. Disabling a Relay fails closed and fences every bound Target. Repair/reenable does not silently declare Targets Connected.
 
-## Required separate NL host approval
+## Required separate Gateway host approval
 
-The inspected NL Gateway host shares one PHP-FPM Unix UID with several other websites. A loopback-only SOCKS5 listener is **not isolated** in this arrangement. Approval to use this feature must include a deployment-specific host change plan and rollback. In order:
+The previously inspected Gateway deployment shared one PHP-FPM Unix UID with several other websites. A loopback-only SOCKS5 listener is **not isolated** in this arrangement. Approval to use this feature must include a deployment-specific host change plan and rollback. In order:
 
 - Give Gateway its own dedicated non-root PHP-FPM pool and UID, not shared with any unrelated website or the SSH control client. Its PHP CLI scheduler/queue must run with the same appropriately isolated identity, or dedicated owner-verified equivalent to avoid failed route attestations. Verify real process credentials, application paths and permissions; retain safe return to previous PHP pool. Do not weaken other sites.
-- Create a distinct low-privilege SSH client identity, Ed25519 control key in root-controlled non-web directory, pinned independently obtained Iran SSHD public host key, and supervised systemd client connecting NL -> Iran using sessionless OpenSSH dynamic local SOCKS5. Use BatchMode, IdentitiesOnly, StrictHostKeyChecking, ExitOnForwardFailure, ServerAlive, and a fixed bind of 127.0.0.1:port only. Do not edit the current dedicated Reverse SSHD instance or its port.
+- Create a distinct low-privilege SSH client identity, Ed25519 control key in root-controlled non-web directory, pinned independently obtained intermediary SSHD public host key, and supervised systemd client connecting Gateway -> intermediary using sessionless OpenSSH dynamic local SOCKS5. Use BatchMode, IdentitiesOnly, StrictHostKeyChecking, ExitOnForwardFailure, ServerAlive, and a fixed bind of 127.0.0.1:port only. Do not edit the current dedicated Reverse SSHD instance or its port.
 - Extend the **existing** nftables/iptables/aaPanel firewall with narrowly owned rules: only the dedicated Gateway PHP UID can connect to this exact loopback port; unrelated UIDs are denied. An output-chain socket UID condition is an implementation possibility, **not an approved production command**. Prove the actual firewall order, IPv4/IPv6 scope, persistence and rollback before use. Reject or drop access from all unrelated site Unix identities, even if they can open localhost TCP sockets. Do not turn off the host firewall to simplify setup.
 - Verify in different *actual OS identities* that Gateway PHP can connect and unrelated websites cannot; allow the root-owned attestation path, `/proc/sys/kernel/random/boot_id` and `/proc/uptime` through any effective PHP open_basedir policy without relaxing other filesystem restrictions; ensure rules survive daemon restart/reboot and are enforced before the SOCKS client starts. Check a downed tunnel fails without Direct, without opening public listeners.
 
-## Required separate Iran host approval
+## Required separate intermediary host approval
 
-Install a dedicated non-root, public-key-only SSH control user, no shell/TTY/password/sudo, agent/X11/StreamLocal forwarding or unrelated authorized keys. Require SSH local forwarding only; validate effective sshd settings and relevant per-key policy with the actual OpenSSH build. Dynamic -D connects via direct-tcpip. PermitOpen applies to fixed destinations, but shared future Target routing may require several hosts and ports. Therefore restrict this principal using an independently approved Iran host/network egress policy to the intended TCP ports and public IP space, denying loopback, RFC1918, link-local, metadata, multicast, local and reserved addresses. Test permitted and denied cases, concurrency, restart and log fidelity. Gateway public-IP SSRF policy is mandatory second-layer validation, not a substitute for host ACL.
+Install a dedicated non-root, public-key-only SSH control user, no shell/TTY/password/sudo, agent/X11/StreamLocal forwarding or unrelated authorized keys. Require SSH local forwarding only; validate effective sshd settings and relevant per-key policy with the actual OpenSSH build. Dynamic -D connects via direct-tcpip. PermitOpen applies to fixed destinations, but shared future Target routing may require several hosts and ports. Therefore restrict this principal using an independently approved intermediary host/network egress policy to the intended TCP ports and public IP space, denying loopback, RFC1918, link-local, metadata, multicast, local and reserved addresses. Test permitted and denied cases, concurrency, restart and log fidelity. Gateway public-IP SSRF policy is mandatory second-layer validation, not a substitute for host ACL.
 
-Iran setup must not require the Iran server to download a script from NL or foreign CDN. Use an independently available transfer path for approved code/public keys, with pinned checksum and provenance. Never store Relay private keys, password or opaque credentials in GitHub issue comments, web forms or normal diagnostic logs.
+Intermediary setup must not require the intermediary server to download a script from Gateway or an external CDN. Use an independently available transfer path for approved code/public keys, with pinned checksum and provenance. Never store Relay private keys, password or opaque credentials in GitHub issue comments, web forms or normal diagnostic logs.
 
 ## Root-owned readiness evidence
 
@@ -763,12 +766,12 @@ The verifier also checks whether `<relay-id>.retired.json` exists (which rejects
 
 All four artifacts and their parent directories must be root-owned, non-symlink, not group/world writable, and actually accessible to the effective Gateway PHP UID. The evidence directory and optional `.fences` directory must be **readable and searchable** (or the Relay fails closed); the private key and lock directories must **not** be opened to PHP. A root-owned `0700` `.fences` directory with a concealed fence is explicitly unsafe: reconcile operator permissions rather than interpreting it as an empty directory. The `.policy` file contains the **same fresh 256-bit generation** as the `provisioning` v1 record, never an independently invented token. Before any FPM/CLI identity, service, SSH principal, firewall, routing, egress or binding policy change, a privileged helper must invalidate the old generation under the same exclusive root-only lock used for the entire Setup/Repair lifecycle. Post-change effective OS checks must finish before an independent privileged verifier issues/renews the lease; PHP writes none of these artifacts.
 
-Merged main provides the **source-side validator, retirement/fence helper and staged Gateway-local Setup/Retry resources**. Neither these merged resources nor the proposed v2 public-key export issue/renew authoritative readiness, enroll or restrict the Iran SSH principal, or prove a live end-to-end Target path. A syntactically valid root-owned claim is not proof of actual SOCKS, Iran reachability or Target identity.
+Merged main provides the **source-side validator, retirement/fence helper and staged Gateway-local Setup/Retry resources**. Neither these merged resources nor the proposed v2 public-key export issue/renew authoritative readiness, enroll or restrict the intermediary SSH principal, or prove a live end-to-end Target path. A syntactically valid root-owned claim is not proof of actual SOCKS, intermediary reachability or Target identity.
 
 The manifest has exactly **11** keys (illustrative schema, not real values; never copy as-is). **Existing 10-key manifests are invalid and must be reissued by the independently privileged operator**; do not migrate or extend them automatically:
 
     {
-      "relay_id": "iran-1",
+      "relay_id": "edge-relay-1",
       "host_fingerprint": "<current 64-hex configuration fingerprint>",
       "gateway_php_uid": 1001,
       "dedicated_php_uid_verified": true,
@@ -781,9 +784,9 @@ The manifest has exactly **11** keys (illustrative schema, not real values; neve
       "expires_at_unix": 1793865600
     }
 
-The operator records `verified_at_boot_seconds` **at the same verification moment** as `verified_at_unix`, using the integer part of the first value in Linux `/proc/uptime`; this is a boot-relative clock **including suspend time** ([Linux `proc_uptime(5)`](https://man7.org/linux/man-pages/man5/proc_uptime.5.html)). The verifier must obtain the sample on the **Gateway host**, not on the Iran Relay or in a container with an incompatible boot/uptime view. Both timestamps must be observed only after effective host isolation is independently verified; do not fill them from unchecked assumptions. The manifest is accepted only while the actual PHP effective UID matches, the running Linux boot ID and policy generation match, the boot-relative age is non-negative and strictly under 86400 seconds, its Unix expiry is strictly in the future and within 24 hours of verification, and Unix versus boot-relative elapsed ages differ by no more than 60 seconds. Large wall-clock forward/backward jumps invalidate the evidence rather than extending the lease. Readable `/proc/uptime` and a valid 11-key schema are mandatory; missing or invalid sources fail closed. The privileged verifier must regularly re-check the effective host controls and renew the manifest **before** expiry; no PHP action may silently renew or infer that effective firewall enforcement is intact. A reboot always invalidates the prior boot's manifest. Independent host configuration drift must trigger policy rotation and re-verification even if the short lease has not yet expired; **static file checks alone cannot detect unreported host drift**.
+The operator records `verified_at_boot_seconds` **at the same verification moment** as `verified_at_unix`, using the integer part of the first value in Linux `/proc/uptime`; this is a boot-relative clock **including suspend time** ([Linux `proc_uptime(5)`](https://man7.org/linux/man-pages/man5/proc_uptime.5.html)). The verifier must obtain the sample on the **Gateway host**, not on the Relay peer or in a container with an incompatible boot/uptime view. Both timestamps must be observed only after effective host isolation is independently verified; do not fill them from unchecked assumptions. The manifest is accepted only while the actual PHP effective UID matches, the running Linux boot ID and policy generation match, the boot-relative age is non-negative and strictly under 86400 seconds, its Unix expiry is strictly in the future and within 24 hours of verification, and Unix versus boot-relative elapsed ages differ by no more than 60 seconds. Large wall-clock forward/backward jumps invalidate the evidence rather than extending the lease. Readable `/proc/uptime` and a valid 11-key schema are mandatory; missing or invalid sources fail closed. The privileged verifier must regularly re-check the effective host controls and renew the manifest **before** expiry; no PHP action may silently renew or infer that effective firewall enforcement is intact. A reboot always invalidates the prior boot's manifest. Independent host configuration drift must trigger policy rotation and re-verification even if the short lease has not yet expired; **static file checks alone cannot detect unreported host drift**.
 
-`host_fingerprint` is generated by `ConnectionRelay::hostFingerprint()` from the immutable Relay identity, endpoint, control key, local port and `configuration_revision`, separated with NUL bytes; it is **not** a login-key fingerprint. Every effective Enable or Disable advances the separate monotonic `lifecycle_revision` used by Owner action forms, invalidating prepared Enable/Disable requests after any intervening action. Each effective Disable also advances `configuration_revision` and atomically fences bound Targets, invalidating the old host manifest. **This does not imply that the prior host resources have been removed:** the approved Gateway-only `retire` command may prove an exact v2 claim against the current DB revision N+1 **or** its immediately preceding provisioned revision N, using an explicit expected prior fingerprint deterministically calculated from the unchanged connection fields. It never adopts arbitrary older or foreign claims. Under the same Relay-scoped root lock, the helper positively verifies and removes those exact installed resources, then issues the retirement receipt for the **current** N+1 fingerprint and revision. `seal-delete` / `seal-rotate` accept **only** the current revision, so the permanent fence agrees with the DB transition. A partial failure retains the claim for bounded Retry. The optional prior fingerprint is accepted by read-only `preflight` and `retire` only; it grants no Setup or Seal privilege. Iran reachability remains irrelevant.
+`host_fingerprint` is generated by `ConnectionRelay::hostFingerprint()` from the immutable Relay identity, endpoint, control key, local port and `configuration_revision`, separated with NUL bytes; it is **not** a login-key fingerprint. Every effective Enable or Disable advances the separate monotonic `lifecycle_revision` used by Owner action forms, invalidating prepared Enable/Disable requests after any intervening action. Each effective Disable also advances `configuration_revision` and atomically fences bound Targets, invalidating the old host manifest. **This does not imply that the prior host resources have been removed:** the approved Gateway-only `retire` command may prove an exact v2 claim against the current DB revision N+1 **or** its immediately preceding provisioned revision N, using an explicit expected prior fingerprint deterministically calculated from the unchanged connection fields. It never adopts arbitrary older or foreign claims. Under the same Relay-scoped root lock, the helper positively verifies and removes those exact installed resources, then issues the retirement receipt for the **current** N+1 fingerprint and revision. `seal-delete` / `seal-rotate` accept **only** the current revision, so the permanent fence agrees with the DB transition. A partial failure retains the claim for bounded Retry. The optional prior fingerprint is accepted by read-only `preflight` and `retire` only; it grants no Setup or Seal privilege. Intermediary reachability remains irrelevant.
 
 Enable does **not** change the attested configuration fingerprint; the independently verified manifest remains current for the same unchanged host policy until expiry. Re-enabling after a Disable requires new privileged verification and a new manifest matching the current configuration fingerprint. A repeated Disable while already disabled is a no-op only with the latest lifecycle revision. No production host setup, verifier implementation, attestation or socket supervision is provided by this application source; the host operator owns their separate approval, persistence, exact host policy and recovery.
 
@@ -793,4 +796,4 @@ Enable does **not** change the attested configuration fingerprint; the independe
 - Validate real Target SSH host-key mismatch before login; HTTPS TLS hostname and SNI; DNS rebinding/non-public DNS refusal; denied egress; request size/deadline; retained Job and stale OAuth outcome fencing; reconnection/reboot; multiple simultaneous Targets.
 - A failed/missing Relay blocks only its selected Targets, with a specific diagnostic and no Direct fallback. Do not auto-retry effectful remote operations after uncertain dispatch.
 - Rollback: disable Relay via Owner UI first to fence Target epochs; independently verify pending Job/OAuth outcome reconciliation; stop only that Relay's controlled service; remove only positively owned host firewall rules, identity, key and attestation under separate authorization. Do not roll back DB columns while historical epoch-bound Target entries or retained SSH Jobs exist.
-- **Gates:** full source diff + exact-head CI + independent high-assurance review; separate authorized NL/Iran host preflight, rollout and real end-to-end tests; explicit Owner merge/deploy approval. No production claim before those facts exist.
+- **Gates:** full source diff + exact-head CI + independent high-assurance review; separate authorized Gateway/intermediary host preflight, rollout and real end-to-end tests; explicit Owner merge/deploy approval. No production claim before those facts exist.

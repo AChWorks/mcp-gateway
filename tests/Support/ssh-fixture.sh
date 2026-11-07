@@ -123,13 +123,21 @@ ssh-keygen -q -t rsa -b 3072 -N "${key_passphrase}" -f "${root}/login_rsa"
 ssh-keygen -q -t ed25519 -N '' -f "${root}/reverse_tunnel_key"
 # Separate client principal for -D (neither Target login nor Reverse).
 ssh-keygen -q -t ed25519 -N '' -f "${root}/relay_control_key"
+# Independent second peer endpoint and credentials; both hosts are disposable
+# loopback daemons, not geography-specific or publicly reachable services.
+ssh-keygen -q -t ed25519 -N '' -f "${root}/relay_secondary_control_key"
+ssh-keygen -q -t ed25519 -N '' -f "${root}/relay_secondary_host_ed25519"
+ssh-keygen -q -t rsa -b 3072 -N '' -f "${root}/relay_secondary_host_rsa"
 
 # Registration intentionally accepts only the canonical two-field public-key
 # form. ssh-keygen appends a local comment by default, so strip fixture-only
 # comments rather than weakening the production parser.
 awk '{print $1" "$2}' "${root}/host_ed25519.pub" > "${root}/host_ed25519.pin"
 awk '{print $1" "$2}' "${root}/control_host_ed25519.pub" > "${root}/control_host_ed25519.pin"
+awk '{print $1" "$2}' "${root}/relay_secondary_host_ed25519.pub" > "${root}/relay_secondary_host_ed25519.pin"
 ! cmp -s "${root}/host_ed25519.pin" "${root}/control_host_ed25519.pin"
+! cmp -s "${root}/relay_secondary_host_ed25519.pin" "${root}/control_host_ed25519.pin"
+! cmp -s "${root}/relay_secondary_host_ed25519.pin" "${root}/host_ed25519.pin"
 awk '{print $1" "$2}' "${root}/host_rsa.pub" > "${root}/host_rsa.pin"
 awk '{print $1" "$2}' "${root}/wrong_ed25519.pub" > "${root}/wrong_ed25519.pin"
 
@@ -141,6 +149,10 @@ awk '{print "restrict,port-forwarding,permitopen=\"127.0.0.1:46231\",permitopen=
   sudo tee "/home/${fixture_user}/.ssh/relay_authorized_keys" >/dev/null
 sudo chown "${fixture_user}:${fixture_user}" "/home/${fixture_user}/.ssh/relay_authorized_keys"
 sudo chmod 600 "/home/${fixture_user}/.ssh/relay_authorized_keys"
+awk '{print "restrict,port-forwarding,permitopen=\"127.0.0.1:46231\",permitopen=\"[::1]:46231\",permitopen=\"127.0.0.1:46244\" "$1" "$2}' "${root}/relay_secondary_control_key.pub" |
+  sudo tee "/home/${fixture_user}/.ssh/relay_authorized_keys_secondary" >/dev/null
+sudo chown "${fixture_user}:${fixture_user}" "/home/${fixture_user}/.ssh/relay_authorized_keys_secondary"
+sudo chmod 600 "/home/${fixture_user}/.ssh/relay_authorized_keys_secondary"
 
 start_daemon() {
   local name="$1"
@@ -163,6 +175,11 @@ start_daemon() {
     allow_password=no
     host_key_prefix=control_host
     keys_file=.ssh/relay_authorized_keys
+  elif [[ "${name}" == "relay-control-secondary" ]]; then
+    allow_forwarding=local
+    allow_password=no
+    host_key_prefix=relay_secondary_host
+    keys_file=.ssh/relay_authorized_keys_secondary
   fi
   cat > "${config}" <<EOF_CONFIG
 Port ${port}
@@ -228,6 +245,8 @@ start_daemon elevated-sftp "${ports[10]}" "Subsystem sftp /usr/bin/sudo -n /usr/
 start_daemon reverse-control "${ports[11]}" \
   "PermitListen 127.0.0.1:46250" "PermitOpen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
 start_daemon relay-control "${ports[12]}" \
+  "PermitOpen 127.0.0.1:46231 [::1]:46231 127.0.0.1:46244" "PermitListen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
+start_daemon relay-control-secondary 46256 \
   "PermitOpen 127.0.0.1:46231 [::1]:46231 127.0.0.1:46244" "PermitListen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
 # Client-initiated OpenSSH -R: listener and actual pinned end-host sshd
 # remain separate SSH authentication and trust domains.
@@ -307,6 +326,34 @@ timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46251' 2>/dev/null || {
   exit 1
 }
 
+# A second independent peer has a different sshd, host key, control key,
+# and SOCKS listener. Failure of one route cannot imply a Direct fallback.
+printf '[127.0.0.1]:46256 %s\n' "$(cat "${root}/relay_secondary_host_ed25519.pin")" > "${root}/relay_secondary_known_hosts"
+chmod 600 "${root}/relay_secondary_known_hosts"
+ssh -NT -p 46256 -i "${root}/relay_secondary_control_key" \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${root}/relay_secondary_known_hosts" \
+  -o ExitOnForwardFailure=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+  -D "127.0.0.1:46255" "${fixture_user}@127.0.0.1" > "${root}/relay-secondary-client.log" 2>&1 &
+relay_secondary_pid="$!"
+printf '%s\n' "${relay_secondary_pid}" > "${root}/relay-secondary-client.pid"
+for _ in $(seq 1 50); do
+  if ! kill -0 "${relay_secondary_pid}" 2>/dev/null; then
+    cat "${root}/relay-secondary-client.log" >&2
+    echo 'Secondary independent Relay peer exited.' >&2
+    exit 1
+  fi
+  if timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46255' 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+timeout 1 bash -c 'exec 3<>/dev/tcp/127.0.0.1/46255' 2>/dev/null || {
+  cat "${root}/relay-secondary-client.log" >&2
+  echo 'Secondary Relay SOCKS fixture did not start.' >&2
+  exit 1
+}
+
 # A tunnel-control key must NOT provide a shell or execute even a
 # noninteractive command; -N/-R works without asking sshd for a session.
 if ssh -T -p "${ports[11]}" -i "${root}/reverse_tunnel_key" \
@@ -345,6 +392,9 @@ SSH_FIXTURE_REVERSE_PORT=46250
 SSH_FIXTURE_REVERSE_CONTROL_PORT=${ports[11]}
 SSH_FIXTURE_RELAY_SOCKS_PORT=46251
 SSH_FIXTURE_RELAY_CONTROL_PORT=${ports[12]}
+SSH_FIXTURE_RELAY_SECONDARY_CONTROL_PORT=46256
+SSH_FIXTURE_RELAY_SECONDARY_SOCKS_PORT=46255
+SSH_FIXTURE_RELAY_SECONDARY_HOST_KEY=${root}/relay_secondary_host_ed25519.pin
 SSH_FIXTURE_RELAY_TLS_CERT=${root}/relay-tls.crt
 SSH_FIXTURE_RELAY_TLS_PORT=46244
 SSH_FIXTURE_RELAY_TLS_HOST=wp.fixture.test

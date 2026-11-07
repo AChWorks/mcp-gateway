@@ -1,4 +1,4 @@
-"""Offline Iran public-key staging tests; ALL resources are disposable fixtures."""
+"""Offline Relay peer public-key staging tests; ALL resources are disposable fixtures."""
 from __future__ import annotations
 
 import base64
@@ -14,15 +14,15 @@ import unittest
 from unittest import mock
 
 sys.dont_write_bytecode = True
-source = Path(__file__).resolve().parents[2] / "resources/host/connection-relay-iran.py"
-spec = importlib.util.spec_from_file_location("relay_iran_public_stage", source)
+source = Path(__file__).resolve().parents[2] / "resources/host/connection-relay-peer.py"
+spec = importlib.util.spec_from_file_location("relay_peer_public_stage", source)
 assert spec and spec.loader
 mod = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = mod
 spec.loader.exec_module(mod)
 
 
-class IranOfflinePublicStageTests(unittest.TestCase):
+class RelayPeerOfflinePublicStageTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -40,21 +40,21 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.input_path = self.root / "gateway-public-export.txt"
         self.input_path.write_bytes(self.snapshot_bytes)
 
-    def export(self, record="01JAE000000000000000000077", relay="iran-stage",
+    def export(self, record="01JAE000000000000000000077", relay="edge-relay",
                host="192.0.2.9", port=2222, user="relay-control", key=None,
                revision=1, fingerprint="a" * 64, generation="b" * 64):
         return ("\n".join([
-            "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT V2",
+            "PUBLIC ONLY - OFFLINE RELAY PEER ENROLLMENT INPUT V2",
             "Relay: " + relay,
             "Record: " + record,
             "Configuration revision: " + str(revision),
             "Host fingerprint: " + fingerprint,
             "Host generation: " + generation,
             "Control endpoint: " + host + ":" + str(port),
-            "Control user on Iran: " + user,
+            "Control user on Relay peer: " + user,
             "Ed25519 PUBLIC KEY (never copy the private key):",
             self.key if key is None else key,
-            "NOT ENROLLED. Restrict Iran SSHD forwarding and public egress separately; "
+            "NOT ENROLLED. Restrict Relay peer SSHD forwarding and public egress separately; "
             "verify both hosts and issue independent readiness before enabling.",
         ]) + "\n").encode("ascii")
 
@@ -71,7 +71,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         value = mod.read_export(self.input_path)
         self.assertEqual(self.snapshot, value)
         self.assertEqual(self.key + "\n", value.public_key.decode())
-        self.assertEqual("iran-stage", value.relay_id)
+        self.assertEqual("edge-relay", value.relay_id)
         self.assertEqual("relay-control", value.control_user)
         self.assertEqual(2222, value.control_port)
         self.assertEqual(1, value.revision)
@@ -79,7 +79,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.assertEqual("b" * 64, value.host_generation)
         self.assertEqual(2, value.owner_record()["version"])
         self.assertEqual("relay-control", value.owner_record()["control_user"])
-        self.assertNotIn("proposed_iran_user", value.owner_record())
+        self.assertNotIn("proposed_peer_user", value.owner_record())
         self.assertNotIn("PRIVATE KEY", value.public_key.decode())
 
     def test_only_inert_public_data_is_staged_and_claim_is_exact(self):
@@ -185,6 +185,28 @@ class IranOfflinePublicStageTests(unittest.TestCase):
                                           for item in stage.iterdir()})
         self.assertFalse((stage / "retiring.json").exists())
 
+    def test_renamed_peer_namespace_does_not_adopt_or_delete_legacy_staging(self):
+        # The generic helper must not silently take ownership of an old,
+        # separately version-pinned Iran-only stage after a helper rename.
+        legacy = self.root / "var/lib/mcp-gateway-iran-relays" / self.snapshot.record_id
+        legacy.mkdir(parents=True, mode=0o700)
+        legacy_marker = legacy / "owner.json"
+        legacy_marker.write_bytes(b"foreign v2 operator evidence")
+        assert self.layout.stage(self.snapshot) != legacy
+        self.assertIn("STAGED INACTIVE", self.stage())
+        self.assertIn("STAGE RETIRED", self.retire())
+        self.assertEqual(b"foreign v2 operator evidence", legacy_marker.read_bytes())
+        self.assertTrue(legacy.is_dir())
+
+    def test_old_geographic_v2_export_is_not_accepted_as_generic_peer_proof(self):
+        old = (self.snapshot_bytes
+               .replace(b"OFFLINE RELAY PEER ENROLLMENT", b"OFFLINE IRAN ENROLLMENT")
+               .replace(b"Control user on Relay peer:", b"Control user on Iran:")
+               .replace(b"Restrict Relay peer SSHD", b"Restrict Iran SSHD"))
+        with self.assertRaises(mod.Refusal):
+            mod.parse_gateway_export(old)
+        self.assertFalse(self.layout.stages.exists())
+
     def test_cold_boot_missing_run_lock_can_be_recreated_without_changing_stage(self):
         self.stage()
         before = {
@@ -221,7 +243,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         invalid = [
             self.snapshot_bytes + b"UNEXPECTED EXTRA\n",
             self.snapshot_bytes.replace(b"Record: ", b"Rexord: "),
-            self.snapshot_bytes.replace(b"iran-stage", b"../../root"),
+            self.snapshot_bytes.replace(b"edge-relay", b"../../root"),
             self.snapshot_bytes.replace(b"relay-control", b"root;touch"),
             self.snapshot_bytes.replace(b"relay-control", b"root"),
             self.snapshot_bytes.replace(b"192.0.2.9:2222", b"192.0.2.9:0"),
@@ -333,7 +355,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.assertIn("STAGE RETIRED", self.retire())
         self.assertFalse(self.layout.stage(self.snapshot).exists())
         self.assertEqual("UNRELATED", sibling.read_text())
-        self.assertIn("NO IRAN STAGE PRESENT", self.retire())
+        self.assertIn("NO RELAY PEER STAGE PRESENT", self.retire())
         with self.assertRaisesRegex(mod.Refusal, "no exact"):
             self.inspect()
         self.assertFalse((self.root / "etc").exists())
@@ -534,7 +556,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.assertTrue(stage.is_dir())
         self.assertEqual([], list(stage.iterdir()))
         # Reset and repeat at the boundary *after* the final rmdir.
-        self.assertIn("EMPTY IRAN PUBLIC STAGE RETIRED", self.retire())
+        self.assertIn("EMPTY RELAY PEER PUBLIC STAGE RETIRED", self.retire())
         self.stage()
         real_sync = mod.sync_dir
 
@@ -547,7 +569,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "simulated crash"):
                 self.retire()
         self.assertFalse(stage.exists())
-        self.assertIn("NO IRAN STAGE PRESENT", self.retire())
+        self.assertIn("NO RELAY PEER STAGE PRESENT", self.retire())
 
     def test_truncated_foreign_retirement_marker_is_preserved(self):
         self.stage()
@@ -575,7 +597,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         # retirement marker were unlinked, before the final rmdir.
         for file in base.iterdir():
             file.unlink()
-        self.assertIn("EMPTY IRAN PUBLIC STAGE RETIRED", self.retire())
+        self.assertIn("EMPTY RELAY PEER PUBLIC STAGE RETIRED", self.retire())
         self.assertFalse(base.exists())
 
     def test_orphaned_partial_stage_without_retirement_marker_refused(self):
@@ -611,14 +633,14 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         """Execute the real documented Bash bodies with disposable test paths."""
         doc = (Path(__file__).resolve().parents[2] /
                "docs/CONNECTION-RELAYS.md").read_text()
-        section = doc.split("## Offline Iran-side public-identity staging", 1)[1]
+        section = doc.split("## Offline Relay peer public-identity staging", 1)[1]
         section = section.split("## Gateway-local privileged policy audit", 1)[0]
         installer = section.split(
             "    /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C "
             "/usr/bin/bash -c '\n", 1,
-        )[1].split("\n    ' bash \"$PWD/connection-relay-iran.py\"", 1)[0]
+        )[1].split("\n    ' bash \"$PWD/connection-relay-peer.py\"", 1)[0]
         runner = section.split(
-            "    iran_relay_public() {\n"
+            "    relay_peer_public() {\n"
             "      /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin "
             "LC_ALL=C /usr/bin/bash -c '\n", 1,
         )[1].split("\n      ' bash \"$@\"", 1)[0]
@@ -629,7 +651,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         installer, runner, section = self._operator_runbook_scripts()
         uid = os.geteuid()
         root = self.root
-        directory = root / "libexec/mcp-gateway-iran-relay"
+        directory = root / "libexec/mcp-gateway-relay-peer"
         installer = (installer
                      .replace("base=/usr/local/libexec", "base=" + str(root / "libexec"))
                      .replace("for parent in / /usr /usr/local; do",
@@ -638,7 +660,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
                      .replace('")" = 0 &&', '")" = ' + str(uid) + ' &&')
                      .replace(')" = 0 &&', ')" = ' + str(uid) + ' &&'))
         runner = (runner
-                  .replace("directory=/usr/local/libexec/mcp-gateway-iran-relay",
+                  .replace("directory=/usr/local/libexec/mcp-gateway-relay-peer",
                            "directory=" + str(directory))
                   .replace('for parent in / /usr /usr/local /usr/local/libexec "$directory"; do',
                            'for parent in "$directory"; do')
@@ -669,16 +691,16 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.assertIn("/usr/bin/sha256sum --check --status", runner)
         self.assertIn("exec 9< \"$destination\"", runner)
         self.assertIn("exec /usr/bin/python3 -I /proc/self/fd/9", runner)
-        self.assertNotIn("sudo python3 connection-relay-iran.py", section)
+        self.assertNotIn("sudo python3 connection-relay-peer.py", section)
         import hashlib
         sha = hashlib.sha256(source.read_bytes()).hexdigest()
         self.assertEqual(2, section.count("expected=" + sha))
 
     def test_documented_install_and_isolated_fd_execute_accept_pinned_source(self):
         installer, runner, section, directory = self._sandbox_operator_scripts()
-        installed = directory / "connection-relay-iran.py"
+        installed = directory / "connection-relay-peer.py"
         # The transferred source may reside next to a malicious Python module.
-        transfer = self.root / "connection-relay-iran.py"
+        transfer = self.root / "connection-relay-peer.py"
         transfer.write_bytes(source.read_bytes())
         (self.root / "hashlib.py").write_text(
             "raise RuntimeError('attacker-controlled transfer module imported')\n"
@@ -688,20 +710,20 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.assertEqual(source.read_bytes(), installed.read_bytes())
         self.assertEqual(0o500, installed.stat().st_mode & 0o777)
         self.assertEqual(0o700, directory.stat().st_mode & 0o777)
-        self.assertEqual({"connection-relay-iran.py"}, {p.name for p in directory.iterdir()})
+        self.assertEqual({"connection-relay-peer.py"}, {p.name for p in directory.iterdir()})
         execution = self._operator_shell(
             runner, "--help",
             env={"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C",
                  "PYTHONPATH": str(self.root), "PYTHONINSPECT": "1"},
         )
         self.assertEqual(0, execution.returncode, execution.stderr)
-        self.assertIn("Offline, inactive Iran Relay public-identity", execution.stdout)
+        self.assertIn("Offline, inactive Relay peer public-identity", execution.stdout)
         self.assertFalse((self.root / "var").exists())
 
     def test_documented_install_refuses_mismatch_and_existing_destination(self):
         installer, runner, section, directory = self._sandbox_operator_scripts()
-        destination = directory / "connection-relay-iran.py"
-        bad = self.root / "bad-iran-helper.py"
+        destination = directory / "connection-relay-peer.py"
+        bad = self.root / "bad-peer-helper.py"
         bad.write_text("print('unknown code')\n")
         result = self._operator_shell(installer, bad)
         self.assertNotEqual(0, result.returncode)
@@ -723,7 +745,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.assertNotEqual(0, bad.returncode)
         self.assertIn("Untrusted helper path", bad.stderr)
         directory.chmod(0o700)
-        installed = directory / "connection-relay-iran.py"
+        installed = directory / "connection-relay-peer.py"
         installed.chmod(0o600)
         installed.write_bytes(b"foreign code\n")
         installed.chmod(0o500)
@@ -735,7 +757,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         # Simulate a name swap AFTER opening/checking the trusted source.
         directory = self.root / "trusted"
         directory.mkdir(mode=0o700)
-        installed = directory / "connection-relay-iran.py"
+        installed = directory / "connection-relay-peer.py"
         installed.write_bytes(source.read_bytes())
         installed.chmod(0o500)
         fd = os.open(installed, os.O_RDONLY | os.O_NOFOLLOW)
@@ -756,7 +778,7 @@ class IranOfflinePublicStageTests(unittest.TestCase):
                      "PYTHONPATH": str(self.root)},
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
-            self.assertIn("Offline, inactive Iran Relay public-identity", proc.stdout)
+            self.assertIn("Offline, inactive Relay peer public-identity", proc.stdout)
             self.assertEqual(b"raise SystemExit(66)\n", installed.read_bytes())
         finally:
             os.close(fd)

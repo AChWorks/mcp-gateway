@@ -5,7 +5,7 @@ namespace App\Infrastructure\Connectors\Relay;
 /**
  * The unprivileged Gateway may verify, but cannot create, host retirement
  * evidence. A separate privileged helper must prove that the exact Relay's
- * resources on the Gateway host were retired. Iran reachability is irrelevant.
+ * resources on the Gateway host were retired. intermediary reachability is irrelevant.
  */
 class ConnectionRelayRetirementEvidence
 {
