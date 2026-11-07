@@ -63,6 +63,19 @@ final class OperationDiagnosticsTest extends TestCase
         self::assertStringContainsString('revocation', OperationDiagnostics::summary('revocation_pending'));
     }
 
+    public function test_relay_guidance_describes_native_ssh_without_obsolete_host_attestation(): void
+    {
+        $unavailable = OperationDiagnostics::nextStep('relay_unavailable');
+        self::assertStringContainsString('OpenSSH SOCKS5', $unavailable);
+        self::assertStringContainsString('select another Relay', $unavailable);
+        self::assertStringNotContainsString('isolation', $unavailable);
+        self::assertStringNotContainsString('egress policy', $unavailable);
+
+        $disabled = OperationDiagnostics::nextStep('relay_disabled');
+        self::assertStringContainsString('re-enable the Relay', $disabled);
+        self::assertStringNotContainsString('host policy', $disabled);
+    }
+
     public function test_shared_unsafe_target_guidance_is_specific_without_leaking_untrusted_context(): void
     {
         $details = [

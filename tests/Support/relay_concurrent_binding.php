@@ -6,8 +6,6 @@ declare(strict_types=1);
 use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Targets\Target;
-use App\Infrastructure\Connectors\Relay\ConnectionRelay;
-use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Support\Facades\DB;
@@ -21,13 +19,6 @@ if ($argc !== 4 || getenv('APP_ENV') !== 'testing'
 $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
 $app->make(ConsoleKernel::class)->bootstrap();
 
-$app->instance(ConnectionRelayHostReadiness::class, new class extends ConnectionRelayHostReadiness
-{
-    public function ready(ConnectionRelay $relay): bool
-    {
-        return true; // Explicit test-only root-evidence fixture.
-    }
-});
 DB::connection()->beforeExecuting(static function (string $sql) use ($argv): void {
     if (str_contains(strtolower($sql), 'for update')
         && str_contains(strtolower($sql), 'connection_relays')) {

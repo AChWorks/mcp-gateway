@@ -21,7 +21,6 @@ final class ConnectionRelay extends Model
         return [
             'control_port' => 'integer',
             'local_socks_port' => 'integer',
-            'configuration_revision' => 'integer',
             'lifecycle_revision' => 'integer',
             'enabled' => 'boolean',
         ];
@@ -35,24 +34,12 @@ final class ConnectionRelay extends Model
             foreach ([
                 'relay_id', 'control_host', 'control_port', 'control_user',
                 'control_host_key', 'local_socks_port', 'enabled',
-                'configuration_revision', 'lifecycle_revision',
+                'lifecycle_revision',
             ] as $field) {
                 if ($relay->exists && $relay->isDirty($field)) {
-                    throw new DomainException('Connection Relay security binding requires Owner rotation workflow.');
+                    throw new DomainException('Connection Relay settings require the Owner workflow.');
                 }
             }
         });
-    }
-
-    public function hostFingerprint(?int $configurationRevision = null): string
-    {
-        // The previous exact identity is needed only to retire a provisioned
-        // revision invalidated by Disable. Never mutate DB state to derive it.
-        return hash('sha256', implode("\0", [
-            $this->relay_id, $this->control_host, (string) $this->control_port,
-            $this->control_user, $this->control_host_key,
-            (string) $this->local_socks_port,
-            (string) ($configurationRevision ?? $this->configuration_revision),
-        ]));
     }
 }

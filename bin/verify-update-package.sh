@@ -156,27 +156,6 @@ foreach (["installer_sha256"=>"managed-reverse-target.sh", "gateway_script_sha25
 }
 ' "$root/update/payload/config/ssh.php" "$bin_dir"
 
-# The Relay host helper is packaged under resources/ rather than widening
-# the privileged updater-managed bin/ leaf allowlist.
-relay_script="$root/update/payload/resources/host/connection-relay-gateway.py"
-relay_pin="$root/update/payload/config/connection_relays.php"
-[[ -f "$relay_script" && ! -L "$relay_script" && -f "$relay_pin" && ! -L "$relay_pin" ]] || {
-  echo "Update payload is missing the Relay host helper or its release digest." >&2; exit 1
-}
-python3 - "$relay_script" <<'PYCODE'
-import ast, pathlib, sys
-ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding='utf8'))
-PYCODE
-php -r '
-$cfg = include $argv[1];
-$expected = $cfg["gateway_retirement_helper_sha256"] ?? null;
-$actual = hash_file("sha256", $argv[2]);
-if (!is_string($expected) || !preg_match("/^[a-f0-9]{64}$/D", $expected) || !hash_equals($expected, $actual)) {
-    fwrite(STDERR, "Update Relay host helper has mismatched release-pinned digest.\n");
-    exit(1);
-}
-' "$relay_pin" "$relay_script"
-
 [[ ! -e "$root/update/payload/.env" ]] || { echo "Update payload must not contain .env." >&2; exit 1; }
 [[ ! -e "$root/update/payload/storage" ]] || { echo "Update payload must not contain storage." >&2; exit 1; }
 [[ -f "$root/update/payload/vendor/autoload.php" ]] || { echo "Update payload is missing vendor/autoload.php." >&2; exit 1; }

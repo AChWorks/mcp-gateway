@@ -8,19 +8,17 @@ use App\Infrastructure\Http\OutboundRequestException;
 use Illuminate\Support\Collection;
 
 /**
- * Resolves a persisted, enabled, host-attested, Target-scoped Relay route.
- * This is a control-plane authorization; the actual numeric data-plane
- * connection still verifies the TCP loopback peer and the remote SSH/TLS pin.
+ * Resolves a persisted, enabled, Target-scoped Relay route.
+ * The data plane connects through local SOCKS5 and independently verifies
+ * the actual SSH/HTTPS Target identity.
  */
 final readonly class ConnectionRelayRoutes
 {
-    public function __construct(private ConnectionRelayHostReadiness $host) {}
-
     /** @return Collection<int,ConnectionRelay> */
     public function selectable(): Collection
     {
         return ConnectionRelay::query()->where('enabled', true)->orderBy('display_name')
-            ->get()->filter(fn (ConnectionRelay $relay): bool => $this->host->ready($relay))->values();
+            ->get();
     }
 
     public function selected(?string $relayId): ?ConnectionRelay
@@ -32,7 +30,7 @@ final readonly class ConnectionRelayRoutes
             throw new ConnectionRelayUnavailable;
         }
         $relay = ConnectionRelay::query()->where('relay_id', $relayId)->first();
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled || ! $this->host->ready($relay)) {
+        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
             throw new ConnectionRelayUnavailable;
         }
 
@@ -53,7 +51,7 @@ final readonly class ConnectionRelayRoutes
             throw new ConnectionRelayUnavailable;
         }
         $relay = ConnectionRelay::query()->where('relay_id', $relayId)->lockForUpdate()->first();
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled || ! $this->host->ready($relay)) {
+        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
             throw new ConnectionRelayUnavailable;
         }
 
@@ -133,7 +131,7 @@ final readonly class ConnectionRelayRoutes
             return null;
         }
         $relay = ConnectionRelay::query()->find($id);
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled || ! $this->host->ready($relay)) {
+        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
             throw new ConnectionRelayUnavailable;
         }
 

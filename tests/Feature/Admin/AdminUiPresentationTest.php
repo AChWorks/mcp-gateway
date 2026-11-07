@@ -10,7 +10,6 @@ use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
-use App\Infrastructure\Connectors\Relay\ConnectionRelayRetirementEvidence;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -22,51 +21,25 @@ final class AdminUiPresentationTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_relay_management_uses_shared_accessible_native_forms_for_create_rename_edit_and_safe_delete(): void
+    public function test_relay_management_uses_native_accessible_forms_without_privileged_host_controls(): void
     {
         $relay = ConnectionRelay::query()->create([
-            'relay_id' => 'ui-test-relay',
-            'display_name' => 'Secondary Relay',
-            'control_host' => '198.51.100.42',
-            'control_port' => 22,
-            'control_user' => 'dedicated-relay',
+            'relay_id' => 'ui-test-relay', 'display_name' => 'Secondary Relay',
+            'control_host' => '198.51.100.42', 'control_port' => 22,
+            'control_user' => 'relay-user',
             'control_host_key' => 'ssh-ed25519 synthetic-display-only',
             'local_socks_port' => 46901,
         ]);
         $this->actingAs($this->owner());
-        $this->get('/admin/settings/connection-relays')->assertOk()
-            ->assertSee('Intermediary SSH host or public IP')
-            ->assertSee('edge-relay-1')
-            ->assertSee('Restrict each intermediary host')
-            ->assertDontSee('Iran SSH host')
-            ->assertDontSee('Iran intermediary')
-            ->assertSee('Retire and remove Relay')
-            ->assertSee('Next: run the Gateway-host cleanup-and-seal-for-delete command')
-            ->assertDontSee('Delete verified retired Relay');
-        $this->get('/admin/settings/connection-relays')->assertOk()
-            ->assertSee('One cleanup-and-seal-for-delete command')
-            ->assertSee('One-time verified helper installation')
-            ->assertSee('Explicit verified helper upgrade')
-            ->assertSee('relay-retire-upgrade-'.$relay->getKey())
-            ->assertSee('An unknown or modified binary is never replaced')
-            ->assertSee('flock -s -w 15 9')
-            ->assertSee('A disconnected intermediary host NEVER blocks this action');
+        $html = $this->get('/admin/settings/connection-relays')
+            ->assertOk()
+            ->assertSee('Set up or reconnect with OpenSSH')
+            ->assertSee('Connect Gateway to Relay')
+            ->assertSee('Delete Relay')
+            ->assertDontSee('nftables')
+            ->assertDontSee('issue-readiness')
+            ->getContent();
 
-        // The real host evidence is issued only by a privileged host
-        // operator. Mock this boundary for view presentation only.
-        $this->app->instance(ConnectionRelayRetirementEvidence::class, new class extends ConnectionRelayRetirementEvidence
-        {
-            public function verifiedForDeletion(ConnectionRelay $relay): bool
-            {
-                return true;
-            }
-
-            public function deletionFencePresent(ConnectionRelay $relay): bool
-            {
-                return true;
-            }
-        });
-        $html = $this->get('/admin/settings/connection-relays')->assertOk()->getContent();
         $dom = new \DOMDocument;
         $dom->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
         $xpath = new \DOMXPath($dom);
@@ -76,59 +49,14 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//main//section[@aria-labelledby="relay-list-heading"]//article[contains(@class,"target-subsection")])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'/name")]/input[@name="_method"][@value="PUT"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'")]/input[@name="_method"][@value="DELETE"])'));
-        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'")]/label/input[@name="confirm_gateway_cleanup"])'));
-        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'")]//input[@name="confirm_relay_id"])'));
-        self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'/name")]/div[contains(@class,"field")]/label[@for="relay-name-'.$relay->getKey().'"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//label[@for="relay-connect-'.$relay->getKey().'"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//textarea[@id="relay-connect-'.$relay->getKey().'"][@readonly])'));
+        self::assertSame(0, (int) $xpath->evaluate('count(//input[@name="confirm_gateway_cleanup"])'));
 
-        // The destructive action must not be offered while the Relay is
-        // enabled. The Owner must disable and reconcile Target bindings first.
         DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
         $this->get('/admin/settings/connection-relays')->assertOk()
-            ->assertDontSee('Delete verified retired Relay')
+            ->assertDontSee('Type Relay ID to confirm')
             ->assertSee('Rename Relay');
-    }
-
-    public function test_staged_relay_setup_has_accessible_readonly_owner_command_without_provisioning_on_page_load(): void
-    {
-        $relay = ConnectionRelay::query()->create([
-            'relay_id' => 'ui-stage-relay',
-            'display_name' => 'Inactive Iran Relay',
-            'control_host' => '192.0.2.20',
-            'control_port' => 22,
-            'control_user' => 'relay-control',
-            'control_host_key' => 'ssh-ed25519 public-test-placeholder',
-            'local_socks_port' => 46902,
-        ]);
-        $this->actingAs($this->owner());
-        $html = $this->get('/admin/settings/connection-relays')
-            ->assertOk()
-            ->assertSee('Stage / repair Gateway host resources (Owner command)')
-            ->assertSee('It DOES NOT issue readiness')
-            ->assertSee('setup-gateway')
-            ->assertSee('Verified first-install and staged Setup/Retry')
-            ->assertSee('It never silently upgrades an older or unknown helper')
-            ->assertSee('Retrieve staged public SSH key for offline Relay peer enrollment (read-only)')
-            ->assertSee('public-enrollment')
-            ->getContent();
-
-        $dom = new \DOMDocument;
-        $dom->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
-        $xpath = new \DOMXPath($dom);
-        $id = 'relay-setup-command-'.$relay->getKey();
-        self::assertSame(1, (int) $xpath->evaluate(
-            'count(//label[@for="'.$id.'"])',
-        ));
-        self::assertSame(1, (int) $xpath->evaluate(
-            'count(//textarea[@id="'.$id.'"][@readonly][@autocomplete="off"])',
-        ));
-        $publicId = 'relay-public-enrollment-command-'.$relay->getKey();
-        self::assertSame(1, (int) $xpath->evaluate(
-            'count(//label[@for="'.$publicId.'"])',
-        ));
-        self::assertSame(1, (int) $xpath->evaluate(
-            'count(//textarea[@id="'.$publicId.'"][@readonly][@autocomplete="off"])',
-        ));
-        self::assertFalse($relay->fresh()->enabled);
     }
 
     public function test_all_admin_owner_reauthentication_fields_share_the_explicit_intent_guard(): void

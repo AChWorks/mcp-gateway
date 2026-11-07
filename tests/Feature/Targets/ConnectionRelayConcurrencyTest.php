@@ -6,7 +6,6 @@ use App\Application\Targets\ConnectionRelayAdministration;
 use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
-use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -18,7 +17,7 @@ use Tests\TestCase;
 
 /**
  * Independent MariaDB transactions prove route-binding serialization with
- * Relay disable. No sockets, host attestation, real target or OS changes.
+ * Relay disable. No sockets, real target or OS changes.
  */
 #[Group('database-concurrency')]
 final class ConnectionRelayConcurrencyTest extends TestCase
@@ -39,13 +38,6 @@ final class ConnectionRelayConcurrencyTest extends TestCase
             throw new RuntimeException('Relay concurrency test refuses a non-test database.');
         }
         Artisan::call('migrate:fresh', ['--force' => true]);
-        $this->app->instance(ConnectionRelayHostReadiness::class, new class extends ConnectionRelayHostReadiness
-        {
-            public function ready(ConnectionRelay $relay): bool
-            {
-                return true;
-            }
-        });
         $this->relay = ConnectionRelay::query()->create([
             'relay_id' => 'race-iran',
             'display_name' => 'Race fixture',
@@ -81,7 +73,7 @@ final class ConnectionRelayConcurrencyTest extends TestCase
         self::assertNull($target->getAttribute('relay_record_id'));
         self::assertSame(0, $target->relay_binding_revision);
         self::assertFalse($this->relay->fresh()->enabled);
-        self::assertSame(2, $this->relay->fresh()->configuration_revision);
+        self::assertSame(2, $this->relay->fresh()->lifecycle_revision);
     }
 
     public function test_binding_before_disable_is_fenced_and_old_epoch_cannot_dispatch(): void
@@ -145,7 +137,7 @@ final class ConnectionRelayConcurrencyTest extends TestCase
             // The worker has entered its own real DB transaction but is
             // blocked acquiring the independently held Relay row lock.
             if (! $allowBinding) {
-                $disable = $pdo->prepare('UPDATE connection_relays SET enabled = 0, configuration_revision = 2, lifecycle_revision = 2 WHERE id = ?');
+                $disable = $pdo->prepare('UPDATE connection_relays SET enabled = 0, lifecycle_revision = 2 WHERE id = ?');
                 $disable->execute([$this->relay->getKey()]);
             }
             $pdo->commit();

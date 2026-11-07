@@ -7,7 +7,6 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
-use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
@@ -203,7 +202,7 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
         self::assertSame(0, TargetCredential::query()->count());
     }
 
-    public function test_one_ready_relay_can_register_several_wordpress_targets_without_changing_dns_tls_metadata_contract(): void
+    public function test_one_enabled_relay_can_register_several_wordpress_targets_without_changing_dns_tls_metadata_contract(): void
     {
         $relay = ConnectionRelay::query()->create([
             'relay_id' => 'iran-wp', 'display_name' => 'Shared Iran WP Relay',
@@ -213,13 +212,6 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
             'local_socks_port' => 46081,
         ]);
         DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
-        $this->app->instance(ConnectionRelayHostReadiness::class, new class extends ConnectionRelayHostReadiness
-        {
-            public function ready(ConnectionRelay $relay): bool
-            {
-                return true; // Test-only isolation fixture, not a host claim.
-            }
-        });
 
         $first = app(WpAiBridgeTargetRegistration::class)->register(
             'wp-through-iran-1', 'First WP', 'https://first.example.test', relayId: 'iran-wp',
@@ -248,7 +240,7 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
         }
     }
 
-    public function test_unattested_wordpress_relay_fails_before_discovery_or_target_insert(): void
+    public function test_disabled_wordpress_relay_fails_before_discovery_or_target_insert(): void
     {
         $relay = ConnectionRelay::query()->create([
             'relay_id' => 'iran-offline', 'display_name' => 'Not ready',
@@ -257,14 +249,13 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
             'control_host_key' => 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat('c', 32)),
             'local_socks_port' => 46082,
         ]);
-        DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
 
         try {
             app(WpAiBridgeTargetRegistration::class)->register(
                 'wp-rejected-relay', 'Offline WP', 'https://offline.example.test',
                 relayId: 'iran-offline',
             );
-            self::fail('Unattested Relay accepted WordPress discovery.');
+            self::fail('Disabled Relay accepted WordPress discovery.');
         } catch (ConnectionRelayUnavailable) {
             self::assertSame(0, Target::query()->count());
             Http::assertNothingSent();

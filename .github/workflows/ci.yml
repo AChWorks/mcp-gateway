@@ -62,12 +62,6 @@ jobs:
       - name: Validate configuration reference matches .env.example
         run: python3 bin/test-configuration-docs.py
 
-      - name: Verify isolated Gateway and intermediary Relay host helpers
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/Support -p 'test_connection_relay_*_host.py'
-
-      - name: Verify Relay readiness against real root-owned 0700/0755 filesystem as non-root PHP
-        run: bash tests/Support/relay-readiness-filesystem-ci.sh
-
       - name: Check updater continuation and crash-journal guards
         run: php bin/test-update-state-guards.php
 
@@ -169,39 +163,10 @@ jobs:
         if: always()
         run: bash tests/Support/ssh-fixture.sh stop
 
-  connection-relay-peer-os:
-    # Real OS admission policy on a disposable runner, never an operator host.
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install native Relay peer fixture prerequisites
-        run: |
-          sudo apt-get update -qq
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server nftables iproute2 openssl python3
-
-      - name: Verify two restricted peers with real IPv4 and IPv6 Targets
-        run: |
-          sudo env MCP_RELAY_DISPOSABLE_OS_TEST=1 python3 -I tests/Support/relay-peer-os-fixture.py \
-            --helper resources/host/connection-relay-peer.py \
-            --artifacts artifacts/relay-peer-os
-
-      - name: Retain bounded peer OS diagnostics
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: connection-relay-peer-os
-          path: artifacts/relay-peer-os/
-          retention-days: 7
-          if-no-files-found: ignore
-
   managed-reverse-host-openssh:
     # Only on a disposable GitHub-hosted runner; never the Gateway's NL/IR host.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -220,7 +185,7 @@ jobs:
     # generated Target installer against a real local TLS claim, OpenSSH and
     # systemd; never connected to a production Gateway, Target or API key.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out repository

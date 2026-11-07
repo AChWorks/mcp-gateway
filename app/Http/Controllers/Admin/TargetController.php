@@ -160,7 +160,7 @@ final class TargetController extends Controller
                     $relays->selected($selectedRelay);
                 } catch (ConnectionRelayUnavailable) {
                     throw ValidationException::withMessages([
-                        'connection_relay_id' => __('Selected Relay is unavailable or missing verified host isolation.'),
+                        'connection_relay_id' => __('Selected Relay is disabled or no longer exists.'),
                     ]);
                 }
             }
