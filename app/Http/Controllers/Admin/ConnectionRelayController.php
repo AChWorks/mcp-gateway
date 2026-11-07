@@ -107,6 +107,12 @@ final class ConnectionRelayController extends Controller
             if ((int) $current->lifecycle_revision >= 4294967295) {
                 throw ValidationException::withMessages(['relay_revision' => __('Relay revision is exhausted.')]);
             }
+            if (DB::table('targets')->where('relay_record_id', $current->getKey())
+                ->where('relay_binding_revision', '>=', 4294967295)->exists()) {
+                throw ValidationException::withMessages([
+                    'relay' => __('Cannot enable this Relay while an assigned Target binding revision is exhausted.'),
+                ]);
+            }
             DB::table('connection_relays')->where('id', $current->getKey())->update([
                 'enabled' => true,
                 'lifecycle_revision' => (int) $current->lifecycle_revision + 1,

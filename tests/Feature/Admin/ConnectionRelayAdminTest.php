@@ -169,6 +169,56 @@ final class ConnectionRelayAdminTest extends TestCase
         self::assertSame(3, $relay->fresh()->lifecycle_revision);
     }
 
+    public function test_saturated_target_binding_blocks_reenable_without_changing_relay_state(): void
+    {
+        $relay = $this->readyRelay();
+        $target = app(SshTargetRegistration::class)->register(
+            'relay-saturated-binding', 'Saturated binding', '1.1.1.1', 22,
+            'deploy', $this->publicKey(), 'password', 'ssh-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $vault = app(SshTargetVault::class);
+        $material = $vault->open($target, $config, $credential);
+
+        // Start just below saturation with a valid credential, so Disable
+        // reaches the maximum normally rather than failing credential resealing.
+        $target->setRawAttributes([
+            ...$target->getAttributes(), 'relay_binding_revision' => 4294967294,
+        ], true);
+        $credential->forceFill(['encrypted_payload' => $vault->seal(
+            $target, $config, $material['secret'], $material['passphrase'],
+        )])->save();
+        DB::table('targets')->where('id', $target->getKey())
+            ->update(['relay_binding_revision' => 4294967294]);
+        $target->refresh();
+        $beforeDisableHash = SshTargetBinding::hash($target, $config);
+
+        $this->actingAs($this->user('owner'));
+        $url = '/admin/settings/connection-relays/'.$relay->getKey().'/toggle';
+        $this->post($url, [
+            'relay_revision' => 1, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+
+        $target->refresh();
+        self::assertSame(4294967295, $target->relay_binding_revision);
+        self::assertNotSame($beforeDisableHash, SshTargetBinding::hash($target, $config));
+        self::assertSame('ssh-secret', $vault->open($target, $config, $credential->fresh())['secret']);
+        self::assertFalse($relay->fresh()->enabled);
+        self::assertSame(2, $relay->fresh()->lifecycle_revision);
+
+        $this->post($url, [
+            'relay_revision' => 2, 'enable' => '1', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasErrors('relay');
+
+        self::assertFalse($relay->fresh()->enabled);
+        self::assertSame(2, $relay->fresh()->lifecycle_revision);
+        self::assertSame(4294967295, $target->fresh()->relay_binding_revision);
+        self::assertSame('relay_disabled', $target->fresh()->last_error_code);
+        self::assertNull(app(ConnectionRelayRoutes::class)->selectable()->first());
+    }
+
     public function test_non_owner_cannot_rename_or_delete_relays(): void
     {
         $relay = ConnectionRelay::query()->create($this->relayFields());
