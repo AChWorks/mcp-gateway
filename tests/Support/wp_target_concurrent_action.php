@@ -13,8 +13,8 @@ use Illuminate\Support\Facades\Http;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
-if ($argc !== 5 || ! in_array($argv[1], ['refresh', 'disconnect'], true)) {
-    fwrite(STDERR, "usage: wp_target_concurrent_action.php <refresh|disconnect> <directory> <worker-id> <hold-remote-flag>\n");
+if ($argc !== 5 || ! in_array($argv[1], ['refresh', 'routing', 'disconnect'], true)) {
+    fwrite(STDERR, "usage: wp_target_concurrent_action.php <refresh|routing|disconnect> <directory> <worker-id> <hold-remote-flag>\n");
     exit(2);
 }
 
@@ -78,13 +78,15 @@ if (! touch($directory.'/ready-'.$workerId)) {
 try {
     $target = Target::query()->where('target_id', 'race')->firstOrFail();
     $service = $app->make(WpAiBridgeTargetConnectionService::class);
-    $result = $action === 'refresh'
-        ? $service->accessToken($target)
-        : (static function () use ($service, $target): string {
+    $result = match ($action) {
+        'refresh' => $service->accessToken($target),
+        'routing' => $service->routingContextWithRecovery($target)['access_token'],
+        default => (static function () use ($service, $target): string {
             $service->disconnect($target);
 
             return 'disconnected';
-        })();
+        })(),
+    };
 
     echo json_encode(['status' => 'ok', 'result' => $result], JSON_THROW_ON_ERROR);
 } catch (WpAiBridgeTargetConnectionException $exception) {

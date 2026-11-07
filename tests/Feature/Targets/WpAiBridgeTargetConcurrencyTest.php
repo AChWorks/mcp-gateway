@@ -125,6 +125,54 @@ final class WpAiBridgeTargetConcurrencyTest extends TestCase
         }
     }
 
+    public function test_parallel_catalog_reader_reuses_only_the_first_workers_rotated_credential(): void
+    {
+        $directory = storage_path('framework/testing/wp-catalog-race-'.bin2hex(random_bytes(8)));
+        if (! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+            throw new RuntimeException('Cannot create catalog race barrier directory.');
+        }
+        $processes = [];
+
+        try {
+            $processes[] = $this->startWorker($directory, 'refresh', 'first', true);
+            $this->waitFor($directory.'/remote-first');
+            self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
+
+            // Simulate two close MCP requests: the first owns the actual
+            // remote rotation, while the second must wait for its DB commit.
+            $processes[] = $this->startWorker($directory, 'routing', 'second', false);
+            $this->waitFor($directory.'/ready-second');
+            usleep(200000);
+            self::assertFileDoesNotExist($directory.'/remote-second');
+
+            touch($directory.'/release');
+            self::assertSame(['status' => 'ok', 'result' => 'race-rotated-access'],
+                $this->completeWorker($processes[0]));
+            self::assertSame(['status' => 'ok', 'result' => 'race-rotated-access'],
+                $this->completeWorker($processes[1]));
+            self::assertFileDoesNotExist($directory.'/remote-second');
+            self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')->value('generation'));
+            self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        } finally {
+            touch($directory.'/release');
+            foreach ($processes as $worker) {
+                if (is_resource($worker['process'])) {
+                    proc_terminate($worker['process']);
+                    proc_close($worker['process']);
+                }
+                foreach ($worker['pipes'] as $pipe) {
+                    if (is_resource($pipe)) {
+                        fclose($pipe);
+                    }
+                }
+            }
+            foreach (glob($directory.'/*') ?: [] as $file) {
+                unlink($file);
+            }
+            rmdir($directory);
+        }
+    }
+
     /** @return array{process: resource|false, pipes: array<int,resource>} */
     private function startWorker(string $directory, string $action, string $id, bool $holdRemote): array
     {

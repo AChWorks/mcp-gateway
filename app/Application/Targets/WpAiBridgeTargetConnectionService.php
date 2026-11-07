@@ -32,6 +32,10 @@ final readonly class WpAiBridgeTargetConnectionService
     // later request/cron tick; never spin or use the one-shot response recovery.
     private const CLIENT_AUTH_RETRY_BACKOFF_SECONDS = 60;
 
+    // Concurrent MCP readers may observe another request's in-flight refresh.
+    // Wait briefly for its committed successor; never send another rotation.
+    private const CONCURRENT_REFRESH_WAIT_SECONDS = 8;
+
     public function __construct(
         private WpAiBridgeDiscovery $discovery,
         private SafeHttpClient $http,
@@ -445,12 +449,80 @@ final readonly class WpAiBridgeTargetConnectionService
         try {
             return $this->routingContext($target, $renewIfDue);
         } catch (WpAiBridgeTargetConnectionException $exception) {
+            if ($exception->reason === 'refresh_pending') {
+                $committed = $this->awaitCommittedConcurrentRefresh($target, $renewIfDue);
+                if ($committed !== null) {
+                    return $committed;
+                }
+            }
             if ($exception->reason !== 'refresh_ambiguous') {
                 throw $exception;
             }
         }
 
         return $this->recoverAmbiguousRefresh($target);
+    }
+
+    /**
+     * A second MCP request must not mistake another in-flight rotation for a
+     * permanently broken credential. Read without holding a database lock,
+     * and reuse ONLY the exact original credential's committed successor.
+     * A missing/changed intent without that proof never authorizes replay.
+     *
+     * @return array{resource_url:string,access_token:string}|null
+     */
+    private function awaitCommittedConcurrentRefresh(Target $target, bool $renewIfDue): ?array
+    {
+        $recordId = (string) $target->getKey();
+        $intent = DB::table('wp_ai_bridge_refresh_intents')
+            ->where('target_record_id', $recordId)
+            ->first(['id', 'credential_id', 'generation', 'attempts', 'created_at']);
+        if ($intent === null) {
+            // The intent vanished before we could bind its credential and
+            // generation. No proof of a committed successor is available,
+            // so this concurrent reader cannot authorize any new rotation.
+            return null;
+        }
+
+        $createdAt = strtotime((string) $intent->created_at);
+        $age = $createdAt === false ? 45 : time() - $createdAt;
+        if ($age < 0 || $age >= 45 || ! in_array((int) $intent->attempts, [1, 2], true)) {
+            return null;
+        }
+
+        $routeEpoch = (int) ($target->getAttribute('relay_binding_revision') ?? 0);
+        $deadlineNs = hrtime(true) + self::CONCURRENT_REFRESH_WAIT_SECONDS * 1_000_000_000;
+        do {
+            Sleep::usleep(250_000);
+            $pending = DB::table('wp_ai_bridge_refresh_intents')
+                ->where('target_record_id', $recordId)->first(['id']);
+            if ($pending !== null) {
+                if (! hash_equals((string) $intent->id, (string) $pending->id)) {
+                    return null;
+                }
+
+                continue;
+            }
+
+            $credential = $this->credential($target);
+            if (! $credential instanceof TargetCredential
+                || (string) $credential->getKey() !== (string) $intent->credential_id
+                || (int) DB::table('wp_ai_bridge_credential_metadata')
+                    ->where('credential_id', $credential->getKey())->value('generation')
+                    !== (int) $intent->generation + 1) {
+                return null;
+            }
+            $current = Target::query()->find($recordId);
+            if (! $current instanceof Target
+                || $current->getAttribute('connection_state') !== TargetConnectionState::Connected
+                || (int) ($current->getAttribute('relay_binding_revision') ?? 0) !== $routeEpoch) {
+                return null;
+            }
+
+            return $this->routingContext($current, $renewIfDue);
+        } while (hrtime(true) < $deadlineNs);
+
+        return null;
     }
 
     /**
@@ -572,6 +644,21 @@ final readonly class WpAiBridgeTargetConnectionService
                     'WordPress OAuth endpoint failed outbound security policy.', [], true);
             }
         } catch (OutboundRequestException $exception) {
+            // Keep only the classified transport stage, never cURL messages,
+            // request URLs, rotating tokens, assertions or response bodies.
+            $stage = $exception->details['failure_stage'] ?? null;
+            $stage = in_array($stage, [
+                'dns_lookup', 'dns_timeout', 'deadline_before_dispatch',
+                'connection_setup', 'tcp_connect', 'tls_handshake',
+                'request_timeout', 'response_transfer', 'response_body',
+            ], true) ? $stage : 'unspecified';
+            $failureContext = [
+                'target_record_id' => $recordId,
+                'cause_code' => $exception->reason,
+                'failure_stage' => $stage,
+                'request_not_sent' => $exception->preDispatch,
+                'recovery_attempt' => $plan['is_recovery'],
+            ];
             // DNS/pre-dispatch failures provably cannot rotate the remote
             // token on a FIRST attempt. Preserve the offline grant and defer,
             // just like a confirmed pre-rotation invalid_client response.
@@ -579,20 +666,14 @@ final readonly class WpAiBridgeTargetConnectionService
             // rotated it: never clear that recovery intent.
             if ($exception->preDispatch && ! $plan['is_recovery']) {
                 $this->deferUnconsumedRefresh($recordId, $plan);
-                Log::warning('WordPress OAuth refresh failed before dispatch.', [
-                    'target_record_id' => $recordId,
-                    'cause_code' => $exception->reason,
-                ]);
+                Log::warning('WordPress OAuth refresh failed before dispatch.', $failureContext);
                 throw new WpAiBridgeTargetConnectionException('refresh_unavailable',
                     'WordPress refresh request was not dispatched; retry after bounded backoff.');
             }
 
             // Retain only the safe failure classification, never remote
             // response bodies, OAuth requests, tokens or client assertions.
-            Log::warning('WordPress OAuth refresh transport outcome ambiguous.', [
-                'target_record_id' => $recordId,
-                'cause_code' => $exception->reason,
-            ]);
+            Log::warning('WordPress OAuth refresh transport outcome ambiguous.', $failureContext);
             $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
             throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
                 'The WordPress refresh outcome is unknown; do not retry an uncontrolled token rotation.');
@@ -634,6 +715,11 @@ final readonly class WpAiBridgeTargetConnectionService
                 'target_record_id' => $recordId,
                 'http_status' => $response->status,
                 'cause_code' => $reason,
+                'oauth_error' => in_array($oauthError, [
+                    'invalid_client', 'invalid_grant', 'invalid_scope',
+                    'invalid_target', 'temporarily_unavailable',
+                ], true) ? $oauthError : 'unclassified',
+                'recovery_attempt' => $plan['is_recovery'],
             ]);
             $this->recordRefreshFailure($recordId, $plan, $reason, $terminal);
             throw new WpAiBridgeTargetConnectionException($reason,
