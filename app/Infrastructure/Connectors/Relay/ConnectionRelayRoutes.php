@@ -8,9 +8,9 @@ use App\Infrastructure\Http\OutboundRequestException;
 use Illuminate\Support\Collection;
 
 /**
- * Resolves a persisted, enabled, host-attested, Target-scoped Relay route.
- * This is a control-plane authorization; the actual numeric data-plane
- * connection still verifies the TCP loopback peer and the remote SSH/TLS pin.
+ * Resolves a persisted, enabled, Target-scoped Relay route.
+ * The data plane connects through local SOCKS5 and independently verifies
+ * the actual SSH/HTTPS Target identity.
  */
 final readonly class ConnectionRelayRoutes
 {

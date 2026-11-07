@@ -60,7 +60,7 @@ final readonly class ConnectionRelayTargetBinding
     public function change(Target $target, string $revision, ?string $relayId): bool
     {
         return DB::transaction(function () use ($target, $revision, $relayId): bool {
-            // Match Disable's Relay->Target lock order. An attested route
+            // Match Disable's Relay->Target lock order. An enabled route
             // cannot be disabled between admission and binding commit.
             $relay = $this->routes->selectedForBinding($relayId);
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();

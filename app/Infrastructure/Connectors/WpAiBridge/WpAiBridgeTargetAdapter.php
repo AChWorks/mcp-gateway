@@ -91,7 +91,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, 
                 $input['connection_relay_id'] ?? null,
             );
         } catch (ConnectionRelayUnavailable) {
-            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or lacks verified host isolation.'), 'connection_relay_id', 'relay_unavailable');
+            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists.'), 'connection_relay_id', 'relay_unavailable');
         } catch (BridgeDiscoveryException $exception) {
             throw new TargetConnectorFailure(
                 OperationDiagnostics::summary($exception->reason, $exception->diagnostics),
