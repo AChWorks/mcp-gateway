@@ -369,6 +369,61 @@ class RelayPeerEnrollmentTests(unittest.TestCase):
         self.assertIn("PUBLIC STAGE RETIRED", mod.operate("retire", self.snapshot, self.layout))
         self.assertTrue((self.peer.record / "retiring.json").exists())
 
+    def _foreign_live_record_drift(self):
+        """A is active; B is fully retired; only A's trusted input drifts to B."""
+        self.peer.setup(self.policy)
+        other = self.other_peer()
+        other.setup(self.policy)
+        other.retire()
+        mod.operate("stage", self.snapshot, self.layout)
+        mod.operate("stage", other.snapshot, self.layout)
+        (self.peer.record / "input.txt").write_bytes(mod.canonical_export(other.snapshot))
+        return other
+
+    def _assert_foreign_drift_refused_without_mutation(self, action):
+        def files_and_directories():
+            return {
+                str(path.relative_to(self.root)): (
+                    ("dir", path.stat().st_mode & 0o777) if path.is_dir()
+                    else ("file", path.read_bytes())
+                )
+                for path in self.root.rglob("*")
+            }
+
+        before_files = files_and_directories()
+        before_host = copy.deepcopy((
+            self.host.accounts, self.host.groups, self.host.tables, self.host.services
+        ))
+        self.host.calls.clear()
+        with self.assertRaisesRegex(mod.Refusal, "foreign Relay record"):
+            action()
+        self.assertEqual(before_files, files_and_directories())
+        self.assertEqual(before_host, (
+            self.host.accounts, self.host.groups, self.host.tables, self.host.services
+        ))
+        self.assertFalse(self.host.mutable_calls())
+        self.assertFalse(any(
+            path.name.startswith(self.snapshot.record_id + ".retired-")
+            for path in self.peer.record.parent.iterdir()
+        ))
+
+    def test_foreign_retired_record_input_cannot_advance_active_setup(self):
+        other = self._foreign_live_record_drift()
+        self.assertTrue((other.record / "retiring.json").is_file())
+        fresh = mod.PeerEnrollment(
+            replace(self.snapshot, revision=2, host_generation="c" * 64), self.layout
+        )
+        self._assert_foreign_drift_refused_without_mutation(
+            lambda: fresh.setup(self.policy)
+        )
+
+    def test_foreign_retired_record_input_cannot_retire_active_public_stage(self):
+        other = self._foreign_live_record_drift()
+        self.assertTrue((other.record / "retiring.json").is_file())
+        self._assert_foreign_drift_refused_without_mutation(
+            lambda: mod.operate("retire", self.snapshot, self.layout)
+        )
+
     def test_monotonic_new_generation_can_reenroll_same_record(self):
         self.peer.setup(self.policy)
         old_uid = self.peer.owner["uid"]

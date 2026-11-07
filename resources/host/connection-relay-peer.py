@@ -388,9 +388,7 @@ def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
         if action == "retire":
             live = PeerEnrollment(snapshot, layout)
             if live.record.exists() or live.record.is_symlink():
-                stored = read_export(live.record / "input.txt")
-                enrolled = PeerEnrollment(stored, layout)
-                enrolled._load(allow_retiring=True)
+                _, enrolled = live._original_predecessor()
                 if not (enrolled.record / "retiring.json").exists():
                     raise Refusal("Retire the live enrollment before deleting its inert public stage.")
                 enrolled._retired_absent()
@@ -666,6 +664,17 @@ class PeerEnrollment:
         self.owner = owner
         return owner
 
+    def _original_predecessor(self) -> tuple[Snapshot, PeerEnrollment]:
+        """Validate a saved generation under its original record's lifecycle lock."""
+        owned(self.record, self.layout, True)
+        if stat.S_IMODE(self.record.lstat().st_mode) != 0o700:
+            raise Refusal("Live enrollment journal must be 0700.")
+        stored = parse_gateway_export(trusted_file(self.record / "input.txt", self.layout, 0o600))
+        if stored.record_id != self.snapshot.record_id:
+            raise Refusal("Existing live enrollment input belongs to a foreign Relay record.")
+        previous = PeerEnrollment(stored, self.layout)
+        previous._load(allow_retiring=True)
+        return stored, previous
 
     def _history(self) -> list[Snapshot]:
         """Exact old claims fence replay even if a crash preceded the new claim."""
@@ -709,9 +718,7 @@ class PeerEnrollment:
             raise Refusal("Prior live service has not been completely retired.")
 
     def _advance_retired(self) -> None:
-        stored = read_export(self.record / "input.txt")
-        previous = PeerEnrollment(stored, self.layout)
-        previous._load(allow_retiring=True)
+        stored, previous = self._original_predecessor()
         if not (previous.record / "retiring.json").exists():
             raise Refusal("A different live generation must be retired before re-enrollment.")
         self._newer_than([stored, *self._history()])

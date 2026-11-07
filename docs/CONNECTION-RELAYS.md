@@ -273,7 +273,7 @@ the new helper must not silently adopt or destroy old staged evidence. Earlier
 path are left untouched by the new generic `/var/lib/mcp-gateway-relay-peers`
 namespace; absence of the new path does not prove the old path is empty.
 
-    6f9ebb756e99b131dc2814a7903a3360115ad166c848ee464adcc72d23df8b98
+    b97d09fab6a5d172bc66418001a9405901131b8c025aac862da58af0f18cd69b
 
 **First install only**, from the directory containing the transferred public
 source file (the file may be untrusted; it is never executed there):
@@ -282,7 +282,7 @@ source file (the file may be untrusted; it is never executed there):
     set -euo pipefail
     umask 077
     source=$1
-    expected=6f9ebb756e99b131dc2814a7903a3360115ad166c848ee464adcc72d23df8b98
+    expected=b97d09fab6a5d172bc66418001a9405901131b8c025aac862da58af0f18cd69b
     base=/usr/local/libexec
     directory=$base/mcp-gateway-relay-peer
     destination=$directory/connection-relay-peer.py
@@ -341,7 +341,7 @@ replace this with a direct sudo Python call.
     relay_peer() {
       /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
       set -euo pipefail
-      expected=6f9ebb756e99b131dc2814a7903a3360115ad166c848ee464adcc72d23df8b98
+      expected=b97d09fab6a5d172bc66418001a9405901131b8c025aac862da58af0f18cd69b
       directory=/usr/local/libexec/mcp-gateway-relay-peer
       destination=$directory/connection-relay-peer.py
       trusted_dir() {
