@@ -11,7 +11,7 @@ final readonly class ConnectionRelayHostOperatorPlan
     private const INSTALLED_HELPER = '/usr/local/sbin/mcp-gateway-relay';
 
     /**
-     * @return array{preflight:string,audit_gateway:string,setup_gateway:string,public_enrollment:string,retire:string,prepare_setup:string,bootstrap:string,upgrade:string,upgrade_from_sha256:string,cleanup:string,cleanup_for_rotation:string,seal_delete:string,seal_rotate:string,sha256:string}|null
+     * @return array{preflight:string,audit_gateway:string,setup_gateway:string,public_enrollment:string,activate_gateway:string,issue_readiness:string,revoke_readiness:string,retire:string,prepare_setup:string,bootstrap:string,upgrade:string,upgrade_from_sha256:string,cleanup:string,cleanup_for_rotation:string,seal_delete:string,seal_rotate:string,sha256:string}|null
      */
     public function commands(ConnectionRelay $relay): ?array
     {
@@ -237,6 +237,16 @@ BASH;
             'audit_gateway' => $verifiedCommand('audit-gateway '.$arguments
                 .' --php-uid '.(string) $phpUid),
             'setup_gateway' => $verifiedCommand('setup-gateway '.$setupArguments),
+            // These flags are explicit assertions by the independently
+            // privileged host operator AFTER proving FPM/CLI isolation and
+            // intermediary egress. PHP never runs the command or signs proof.
+            'activate_gateway' => $verifiedCommand('activate-gateway '.$arguments
+                .' --php-uid '.(string) $phpUid
+                .' --confirm-php-fpm-cli-isolation --confirm-peer-egress'),
+            'issue_readiness' => $verifiedCommand('issue-readiness '.$arguments
+                .' --php-uid '.(string) $phpUid
+                .' --confirm-php-fpm-cli-isolation --confirm-peer-egress'),
+            'revoke_readiness' => $verifiedCommand('revoke-readiness '.$arguments),
             // Exposes only a root-verified Ed25519 public key on the Gateway
             // operator terminal; never to PHP or the rendered Admin page.
             'public_enrollment' => $verifiedCommand('public-enrollment '.$arguments),

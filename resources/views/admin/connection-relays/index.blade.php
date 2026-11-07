@@ -85,6 +85,27 @@
                     </div>
                 </details>
             @endif
+            @if (! ($deletionFencedStates[$relay->id] ?? false) && ($hostCommands[$relay->id] ?? null))
+                <details class="target-help-details">
+                    <summary>{{ __('Operator-only Gateway activation and readiness evidence') }}</summary>
+                    <p class="field-help"><strong>{{ __('These commands do NOT perform PHP-FPM/CLI isolation or intermediary egress verification for you.') }}</strong> {{ __('The two confirmation flags are explicit privileged-operator attestations. Run them only after actual dedicated PHP user/pool/CLI isolation, unrelated-site denied localhost access, intermediary SSHD forwarding-only and positive/negative public/private egress tests have independently passed. Never execute on Production without a separate approved host plan.') }}</p>
+                    <div class="field">
+                        <label for="relay-activate-command-{{ $relay->id }}">{{ __('Queue restricted Gateway OpenSSH start (still disabled, not Ready)') }}</label>
+                        <textarea id="relay-activate-command-{{ $relay->id }}" rows="6" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['activate_gateway'] }}</textarea>
+                        <p class="field-help">{{ __('After Setup and intermediary enrollment, this queues only the exact staged systemd service. ExecStartPre audits/restores its owned ACL. A start request is not proof that a listener is active, persistent or safe.') }}</p>
+                    </div>
+                    <div class="field">
+                        <label for="relay-issue-command-{{ $relay->id }}">{{ __('Issue or renew independently checked one-hour readiness (root only)') }}</label>
+                        <textarea id="relay-issue-command-{{ $relay->id }}" rows="6" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['issue_readiness'] }}</textarea>
+                        <p class="field-help">{{ __('Run only after current effective PHP identity and peer egress tests. The root helper verifies exact live process, systemd, SSH key, IPv4/IPv6 ACL and listener identity, enables persistence if safe, and writes the boot- and generation-bound 11-field lease. It does not authenticate the selected Target. Repeat only after fresh verification before expiry.') }}</p>
+                    </div>
+                    <div class="field">
+                        <label for="relay-revoke-command-{{ $relay->id }}">{{ __('Revoke Gateway readiness evidence (does not stop transport)') }}</label>
+                        <textarea id="relay-revoke-command-{{ $relay->id }}" rows="5" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['revoke_readiness'] }}</textarea>
+                        <p class="field-help">{{ __('Revocation immediately makes host readiness fail closed for application routing. It does NOT stop OpenSSH or retire local resources; use the separate scoped Gateway cleanup/rotation lifecycle for host changes. An unreachable intermediary never blocks Gateway-only cleanup.') }}</p>
+                    </div>
+                </details>
+            @endif
             @if ($rotationStates[$relay->id] ?? false)
                 <p class="field-help">{{ __('Old revision retirement is sealed. Save the pending connection change before requesting setup for the new revision.') }}</p>
             @endif
