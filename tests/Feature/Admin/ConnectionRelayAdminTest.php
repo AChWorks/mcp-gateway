@@ -68,6 +68,27 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertOk()->assertDontSee('value="iran-1"', false);
     }
 
+    public function test_owner_can_register_non_geographic_intermediary_as_a_reusable_relay(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->post('/admin/settings/connection-relays', [
+            ...$this->relayFields(),
+            'relay_id' => 'edge-relay-1',
+            'display_name' => 'Partner network hop',
+            'control_host' => 'relay.partner.example',
+            'current_password' => self::PASSWORD,
+        ])->assertAdminRedirect('/admin/settings/connection-relays')->assertSessionHasNoErrors();
+
+        $relay = ConnectionRelay::query()->sole();
+        self::assertSame('edge-relay-1', $relay->relay_id);
+        self::assertSame('relay.partner.example', $relay->control_host);
+        self::assertFalse($relay->enabled, 'No geographic rule may imply readiness.');
+        $this->get('/admin/settings/connection-relays')
+            ->assertOk()->assertSee('Partner network hop')
+            ->assertSee('relay.partner.example')
+            ->assertSee('Intermediary SSH host or public IP');
+    }
+
     public function test_admin_status_distinguishes_draft_ready_enabled_degraded_and_needs_setup(): void
     {
         $this->actingAs($this->user('owner'));
@@ -572,7 +593,7 @@ PYTHON;
         self::assertStringNotContainsString('--prior-fingerprint', $commands['public_enrollment']);
         self::assertStringContainsString($commands['sha256'], $commands['audit_gateway']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
-        self::assertSame('886f727e1dc85ab2ed32dd59c6f82d7177686752d27694f8d22350abbe8da360', $commands['upgrade_from_sha256']);
+        self::assertSame('1658e749005dfc1e28d89d4ec127a4faef592d6a6c1bd6148943b4c5ba87bba4', $commands['upgrade_from_sha256']);
         self::assertStringContainsString('mode=install', $commands['bootstrap']);
         self::assertStringContainsString('test -x "$destination"', $commands['bootstrap']);
         self::assertStringNotContainsString('mode=upgrade', $commands['bootstrap']);

@@ -8,7 +8,7 @@
     <div>
         <div class="eyebrow">{{ __('System') }}</div>
         <h1>{{ __('Connection Relays') }}</h1>
-        <p class="muted reading-width">{{ __('Register one intermediary for several SSH/SFTP or WordPress Targets. Direct stays the default; existing Reverse SSH routes remain separate.') }}</p>
+        <p class="muted reading-width">{{ __('Register reusable Relays on any reachable intermediary server, regardless of location. Each Relay can serve multiple SSH/SFTP or WordPress Targets; Direct and Reverse SSH remain separate.') }}</p>
     </div>
     <div class="action-row">
         <a href="#relay-add-heading" class="button button-primary">{{ __('Add Relay') }}</a>
@@ -23,7 +23,7 @@
         <li><strong>{{ __('Isolate the Gateway') }}</strong>
             <p class="field-help">{{ __('Use a dedicated PHP-FPM and worker UID, with exclusive access to the selected local SOCKS5 listener.') }}</p>
         </li>
-        <li><strong>{{ __('Restrict the Iran intermediary') }}</strong>
+        <li><strong>{{ __('Restrict each intermediary host') }}</strong>
             <p class="field-help">{{ __('Pin its SSH host key and limit a dedicated forwarding-only account to approved public destinations.') }}</p>
         </li>
         <li><strong>{{ __('Verify and attest the host') }}</strong>
@@ -61,7 +61,7 @@
             @if ($hostCommands[$relay->id] ?? null)
                 <details class="target-help-details">
                     <summary>{{ __('Audit installed Gateway-local policy (read-only)') }}</summary>
-                    <p class="field-help">{{ __('Run only on the authorized Gateway host after privileged Setup. Checks root-owned host identity, effective systemd service, nftables loopback UID restrictions on IPv4/IPv6, and the actual listening process without changing host state. A PASS does not issue readiness evidence or prove the Iran egress policy, dedicated PHP-FPM ownership, or Target authentication.') }}</p>
+                    <p class="field-help">{{ __('Run only on the authorized Gateway host after privileged Setup. Checks root-owned host identity, effective systemd service, nftables loopback UID restrictions on IPv4/IPv6, and the actual listening process without changing host state. A PASS does not issue readiness evidence or prove the Relay peer egress policy, dedicated PHP-FPM ownership, or Target authentication.') }}</p>
                     <div class="field">
                         <label for="relay-audit-command-{{ $relay->id }}">{{ __('Verified, Relay-specific local audit command') }}</label>
                         <textarea id="relay-audit-command-{{ $relay->id }}" rows="4" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['audit_gateway'] }}</textarea>
@@ -72,16 +72,16 @@
             @if (! $relay->enabled && ! ($deletionFencedStates[$relay->id] ?? false) && ($hostCommands[$relay->id] ?? null))
                 <details class="target-help-details">
                     <summary>{{ __('Stage / repair Gateway host resources (Owner command)') }}</summary>
-                    <p class="field-help">{{ __('A dedicated root-run Gateway operation installs or resumes this Relay’s Unix SSH identity, root-controlled credentials, supervised local OpenSSH service and scoped IPv4/IPv6 nftables access rule. It DOES NOT issue readiness or verify Iran egress, PHP-FPM isolation or Target login. Never run this on Production without separate host-maintenance approval.') }}</p>
+                    <p class="field-help">{{ __('A dedicated root-run Gateway operation installs or resumes this Relay’s Unix SSH identity, root-controlled credentials, supervised local OpenSSH service and scoped IPv4/IPv6 nftables access rule. It DOES NOT issue readiness or verify Relay peer egress, PHP-FPM isolation or Target login. Never run this on Production without separate host-maintenance approval.') }}</p>
                     <div class="field">
                         <label for="relay-setup-command-{{ $relay->id }}">{{ __('Verified, Relay-specific staged Setup/Retry command') }}</label>
                         <textarea id="relay-setup-command-{{ $relay->id }}" rows="6" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['setup_gateway'] }}</textarea>
-                        <p class="field-help">{{ __('First install the exact verified helper under Retire and remove Relay. For an older installed helper, use the separate reviewed Upgrade command; never paste an outdated Setup command. The helper creates no Iranian user or forwarding permission and never sets this Relay Ready/Enabled.') }}</p>
+                        <p class="field-help">{{ __('First install the exact verified helper under Retire and remove Relay. For an older installed helper, use the separate reviewed Upgrade command; never paste an outdated Setup command. The helper creates no account or forwarding permission on the intermediary host and never sets this Relay Ready/Enabled.') }}</p>
                     </div>
                     <div class="field">
-                        <label for="relay-public-enrollment-command-{{ $relay->id }}">{{ __('Retrieve staged public SSH key for offline Iran enrollment (read-only)') }}</label>
+                        <label for="relay-public-enrollment-command-{{ $relay->id }}">{{ __('Retrieve staged public SSH key for offline Relay peer enrollment (read-only)') }}</label>
                         <textarea id="relay-public-enrollment-command-{{ $relay->id }}" rows="5" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['public_enrollment'] }}</textarea>
-                        <p class="field-help">{{ __('Run on the authorized Gateway host only AFTER Setup. The root-only command validates this Relay’s journal, UID, exact SSH key pair, disabled systemd unit and live IPv4/IPv6 nftables policy before printing PUBLIC material in the operator terminal, never in this web page. Missing or partially retired host resources block export; use separately approved Setup/Retry or Retirement recovery. It does not configure Iran, enable forwarding or issue readiness. Enroll Iran separately with restricted SSHD and verified egress; never send the private key.') }}</p>
+                        <p class="field-help">{{ __('Run on the authorized Gateway host only AFTER Setup. The root-only command validates this Relay’s journal, UID, exact SSH key pair, disabled systemd unit and live IPv4/IPv6 nftables policy before printing PUBLIC material in the operator terminal, never in this web page. Missing or partially retired host resources block export; use separately approved Setup/Retry or Retirement recovery. It does not configure the intermediary, enable forwarding or issue readiness. Configure the intermediary host separately with restricted SSHD and verified egress; never send the private key.') }}</p>
                     </div>
                 </details>
             @endif
@@ -175,7 +175,7 @@
                 <details class="target-help-details" id="relay-retire-{{ $relay->id }}">
                     <summary>{{ __('Retire and remove Relay') }}</summary>
                     @if (! ($retiredStates[$relay->id] ?? false))
-                        <p class="field-help">{{ __('Next: run the Gateway-host cleanup-and-seal-for-delete command with authorized sudo. It retires only the selected Relay local resources and permanently fences old setup commands BEFORE any DB Delete. A disconnected Iran host NEVER blocks this action. Refresh afterward.') }}</p>
+                        <p class="field-help">{{ __('Next: run the Gateway-host cleanup-and-seal-for-delete command with authorized sudo. It retires only the selected Relay local resources and permanently fences old setup commands BEFORE any DB Delete. A disconnected intermediary host NEVER blocks this action. Refresh afterward.') }}</p>
                         @if ($hostCommands[$relay->id] ?? null)
                             <div class="field">
                                 <label for="relay-retire-command-{{ $relay->id }}">{{ __('One cleanup-and-seal-for-delete command — Gateway host only') }}</label>
@@ -199,13 +199,13 @@
                                     <label for="relay-retire-preflight-{{ $relay->id }}">{{ __('Optional read-only local preflight') }}</label>
                                     <textarea id="relay-retire-preflight-{{ $relay->id }}" rows="3" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['preflight'] }}</textarea>
                                 </div>
-                                <p class="field-help">{{ __('The helper never performs a remote SSH connection or reaches the Iran server. It refuses unknown systemd, firewall and key namespaces, instead of deleting unrelated resources. It does not provision a new Relay.') }}</p>
+                                <p class="field-help">{{ __('The helper never performs a remote SSH connection or reaches the intermediary server. It refuses unknown systemd, firewall and key namespaces, instead of deleting unrelated resources. It does not provision a new Relay.') }}</p>
                             </details>
                         @else
                             <p class="field-error" role="alert">{{ __('Cannot generate the host cleanup command: the installed helper does not match the release-pinned SHA256 or Relay identity. Restore a verified Gateway release before privileged operations.') }}</p>
                         @endif
                     @else
-                        <p class="field-help">{{ __('Gateway-host cleanup and irreversible deletion fence have been verified for this record. Setup commands for this record can no longer run; Iran cleanup is not required. Confirm the final deletion.') }}</p>
+                        <p class="field-help">{{ __('Gateway-host cleanup and irreversible deletion fence have been verified for this record. Setup commands for this record can no longer run; Remote intermediary cleanup is not required. Confirm the final deletion.') }}</p>
                         <form method="post" class="form-stack" action="{{ route('admin.connection-relays.destroy', ['relay' => $relay->id]) }}" autocomplete="off">
                         @csrf
                         @method('DELETE')
@@ -216,7 +216,7 @@
                         </div>
                         <label class="checkbox-option">
                             <input type="checkbox" name="confirm_gateway_cleanup" value="1" required>
-                            <span>{{ __('I confirm Gateway-host cleanup and irreversible deletion fencing were completed. Iran-side cleanup is optional and does not block deleting this Gateway record.') }}</span>
+                            <span>{{ __('I confirm Gateway-host cleanup and irreversible deletion fencing were completed. Cleanup on the intermediary is optional and never blocks deleting this Gateway record.') }}</span>
                         </label>
                         <div class="field">
                             <label for="relay-delete-password-{{ $relay->id }}">{{ __('Current Owner password') }}</label>

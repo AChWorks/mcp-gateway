@@ -10,7 +10,7 @@
         <input id="relay-{{ $prefix }}-id" type="text" name="relay_id" maxlength="64" required
             pattern="[a-z0-9]+(-[a-z0-9]+)*" spellcheck="false" autocomplete="off"
             data-admin-manual-entry data-admin-server-value="{{ $draft('relay_id', $editing ? $relay->relay_id : '') }}"
-            value="{{ $draft('relay_id', $editing ? $relay->relay_id : '') }}" placeholder="iran-bridge-1" @readonly($editing)
+            value="{{ $draft('relay_id', $editing ? $relay->relay_id : '') }}" placeholder="edge-relay-1" @readonly($editing)
             @if($restore && $errors->has('relay_id')) aria-invalid="true" aria-describedby="relay-{{ $prefix }}-id-error" @endif>
         @if($restore) @error('relay_id')<p class="field-error" role="alert" id="relay-{{ $prefix }}-id-error">{{ $message }}</p>@enderror @endif
         @if($editing)<p class="field-help">{{ __('Stable host-resource identifier. To change it, create a new Relay and explicitly migrate Targets; do not rename existing systemd/firewall resources.') }}</p>@endif
@@ -19,12 +19,12 @@
         <label for="relay-{{ $prefix }}-name">{{ __('Display name') }}</label>
         <input id="relay-{{ $prefix }}-name" type="text" name="display_name" maxlength="160" required autocomplete="off"
             data-admin-manual-entry data-admin-server-value="{{ $draft('display_name', $editing ? $relay->display_name : '') }}"
-            value="{{ $draft('display_name', $editing ? $relay->display_name : '') }}" placeholder="{{ __('Iran intermediary') }}"
+            value="{{ $draft('display_name', $editing ? $relay->display_name : '') }}" placeholder="{{ __('Edge intermediary') }}"
             @if($restore && $errors->has('display_name')) aria-invalid="true" aria-describedby="relay-{{ $prefix }}-name-error" @endif>
         @if($restore) @error('display_name')<p class="field-error" role="alert" id="relay-{{ $prefix }}-name-error">{{ $message }}</p>@enderror @endif
     </div>
     <div class="field">
-        <label for="relay-{{ $prefix }}-host">{{ __('Iran SSH host or public IP') }}</label>
+        <label for="relay-{{ $prefix }}-host">{{ __('Intermediary SSH host or public IP') }}</label>
         <input id="relay-{{ $prefix }}-host" type="text" name="control_host" maxlength="253" required autocomplete="off" spellcheck="false"
             value="{{ $draft('control_host', $editing ? $relay->control_host : '') }}" placeholder="relay.example.com"
             @if($restore && $errors->has('control_host')) aria-invalid="true" aria-describedby="relay-{{ $prefix }}-host-error" @endif>

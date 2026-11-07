@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Privileged, explicitly invoked Gateway-side Relay retirement and local audit.
 
-This is NOT an SSH client installer, readiness issuer or remote Iran cleanup tool. Runtime
+This is NOT an SSH client installer, readiness issuer or remote Relay peer cleanup tool. Runtime
 CLI paths are fixed; PHP never invokes it and cannot issue retirement proofs.
 The expected fields come from the Owner-facing command and are checked against
 owned resources. Do not use it to adopt third-party systemd/firewall state.
@@ -618,7 +618,7 @@ class Retirement:
             + ", resource claim=" + (("verified installed revision " + str(managed["configuration_revision"])) if managed else "absent")
             + ", active unit=" + ("yes" if self._unit_active() else "no")
             + ", reserved listener=" + ("present" if self._listening({self.relay.local_port}) else "absent")
-            + ". No remote Iran access is attempted."
+            + ". No remote Relay peer access is attempted."
         )
 
     def _require_unjournaled_legacy_safe(self) -> None:
@@ -1078,7 +1078,7 @@ class Retirement:
             generation = self._advance_generation("retired")
             self._receipt(generation)
             return ("RETIREMENT VERIFIED for Gateway Relay " + self.relay.relay_id
-                    + ". Iran was not contacted, and its cleanup was not asserted.")
+                    + ". Relay peer was not contacted, and its cleanup was not asserted.")
         except BlockingIOError as error:
             raise Refusal("Another operator is changing this Relay; do not overlap operations.") from error
         finally:
@@ -1180,7 +1180,7 @@ class Retirement:
             self._receipt(generation["host_generation"])
             return ("LIFECYCLE FENCE VERIFIED for Gateway Relay " + self.relay.relay_id
                     + " (" + intent + "). Old host setup commands are permanently rejected; "
-                    "Iran was not contacted.")
+                    "Relay peer was not contacted.")
         except BlockingIOError as error:
             raise Refusal("Another operator is changing this Relay.") from error
         finally:
@@ -1225,7 +1225,7 @@ class GatewayPolicyAudit(Retirement):
     """Read-only, fail-closed audit of provisioned Gateway host resources.
 
     This is deliberately NOT readiness issuance. A matching root-owned claim
-    and effective local controls cannot prove the independent Iran egress
+    and effective local controls cannot prove the independent Relay peer egress
     policy, dedicated FPM-pool ownership, or a fully authenticated Target.
     The future Setup/Repair path must first create these owned resources;
     there is no mechanism here to adopt foreign state.
@@ -1581,15 +1581,15 @@ class GatewayPolicyAudit(Retirement):
             raise Refusal("Relay generation is no longer provisionable.")
         return ("GATEWAY LOCAL POLICY AUDIT PASS for " + self.relay.relay_id
                 + ". NO READINESS ISSUED: dedicated PHP-FPM ownership, "
-                "Iran egress restrictions and Target authentication still "
+                "Relay peer egress restrictions and Target authentication still "
                 "require independent verified evidence.")
 
 
 
     def public_enrollment(self) -> str:
-        """Export only the exact staged Ed25519 public key for offline Iran setup.
+        """Export only the exact staged Ed25519 public key for offline Relay peer setup.
 
-        This is a read-only, current-generation inspection, NOT Iran
+        This is a read-only, current-generation inspection, NOT Relay peer
         enrollment, service activation, or host readiness attestation.
         """
         if os.geteuid() != self.layout.owner_uid:
@@ -1688,16 +1688,16 @@ class GatewayPolicyAudit(Retirement):
                 or managed["host_generation"] != journal["host_generation"]):
                 raise Refusal("Staged Relay enrollment identity is not current-generation bound.")
             return (
-                "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT V2\n"
+                "PUBLIC ONLY - OFFLINE RELAY PEER ENROLLMENT INPUT V2\n"
                 "Relay: " + self.relay.relay_id + "\n"
                 "Record: " + self.relay.record_id + "\n"
                 "Configuration revision: " + str(self.relay.revision) + "\n"
                 "Host fingerprint: " + self.relay.fingerprint + "\n"
                 "Host generation: " + journal["host_generation"] + "\n"
                 "Control endpoint: " + journal["control_host"] + ":" + str(journal["control_port"]) + "\n"
-                "Control user on Iran: " + journal["control_user"] + "\n"
+                "Control user on Relay peer: " + journal["control_user"] + "\n"
                 "Ed25519 PUBLIC KEY (never copy the private key):\n" + line + "\n"
-                "NOT ENROLLED. Restrict Iran SSHD forwarding and public egress separately; "
+                "NOT ENROLLED. Restrict Relay peer SSHD forwarding and public egress separately; "
                 "verify both hosts and issue independent readiness before enabling."
             )
         except BlockingIOError as error:
@@ -2173,12 +2173,12 @@ class GatewaySetup(GatewayPolicyAudit):
             # Deliberately do NOT enable or start the SOCKS transport here.
             # The Gateway's current PHP UID could be shared by sibling sites.
             # Opening even a loopback listener before independently proving
-            # FPM/CLI isolation and Iran egress could grant those sites access.
+            # FPM/CLI isolation and Relay peer egress could grant those sites access.
             if self._unit_active() or self._unit_enabled():
                 raise Refusal("Staged Relay service became active/enabled without verified admission; investigate host drift.")
             return ("GATEWAY RESOURCES STAGED INACTIVE for " + self.relay.relay_id
                     + ". Service intentionally DISABLED. Dedicated PHP-FPM isolation, "
-                    "Iran egress, operator-controlled activation and separate "
+                    "Relay peer egress, operator-controlled activation and separate "
                     "trusted attestation are still required. NO READINESS ISSUED.")
         except BlockingIOError as error:
             raise Refusal("Another Relay operation holds the lifecycle lock.") from error
@@ -2186,7 +2186,7 @@ class GatewaySetup(GatewayPolicyAudit):
             os.close(fd)
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay operator actions; never contacts Iran.")
+    parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay operator actions; never contacts Relay peer.")
     parser.add_argument("action", choices=("preflight", "audit-gateway", "setup-gateway", "public-enrollment",
                                             "ensure-acl", "retire", "prepare-setup", "seal-delete", "seal-rotate"))
     parser.add_argument("--relay-id", required=True)

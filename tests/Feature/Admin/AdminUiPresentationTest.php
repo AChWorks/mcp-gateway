@@ -35,6 +35,11 @@ final class AdminUiPresentationTest extends TestCase
         ]);
         $this->actingAs($this->owner());
         $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertSee('Intermediary SSH host or public IP')
+            ->assertSee('edge-relay-1')
+            ->assertSee('Restrict each intermediary host')
+            ->assertDontSee('Iran SSH host')
+            ->assertDontSee('Iran intermediary')
             ->assertSee('Retire and remove Relay')
             ->assertSee('Next: run the Gateway-host cleanup-and-seal-for-delete command')
             ->assertDontSee('Delete verified retired Relay');
@@ -45,7 +50,7 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('relay-retire-upgrade-'.$relay->getKey())
             ->assertSee('An unknown or modified binary is never replaced')
             ->assertSee('flock -s -w 15 9')
-            ->assertSee('A disconnected Iran host NEVER blocks this action');
+            ->assertSee('A disconnected intermediary host NEVER blocks this action');
 
         // The real host evidence is issued only by a privileged host
         // operator. Mock this boundary for view presentation only.
@@ -100,7 +105,7 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Stage / repair Gateway host resources (Owner command)')
             ->assertSee('It DOES NOT issue readiness')
             ->assertSee('setup-gateway')
-            ->assertSee('Retrieve staged public SSH key for offline Iran enrollment (read-only)')
+            ->assertSee('Retrieve staged public SSH key for offline Relay peer enrollment (read-only)')
             ->assertSee('public-enrollment')
             ->getContent();
 

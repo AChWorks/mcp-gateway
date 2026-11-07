@@ -1,10 +1,10 @@
 #!/usr/bin/python3
-"""Offline Iran-side staging of a Gateway Relay's *public* control identity.
+"""Offline intermediary-side staging of a Gateway Relay's *public* control identity.
 
 This deliberately stages ONLY root-owned, inert public metadata. It never
 creates SSH accounts, touches sshd/authorized_keys, installs firewall rules,
 starts a listener, contacts Gateway, issues readiness, or authorizes traffic.
-A separate future, reviewed admission protocol must prove Iran egress before
+A separate future, reviewed admission protocol must prove intermediary egress before
 these bytes can be installed into a live authentication/forwarding path.
 """
 from __future__ import annotations
@@ -28,9 +28,9 @@ class Refusal(Exception):
     pass
 
 
-_HEADER = "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT V2"
+_HEADER = "PUBLIC ONLY - OFFLINE RELAY PEER ENROLLMENT INPUT V2"
 _KEY_HEADER = "Ed25519 PUBLIC KEY (never copy the private key):"
-_TRAILER = ("NOT ENROLLED. Restrict Iran SSHD forwarding and public egress separately; "
+_TRAILER = ("NOT ENROLLED. Restrict Relay peer SSHD forwarding and public egress separately; "
             "verify both hosts and issue independent readiness before enabling.")
 _ULID = re.compile(r"[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}\Z")
 _RELAY = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
@@ -83,7 +83,7 @@ def parse_gateway_export(raw: bytes) -> Snapshot:
         ("Configuration revision: ", lines[3]),
         ("Host fingerprint: ", lines[4]),
         ("Host generation: ", lines[5]),
-        ("Control endpoint: ", lines[6]), ("Control user on Iran: ", lines[7]),
+        ("Control endpoint: ", lines[6]), ("Control user on Relay peer: ", lines[7]),
     ]
     if any(not line.startswith(prefix) for prefix, line in fields):
         raise Refusal("Public enrollment metadata fields are missing or out of order.")
@@ -103,9 +103,9 @@ def parse_gateway_export(raw: bytes) -> Snapshot:
     host, port = endpoint.rsplit(":", 1)
     if (not _HOST.fullmatch(host) or ".." in host or host.endswith(".")
         or not port.isdecimal() or len(port) > 5 or not 1 <= int(port) <= 65535):
-        raise Refusal("Invalid Iran control host or SSH port.")
+        raise Refusal("Invalid Relay peer control host or SSH port.")
     if not _USER.fullmatch(control_user) or control_user == "root":
-        raise Refusal("Iran control principal must be a dedicated non-root identity.")
+        raise Refusal("Relay peer control principal must be a dedicated non-root identity.")
     public_fields = lines[9].split(" ")
     if (len(public_fields) != 2 or public_fields[0] != "ssh-ed25519"
         or not _KEY_B64.fullmatch(public_fields[1])):
@@ -129,11 +129,11 @@ class Layout:
 
     @property
     def stages(self) -> Path:
-        return self.root / "var/lib/mcp-gateway-iran-relays"
+        return self.root / "var/lib/mcp-gateway-relay-peers"
 
     @property
     def locks(self) -> Path:
-        return self.root / "run/mcp-gateway-iran-relays"
+        return self.root / "run/mcp-gateway-relay-peers"
 
     def stage(self, snapshot: Snapshot) -> Path:
         return self.stages / snapshot.record_id
@@ -167,7 +167,7 @@ def ensure_root_directory(path: Path, layout: Layout) -> None:
             parents.append(current)
         current = current.parent
         if not current.is_relative_to(layout.root):
-            raise Refusal("Escaped the fixed Iran Relay namespace.")
+            raise Refusal("Escaped the fixed Relay peer namespace.")
     owned(layout.root, layout, True)
     for item in reversed(parents):
         item.mkdir(mode=0o700)
@@ -208,18 +208,18 @@ def exact_stage(snapshot: Snapshot, layout: Layout, allow_retiring: bool = False
     if not owned(base, layout, True, required=False):
         return False
     if base.stat().st_mode & 0o777 != 0o700:
-        raise Refusal("Staged Iran public identity directory must be 0700.")
+        raise Refusal("Staged Relay peer public identity directory must be 0700.")
     names = {p.name for p in base.iterdir()}
     permitted = {"control_key.pub", "owner.json"} | ({"retiring.json"} if allow_retiring else set())
     if not names.issubset(permitted) or (not allow_retiring and names != permitted):
-        raise Refusal("Unexpected or incomplete Iran Relay public staging namespace.")
+        raise Refusal("Unexpected or incomplete Relay peer public staging namespace.")
     if "retiring.json" in names:
         if not allow_retiring:
-            raise Refusal("Iran Relay stage is being retired; cannot inspect or adopt it.")
+            raise Refusal("Relay peer stage is being retired; cannot inspect or adopt it.")
         marker = base / "retiring.json"
         owned(marker, layout, False)
         if marker.read_bytes() != _encode(snapshot.owner_record()):
-            raise Refusal("Interrupted retirement belongs to different Iran Relay evidence.")
+            raise Refusal("Interrupted retirement belongs to different Relay peer evidence.")
     else:
         if names != {"control_key.pub", "owner.json"}:
             raise Refusal("Partial staging without a retirement marker cannot be adopted.")
@@ -227,12 +227,12 @@ def exact_stage(snapshot: Snapshot, layout: Layout, allow_retiring: bool = False
         key = base / "control_key.pub"
         owned(key, layout, False)
         if key.read_bytes() != snapshot.public_key:
-            raise Refusal("Existing Iran Relay staged key differs from verified public export.")
+            raise Refusal("Existing Relay peer staged key differs from verified public export.")
     if "owner.json" in names:
         claim = base / "owner.json"
         owned(claim, layout, False)
         if claim.read_bytes() != _encode(snapshot.owner_record()):
-            raise Refusal("Existing Iran Relay staged claim differs from public export.")
+            raise Refusal("Existing Relay peer staged claim differs from public export.")
     return True
 
 
@@ -313,7 +313,7 @@ def publish_retiring_marker(stage: Path, snapshot: Snapshot, layout: Layout) -> 
             expected = stage.lstat()
             if ((actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
                 or actual.st_mode & 0o777 != 0o700):
-                raise Refusal("Iran public staging directory changed before marker publication.")
+                raise Refusal("Relay peer public staging directory changed before marker publication.")
             _link_anonymous_marker(fd, stage_fd)
             os.fsync(stage_fd)
         finally:
@@ -368,7 +368,7 @@ def sync_existing_retiring_marker(stage: Path, snapshot: Snapshot, layout: Layou
 
 def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
     if os.geteuid() != layout.owner_uid:
-        raise Refusal("Iran Relay staging requires explicit root execution.")
+        raise Refusal("Relay peer staging requires explicit root execution.")
     ensure_root_directory(layout.locks, layout)
     ensure_root_directory(layout.stages, layout)
     lock = layout.lock(snapshot)
@@ -378,25 +378,25 @@ def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
         info = os.fstat(fd)
         link = lock.lstat()
         if (info.st_dev, info.st_ino) != (link.st_dev, link.st_ino):
-            raise Refusal("Iran Relay lock was replaced during open.")
+            raise Refusal("Relay peer lock was replaced during open.")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         stage = layout.stage(snapshot)
         if action == "inspect":
             if not exact_stage(snapshot, layout):
-                raise Refusal("Iran Relay has no exact, trusted staged public identity.")
+                raise Refusal("Relay peer has no exact, trusted staged public identity.")
             return "PUBLIC IDENTITY STAGED INACTIVE for " + snapshot.relay_id + ". NOT ENROLLED OR READY."
         if action == "retire":
             if not owned(stage, layout, True, required=False):
-                return "NO IRAN STAGE PRESENT. No SSH account, firewall or service was changed."
+                return "NO RELAY PEER STAGE PRESENT. No SSH account, firewall or service was changed."
             if stage.stat().st_mode & 0o777 != 0o700:
-                raise Refusal("Staged Iran public identity directory must be 0700.")
+                raise Refusal("Staged Relay peer public identity directory must be 0700.")
             # A power loss after the final retirement marker unlink, but
             # before rmdir/fsync, may leave this exact private directory
             # EMPTY. Removing an empty trusted stage deletes no unknown data.
             if not any(stage.iterdir()):
                 stage.rmdir()
                 sync_dir(layout.stages, layout)
-                return "EMPTY IRAN PUBLIC STAGE RETIRED. No live SSH policy was touched."
+                return "EMPTY RELAY PEER PUBLIC STAGE RETIRED. No live SSH policy was touched."
             exact_stage(snapshot, layout, allow_retiring=True)
             marker = stage / "retiring.json"
             if marker.exists():
@@ -419,9 +419,9 @@ def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
             sync_dir(stage, layout)
             stage.rmdir()
             sync_dir(layout.stages, layout)
-            return "IRAN PUBLIC STAGE RETIRED. No live SSH identity or network policy was touched."
+            return "RELAY PEER PUBLIC STAGE RETIRED. No live SSH identity or network policy was touched."
         if action != "stage":
-            raise Refusal("Unknown offline Iran staging operation.")
+            raise Refusal("Unknown offline Relay peer staging operation.")
         if exact_stage(snapshot, layout, allow_retiring=False):
             return "ALREADY STAGED INACTIVE for " + snapshot.relay_id + ". NOT ENROLLED OR READY."
         prefix = ".pending-" + snapshot.record_id + "-"
@@ -436,18 +436,18 @@ def operate(action: str, snapshot: Snapshot, layout: Layout = Layout()) -> str:
         write_new(tmp / "owner.json", _encode(snapshot.owner_record()), 0o644)
         sync_dir(tmp, layout)
         if stage.exists() or stage.is_symlink():
-            raise Refusal("Concurrent foreign Iran Relay staging namespace.")
+            raise Refusal("Concurrent foreign Relay peer staging namespace.")
         os.rename(tmp, stage)
         sync_dir(layout.stages, layout)
         return "PUBLIC IDENTITY STAGED INACTIVE for " + snapshot.relay_id + ". NOT ENROLLED OR READY."
     except BlockingIOError as error:
-        raise Refusal("Iran Relay lifecycle maintenance is active; retry afterward.") from error
+        raise Refusal("Relay peer lifecycle maintenance is active; retry afterward.") from error
     finally:
         os.close(fd)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Offline, inactive Iran Relay public-identity staging.")
+    parser = argparse.ArgumentParser(description="Offline, inactive Relay peer public-identity staging.")
     parser.add_argument("action", choices=("stage", "inspect", "retire"))
     parser.add_argument("--input", required=True, help="Exact public-only Gateway export text (never a private key).")
     args = parser.parse_args()

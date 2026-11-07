@@ -65,6 +65,70 @@ final class ConnectionRelayOpenSshFixtureTest extends TestCase
         self::assertSame('', $peer);
     }
 
+    public function test_two_distinct_intermediaries_route_the_same_target_independently_without_direct_fallback(): void
+    {
+        // Two isolated sshd control endpoints with distinct host/login keys,
+        // each providing its own real OpenSSH -D listener. No regional
+        // identity or geographic routing assumption is part of the route.
+        $primary = $this->relay();
+        $secondary = LocalSocks5Route::fromApprovedBinding(
+            'edge-peer-secondary', (int) $this->env('SSH_FIXTURE_RELAY_SECONDARY_SOCKS_PORT'),
+        );
+        self::assertNotSame($primary->loopbackPort, $secondary->loopbackPort);
+        $transport = $this->transport('127.0.0.1');
+        $endHost = $this->pin('SSH_FIXTURE_ED25519_HOST_PUB');
+        foreach ([$primary, $secondary] as $route) {
+            self::assertSame('', $transport->authenticate(
+                $this->endpoint(), $endHost,
+                'password', $this->env('SSH_FIXTURE_PASSWORD'), null,
+                relay: $route,
+            ));
+            $sftpDirectory = $transport->withAuthenticatedSftpSession(
+                $this->endpoint(), $endHost,
+                'password', $this->env('SSH_FIXTURE_PASSWORD'), null,
+                static fn (SFTP $sftp, string $peer): array => [$peer, $sftp->pwd()],
+                relay: $route,
+            );
+            self::assertSame('', $sftpDirectory[0]);
+            self::assertIsString($sftpDirectory[1]);
+            self::assertNotSame('', $sftpDirectory[1]);
+
+            // The distant peer may reach only explicitly permitted Target
+            // ports; both independent routes reject a foreign destination.
+            try {
+                $socket = (new Socks5NumericDialer)->connect(
+                    $route->loopbackPort, '127.0.0.1', 46232, 5,
+                );
+                if (is_resource($socket)) {
+                    fclose($socket);
+                }
+                self::fail('A Relay peer forwarded to an unapproved port.');
+            } catch (RuntimeException $exception) {
+                self::assertContains($exception->getMessage(), [
+                    'relay_connect_denied', 'relay_handshake_failed',
+                ]);
+            }
+        }
+
+        // The non-existent third peer is never substituted with either
+        // working peer or with a Direct connection to the Target.
+        try {
+            $transport->authenticate(
+                $this->endpoint(), $endHost,
+                'password', $this->env('SSH_FIXTURE_PASSWORD'), null,
+                relay: LocalSocks5Route::fromApprovedBinding('absent-peer', 46252),
+            );
+            self::fail('An unavailable Relay unexpectedly connected via another route.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('relay_unavailable', $exception->reason);
+        }
+        self::assertSame('', $transport->authenticate(
+            $this->endpoint(), $endHost,
+            'password', $this->env('SSH_FIXTURE_PASSWORD'), null,
+            relay: $secondary,
+        ));
+    }
+
     public function test_wrong_real_end_host_key_is_rejected_before_password_authentication(): void
     {
         $log = $this->env('SSH_FIXTURE_LOG_MODERN');
@@ -92,27 +156,30 @@ final class ConnectionRelayOpenSshFixtureTest extends TestCase
         $host = $this->env('SSH_FIXTURE_RELAY_TLS_HOST');
         $port = (int) $this->env('SSH_FIXTURE_RELAY_TLS_PORT');
         $trusted = $this->env('SSH_FIXTURE_RELAY_TLS_CERT');
-        $client = new Client([
-            'proxy' => 'socks5://127.0.0.1:'.$this->relay()->loopbackPort,
-            'curl' => [CURLOPT_RESOLVE => [$host.':'.$port.':127.0.0.1']],
-            'verify' => $trusted, 'allow_redirects' => false,
-            'timeout' => 8, 'connect_timeout' => 4,
-        ]);
-        $response = $client->request('GET', 'https://'.$host.':'.$port.'/');
-        self::assertSame(200, $response->getStatusCode());
-        self::assertStringContainsString('SSL', (string) $response->getBody());
+        foreach ([$this->relay()->loopbackPort,
+            (int) $this->env('SSH_FIXTURE_RELAY_SECONDARY_SOCKS_PORT')] as $socksPort) {
+            $client = new Client([
+                'proxy' => 'socks5://127.0.0.1:'.$socksPort,
+                'curl' => [CURLOPT_RESOLVE => [$host.':'.$port.':127.0.0.1']],
+                'verify' => $trusted, 'allow_redirects' => false,
+                'timeout' => 8, 'connect_timeout' => 4,
+            ]);
+            $response = $client->request('GET', 'https://'.$host.':'.$port.'/');
+            self::assertSame(200, $response->getStatusCode());
+            self::assertStringContainsString('SSL', (string) $response->getBody());
 
-        $wrong = new Client([
-            'proxy' => 'socks5://127.0.0.1:'.$this->relay()->loopbackPort,
-            'curl' => [CURLOPT_RESOLVE => ['wrong.fixture.test:'.$port.':127.0.0.1']],
-            'verify' => $trusted, 'allow_redirects' => false,
-            'timeout' => 8, 'connect_timeout' => 4,
-        ]);
-        try {
-            $wrong->request('GET', 'https://wrong.fixture.test:'.$port.'/');
-            self::fail('Guzzle TLS verified the wrong original hostname through the SOCKS Relay.');
-        } catch (TransferException $exception) {
-            self::assertNotSame('', $exception->getMessage());
+            $wrong = new Client([
+                'proxy' => 'socks5://127.0.0.1:'.$socksPort,
+                'curl' => [CURLOPT_RESOLVE => ['wrong.fixture.test:'.$port.':127.0.0.1']],
+                'verify' => $trusted, 'allow_redirects' => false,
+                'timeout' => 8, 'connect_timeout' => 4,
+            ]);
+            try {
+                $wrong->request('GET', 'https://wrong.fixture.test:'.$port.'/');
+                self::fail('Guzzle TLS verified an untrusted host through a Relay.');
+            } catch (TransferException $exception) {
+                self::assertNotSame('', $exception->getMessage());
+            }
         }
     }
 
