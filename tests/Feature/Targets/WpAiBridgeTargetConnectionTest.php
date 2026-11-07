@@ -651,6 +651,105 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         }
     }
 
+    public function test_concurrent_reader_reuses_only_a_committed_refresh_successor(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $credential = $this->credential($target);
+        $this->seedPendingRefresh($target);
+        $sleeps = 0;
+
+        Sleep::fake();
+        Sleep::whenFakingSleep(function () use ($target, $credential, &$sleeps): void {
+            $sleeps++;
+            if ($sleeps !== 1) {
+                return;
+            }
+
+            // Another process finishes the original remote exchange and
+            // atomically persists the rotated credential. The waiting reader
+            // itself may never send a second rotating-token HTTP request.
+            DB::transaction(function () use ($target, $credential): void {
+                $vault = app(WpAiBridgeTargetVault::class);
+                $prior = $vault->openCredential($target, $credential);
+                $credential->forceFill(['encrypted_payload' => $vault->sealCredential(
+                    $target, $prior['client_id'], $prior['resource_url'],
+                    'alpha-concurrent-access', 'alpha-concurrent-refresh',
+                    now()->addHour(), $prior['scopes'],
+                )])->save();
+                DB::table('wp_ai_bridge_credential_metadata')
+                    ->where('credential_id', $credential->getKey())
+                    ->update([
+                        'generation' => 2,
+                        'access_expires_at' => now()->addHour(),
+                        'refresh_expires_at' => now()->addMonth(),
+                        'refresh_due_at' => now()->addWeeks(2),
+                    ]);
+                DB::table('wp_ai_bridge_refresh_intents')
+                    ->where('target_record_id', $target->getKey())->delete();
+            });
+        });
+
+        try {
+            self::assertSame('alpha-concurrent-access',
+                app(WpAiBridgeTargetConnectionService::class)
+                    ->routingContextWithRecovery($target)['access_token']);
+            self::assertSame(1, $sleeps);
+            self::assertSame(0, $this->refreshCalls);
+            self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        } finally {
+            Sleep::fake(false);
+        }
+    }
+
+    public function test_concurrent_reader_does_not_trust_a_removed_intent_without_new_credential_generation(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $this->seedPendingRefresh($target);
+
+        Sleep::fake();
+        Sleep::whenFakingSleep(static function () use ($target): void {
+            DB::table('wp_ai_bridge_refresh_intents')
+                ->where('target_record_id', $target->getKey())->delete();
+        });
+
+        try {
+            app(WpAiBridgeTargetConnectionService::class)
+                ->routingContextWithRecovery($target);
+            self::fail('An unverified disappearing intent was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        } finally {
+            Sleep::fake(false);
+        }
+        self::assertSame(0, $this->refreshCalls);
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')->value('generation'));
+    }
+
+    public function test_old_ambiguous_refresh_does_not_wait_or_replay_from_another_reader(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $this->seedPendingRefresh($target, ageSeconds: 120, attempts: 2);
+
+        Sleep::fake();
+        try {
+            app(WpAiBridgeTargetConnectionService::class)
+                ->routingContextWithRecovery($target);
+            self::fail('A stale, twice-attempted rotating grant was replayed.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('refresh_pending', $exception->reason);
+        } finally {
+            Sleep::assertNeverSlept();
+            Sleep::fake(false);
+        }
+        self::assertSame(0, $this->refreshCalls);
+    }
+
     public function test_tcp_refusal_on_initial_refresh_is_definitively_unconsumed(): void
     {
         $this->assertFirstConnectionFailureDefersRefresh('connect');
@@ -673,6 +772,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->expire($target);
         $service = app(WpAiBridgeTargetConnectionService::class);
         $this->refreshTransportFailure = 'network_timeout';
+        Log::spy();
 
         try {
             $service->accessToken($target);
@@ -687,6 +787,13 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
         self::assertSame('refresh_ambiguous', $target->last_error_code);
         self::assertSame(1, DB::table('target_credentials')->count());
+        Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh transport outcome ambiguous.'
+            && ($context['cause_code'] ?? null) === 'network_failure'
+            && ($context['failure_stage'] ?? null) === 'request_timeout'
+            && ($context['request_not_sent'] ?? null) === false
+            && ($context['recovery_attempt'] ?? null) === false
+            && ! str_contains(json_encode($context, JSON_THROW_ON_ERROR), 'alpha-refresh')
+        )->once();
     }
 
     public function test_connection_refusal_during_one_shot_recovery_does_not_clear_prior_ambiguity(): void
@@ -866,9 +973,14 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
         $recordId = (string) $target->getKey();
         Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh failed before dispatch.'
-            && array_keys($context) === ['target_record_id', 'cause_code']
+            && array_keys($context) === [
+                'target_record_id', 'cause_code', 'failure_stage',
+                'request_not_sent', 'recovery_attempt',
+            ]
             && ($context['target_record_id'] ?? null) === $recordId
             && ($context['cause_code'] ?? null) === 'client_assertion_unavailable'
+            && ($context['failure_stage'] ?? null) === 'unspecified'
+            && ($context['request_not_sent'] ?? null) === true
         )->once();
 
         try {
@@ -938,9 +1050,14 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame('refresh_ambiguous', $target->last_error_code);
         $recordId = (string) $target->getKey();
         Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh transport outcome ambiguous.'
-            && array_keys($context) === ['target_record_id', 'cause_code']
+            && array_keys($context) === [
+                'target_record_id', 'cause_code', 'failure_stage',
+                'request_not_sent', 'recovery_attempt',
+            ]
             && ($context['target_record_id'] ?? null) === $recordId
             && ($context['cause_code'] ?? null) === 'client_assertion_unavailable'
+            && ($context['failure_stage'] ?? null) === 'unspecified'
+            && ($context['request_not_sent'] ?? null) === true
         )->once();
 
         try {
@@ -1410,6 +1527,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->pair($alpha);
         $this->expire($alpha);
         $this->rejectRefresh = true;
+        Log::spy();
 
         try {
             $service->accessToken($alpha);
@@ -1427,6 +1545,13 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         }
         self::assertSame(1, $this->refreshCalls);
         self::assertSame(1, DB::table('target_credentials')->count());
+        Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh request declined.'
+            && ($context['http_status'] ?? null) === 400
+            && ($context['oauth_error'] ?? null) === 'invalid_grant'
+            && ($context['cause_code'] ?? null) === 'refresh_rejected'
+            && ($context['recovery_attempt'] ?? null) === false
+            && ! str_contains(json_encode($context, JSON_THROW_ON_ERROR), 'alpha-refresh')
+        )->once();
     }
 
     public function test_second_unknown_rotation_never_triggers_a_third_refresh_replay(): void
@@ -2636,6 +2761,23 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
         self::assertSame([], $this->revocationTokenAttempts);
         DB::unprepared('DROP TRIGGER fail_intent');
+    }
+
+    private function seedPendingRefresh(Target $target, int $ageSeconds = 0, int $attempts = 1): void
+    {
+        $credential = $this->credential($target);
+        $generation = DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())->value('generation');
+        DB::table('wp_ai_bridge_refresh_intents')->insert([
+            'id' => (string) Str::ulid(),
+            'target_record_id' => $target->getKey(),
+            'credential_id' => $credential->getKey(),
+            'generation' => $generation,
+            'attempts' => $attempts,
+            'request_timeout_seconds' => 5,
+            'created_at' => now()->subSeconds($ageSeconds),
+            'updated_at' => now(),
+        ]);
     }
 
     private function expire(Target $target): void
