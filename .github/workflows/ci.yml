@@ -166,7 +166,7 @@ jobs:
   managed-reverse-host-openssh:
     # Only on a disposable GitHub-hosted runner; never the Gateway's NL/IR host.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -185,7 +185,7 @@ jobs:
     # generated Target installer against a real local TLS claim, OpenSSH and
     # systemd; never connected to a production Gateway, Target or API key.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out repository
