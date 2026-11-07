@@ -633,14 +633,14 @@ class RelayPeerOfflinePublicStageTests(unittest.TestCase):
         """Execute the real documented Bash bodies with disposable test paths."""
         doc = (Path(__file__).resolve().parents[2] /
                "docs/CONNECTION-RELAYS.md").read_text()
-        section = doc.split("## Offline Relay peer public-identity staging", 1)[1]
+        section = doc.split("## Offline Relay peer public identity and enrollment (V2)", 1)[1]
         section = section.split("## Gateway-local privileged policy audit", 1)[0]
         installer = section.split(
             "    /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C "
             "/usr/bin/bash -c '\n", 1,
         )[1].split("\n    ' bash \"$PWD/connection-relay-peer.py\"", 1)[0]
         runner = section.split(
-            "    relay_peer_public() {\n"
+            "    relay_peer() {\n"
             "      /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin "
             "LC_ALL=C /usr/bin/bash -c '\n", 1,
         )[1].split("\n      ' bash \"$@\"", 1)[0]
@@ -717,7 +717,7 @@ class RelayPeerOfflinePublicStageTests(unittest.TestCase):
                  "PYTHONPATH": str(self.root), "PYTHONINSPECT": "1"},
         )
         self.assertEqual(0, execution.returncode, execution.stderr)
-        self.assertIn("Offline, inactive Relay peer public-identity", execution.stdout)
+        self.assertIn("Offline public staging and separately authorized restricted Relay peer", execution.stdout)
         self.assertFalse((self.root / "var").exists())
 
     def test_documented_install_refuses_mismatch_and_existing_destination(self):
@@ -778,7 +778,7 @@ class RelayPeerOfflinePublicStageTests(unittest.TestCase):
                      "PYTHONPATH": str(self.root)},
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
-            self.assertIn("Offline, inactive Relay peer public-identity", proc.stdout)
+            self.assertIn("Offline public staging and separately authorized restricted Relay peer", proc.stdout)
             self.assertEqual(b"raise SystemExit(66)\n", installed.read_bytes())
         finally:
             os.close(fd)

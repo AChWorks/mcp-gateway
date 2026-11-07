@@ -1,6 +1,6 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Core Relay routing, inactive Gateway Setup/Retry, root-verified V2 public-key export and inert peer-side staging are merged through PR #294, but have not been published, installed or accepted on real hosts.** The exported public key is bound to the exact configuration revision, fingerprint and Gateway host generation. This runbook's generic peer-host naming is a source change pending independent review. Independent operational readiness attestation and restricted live intermediary enrollment remain unfinished. Production host setup, firewall edits, SSH identity creation, installation, migrations, integration and release require separate approvals and verification. A saved Relay alone does not mean a tunnel is running or that the actual Target is authenticated.
+**Source capabilities are not production acceptance.** Gateway routing, inactive local Setup/Retry and the strict V2 public-key export are available. The intermediary helper adds separately authorized restricted live Setup/Repair, effective audit and scoped retirement. Dedicated Gateway PHP-FPM/CLI isolation, Gateway activation and independent readiness issuance/renewal remain unfinished. No source change installs or activates a production host. A saved Relay or a successful local host audit alone does not authenticate the selected Target.
 
 ## Intent and architecture
 
@@ -235,14 +235,17 @@ Gateway-only retirement and metadata deletion must continue to work without
 contacting intermediary. No production host operation is approved by this source
 candidate.
 
-## Offline Relay peer public-identity staging (V2; no SSH admission)
+## Offline Relay peer public identity and enrollment (V2)
 
-**This helper does NOT enroll an SSH login or enable a Relay.** The offline
-resources/host/connection-relay-peer.py script stages only the **public**
-Ed25519 identity exported by the reviewed Gateway public-enrollment action.
-Use it only after separately authorized host maintenance; the source is not
-a published release or an installed host service. The intermediary needs no connection to
-Gateway, GitHub or a foreign CDN.
+The offline `resources/host/connection-relay-peer.py` helper keeps public
+identity staging separate from explicit live enrollment. `stage` saves only
+the **public** Ed25519 identity exported by the Gateway operator. The live
+Setup/Repair actions described below additionally create the restricted
+forwarding principal and native host controls; no action issues Gateway
+readiness or enables its database registration. Use them only after separately
+authorized host maintenance. The intermediary needs no download from Gateway,
+GitHub or a CDN; transfer the exact approved helper and public input through
+an independently trusted channel.
 
 The operator transfers two items over an independently trusted offline channel:
 (1) the exact, complete, public-only **11-line v2** Gateway operator-terminal
@@ -254,11 +257,12 @@ eight-line export is deliberately refused rather than silently adopted.
 These fields provide **exact identity binding, not cryptographic authenticity
 or a signed freshness guarantee**: the operator must obtain the export from
 a verified current Gateway session and independently recheck its revision
-before any future live enrollment. **Never run the transferred Python file under
+before any live enrollment. **Never run the transferred Python file under
 sudo or use a split checksum/execute procedure in a writable transfer
 directory.** Only an expressly authorized intermediary host operator may perform the
 following installation and execution. This is **not** an automatically invoked
-installer, live SSH enrollment, or permission to change Production.
+installer or permission to change Production. Live enrollment is a separate,
+explicit operator action using the verified installed helper.
 
 For this peer helper, the exact reviewed-source SHA256 is:
 A previously installed geography-specific or v1 helper is **not** overwritten by the first-install
@@ -269,7 +273,7 @@ the new helper must not silently adopt or destroy old staged evidence. Earlier
 path are left untouched by the new generic `/var/lib/mcp-gateway-relay-peers`
 namespace; absence of the new path does not prove the old path is empty.
 
-    a0d1fb3a12c98f35a41d60f1e55c562c75ec5ad20f5531e12e7e8b326b72eb7b
+    6f9ebb756e99b131dc2814a7903a3360115ad166c848ee464adcc72d23df8b98
 
 **First install only**, from the directory containing the transferred public
 source file (the file may be untrusted; it is never executed there):
@@ -278,7 +282,7 @@ source file (the file may be untrusted; it is never executed there):
     set -euo pipefail
     umask 077
     source=$1
-    expected=a0d1fb3a12c98f35a41d60f1e55c562c75ec5ad20f5531e12e7e8b326b72eb7b
+    expected=6f9ebb756e99b131dc2814a7903a3360115ad166c848ee464adcc72d23df8b98
     base=/usr/local/libexec
     directory=$base/mcp-gateway-relay-peer
     destination=$directory/connection-relay-peer.py
@@ -319,7 +323,7 @@ source file (the file may be untrusted; it is never executed there):
     printf "%s  %s\n" "$expected" "$destination" |
         /usr/bin/sha256sum --check --status ||
         { echo "Installed source verification failed" >&2; exit 1; }
-    echo "Root-owned, hash-verified intermediary public-only helper installed; no SSH admission."
+    echo "Root-owned, hash-verified intermediary helper installed; no SSH admission yet."
     ' bash "$PWD/connection-relay-peer.py"
 
 If the destination already exists, **do not overwrite it** or run a version
@@ -334,10 +338,10 @@ executes those exact bytes with isolated Python imports. Even if the pathname
 changes after opening, Python runs the originally verified inode. Do not
 replace this with a direct sudo Python call.
 
-    relay_peer_public() {
+    relay_peer() {
       /usr/bin/sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin LC_ALL=C /usr/bin/bash -c '
       set -euo pipefail
-      expected=a0d1fb3a12c98f35a41d60f1e55c562c75ec5ad20f5531e12e7e8b326b72eb7b
+      expected=6f9ebb756e99b131dc2814a7903a3360115ad166c848ee464adcc72d23df8b98
       directory=/usr/local/libexec/mcp-gateway-relay-peer
       destination=$directory/connection-relay-peer.py
       trusted_dir() {
@@ -364,10 +368,10 @@ replace this with a direct sudo Python call.
       exec /usr/bin/python3 -I /proc/self/fd/9 "$@"
       ' bash "$@"
     }
-    relay_peer_public stage --input "$PWD/gateway-public-export.txt"
-    relay_peer_public inspect --input "$PWD/gateway-public-export.txt"
+    relay_peer stage --input "$PWD/gateway-public-export.txt"
+    relay_peer inspect --input "$PWD/gateway-public-export.txt"
     # Optional offline public-stage rollback only:
-    relay_peer_public retire --input "$PWD/gateway-public-export.txt"
+    relay_peer retire --input "$PWD/gateway-public-export.txt"
 
 On unsupported Linux filesystems lacking O_TMPFILE and
 linkat(AT_EMPTY_PATH), retirement must fail closed **before deletion**; it
@@ -402,17 +406,122 @@ Unexpected incomplete staging or a pending directory is intentionally **not**
 recursively deleted: inspect the exact root-owned
 namespace before any separately approved recovery.
 
-No Linux SSH principal is created, no authorized_keys or sshd configuration
-is installed or reloaded, no listener, service or nftables policy is enabled,
-and no privileged readiness evidence is produced. The actual intermediary account
-**must be exclusive to the Relay**, not a reused shared SSH principal, and
-its AllowTcpForwarding, key-only restrictions and public-destination egress
-policy must still be independently installed, positively and negatively
-tested, and linked to a fresh Gateway/host generation before any forwarding
-activation. The next host-admission/attestation step must not treat a staged
-public key as proof of intermediary connectivity, restricted egress or authenticated
-Target access. Gateway-only deletion does not depend on intermediary-side staging or
-cleanup.
+The `stage` / `inspect` / `retire` actions remain limited to inert public
+metadata. A live enrollment must be retired with the separate live retirement
+action before its public stage can be removed. Earlier geography-specific
+namespaces and unknown resources are never adopted or purged. The live peer
+controls below are independent from Gateway-side deletion: an unreachable
+intermediary still cannot prevent verified local Gateway retirement/deletion.
+No peer action writes the Gateway eleven-key readiness lease.
+
+## Restricted live intermediary Setup / Repair / Audit / Retire
+
+Use the **same pinned `relay_peer` wrapper above** on the separately authorized
+intermediary. Required native tools are Python 3, OpenSSH server/key tools,
+systemd with a unified cgroup v2 hierarchy, nftables and the ordinary Linux
+account/network tools. The helper does
+not download code or packages, edit the shared `sshd_config`, reload the shared
+SSH service, or generate a replacement server host key.
+
+First independently verify that the existing peer host-key fingerprint is the
+one pinned in the Gateway registration. The V2 public export does not contain
+that server key; its configuration fingerprint is not a substitute for the SSH
+host-key pin. Supply an existing root-controlled private host-key **path**, and
+its separately trusted public SHA256 fingerprint. No private key is transferred
+from Gateway, printed by the helper, or accepted in the public input.
+
+Choose an explicit local bind address and the public TCP destination ports
+needed by the selected Targets. The control port and dedicated account come
+from the exact V2 export. For example, after replacing both placeholders:
+
+    relay_peer setup --input "$PWD/gateway-public-export.txt" \
+      --bind-address '<local-IPv4-or-IPv6>' \
+      --host-key /etc/ssh/ssh_host_ed25519_key \
+      --host-key-fingerprint 'SHA256:<independently-verified-peer-host-key>' \
+      --allow-port 22 --allow-port 443
+    relay_peer audit --input "$PWD/gateway-public-export.txt"
+
+One Relay may forward to multiple public Targets on those explicit ports. This
+is location-neutral and does not depend on an Iran server, a foreign CDN,
+WordPress on the intermediary, or a connection back to the Gateway during
+installation. Gateway independently validates each actual numeric Target
+endpoint and its SSH host key or TLS certificate.
+
+Setup binds a root-owned journal to the exact public input and policy, creates
+one exclusive non-root forwarding account, and installs one dedicated OpenSSH
+systemd service plus one UID-scoped `inet` nftables table. The native sshd master
+is privileged; authenticated forwarding sockets use the dedicated account.
+The account is public-key-only and has no shell/session/subsystem/TTY, reverse
+TCP, Unix-socket, agent, X11 or tunnel forwarding. `MaxSessions 0` preserves local
+TCP forwarding while denying shell and subsystem sessions; see the
+[OpenSSH server policy reference](https://man.openbsd.org/sshd_config).
+
+The public `authorized_keys` path is root-owned and traversable by the account;
+private journals and host keys remain protected. Existing parents, identities,
+units, keys and policies are checked before use. Setup never widens permissions
+on an unrelated private ancestor or adopts a pre-existing shared account.
+
+The egress guard evaluates the final destination after ordinary output DNAT,
+denies local routes including the intermediary's own public IPs, denies
+private/link-local/reserved/special-purpose addresses, and permits only the
+configured TCP ports. IPv6 is confined to the currently allocated global
+unicast `2000::/3` range with the additional special-prefix exclusions; this
+host boundary is deliberately stricter than the Gateway's IPv6 exclusions;
+both the Gateway and intermediary policy must permit a connection. See [nftables hook ordering](https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks)
+and [IANA IPv6 address allocation](https://www.iana.org/assignments/ipv6-address-space).
+Unrelated UIDs and other Relay tables are outside this policy's scope. Other
+host firewall rules can still deny legitimate traffic, so an audit pass is not
+proof of positive Target connectivity.
+
+Repeating Setup with the same exact policy verifies an already healthy service
+without disconnecting its existing forwarding sessions. For the **same exact
+installed identity and policy** that needs recovery, use:
+
+    relay_peer repair --input "$PWD/gateway-public-export.txt"
+    relay_peer audit --input "$PWD/gateway-public-export.txt"
+
+Repair stops and restarts the owned service, so its existing control sessions
+must reconnect. It restores absent owned files/account/egress state and refuses
+a present drifted table, changed account, unit or policy. The same
+`ensure-egress` check runs before service startup. A changed allowed-port set
+or identity requires deliberate retirement and a fresh current enrollment;
+Repair does not reinterpret a new privilege grant as recovery. Inspect the
+reported failure instead of removing unknown files or flushing a ruleset.
+
+For explicit intermediary-side revocation, even when Gateway is unreachable:
+
+    relay_peer retire-live --input "$PWD/gateway-public-export.txt"
+    # Optional removal of the now-inert public stage:
+    relay_peer retire --input "$PWD/gateway-public-export.txt"
+
+Live retirement first records its intent, stops the exact service and its
+connection processes, then removes only verified owned admission resources,
+egress state and the original account. The SSH server host key remains intact.
+A partial failure retains the ownership evidence needed for a bounded retry;
+it must not report successful revocation while active forwarding survives.
+The public-stage `retire` action cannot remove an active enrollment's identity.
+The small root-only live journal and its durable retirement marker remain as a
+replay fence; they are not a running account or service. Repeating retirement
+is safe after the same generation has been completely removed.
+
+To enroll the same Relay record again, first finish the old live retirement
+and retire its inert public stage. Obtain a current Gateway V2 export with a
+**strictly higher configuration revision and a different host generation**,
+stage that new public identity, and run Setup with the new explicit policy.
+Setup verifies that the prior service/account/table are absent before archiving
+the old exact journal and accepting the new one. Replayed revisions and reused
+generations are refused, including after an interrupted journal transition.
+Do not delete the retained journals to make an old export acceptable.
+
+**The peer audit does not issue Gateway readiness.** Dedicated Gateway FPM/CLI
+UID isolation, Gateway-local listener ACLs and activation, privileged readiness
+issuance/renewal/revocation, real kernel reboot, physical multi-host and full
+WordPress application acceptance remain separate requirements. The disposable
+OS fixture exercises this helper with two peer identities and two real
+SSH/SFTP/HTTPS Targets, including positive/negative UID access, concurrency,
+drift, DNAT, restart, scoped retirement and same-record re-enrollment with a
+fresh generation and a changed port policy. Its fixture output and exact-candidate
+CI own the actual test results; source code alone is not a test pass.
 
 ## Gateway-local privileged policy audit (merged source; not installed)
 
@@ -766,7 +875,12 @@ The verifier also checks whether `<relay-id>.retired.json` exists (which rejects
 
 All four artifacts and their parent directories must be root-owned, non-symlink, not group/world writable, and actually accessible to the effective Gateway PHP UID. The evidence directory and optional `.fences` directory must be **readable and searchable** (or the Relay fails closed); the private key and lock directories must **not** be opened to PHP. A root-owned `0700` `.fences` directory with a concealed fence is explicitly unsafe: reconcile operator permissions rather than interpreting it as an empty directory. The `.policy` file contains the **same fresh 256-bit generation** as the `provisioning` v1 record, never an independently invented token. Before any FPM/CLI identity, service, SSH principal, firewall, routing, egress or binding policy change, a privileged helper must invalidate the old generation under the same exclusive root-only lock used for the entire Setup/Repair lifecycle. Post-change effective OS checks must finish before an independent privileged verifier issues/renews the lease; PHP writes none of these artifacts.
 
-Merged main provides the **source-side validator, retirement/fence helper and staged Gateway-local Setup/Retry resources**. Neither these merged resources nor the proposed v2 public-key export issue/renew authoritative readiness, enroll or restrict the intermediary SSH principal, or prove a live end-to-end Target path. A syntactically valid root-owned claim is not proof of actual SOCKS, intermediary reachability or Target identity.
+The Gateway **source-side validator, retirement/fence helper and staged local
+Setup/Retry resources** do not issue or renew authoritative readiness. The V2
+public export remains inert; only the separately authorized intermediary helper
+described above enrolls and restricts its SSH principal. Neither that peer audit
+nor a syntactically valid root-owned claim proves Gateway SOCKS isolation,
+intermediary reachability or end-to-end Target identity.
 
 The manifest has exactly **11** keys (illustrative schema, not real values; never copy as-is). **Existing 10-key manifests are invalid and must be reissued by the independently privileged operator**; do not migrate or extend them automatically:
 
