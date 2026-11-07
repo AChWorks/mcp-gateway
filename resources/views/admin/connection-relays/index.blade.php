@@ -74,9 +74,9 @@
                     <summary>{{ __('Stage / repair Gateway host resources (Owner command)') }}</summary>
                     <p class="field-help">{{ __('A dedicated root-run Gateway operation installs or resumes this Relay’s Unix SSH identity, root-controlled credentials, supervised local OpenSSH service and scoped IPv4/IPv6 nftables access rule. It DOES NOT issue readiness or verify Relay peer egress, PHP-FPM isolation or Target login. Never run this on Production without separate host-maintenance approval.') }}</p>
                     <div class="field">
-                        <label for="relay-setup-command-{{ $relay->id }}">{{ __('Verified, Relay-specific staged Setup/Retry command') }}</label>
+                        <label for="relay-setup-command-{{ $relay->id }}">{{ __('Verified first-install and staged Setup/Retry — one Gateway-host command') }}</label>
                         <textarea id="relay-setup-command-{{ $relay->id }}" rows="6" readonly spellcheck="false" autocomplete="off">{{ $hostCommands[$relay->id]['setup_gateway'] }}</textarea>
-                        <p class="field-help">{{ __('First install the exact verified helper under Retire and remove Relay. For an older installed helper, use the separate reviewed Upgrade command; never paste an outdated Setup command. The helper creates no account or forwarding permission on the intermediary host and never sets this Relay Ready/Enabled.') }}</p>
+                        <p class="field-help">{{ __('This one command installs the release-pinned helper if missing, then performs Relay-scoped staged Setup only if installation succeeds. It never silently upgrades an older or unknown helper; use the separate reviewed Upgrade action for a known predecessor. Setup does not configure intermediary forwarding or make this Relay Ready/Enabled.') }}</p>
                     </div>
                     <div class="field">
                         <label for="relay-public-enrollment-command-{{ $relay->id }}">{{ __('Retrieve staged public SSH key for offline Relay peer enrollment (read-only)') }}</label>
