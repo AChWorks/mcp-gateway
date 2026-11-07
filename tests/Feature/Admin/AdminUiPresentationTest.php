@@ -105,7 +105,7 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Stage / repair Gateway host resources (Owner command)')
             ->assertSee('It DOES NOT issue readiness')
             ->assertSee('setup-gateway')
-            ->assertSee('Retrieve staged public SSH key for offline Iran enrollment (read-only)')
+            ->assertSee('Retrieve staged public SSH key for offline Relay peer enrollment (read-only)')
             ->assertSee('public-enrollment')
             ->getContent();
 
