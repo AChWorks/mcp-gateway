@@ -10,7 +10,6 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
-use App\Infrastructure\Connectors\Relay\ConnectionRelayHostReadiness;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
@@ -31,19 +30,6 @@ if (! app()->environment('local') || getenv('GATEWAY_BROWSER_FIXTURE') !== '1'
 // Render real SSH file forms only in this already guarded disposable fixture.
 // Browser tests intercept transfer actions before any application execution.
 config()->set('ssh.file_transfer.enabled', true);
-
-// The isolated loopback-only browser fixture must exercise the real enabled
-// Owner UI without fabricating privileged root files or changing host state.
-// Production never binds this synthetic readiness implementation.
-app()->instance(ConnectionRelayHostReadiness::class, new class extends ConnectionRelayHostReadiness
-{
-    public function ready(ConnectionRelay $relay): bool
-    {
-        // Keep one independently "ready" UI fixture while exposing a real
-        // fail-closed degraded and an unverified draft presentation.
-        return $relay->relay_id === 'ui-iran';
-    }
-});
 
 Route::middleware('web')->get('/__browser__/experience/{role}', static function (string $role) {
     abort_unless(in_array($role, ['owner', 'administrator', 'operator', 'viewer'], true), 404);
@@ -137,7 +123,7 @@ Route::middleware('web')->get('/__browser__/experience/{role}', static function 
     return redirect()->route('admin.dashboard');
 });
 
-// A disabled saved Relay must remain selected and explicitly blocked on Edit,
+// A disabled Relay stays selected and unavailable on Target Edit,
 // not silently present Direct. This disposable fixture creates no connection.
 Route::middleware(['web', 'auth'])->get('/__browser__/relay-unavailable-target', static function () {
     abort_unless(Auth::user()?->getRawOriginal('role') === 'owner', 403);

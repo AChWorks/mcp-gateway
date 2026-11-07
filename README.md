@@ -4,7 +4,7 @@
 
 Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run authorized SSH commands, inspect or transfer files with SFTP, and manage longer-running SSH Jobs. The Gateway does not grant more access than the configured WordPress user or remote SSH account already has.
 
-**Get started:** [Latest official Release](https://github.com/AChWorks/mcp-gateway/releases) · [Install](#install) · [Connect WordPress](#connect-wordpress) · [Connect SSH](#connect-direct-ssh) · [Managed Reverse SSH](#connect-an-inbound-blocked-server-with-reverse-ssh) · [Connection Relays](#share-one-iran-intermediary-using-connection-relays) · [Connect ChatGPT](#connect-chatgpt-or-another-mcp-client)
+**Get started:** [Latest official Release](https://github.com/AChWorks/mcp-gateway/releases) · [Install](#install) · [Connect WordPress](#connect-wordpress) · [Connect SSH](#connect-direct-ssh) · [Managed Reverse SSH](#connect-an-inbound-blocked-server-with-reverse-ssh) · [Connection Relays](#connect-targets-through-a-relay) · [Connect ChatGPT](#connect-chatgpt-or-another-mcp-client)
 
 > **Browser updates:** only upgrades from the three latest preceding stable releases are supported directly. Older installations need a verified intermediate upgrade or separately approved migration/restore path. See [Deployment](docs/DEPLOYMENT.md#rolling-browser-update-support-window).
 
@@ -79,11 +79,19 @@ Reverse SSH is an **optional** route for the same `ssh_direct` Target when the r
 
 The [Managed Reverse SSH operator guide](docs/REVERSE-SSH-MANAGED.md) has one-time host preflight, enrollment, restrictions, diagnostics, rollback and release provenance. The [manual Reverse SSH runbook](docs/REVERSE-SSH-OPERATOR.md) remains supported for independently operator-managed routes. **Source changes, CI and publishing a GitHub Release do not deploy or test your installed NL/IR hosts.**
 
-## Share one Iran intermediary using Connection Relays
+## Connect Targets through a Relay
 
-**Under development (Issue #284):** do not expect this feature in the currently installed v2.5.8 Release. After a separately reviewed release and approved host bootstrap, an Owner can open **System > Connection Relays**, register one Iran SSH intermediary as disabled, independently verify dedicated Gateway PHP-FPM isolation, restricted local SOCKS5 access and Iran outbound policy, and enable that Relay. On **Targets > Add Target** choose the existing SSH or WordPress connector and optionally select the same ready Relay for several Targets. Direct and existing Reverse SSH stay separate; Relay failure never falls back to Direct. The actual SSH Target host key and WordPress TLS/OAuth identity remain verified individually.
+**Under development (Issue #284):** This source feature is not yet verified on real Gateway/intermediary/Target hosts. A Relay is any reachable SSH server used as a shared intermediary for multiple SSH/SFTP/WordPress Targets; it does not have to be in a particular country.
 
-A Relay record or a successful local SOCKS5 greeting is not proof of remote authentication. Changing routes invalidates earlier SSH Job bindings and requires a disconnected Target and Owner password. See the [Connection Relays operator guide](docs/CONNECTION-RELAYS.md) for host prerequisites, verification, diagnostics, revocation and rollback. Development alone does not deploy this capability or authorize root-level changes to NL or Iran servers.
+1. In **System > Connection Relays**, add the Relay SSH endpoint, independently verified SSH server public host key and an unused Gateway-local SOCKS5 port.
+2. On the Gateway host, run the copyable **Prepare SSH key** command, add its printed **public** key to the SSH account on the intermediary, then run the native \`ssh -N -D\` command. Keep that process running with an existing supervisor if required.
+3. Use **Test local Relay connection**, then **Enable Relay**. Select it on SSH or WordPress Targets and use their normal Connect / Test / Retry actions.
+4. On failure, the selected route remains selected; retest or reconnect normally, or deliberately choose a different Relay/Direct route on the Target. Gateway does not implement automatic failover or a special connection-recovery policy.
+5. To edit or delete a Relay, first Disable it. Deleting requires the Owner to reassign/detach its Targets and does **not** contact the intermediary. Stop the old SSH process separately if one is running.
+
+No Gateway-managed firewall, custom privileged host agent, readiness attestation or intermediary installer is required. A local SOCKS5 greeting alone does not prove the actual Target identity; SSH host-key and WordPress HTTPS/TLS/OAuth checks remain part of the normal Target connection. The local listener is loopback-only but may be reachable by other Unix accounts on a shared Gateway host; choose appropriate trusted hosting/isolation.
+
+See the [short Connection Relays guide](docs/CONNECTION-RELAYS.md). Source changes do not deploy or authorize privileged host changes.
 
 ## Connect ChatGPT or another MCP client
 

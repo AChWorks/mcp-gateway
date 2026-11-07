@@ -33,14 +33,12 @@ final readonly class ConnectionRelayAdministration
             if (! $locked->enabled) {
                 return false;
             }
-            if ((int) $locked->configuration_revision >= 4294967295 || (int) $locked->lifecycle_revision >= 4294967295) {
-                throw new TargetConnectorFailure(__('The Relay security generation is exhausted. Contact the operator before changing its state.'), 'relay_revision');
+            if ((int) $locked->lifecycle_revision >= 4294967295) {
+                throw new TargetConnectorFailure(__('The Relay revision is exhausted. Contact the operator before changing its state.'), 'relay_revision');
             }
-            // Disable and advance the host-fingerprint generation atomically
-            // with Target fencing. Any old Enable form and attestation is stale.
+            // Disable the route and invalidate retained Target binding epochs.
             DB::table('connection_relays')->where('id', $locked->getKey())->update([
                 'enabled' => false,
-                'configuration_revision' => (int) $locked->configuration_revision + 1,
                 'lifecycle_revision' => (int) $locked->lifecycle_revision + 1,
                 'updated_at' => now(),
             ]);

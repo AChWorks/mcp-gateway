@@ -65,8 +65,6 @@ required_entries=(
   "$package/bin/"
   "$package/bin/managed-reverse-target.sh"
   "$package/bin/managed-reverse-gateway.sh"
-  "$package/resources/host/connection-relay-gateway.py"
-  "$package/config/connection_relays.php"
   "$package/composer.json"
   "$package/app/"
   "$package/bootstrap/"
@@ -111,21 +109,6 @@ fi
 }
 bash -n "$root/bin/managed-reverse-target.sh"
 bash -n "$root/bin/managed-reverse-gateway.sh"
-# Root-installed Relay retirement helper is an application resource, not a
-# mutable developer bin/ script. Verify both syntax and the release identity pin.
-python3 - "$root/resources/host/connection-relay-gateway.py" <<'PYCODE'
-import ast, pathlib, sys
-ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding='utf8'))
-PYCODE
-php -r '
-$cfg = include $argv[1];
-$expected = $cfg["gateway_retirement_helper_sha256"] ?? null;
-$actual = hash_file("sha256", $argv[2]);
-if (!is_string($expected) || !preg_match("/^[a-f0-9]{64}$/D", $expected) || !hash_equals($expected, $actual)) {
-    fwrite(STDERR, "Gateway Relay helper does not match release-pinned digest.\n");
-    exit(1);
-}
-' "$root/config/connection_relays.php" "$root/resources/host/connection-relay-gateway.py"
 php -r '
 $cfg = file_get_contents($argv[1]);
 foreach (["installer_sha256" => "managed-reverse-target.sh", "gateway_script_sha256" => "managed-reverse-gateway.sh"] as $setting => $script) {

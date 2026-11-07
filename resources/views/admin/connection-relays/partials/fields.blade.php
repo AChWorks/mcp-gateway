@@ -13,7 +13,7 @@
             value="{{ $draft('relay_id', $editing ? $relay->relay_id : '') }}" placeholder="edge-relay-1" @readonly($editing)
             @if($restore && $errors->has('relay_id')) aria-invalid="true" aria-describedby="relay-{{ $prefix }}-id-error" @endif>
         @if($restore) @error('relay_id')<p class="field-error" role="alert" id="relay-{{ $prefix }}-id-error">{{ $message }}</p>@enderror @endif
-        @if($editing)<p class="field-help">{{ __('Stable host-resource identifier. To change it, create a new Relay and explicitly migrate Targets; do not rename existing systemd/firewall resources.') }}</p>@endif
+        @if($editing)<p class="field-help">{{ __('Stable Relay ID. To change it, create a new Relay instead.') }}</p>@endif
     </div>
     <div class="field">
         <label for="relay-{{ $prefix }}-name">{{ __('Display name') }}</label>
@@ -38,7 +38,7 @@
         @if($restore) @error('control_port')<p class="field-error" role="alert" id="relay-{{ $prefix }}-port-error">{{ $message }}</p>@enderror @endif
     </div>
     <div class="field">
-        <label for="relay-{{ $prefix }}-user">{{ __('Dedicated SSH control username') }}</label>
+        <label for="relay-{{ $prefix }}-user">{{ __('Relay SSH username') }}</label>
         <input id="relay-{{ $prefix }}-user" type="text" name="control_user" maxlength="128" required
             data-admin-manual-entry data-admin-server-value="{{ $draft('control_user', $editing ? $relay->control_user : '') }}"
             autocomplete="off" value="{{ $draft('control_user', $editing ? $relay->control_user : '') }}" spellcheck="false"
@@ -46,7 +46,7 @@
         @if($restore) @error('control_user')<p class="field-error" role="alert" id="relay-{{ $prefix }}-user-error">{{ $message }}</p>@enderror @endif
     </div>
     <div class="field">
-        <label for="relay-{{ $prefix }}-socks">{{ __('Dedicated local SOCKS5 TCP port') }}</label>
+        <label for="relay-{{ $prefix }}-socks">{{ __('Local SOCKS5 TCP port') }}</label>
         <input id="relay-{{ $prefix }}-socks" type="number" name="local_socks_port" min="46000" max="60999" required
             value="{{ $draft('local_socks_port', $editing ? $relay->local_socks_port : 46081) }}"
             @if($restore && $errors->has('local_socks_port')) aria-invalid="true" aria-describedby="relay-{{ $prefix }}-socks-error" @endif>

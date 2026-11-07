@@ -14,13 +14,11 @@ use Illuminate\Support\Collection;
  */
 final readonly class ConnectionRelayRoutes
 {
-    public function __construct(private ConnectionRelayHostReadiness $host) {}
-
     /** @return Collection<int,ConnectionRelay> */
     public function selectable(): Collection
     {
         return ConnectionRelay::query()->where('enabled', true)->orderBy('display_name')
-            ->get()->filter(fn (ConnectionRelay $relay): bool => $this->host->ready($relay))->values();
+            ->get();
     }
 
     public function selected(?string $relayId): ?ConnectionRelay
@@ -32,7 +30,7 @@ final readonly class ConnectionRelayRoutes
             throw new ConnectionRelayUnavailable;
         }
         $relay = ConnectionRelay::query()->where('relay_id', $relayId)->first();
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled || ! $this->host->ready($relay)) {
+        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
             throw new ConnectionRelayUnavailable;
         }
 
@@ -53,7 +51,7 @@ final readonly class ConnectionRelayRoutes
             throw new ConnectionRelayUnavailable;
         }
         $relay = ConnectionRelay::query()->where('relay_id', $relayId)->lockForUpdate()->first();
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled || ! $this->host->ready($relay)) {
+        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
             throw new ConnectionRelayUnavailable;
         }
 
@@ -133,7 +131,7 @@ final readonly class ConnectionRelayRoutes
             return null;
         }
         $relay = ConnectionRelay::query()->find($id);
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled || ! $this->host->ready($relay)) {
+        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
             throw new ConnectionRelayUnavailable;
         }
 
