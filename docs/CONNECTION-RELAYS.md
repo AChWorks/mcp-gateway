@@ -88,7 +88,12 @@ separately verified pinned server host key, requested control endpoint, and
 the web process's effective PHP UID. The helper **recomputes the full PHP
 registration fingerprint** from those inputs before changing host state;
 unknown/modified helper source bytes are refused by the existing
-release-SHA256-verified Owner command and shared installer lock.
+release-SHA256-verified Owner command and shared installer lock. The Admin
+page presents **one copyable first-run command**: install the exact release-pinned
+helper if missing, then run the Relay-scoped stager only on success. The
+first-install step refuses an unknown or older installed helper and never
+implicitly upgrades it; the separately reviewed Upgrade command is explicit.
+An interrupted Setup can use the same combined command for safe retry.
 
 Under the **same exclusive per-Relay root lifecycle lock** as Cleanup/Seal,
 the stager checks the permanent Delete/Rotate fences and creates a new

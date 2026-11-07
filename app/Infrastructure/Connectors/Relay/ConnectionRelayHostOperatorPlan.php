@@ -236,7 +236,9 @@ BASH;
             // be independently confirmed by the host operator.
             'audit_gateway' => $verifiedCommand('audit-gateway '.$arguments
                 .' --php-uid '.(string) $phpUid),
-            'setup_gateway' => $verifiedCommand('setup-gateway '.$setupArguments),
+            // First-run Setup must not depend on finding bootstrap under the Delete UI.
+            // First-install is fail-closed for unknown/old tools; no implicit upgrade.
+            'setup_gateway' => $bootstrap.' && '.$verifiedCommand('setup-gateway '.$setupArguments),
             // These flags are explicit assertions by the independently
             // privileged host operator AFTER proving FPM/CLI isolation and
             // intermediary egress. PHP never runs the command or signs proof.
