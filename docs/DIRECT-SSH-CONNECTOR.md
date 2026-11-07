@@ -30,7 +30,12 @@ Both paths preserve the same end-to-end Target SSH host-key pin, login,
 Target permissions and retained Job revision fencing; neither is a public
 proxy or automatic Direct fallback.
 
-A Target may choose **Direct (default)** or **Reverse SSH**. Reverse SSH is still the
+A Target may choose **Direct (default)** or **Reverse SSH**. A Direct-mode
+SSH Target may additionally select an Owner-registered
+[Connection Relay](CONNECTION-RELAYS.md) as its outbound OpenSSH/SOCKS5
+intermediary. The real Target host key and credentials are still verified,
+and Relay failure never silently becomes Direct. This does not create a new
+connector or change the Reverse SSH model. Reverse SSH is still the
 built-in, agentless `ssh_direct` connector: a restricted OpenSSH **client on the
 Target** opens one **remote** forward to a loopback-only listener on NL. Gateway
 only dials **127.0.0.1 on the approved NL port**. It never picks arbitrary local

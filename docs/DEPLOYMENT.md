@@ -6,7 +6,7 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## Rolling browser-update support window
 
-**Direct browser updates are supported only from the three most recent preceding published stable MCP Gateway releases to the current release.** The exact supported source versions are recorded in the tagged repository source's `bin/released-baselines.txt` manifest, validated by CI; this source-only manifest is **not** included in the production deployment ZIP. The operator release notes describe the three-release policy. For v2.5.8, the three preceding published tagged sources are v2.5.5, v2.5.6 and v2.5.7; use that window only when v2.5.8 has been explicitly published as an official, verified Release. Older direct-upgrade attempts are **unsupported and unverified**, even if the updater does not actively reject them.
+**Direct browser updates are supported only from the three most recent preceding published stable MCP Gateway releases to the current release.** The exact supported source versions are recorded in the tagged repository source's `bin/released-baselines.txt` manifest, validated by CI; this source-only manifest is **not** included in the production deployment ZIP. The operator release notes describe the three-release policy. The published v2.5.8 release supports direct browser updates from v2.5.5, v2.5.6 and v2.5.7. For a different destination release, use its own tagged baseline manifest and verified release assets rather than extending this example by assumption. Older direct-upgrade attempts are **unsupported and unverified**, even if the updater does not actively reject them.
 
 For an older installation, do not skip blindly to the newest release. Preserve an independently restorable full code/database/secret backup, inspect each archived official intermediate version's supported upgrade window, and plan a sequential supported hop to a version within the current three-release window. Verify SHA256/signatures, installation health, schema and recovery after each hop. If the exact hop or old installed runtime cannot be verified, use a tested migration/reinstall/restore plan with operator approval rather than assuming a direct update is safe. Existing browser-updater authorization, maintenance, pre-migration backup validation and fail-closed recovery behavior still apply; narrowing the support window does not weaken these controls.
 
@@ -42,7 +42,7 @@ remains available.
 
 Install or update **only** from the named official [GitHub Release](https://github.com/AChWorks/mcp-gateway/releases) assets and matching verified checksums. A GitHub source branch/green CI is not a release; a published release is **not** the version installed on the operator's PHP host. Reconcile actual installed version, migration history, admin session/cron and enabled connector settings separately. Do not use a fresh-install ZIP as an updater or bypass rollback/downgrade/version gates.
 
-**Runtime profile:** HTTPS PHP 8.5 with MariaDB 12.3 is the principal new CI target; older PHP 8.4.1+/MariaDB 10.11 and MySQL compatibility are retained; required PHP extensions include `curl` with `CURLOPT_RESOLVE`, `mbstring`, `openssl`, `pdo_mysql`, `sodium`. Keep `public/` the only served document root, encrypted keys/storage private, and distinct Gateway OAuth-server vs Bridge-client RSA keypairs. No production Node, Redis, separate queue daemon or Docker is required by the baseline. Actual provider connectivity enforces public DNS/address/pin, verified TLS/SSH host identity and **direct** safe outbound HTTP, not ambient untrusted proxy environment variables.
+**Runtime profile:** HTTPS PHP 8.5 with MariaDB 12.3 is the principal new CI target; older PHP 8.4.1+/MariaDB 10.11 and MySQL compatibility are retained; required PHP extensions include `curl` with `CURLOPT_RESOLVE`, `mbstring`, `openssl`, `pdo_mysql`, `sodium`. Keep `public/` the only served document root, encrypted keys/storage private, and distinct Gateway OAuth-server vs Bridge-client RSA keypairs. No production Node, Redis, separate queue daemon or Docker is required by the baseline. Provider connectivity enforces approved destination/address policy and independently verified TLS/SSH host identity, whether the Target uses Direct routing or an explicitly selected [Connection Relay](CONNECTION-RELAYS.md). The Gateway does not trust ambient unapproved HTTP proxy environment variables.
 
 **Version-dependent schema/behavior:** The v1 **Site → v2 Target** transition is a separately authorized **destructive** migration; see [legacy upgrade/recovery runbook](TARGET-TRANSITION-RUNBOOK.md). Later v2 updates are version-specific; use source migration files and official release notes, not a copied historical checklist. In particular public v2.3.0 introduced additive SSH command/Job/lease and Target Pause schema:
 - `2026_10_15_000000_add_ssh_command_operational_limits.php`
@@ -347,8 +347,8 @@ asset-level immutability.
 this policy was enabled. Their stable tags and independently checked asset
 hashes remain useful, but GitHub reports `immutable: false` for those
 historic Releases. Do not claim enabling the new setting retroactively
-locked their assets. This new protection applies to future Releases,
-including v2.5.8 once published.
+locked their assets. The first verified immutable Release under this policy was v2.5.8;
+the protection also applies to subsequent Releases.
 
 The repository Owner/admin must also establish a **GitHub-enforced** tag policy in
 `AChWorks/mcp-gateway` (GitHub **Settings → Rulesets → New tag ruleset**):

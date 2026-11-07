@@ -12,6 +12,9 @@ This index helps contributors and operators find the **appropriate maintained re
 | New provider/Target adapter integration and conformance | [Connector integration guide](CONNECTOR-INTEGRATION-GUIDE.md) |
 | Result completeness, independently typed limits, file integrity and outcome uncertainty | [Remote I/O contract](REMOTE-IO-CONTRACT.md) |
 | SSH trust, OS execution, Jobs and SFTP | [Direct SSH connector](DIRECT-SSH-CONNECTOR.md) |
+| Optional shared OpenSSH intermediary for SSH/SFTP and WordPress | [Connection Relays](CONNECTION-RELAYS.md) |
+| Inbound-blocked SSH Target host setup and one-command enrollment | [Managed Reverse SSH](REVERSE-SSH-MANAGED.md) |
+| Existing manually operator-managed reverse forwarding | [Manual Reverse SSH](REVERSE-SSH-OPERATOR.md) |
 | Authenticated SSH whole-file binary protocol and safety | [Whole-file exchange](WHOLE-FILE-EXCHANGE.md) |
 | OAuth client-profile identity and recovery | [Client-profile runbook](CLIENT-PROFILE-RUNBOOK.md) |
 
