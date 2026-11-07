@@ -213,7 +213,6 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
         ]);
         DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
 
-
         $first = app(WpAiBridgeTargetRegistration::class)->register(
             'wp-through-iran-1', 'First WP', 'https://first.example.test', relayId: 'iran-wp',
         );

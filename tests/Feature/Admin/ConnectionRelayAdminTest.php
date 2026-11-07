@@ -31,7 +31,6 @@ final class ConnectionRelayAdminTest extends TestCase
 
     private const PASSWORD = 'StrongPassword!234';
 
-
     public function test_owner_can_add_enable_and_view_native_ssh_commands_without_host_manifests(): void
     {
         $this->actingAs($this->user('owner'));
@@ -46,6 +45,7 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertSee('ssh-keygen')
             ->assertSee('ssh -N -T -D 127.0.0.1:46081')
             ->assertSee('StrictHostKeyChecking=yes')
+            ->assertSee('-l')
             ->assertSee('Test local Relay connection')
             ->assertDontSee('issue-readiness')
             ->assertDontSee('nftables')
@@ -456,6 +456,7 @@ final class ConnectionRelayAdminTest extends TestCase
     {
         $relay = ConnectionRelay::query()->create($this->relayFields());
         DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
+
         return $relay->fresh();
     }
 

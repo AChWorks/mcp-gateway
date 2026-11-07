@@ -308,7 +308,7 @@ final class ConnectionRelayController extends Controller
         $pin = escapeshellarg($alias.' '.$relay->control_host_key);
 
         $prepare = 'mkdir -p '.$directory.' && chmod 700 '.$directory
-            .' && { test -f '.$key.' || ssh-keygen -q -t ed25519 -N '.escapeshellarg(''). ' -f '.$key.'; }'
+            .' && { test -f '.$key.' || ssh-keygen -q -t ed25519 -N '.escapeshellarg('').' -f '.$key.'; }'
             ." && printf '%s\\n' ".$pin.' > '.$known
             .' && cat '.$key.'.pub';
 
@@ -318,7 +318,7 @@ final class ConnectionRelayController extends Controller
             .' -o StrictHostKeyChecking=yes -o UserKnownHostsFile='.$known
             .' -o HostKeyAlias='.escapeshellarg($alias)
             .' -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 '
-            .escapeshellarg($relay->control_user.'@'.$relay->control_host);
+            .' -l '.escapeshellarg($relay->control_user).' '.escapeshellarg($relay->control_host);
 
         return [
             'prepare' => $prepare,

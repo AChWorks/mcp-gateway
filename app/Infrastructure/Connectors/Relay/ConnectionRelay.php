@@ -42,5 +42,4 @@ final class ConnectionRelay extends Model
             }
         });
     }
-
 }
