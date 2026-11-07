@@ -1,6 +1,6 @@
 # Connection Relays — owner/operator runbook (Issue #284)
 
-**Source capabilities are not production acceptance.** Gateway routing, inactive local Setup/Retry and the strict V2 public-key export are available. The intermediary helper adds separately authorized restricted live Setup/Repair, effective audit and scoped retirement. Dedicated Gateway PHP-FPM/CLI isolation, Gateway activation and independent readiness issuance/renewal remain unfinished. No source change installs or activates a production host. A saved Relay or a successful local host audit alone does not authenticate the selected Target.
+**Source capabilities are not production acceptance.** Gateway routing, inactive local Setup/Retry, public-only V2 export and restricted intermediary Setup/Repair/Audit/Retire are available. The Gateway helper also supports root-operated two-phase activation and one-hour issuance/renewal/revocation of the existing 11-field readiness contract. The helper does NOT itself establish dedicated PHP-FPM/CLI isolation or intermediary egress: a separately authorized privileged operator must verify both before asserting either confirmation. No source change installs or activates a production host. Physical multi-host, reboot, actual PHP pool, WordPress and Target authentication acceptance remains incomplete.
 
 ## Intent and architecture
 
@@ -27,7 +27,7 @@ Gateway is the **unprivileged control plane**, not a root-level package manager.
 
 The command must be generated for the exact Relay and checked revision; support an independently transferred/offline intermediary-side package when intermediary cannot fetch code from foreign endpoints. No arbitrary shell construction from form inputs, production root execution by PHP, generic destructive purge or silently claimed success. Failure leaves a recoverable disabled registration with an actionable Retry/Repair. Host resource changes must be idempotent, ownership-scoped and positively verified. A successful response from a script alone is not evidence that the Target was authenticated.
 
-**Interim security boundary:** The application now separates display-only rename from sensitive route changes and forbids hard deletion based on an Owner checkbox or absent attestation file. Final deletion requires Owner acknowledgement, a **privileged, short-lived root-owned Gateway-host cleanup receipt** AND an **irreversible, root-owned `delete` fence** bound to exact DB ULID, Relay ID, fingerprint, revision and host generation. An ordinary receipt alone never authorizes DB deletion or sensitive identity rotation. It does **not** require intermediary reachability, remote cleanup evidence or intermediary SSH credentials. The exact-receipt verifier and scoped Gateway-host-only retirement helper were merged in PR #286, but are not installed or operationally accepted. The helper must be installed by the separately authorized host operator; it is NOT a tunnel installer or host-readiness attester. **Do not present Create/Edit/Setup as finished or claim this is deployed.** The UI preserves records instead of fabricating cleanup. This receipt is never to be hand-authored by PHP or fabricated by an operator.
+**Interim security boundary:** The application now separates display-only rename from sensitive route changes and forbids hard deletion based on an Owner checkbox or absent attestation file. Final deletion requires Owner acknowledgement, a **privileged, short-lived root-owned Gateway-host cleanup receipt** AND an **irreversible, root-owned `delete` fence** bound to exact DB ULID, Relay ID, fingerprint, revision and host generation. An ordinary receipt alone never authorizes DB deletion or sensitive identity rotation. It does **not** require intermediary reachability, remote cleanup evidence or intermediary SSH credentials. The exact-receipt verifier and scoped Gateway-host-only retirement helper were merged in PR #286, but are not installed or operationally accepted. The helper must be installed by the separately authorized host operator; the separate audit/retirement actions are not readiness issuers. The newer explicit issue-readiness action requires its own independently verified host conditions and does not turn PHP into an attester. **Do not present Create/Edit/Setup as finished or claim this is deployed.** The UI preserves records instead of fabricating cleanup. This receipt is never to be hand-authored by PHP or fabricated by an operator.
 
 The receipt is located at `/etc/mcp-gateway/connection-relays/<relay-id>.retired.json` (fixed root-owned, symlink-free namespace) and contains exactly `relay_record_id`, `relay_id`, `host_fingerprint`, `configuration_revision`, `host_generation`, `verified_boot_id`, `verified_at_unix`, `verified_at_boot_seconds`, `expires_at_unix`, `gateway_cleanup_verified`. The single boolean must be true **based on independent privileged verification on the Gateway host**. The lease is valid for no more than 900 seconds, with no significant wall-clock/boot-clock divergence. Active policy and readiness files must be gone. There is no intermediary cleanup field or network check: an unreachable intermediary server must never prevent Gateway-side deletion after local verification and Owner confirmation. Remote cleanup, if desired, is an optional separate follow-up. Real-host operational acceptance and a distinct setup/update helper are still required before whole-product acceptance.
 
@@ -132,8 +132,8 @@ DISABLED**, without executing a remote connection. The present Gateway may
 still share a PHP UID with sibling websites; staging a reachable SOCKS
 listener before independently verifying a dedicated FPM/CLI identity and
 intermediary forwarding restrictions would violate the security boundary. Source
-support for operator-controlled activation and an independent trusted
-readiness issuer remains a separate acceptance requirement. `setup-gateway`
+source support for operator-controlled activation and independent privileged
+readiness issuance is provided below; physical acceptance remains separate. `setup-gateway`
 is an idempotent scoped retry of the same configured state, **not** an override
 of foreign/malformed host state. On a first-ever clean host, Setup creates
 and validates the root-owned evidence directory **before** advancing the
@@ -188,15 +188,28 @@ the existing Delete/Rotate seal contract. It never contacts intermediary. Incomp
 or unknown host state is retained for explicit operator investigation, not
 removed by generic purge.
 
-**NO READINESS IS ISSUED.** Neither a staged service nor even
+**SETUP/AUDIT DO NOT ISSUE READINESS.** Neither a staged service nor even
 `GATEWAY LOCAL POLICY AUDIT PASS` proves an isolated production FPM/CLI
 UID, allowed/denied intermediary forwarding egress, authenticated SSH/SFTP/WordPress
 Target traffic, reboot persistence or a trusted 11-field lease. The Owner
 must independently arrange intermediary-side offline enrollment and permitted
 egress, complete positive/negative host tests, and obtain a separately
-approved trusted readiness issuer before enabling. Do not run source
+approved root-operated activation and trusted readiness issuance before enabling. Do not run source
 unpublished host commands on Production; deployment and operational host
 modifications require separate Owner authorization.
+
+## Gateway activation and privileged readiness (source candidate; NOT deployed)
+
+This is the operator-only path after inert Gateway Setup and separately authorized intermediary enrollment. No Github source change, Admin-page visit or PHP process installs or activates a Production host. First use the exact pinned helper-install/upgrade process; older copied root commands that lack the shared installer lock require the documented maintenance window and positively drained sessions.
+
+1. The independent root operator must verify the actual dedicated PHP-FPM Gateway pool and effective UID, CLI/cron/queue identity, that no sibling website shares the UID, and positive/negative local IPv4/IPv6 socket tests as the Gateway PHP UID and unrelated site UIDs. Separately verify the intermediary SSHD forwarding-only principal and its allowed public and denied private/metadata/local egress. Preserve the actual privileged host test results. No command generated by PHP performs these external checks.
+2. Under System > Connection Relays, after verified Gateway Setup and intermediary enrollment, open Operator-only Gateway activation and readiness evidence. Running the exact current activate-gateway command with --confirm-php-fpm-cli-isolation and --confirm-peer-egress is a privileged declaration that the independent checks really passed; flags are NOT a machine check or a PHP grant. Never run if these facts are unknown.
+3. activate-gateway locks the same Relay lifecycle fence, verifies the complete original staged key, journal/UID, exact root-owned systemd unit, effective nftables ACL, no existing listener and no stale readiness, then queues systemctl start --no-block. It deliberately leaves the unit DISABLED and issues no readiness. The unit's ExecStartPre=ensure-acl must obtain the same lock after the queuing helper exits; initial contention may cause systemd to restart before the listener becomes healthy. Verify the eventual unit, not just the queue result.
+4. Re-check PHP identity separation and intermediary positive/negative egress against the actual running connection; only then run issue-readiness with the two independently verified operator flags. Under the same exclusive lifecycle lock the privileged issuer audits live systemd/SSH PID/executable, key pair, pinned invocation, nftables full policy and exact inet/output UID reject, plus the unique 127.0.0.1 port owner. An active-but-disabled unit is enabled ONLY after a successful live audit, then audited again before issuance.
+5. The issuer publishes a root-owned mode 0644 .policy equal to the existing provisioning generation, and the existing exact 11-key .json readiness lease with live boot ID, /proc/uptime, PHP UID and configuration fingerprint. Its TTL is 3600 seconds. PHP cannot issue or renew. A legacy same-identity 10-key manifest is NOT accepted by PHP; it requires explicit fresh root re-verification and reissue. The operator must re-verify and renew BEFORE expiry via a separately approved privileged schedule; no production renewal scheduler or proof that PHP-FPM/peer egress tests were run is included here. Reboot, clock step, stale revision, UID mismatch or changed policy fail closed.
+6. revoke-readiness locks the same lifecycle and durably unlinks only the exact owned .json and .policy. Application routing immediately fails closed; THIS DOES NOT STOP the live SSH service. For any host-policy or identity change, first Disable in Owner UI and use the existing exact Gateway-only Retire/Seal/rotation lifecycle. Never change FPM UID, ACL, service, peer egress or bindings under a still-valid lease; Gateway-only deletion never depends on intermediary reachability.
+
+The helper machine-inspects actual local systemd/process/SSH/nft/listener state. The two additional positive assertions are explicitly verified by a trusted privileged human/operator, NOT automatically demonstrated by the helper. False assertions invalidate the security model. This source package is not real-host, reboot or end-to-end SSH/SFTP/WordPress acceptance and gives no Release, Deployment or Production host approval. Bound Targets never silently fall back to Direct.
 
 ## Offline intermediary public-key handoff (merged source; no intermediary mutation)
 
@@ -230,7 +243,7 @@ dedicated key-only forwarding principal, effective SSHD forwarding limits and
 independently verified destination/port egress policy. Where Internet access
 is blocked, carry only the public text over a trusted offline channel. Validate
 positive and negative egress with the real account and host policy before
-operator-controlled activation and separately privileged readiness issuance.
+operator-controlled activation and separately privileged readiness issuance (source-only, not host accepted).
 Gateway-only retirement and metadata deletion must continue to work without
 contacting intermediary. No production host operation is approved by this source
 candidate.
@@ -514,7 +527,7 @@ generations are refused, including after an interrupted journal transition.
 Do not delete the retained journals to make an old export acceptable.
 
 **The peer audit does not issue Gateway readiness.** Dedicated Gateway FPM/CLI
-UID isolation, Gateway-local listener ACLs and activation, privileged readiness
+effective dedicated PHP UID isolation, Gateway-local activation acceptance, privileged readiness
 issuance/renewal/revocation, real kernel reboot, physical multi-host and full
 WordPress application acceptance remain separate requirements. The disposable
 OS fixture exercises this helper with two peer identities and two real
@@ -580,16 +593,17 @@ negative socket tests and FPM/CLI/sibling-site UID isolation are separate
 host-acceptance requirements, not inferred from this source-level audit.
 
 Output is **GATEWAY LOCAL POLICY AUDIT PASS** or actionable **FAIL CLOSED**.
-Passing this check is deliberately NOT a readiness lease. The helper creates
+Passing this check is deliberately NOT a readiness lease. The audit-gateway ACTION creates
 no policy marker or eleven-field readiness manifest and cannot itself set a
 Relay Ready/Enabled. Separate effective verification of the dedicated
 Gateway PHP-FPM/CLI UID and sibling-site isolation, intermediary forwarding-only
 control account and permitted egress, SSH control connectivity, and actual
-Target authentication remains required. Setup, Update, Repair, trusted
-attestation issuer and real-host end-to-end acceptance are still unfinished.
+Target authentication remains required. Root-only host Setup, controlled activation and issuer source
+exist, but independent host admission validation, automatic lease renewal, Update/Repair
+of active transport and physical end-to-end acceptance remain unfinished.
 
 Root-only SSH private keys cannot be read by the unprivileged SSH service
-directly. A future host Setup must deliver `control_key` and `known_hosts`
+directly. The Gateway host Setup delivers `control_key` and `known_hosts`
 via trusted systemd `LoadCredential=`, into the service-specific
 `/run/credentials/<unit>/` directory used by the audited argv. Do not weaken
 root-only storage or assume systemd dynamic credential paths are verified
@@ -799,7 +813,7 @@ Before removal, the helper parses the **full**
 `nft -j list table inet <name>` JSON, validates exact
 table/chain/rule ownership, removes only volatile `handle`
 and `metainfo` fields, serializes stable sorted JSON and compares
-SHA256 to the root-owned claim. The future Setup helper must use this
+SHA256 to the root-owned claim. The privileged Setup helper must use this
 exact normalization algorithm when recording the claim. Unknown,
 modified or unprovable rules are never removed; table name is
 insufficient proof. The helper rechecks policy immediately before
@@ -816,8 +830,8 @@ Relay and intentionally migrate Targets. Changing endpoint, host key,
 username or local port requires fresh local retirement proof AND a `rotate`
 fence for the old configuration before the PHP update. Rename display name without any host command or downtime.
 After an identity edit the old retirement proof no longer validates the
-new configuration. The Setup/Update and short-lived independent readiness
-attestation implementation are still outstanding.
+new configuration. A fully accepted Setup/Update/Repair lifecycle, trusted real-host attestation testing,
+renewal automation and reboot acceptance remain outstanding.
 
 Tests of this helper currently use disposable directories and fake
 `systemctl`, `nft` and `ss`; those tests are **not a claim of
@@ -902,7 +916,7 @@ The operator records `verified_at_boot_seconds` **at the same verification momen
 
 `host_fingerprint` is generated by `ConnectionRelay::hostFingerprint()` from the immutable Relay identity, endpoint, control key, local port and `configuration_revision`, separated with NUL bytes; it is **not** a login-key fingerprint. Every effective Enable or Disable advances the separate monotonic `lifecycle_revision` used by Owner action forms, invalidating prepared Enable/Disable requests after any intervening action. Each effective Disable also advances `configuration_revision` and atomically fences bound Targets, invalidating the old host manifest. **This does not imply that the prior host resources have been removed:** the approved Gateway-only `retire` command may prove an exact v2 claim against the current DB revision N+1 **or** its immediately preceding provisioned revision N, using an explicit expected prior fingerprint deterministically calculated from the unchanged connection fields. It never adopts arbitrary older or foreign claims. Under the same Relay-scoped root lock, the helper positively verifies and removes those exact installed resources, then issues the retirement receipt for the **current** N+1 fingerprint and revision. `seal-delete` / `seal-rotate` accept **only** the current revision, so the permanent fence agrees with the DB transition. A partial failure retains the claim for bounded Retry. The optional prior fingerprint is accepted by read-only `preflight` and `retire` only; it grants no Setup or Seal privilege. Intermediary reachability remains irrelevant.
 
-Enable does **not** change the attested configuration fingerprint; the independently verified manifest remains current for the same unchanged host policy until expiry. Re-enabling after a Disable requires new privileged verification and a new manifest matching the current configuration fingerprint. A repeated Disable while already disabled is a no-op only with the latest lifecycle revision. No production host setup, verifier implementation, attestation or socket supervision is provided by this application source; the host operator owns their separate approval, persistence, exact host policy and recovery.
+Enable does **not** change the attested configuration fingerprint; the independently verified manifest remains current for the same unchanged host policy until expiry. Re-enabling after a Disable requires new privileged verification and a new manifest matching the current configuration fingerprint. A repeated Disable while already disabled is a no-op only with the latest lifecycle revision. Host-side Setup/activation and a root-only issuer now exist in source, but no Production host change, independently proved PHP-FPM/CLI separation, physical intermediary egress acceptance or deploy is implied. The privileged operator still owns separate approval, host isolation, revalidation and rollback.
 
 ## Acceptance, diagnostics and rollback
 

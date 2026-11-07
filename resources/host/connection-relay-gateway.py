@@ -1,7 +1,8 @@
 #!/usr/bin/python3
-"""Privileged, explicitly invoked Gateway-side Relay retirement and local audit.
+"""Privileged, explicitly invoked Gateway-side Relay operator actions.
 
-This is NOT an SSH client installer, readiness issuer or remote Relay peer cleanup tool. Runtime
+The root-only helper supports manually confirmed host-readiness issuance, but is
+NOT an SSH client installer or remote Relay peer cleanup tool. Runtime
 CLI paths are fixed; PHP never invokes it and cannot issue retirement proofs.
 The expected fields come from the Owner-facing command and are checked against
 owned resources. Do not use it to adopt third-party systemd/firewall state.
@@ -345,6 +346,49 @@ class Retirement:
         finally:
             if os.path.lexists(tempname):
                 os.unlink(tempname)
+
+    def _write_exact(self, path: Path, contents: bytes, mode: int) -> None:
+        # Never overwrite a published path. Re-fsync exact existing files and
+        # their parent on retry: a prior process may have crashed after the
+        # hard link was made, but before its directory entry was committed.
+        if self._owned(path):
+            if path.read_bytes() != contents or path.stat().st_mode & 0o777 != mode:
+                raise Refusal("Owned Relay Setup file differs from reviewed bytes: " + str(path))
+            file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                os.fsync(file_fd)
+            finally:
+                os.close(file_fd)
+            self._fsync_directory(path.parent)
+            return
+        if path.exists() or path.is_symlink():
+            raise Refusal("Untrusted existing Relay Setup file: " + str(path))
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            # Linux O_TMPFILE has no directory entry until linkat publishes it.
+            # A crash before publication leaves no .relay-setup-* artifact to
+            # strand Setup or Retirement. dir_fd forces linkat(AT_SYMLINK_FOLLOW)
+            # on /proc/self/fd, preserving atomic no-clobber link semantics.
+            try:
+                temporary_fd = os.open(".", os.O_TMPFILE | os.O_WRONLY, 0o600,
+                                       dir_fd=directory_fd)
+            except OSError as error:
+                raise Refusal("Relay Setup requires filesystem support for anonymous O_TMPFILE publication.") from error
+            try:
+                with os.fdopen(os.dup(temporary_fd), "wb") as destination:
+                    destination.write(contents)
+                    destination.flush()
+                    os.fchmod(destination.fileno(), mode)
+                    os.fsync(destination.fileno())
+                os.link("/proc/self/fd/" + str(temporary_fd), path.name,
+                        dst_dir_fd=directory_fd, follow_symlinks=True)
+                os.fsync(directory_fd)
+            except FileExistsError as error:
+                raise Refusal("Concurrent Relay Setup file mutation; retry after operator review.") from error
+            finally:
+                os.close(temporary_fd)
+        finally:
+            os.close(directory_fd)
 
     def _advance_generation(self, state: str) -> str:
         self._generation()
@@ -1464,7 +1508,7 @@ class GatewayPolicyAudit(Retirement):
         finally:
             os.close(fd)
 
-    def _audit_locked(self, php_uid: int) -> str:
+    def _audit_locked(self, php_uid: int, require_enabled: bool = True) -> str:
         # A root-owned active claim can survive a historical delete/rotation
         # fence due to interrupted host changes. Never let its local socket
         # checks imply a current, mutable Relay security identity.
@@ -1484,7 +1528,7 @@ class GatewayPolicyAudit(Retirement):
             or hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest()
                 != managed["unit_exec_sha256"]):
             raise Refusal("Effective Relay systemd service is not the approved active definition.")
-        if not self._unit_active() or not self._unit_enabled():
+        if not self._unit_active() or (require_enabled and not self._unit_enabled()):
             raise Refusal("Relay service is stopped or cannot survive reboot.")
         keydir = self.layout.key_dir(self.relay)
         if not self._owned(keydir, True):
@@ -1586,6 +1630,109 @@ class GatewayPolicyAudit(Retirement):
 
 
 
+    def _staged_public_key_locked(self) -> str:
+        """Strict read-only validation of an inactive Setup under an already held lifecycle lock."""
+        self._require_mutable_revision()
+        managed = self._preflight()
+        if managed is None:
+            raise Refusal("No exact staged Relay resource claim; finish Gateway Setup before exporting the public key.")
+        journal = self._owned_setup_for_retirement(managed)
+        if (journal is None or journal["ssh_uid"] is None
+            or journal["configuration_revision"] != self.relay.revision
+            or journal["host_fingerprint"] != self.relay.fingerprint):
+            raise Refusal("No current UID-bound Setup journal; refusing an unproven public key.")
+        # Retirement intentionally keeps the managed claim and original
+        # UID-bound journal until AFTER unit/ACL teardown and SSH-account
+        # removal. They are necessary but insufficient evidence that a
+        # Gateway Setup stage remains complete. Never use the reusable
+        # _verify_effective_systemd(): it may daemon-reload as a Repair
+        # side effect. A public-key handoff must be STRICTLY read-only.
+        unit = self.layout.unit(self.relay)
+        nft_source = self.layout.evidence(self.relay, ".nft")
+        unit_digest = hashlib.sha256(unit.read_bytes()).hexdigest() if self._owned(unit) else None
+        if (unit_digest is None
+            or unit_digest != managed["unit_sha256"]
+            or unit_digest != journal["unit_sha256"]):
+            raise Refusal("Staged Relay systemd unit is missing or differs from its original journal and claim.")
+        if (not self._owned(nft_source)
+            or nft_source.read_bytes() != nft_policy_source(
+                self.relay, journal["gateway_php_uid"])):
+            raise Refusal("Staged Relay nftables persistence source is missing or changed.")
+        info = self._systemd_info()
+        if (info["LoadState"] != "loaded"
+            or info["ActiveState"] != "inactive"
+            or info["FragmentPath"] != str(unit)
+            or info["NeedDaemonReload"] != "no"
+            or hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest()
+               != managed["unit_exec_sha256"]):
+            raise Refusal("Effective staged Relay systemd definition is missing, stale or foreign.")
+        if self._unit_active() or self._unit_enabled():
+            raise Refusal("Relay service is not in its expected inactive, disabled staged state.")
+        if not self._verify_effective_nft(managed):
+            raise Refusal("Effective staged Relay nftables policy is absent; run controlled Setup/Repair.")
+        self._require_effective_acl(journal["gateway_php_uid"])
+        keydir = self.layout.key_dir(self.relay)
+        required = {"control_key", "control_key.pub", "known_hosts", "owner.json"}
+        if (not self._owned(keydir, True)
+            or keydir.stat().st_mode & 0o777 != 0o700
+            or {entry.name for entry in keydir.iterdir()} != required):
+            raise Refusal("Staged Relay credential namespace is not complete and isolated.")
+        owner = self._json(keydir / "owner.json")
+        expected = {
+            "version", "relay_record_id", "relay_id", "ssh_user",
+            "ssh_uid", "gateway_php_uid", "control_host", "control_port",
+            "control_user", "control_key_sha256", "control_key_pub_sha256",
+            "known_hosts_sha256",
+        }
+        if (set(owner) != expected
+            or owner["ssh_uid"] != journal["ssh_uid"]
+            or owner["gateway_php_uid"] != journal["gateway_php_uid"]):
+            raise Refusal("Staged Relay public key lacks its exact root-owned ownership claim.")
+        self._require_control_key_pair(keydir)
+        self._require_ssh_invocation(info["ExecStart"], owner)
+        # Verify the local NSS identity without requiring an unrelated
+        # sibling Relay's partially staged keydir to be fully provisioned.
+        try:
+            account = pwd.getpwnam(self.relay.ssh_user)
+            canonical = pwd.getpwuid(account.pw_uid)
+            accounts = pwd.getpwall()
+        except (KeyError, OSError) as error:
+            raise Refusal("Dedicated Relay SSH account cannot be verified for public-key export.") from error
+        if (account.pw_uid != journal["ssh_uid"] or account.pw_uid <= 0
+            or account.pw_gecos != account_generation_marker(self.relay, journal["host_generation"])
+            or not account.pw_shell.endswith(("/nologin", "/false"))
+            or canonical.pw_name != self.relay.ssh_user
+            or any(user.pw_uid == account.pw_uid and user.pw_name != self.relay.ssh_user
+                   for user in accounts)):
+            raise Refusal("Dedicated Relay SSH account no longer matches its staged generation.")
+        public = (keydir / "control_key.pub").read_bytes()
+        if len(public) > 1024:
+            raise Refusal("Staged public key exceeds reviewed Ed25519 length.")
+        try:
+            line = public.decode("ascii").strip()
+        except UnicodeDecodeError as error:
+            raise Refusal("Staged public key is not valid ASCII.") from error
+        if (journal["configuration_revision"] != self.relay.revision
+            or journal["host_fingerprint"] != self.relay.fingerprint
+            or managed["configuration_revision"] != self.relay.revision
+            or managed["host_fingerprint"] != self.relay.fingerprint
+            or managed["host_generation"] != journal["host_generation"]):
+            raise Refusal("Staged Relay enrollment identity is not current-generation bound.")
+        return (
+            "PUBLIC ONLY - OFFLINE RELAY PEER ENROLLMENT INPUT V2\n"
+            "Relay: " + self.relay.relay_id + "\n"
+            "Record: " + self.relay.record_id + "\n"
+            "Configuration revision: " + str(self.relay.revision) + "\n"
+            "Host fingerprint: " + self.relay.fingerprint + "\n"
+            "Host generation: " + journal["host_generation"] + "\n"
+            "Control endpoint: " + journal["control_host"] + ":" + str(journal["control_port"]) + "\n"
+            "Control user on Relay peer: " + journal["control_user"] + "\n"
+            "Ed25519 PUBLIC KEY (never copy the private key):\n" + line + "\n"
+            "NOT ENROLLED. Restrict Relay peer SSHD forwarding and public egress separately; "
+            "verify both hosts and issue independent readiness before enabling."
+        )
+
+
     def public_enrollment(self) -> str:
         """Export only the exact staged Ed25519 public key for offline Relay peer setup.
 
@@ -1601,107 +1748,215 @@ class GatewayPolicyAudit(Retirement):
         fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-            self._require_mutable_revision()
-            managed = self._preflight()
-            if managed is None:
-                raise Refusal("No exact staged Relay resource claim; finish Gateway Setup before exporting the public key.")
-            journal = self._owned_setup_for_retirement(managed)
-            if (journal is None or journal["ssh_uid"] is None
-                or journal["configuration_revision"] != self.relay.revision
-                or journal["host_fingerprint"] != self.relay.fingerprint):
-                raise Refusal("No current UID-bound Setup journal; refusing an unproven public key.")
-            # Retirement intentionally keeps the managed claim and original
-            # UID-bound journal until AFTER unit/ACL teardown and SSH-account
-            # removal. They are necessary but insufficient evidence that a
-            # Gateway Setup stage remains complete. Never use the reusable
-            # _verify_effective_systemd(): it may daemon-reload as a Repair
-            # side effect. A public-key handoff must be STRICTLY read-only.
-            unit = self.layout.unit(self.relay)
-            nft_source = self.layout.evidence(self.relay, ".nft")
-            unit_digest = hashlib.sha256(unit.read_bytes()).hexdigest() if self._owned(unit) else None
-            if (unit_digest is None
-                or unit_digest != managed["unit_sha256"]
-                or unit_digest != journal["unit_sha256"]):
-                raise Refusal("Staged Relay systemd unit is missing or differs from its original journal and claim.")
-            if (not self._owned(nft_source)
-                or nft_source.read_bytes() != nft_policy_source(
-                    self.relay, journal["gateway_php_uid"])):
-                raise Refusal("Staged Relay nftables persistence source is missing or changed.")
-            info = self._systemd_info()
-            if (info["LoadState"] != "loaded"
-                or info["ActiveState"] != "inactive"
-                or info["FragmentPath"] != str(unit)
-                or info["NeedDaemonReload"] != "no"
-                or hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest()
-                   != managed["unit_exec_sha256"]):
-                raise Refusal("Effective staged Relay systemd definition is missing, stale or foreign.")
-            if self._unit_active() or self._unit_enabled():
-                raise Refusal("Relay service is not in its expected inactive, disabled staged state.")
-            if not self._verify_effective_nft(managed):
-                raise Refusal("Effective staged Relay nftables policy is absent; run controlled Setup/Repair.")
-            self._require_effective_acl(journal["gateway_php_uid"])
-            keydir = self.layout.key_dir(self.relay)
-            required = {"control_key", "control_key.pub", "known_hosts", "owner.json"}
-            if (not self._owned(keydir, True)
-                or keydir.stat().st_mode & 0o777 != 0o700
-                or {entry.name for entry in keydir.iterdir()} != required):
-                raise Refusal("Staged Relay credential namespace is not complete and isolated.")
-            owner = self._json(keydir / "owner.json")
-            expected = {
-                "version", "relay_record_id", "relay_id", "ssh_user",
-                "ssh_uid", "gateway_php_uid", "control_host", "control_port",
-                "control_user", "control_key_sha256", "control_key_pub_sha256",
-                "known_hosts_sha256",
-            }
-            if (set(owner) != expected
-                or owner["ssh_uid"] != journal["ssh_uid"]
-                or owner["gateway_php_uid"] != journal["gateway_php_uid"]):
-                raise Refusal("Staged Relay public key lacks its exact root-owned ownership claim.")
-            self._require_control_key_pair(keydir)
-            self._require_ssh_invocation(info["ExecStart"], owner)
-            # Verify the local NSS identity without requiring an unrelated
-            # sibling Relay's partially staged keydir to be fully provisioned.
-            try:
-                account = pwd.getpwnam(self.relay.ssh_user)
-                canonical = pwd.getpwuid(account.pw_uid)
-                accounts = pwd.getpwall()
-            except (KeyError, OSError) as error:
-                raise Refusal("Dedicated Relay SSH account cannot be verified for public-key export.") from error
-            if (account.pw_uid != journal["ssh_uid"] or account.pw_uid <= 0
-                or account.pw_gecos != account_generation_marker(self.relay, journal["host_generation"])
-                or not account.pw_shell.endswith(("/nologin", "/false"))
-                or canonical.pw_name != self.relay.ssh_user
-                or any(user.pw_uid == account.pw_uid and user.pw_name != self.relay.ssh_user
-                       for user in accounts)):
-                raise Refusal("Dedicated Relay SSH account no longer matches its staged generation.")
-            public = (keydir / "control_key.pub").read_bytes()
-            if len(public) > 1024:
-                raise Refusal("Staged public key exceeds reviewed Ed25519 length.")
-            try:
-                line = public.decode("ascii").strip()
-            except UnicodeDecodeError as error:
-                raise Refusal("Staged public key is not valid ASCII.") from error
-            if (journal["configuration_revision"] != self.relay.revision
-                or journal["host_fingerprint"] != self.relay.fingerprint
-                or managed["configuration_revision"] != self.relay.revision
-                or managed["host_fingerprint"] != self.relay.fingerprint
-                or managed["host_generation"] != journal["host_generation"]):
-                raise Refusal("Staged Relay enrollment identity is not current-generation bound.")
-            return (
-                "PUBLIC ONLY - OFFLINE RELAY PEER ENROLLMENT INPUT V2\n"
-                "Relay: " + self.relay.relay_id + "\n"
-                "Record: " + self.relay.record_id + "\n"
-                "Configuration revision: " + str(self.relay.revision) + "\n"
-                "Host fingerprint: " + self.relay.fingerprint + "\n"
-                "Host generation: " + journal["host_generation"] + "\n"
-                "Control endpoint: " + journal["control_host"] + ":" + str(journal["control_port"]) + "\n"
-                "Control user on Relay peer: " + journal["control_user"] + "\n"
-                "Ed25519 PUBLIC KEY (never copy the private key):\n" + line + "\n"
-                "NOT ENROLLED. Restrict Relay peer SSHD forwarding and public egress separately; "
-                "verify both hosts and issue independent readiness before enabling."
-            )
+            return self._staged_public_key_locked()
         except BlockingIOError as error:
             raise Refusal("Relay lifecycle maintenance is active; retry public-key export afterward.") from error
+        finally:
+            os.close(fd)
+
+
+
+
+class GatewayReadinessIssuer(GatewayPolicyAudit):
+    """Privileged, explicit operator attestation, never an application action.
+
+    Local host checks are performed by the trusted root helper under the
+    lifecycle lock. FPM/CLI separation and intermediary egress are external
+    operator acceptance tests, not inferred from an active SOCKS listener.
+    """
+
+    LEASE_SECONDS = 3600
+
+    def activate(
+        self, php_uid: int, php_fpm_cli_verified: bool,
+        peer_egress_verified: bool,
+    ) -> str:
+        """Queue only a verified staged Relay unit; keep it disabled until audited.
+
+        ExecStartPre re-acquires this same lifecycle lock. Starting the unit
+        synchronously while locked would deadlock. An asynchronous start is
+        enqueued under the lock, and the next explicit operator step proves
+        the live service before enabling it and issuing readiness.
+        """
+        if (type(php_uid) is not int or php_uid < 1
+            or php_fpm_cli_verified is not True or peer_egress_verified is not True):
+            raise Refusal("The host operator must verify PHP identity isolation and intermediary egress before activation.")
+        fd = self._locked()
+        try:
+            self._staged_public_key_locked()
+            journal = self._owned_setup_for_retirement(self._manifest())
+            if journal is None or journal["gateway_php_uid"] != php_uid:
+                raise Refusal("Actual Gateway PHP UID does not match the staged Relay admission policy.")
+            if (self._owned(self.layout.evidence(self.relay, ".json"))
+                or self._owned(self.layout.evidence(self.relay, ".policy"))):
+                raise Refusal("Revoke existing readiness evidence before a fresh activation.")
+            started = self.run(["systemctl", "start", "--no-block", self.relay.unit_name])
+            if started.returncode:
+                raise Refusal("Unable to queue current Relay service start: " + started.stderr[:140])
+            return (
+                "RELAY START QUEUED, NOT READY for " + self.relay.relay_id
+                + ". Unit remains DISABLED and no readiness was issued. "
+                "Wait for verified active local OpenSSH and successful independent "
+                "PHP/peer tests, then run the separate root issue-readiness action."
+            )
+        except BlockingIOError as error:
+            raise Refusal("Relay lifecycle maintenance is active; no activation occurred.") from error
+        finally:
+            os.close(fd)
+
+    def _locked(self) -> int:
+        if os.geteuid() != self.layout.owner_uid:
+            raise Refusal("Only an independent privileged Gateway host operator may issue or revoke readiness.")
+        lock = self.layout.lock_path(self.relay)
+        owned_parents(lock.parent, self.layout)
+        if not self._owned(lock):
+            raise Refusal("Current root-owned Relay lifecycle lock is missing.")
+        fd = os.open(lock, os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError as error:
+            os.close(fd)
+            raise Refusal("Relay lifecycle maintenance is active; retry readiness operation.") from error
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def _policy_file(self, generation: str) -> None:
+        # Reuse Setup's crash-consistent, anonymous no-clobber O_TMPFILE
+        # publication. No named temporary artifacts survive power loss.
+        self._write_exact(
+            self.layout.evidence(self.relay, ".policy"),
+            (generation + "\n").encode("ascii"), 0o644,
+        )
+
+    def _current_proof_path(self, php_uid: int, generation: str) -> Path:
+        path = self.layout.evidence(self.relay, ".json")
+        if self._owned(path):
+            previous = self._json(path)
+            keys = {
+                "relay_id", "host_fingerprint", "gateway_php_uid",
+                "dedicated_php_uid_verified", "socks_access_acl_verified",
+                "relay_egress_verified", "verified_boot_id",
+                "policy_generation", "verified_at_unix",
+                "verified_at_boot_seconds", "expires_at_unix",
+            }
+            # Legacy 10-key evidence was never PHP-ready. A separately
+            # verified root issuance can replace its same-identity contents
+            # with the current 11-key boot-relative lease; PHP cannot.
+            prior_keys = set(previous)
+            if (prior_keys not in (keys, keys - {"verified_at_boot_seconds"})
+                or previous["relay_id"] != self.relay.relay_id
+                or previous["host_fingerprint"] != self.relay.fingerprint
+                or previous["gateway_php_uid"] != php_uid
+                or previous["policy_generation"] != generation):
+                raise Refusal("Existing readiness evidence is not owned by the current Relay identity.")
+        return path
+
+    def issue(
+        self, php_uid: int, php_fpm_cli_verified: bool,
+        peer_egress_verified: bool,
+    ) -> str:
+        if (type(php_uid) is not int or php_uid < 1
+            or php_fpm_cli_verified is not True or peer_egress_verified is not True):
+            raise Refusal(
+                "Independent host operator must first verify dedicated Gateway PHP-FPM/CLI UID "
+                "isolation and positive/negative intermediary egress; both confirmations are mandatory."
+            )
+        fd = self._locked()
+        try:
+            self._require_mutable_revision()
+            # Unlike PHP, the root operator reads live systemd, process,
+            # credentials, nftables and listener evidence under this lock.
+            # The first explicit activation starts the service but leaves it
+            # disabled. Only a successful active-service audit may enable
+            # persistence. No proof is published before both pass.
+            # Verify the claimed revision, previous evidence and policy path
+            # BEFORE enabling a running service. Foreign or malformed proof
+            # files must not cause even a persistence side effect.
+            generation = self._generation()
+            if generation is None or generation["state"] != "provisioning":
+                raise Refusal("No current provisioned host generation to attest.")
+            policy = generation["host_generation"]
+            path = self._current_proof_path(php_uid, policy)
+            policy_path = self.layout.evidence(self.relay, ".policy")
+            if (self._owned(policy_path)
+                and policy_path.read_bytes() != (policy + "\n").encode("ascii")):
+                raise Refusal("Existing root-owned readiness policy differs from the current generation.")
+            boot = self.layout.at("/proc/sys/kernel/random/boot_id").read_text().strip()
+            uptime = self.layout.at("/proc/uptime").read_text().strip()
+            if not re.fullmatch(r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}", boot):
+                raise Refusal("No valid current Gateway host boot ID.")
+            match = re.fullmatch(r"([0-9]+)\.[0-9]+[ \t]+[0-9]+\.[0-9]+", uptime)
+            if match is None:
+                raise Refusal("No valid boot-relative Gateway host uptime.")
+            seconds = int(match[1])
+            now = int(time.time())
+            if seconds < 0 or now < 1:
+                raise Refusal("Invalid readiness verification clock.")
+            if self._unit_enabled():
+                self._audit_locked(php_uid)
+            else:
+                self._audit_locked(php_uid, require_enabled=False)
+                enabled = self.run(["systemctl", "enable", self.relay.unit_name])
+                if enabled.returncode:
+                    raise Refusal("Cannot enable audited Relay service: " + enabled.stderr[:140])
+                self._audit_locked(php_uid)
+            proof = {
+                "relay_id": self.relay.relay_id,
+                "host_fingerprint": self.relay.fingerprint,
+                "gateway_php_uid": php_uid,
+                "dedicated_php_uid_verified": True,
+                "socks_access_acl_verified": True,
+                "relay_egress_verified": True,
+                "verified_boot_id": boot,
+                "policy_generation": policy,
+                "verified_at_unix": now,
+                "verified_at_boot_seconds": seconds,
+                "expires_at_unix": now + self.LEASE_SECONDS,
+            }
+            self._policy_file(policy)
+            self._write_json_atomic(path, proof)
+            return (
+                "ROOT OPERATOR READINESS ISSUED for " + self.relay.relay_id
+                + " (one-hour lease). Gateway systemd/process/nft/listener passed live audit. "
+                "Dedicated PHP-FPM/CLI isolation and intermediary egress were explicitly "
+                "confirmed by the independent host operator, not proven by this source "
+                "or by PHP. Target login is still a separate end-to-end test."
+            )
+        except BlockingIOError as error:
+            raise Refusal("Relay lifecycle maintenance is active; no readiness was issued.") from error
+        finally:
+            os.close(fd)
+
+    def revoke(self) -> str:
+        """Immediately fail PHP readiness closed; do not modify the service."""
+        fd = self._locked()
+        try:
+            self._require_mutable_revision()
+            managed = self._manifest()
+            if managed is None:
+                raise Refusal("No current owned host generation for scoped readiness revocation.")
+            policy = managed["host_generation"]
+            owner = self._json(self.layout.key_dir(self.relay) / "owner.json")
+            php_uid = owner.get("gateway_php_uid")
+            if (owner.get("relay_record_id") != self.relay.record_id
+                or owner.get("relay_id") != self.relay.relay_id
+                or type(php_uid) is not int or php_uid < 1):
+                raise Refusal("No current root-owned Relay PHP UID claim for readiness revocation.")
+            self._current_proof_path(php_uid, policy)
+            policy_path = self.layout.evidence(self.relay, ".policy")
+            if self._owned(policy_path) and policy_path.read_bytes() != (policy + "\n").encode("ascii"):
+                raise Refusal("Refusing to remove foreign readiness policy.")
+            self._unlink_owned_durable(self.layout.evidence(self.relay, ".json"))
+            self._unlink_owned_durable(policy_path)
+            return (
+                "GATEWAY READINESS REVOKED for " + self.relay.relay_id
+                + ". The SSH transport service was NOT stopped by this evidence-only action; "
+                "disable/restrict the Relay separately before host-policy changes."
+            )
+        except BlockingIOError as error:
+            raise Refusal("Relay lifecycle maintenance is active; retry revocation.") from error
         finally:
             os.close(fd)
 
@@ -1916,49 +2171,6 @@ class GatewaySetup(GatewayPolicyAudit):
         identity = (self.control_host if self.control_port == 22 else
                     "[" + self.control_host + "]:" + str(self.control_port))
         return (identity + " " + self.host_key + "\n").encode("ascii")
-
-    def _write_exact(self, path: Path, contents: bytes, mode: int) -> None:
-        # Never overwrite a published path. Re-fsync exact existing files and
-        # their parent on retry: a prior process may have crashed after the
-        # hard link was made, but before its directory entry was committed.
-        if self._owned(path):
-            if path.read_bytes() != contents or path.stat().st_mode & 0o777 != mode:
-                raise Refusal("Owned Relay Setup file differs from reviewed bytes: " + str(path))
-            file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-            try:
-                os.fsync(file_fd)
-            finally:
-                os.close(file_fd)
-            self._fsync_directory(path.parent)
-            return
-        if path.exists() or path.is_symlink():
-            raise Refusal("Untrusted existing Relay Setup file: " + str(path))
-        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            # Linux O_TMPFILE has no directory entry until linkat publishes it.
-            # A crash before publication leaves no .relay-setup-* artifact to
-            # strand Setup or Retirement. dir_fd forces linkat(AT_SYMLINK_FOLLOW)
-            # on /proc/self/fd, preserving atomic no-clobber link semantics.
-            try:
-                temporary_fd = os.open(".", os.O_TMPFILE | os.O_WRONLY, 0o600,
-                                       dir_fd=directory_fd)
-            except OSError as error:
-                raise Refusal("Relay Setup requires filesystem support for anonymous O_TMPFILE publication.") from error
-            try:
-                with os.fdopen(os.dup(temporary_fd), "wb") as destination:
-                    destination.write(contents)
-                    destination.flush()
-                    os.fchmod(destination.fileno(), mode)
-                    os.fsync(destination.fileno())
-                os.link("/proc/self/fd/" + str(temporary_fd), path.name,
-                        dst_dir_fd=directory_fd, follow_symlinks=True)
-                os.fsync(directory_fd)
-            except FileExistsError as error:
-                raise Refusal("Concurrent Relay Setup file mutation; retry after operator review.") from error
-            finally:
-                os.close(temporary_fd)
-        finally:
-            os.close(directory_fd)
 
     def _identity(self, journal: dict) -> int:
         marker = account_generation_marker(self.relay, journal["host_generation"])
@@ -2188,6 +2400,7 @@ class GatewaySetup(GatewayPolicyAudit):
 def main() -> int:
     parser = argparse.ArgumentParser(description="MCP Gateway local-only Relay operator actions; never contacts Relay peer.")
     parser.add_argument("action", choices=("preflight", "audit-gateway", "setup-gateway", "public-enrollment",
+                                            "activate-gateway", "issue-readiness", "revoke-readiness",
                                             "ensure-acl", "retire", "prepare-setup", "seal-delete", "seal-rotate"))
     parser.add_argument("--relay-id", required=True)
     parser.add_argument("--record-id", required=True)
@@ -2201,6 +2414,10 @@ def main() -> int:
     parser.add_argument("--control-user", default=None)
     parser.add_argument("--host-key", default=None,
                         help="Public SSH server host-key pin; never a secret/private key.")
+    parser.add_argument("--confirm-php-fpm-cli-isolation", action="store_true",
+                        help="Root operator has separately verified Gateway-only FPM and CLI identity.")
+    parser.add_argument("--confirm-peer-egress", action="store_true",
+                        help="Root operator has separately verified intermediary allowed/denied egress.")
     parser.add_argument("--prior-fingerprint", default=None,
                         help="Read-only preflight or retire: exact N-1 installed fingerprint after DB Disable.")
     args = parser.parse_args()
@@ -2212,7 +2429,31 @@ def main() -> int:
         if args.prior_fingerprint is not None and args.action not in {"preflight", "retire"}:
             raise Refusal("Prior host fingerprint is allowed only for local preflight or retirement.")
         operation = Retirement(relay, layout, prior_fingerprint=args.prior_fingerprint)
-        if args.action == "audit-gateway":
+        if (args.confirm_php_fpm_cli_isolation or args.confirm_peer_egress) and args.action not in {"activate-gateway", "issue-readiness"}:
+            raise Refusal("Operator confirmations are accepted only by Gateway activation or readiness issuance.")
+        if args.action == "activate-gateway":
+            if (args.php_uid is None or args.prior_fingerprint is not None
+                or any(value is not None for value in
+                       (args.control_host, args.control_port, args.control_user, args.host_key))):
+                raise Refusal("Gateway activation requires current Relay identity, --php-uid and two confirmations.")
+            print(GatewayReadinessIssuer(relay, layout).activate(
+                args.php_uid, args.confirm_php_fpm_cli_isolation, args.confirm_peer_egress,
+            ))
+        elif args.action == "issue-readiness":
+            if (args.php_uid is None or args.prior_fingerprint is not None
+                or any(value is not None for value in
+                       (args.control_host, args.control_port, args.control_user, args.host_key))):
+                raise Refusal("Readiness issuance takes the current Relay identity, --php-uid and two operator confirmations.")
+            print(GatewayReadinessIssuer(relay, layout).issue(
+                args.php_uid, args.confirm_php_fpm_cli_isolation, args.confirm_peer_egress,
+            ))
+        elif args.action == "revoke-readiness":
+            if (args.php_uid is not None or args.prior_fingerprint is not None
+                or any(value is not None for value in
+                       (args.control_host, args.control_port, args.control_user, args.host_key))):
+                raise Refusal("Readiness revocation takes only the current Relay identity.")
+            print(GatewayReadinessIssuer(relay, layout).revoke())
+        elif args.action == "audit-gateway":
             if (args.php_uid is None or args.prior_fingerprint is not None
                 or any(value is not None for value in
                        (args.control_host, args.control_port, args.control_user, args.host_key))):

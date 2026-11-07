@@ -1596,6 +1596,211 @@ class GatewayPolicyAuditTests(unittest.TestCase):
             self.op.audit(1010)
 
 
+
+
+class GatewayReadinessIssuerTests(unittest.TestCase):
+    """Root-operator lease lifecycle against an isolated synthetic live host."""
+
+    def setUp(self):
+        GatewayPolicyAuditTests.setUp(self)
+        self.issuer = mod.GatewayReadinessIssuer(self.relay, self.layout, self.fake)
+        boot = self.layout.at("/proc/sys/kernel/random")
+        boot.mkdir(parents=True, exist_ok=True)
+        (boot / "boot_id").write_text("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n")
+        self.layout.at("/proc/uptime").write_text("3601.50 100.00\n")
+        self.proof = self.layout.evidence(self.relay, ".json")
+        self.policy = self.layout.evidence(self.relay, ".policy")
+
+    def issue(self):
+        return self.issuer.issue(1010, True, True)
+
+    def test_live_privileged_issuance_matches_exact_eleven_field_php_contract(self):
+        self.assertIn("ROOT OPERATOR READINESS ISSUED", self.issue())
+        doc = json.loads(self.proof.read_text())
+        self.assertEqual({
+            "relay_id", "host_fingerprint", "gateway_php_uid",
+            "dedicated_php_uid_verified", "socks_access_acl_verified",
+            "relay_egress_verified", "verified_boot_id",
+            "policy_generation", "verified_at_unix", "verified_at_boot_seconds",
+            "expires_at_unix",
+        }, set(doc))
+        self.assertEqual(1010, doc["gateway_php_uid"])
+        self.assertEqual("aaaaaaa" + "a-bbbb-cccc-dddd-eeeeeeeeeeee", doc["verified_boot_id"])
+        self.assertTrue(doc["dedicated_php_uid_verified"])
+        self.assertTrue(doc["socks_access_acl_verified"])
+        self.assertTrue(doc["relay_egress_verified"])
+        self.assertEqual(3601, doc["verified_at_boot_seconds"])
+        self.assertEqual(self.op._generation()["host_generation"], doc["policy_generation"])
+        self.assertEqual(doc["policy_generation"] + "\n", self.policy.read_text())
+        self.assertEqual(doc["expires_at_unix"] - doc["verified_at_unix"], 3600)
+        self.assertEqual(self.layout.owner_uid, self.proof.stat().st_uid)
+        self.assertEqual(0o644, self.proof.stat().st_mode & 0o777)
+        self.assertEqual(0o644, self.policy.stat().st_mode & 0o777)
+        self.assertFalse(any(x[0] in ("curl", "ssh", "scp")
+                             or x[:2] == ["systemctl", "enable"]
+                             for x in self.fake.calls))
+
+    def test_ordinary_audit_never_issues_lease(self):
+        self.assertIn("AUDIT PASS", self.op.audit(1010))
+        self.assertFalse(self.proof.exists())
+        self.assertFalse(self.policy.exists())
+
+    def test_no_operator_confirmations_fails_before_host_mutation(self):
+        for flags in ((False, False), (True, False), (False, True)):
+            with self.subTest(flags=flags), self.assertRaisesRegex(mod.Refusal, "confirmations"):
+                self.issuer.issue(1010, *flags)
+        self.assertFalse(self.policy.exists())
+        self.assertFalse(self.proof.exists())
+
+    def test_wrong_php_uid_or_unsafe_live_acl_fails_before_lease(self):
+        with self.assertRaises(mod.Refusal):
+            self.issuer.issue(1011, True, True)
+        self.fake.loopback_guard = False
+        self.op._write_json_atomic(self.layout.evidence(self.relay, ".managed.json"), {
+            **self.op._manifest(), "firewall_sha256": self.op._nft_policy_digest(),
+        })
+        with self.assertRaisesRegex(mod.Refusal, "unrelated UIDs"):
+            self.issue()
+        self.assertFalse(self.policy.exists())
+        self.assertFalse(self.proof.exists())
+
+    def test_missing_active_service_and_unexpected_listener_refuse(self):
+        self.fake.active = False
+        with self.assertRaisesRegex(mod.Refusal, "approved active definition"):
+            self.issue()
+        self.fake.active = True
+        self.fake.listening_address = "0.0.0.0"
+        with self.assertRaisesRegex(mod.Refusal, "non-loopback"):
+            self.issue()
+        self.assertFalse(self.proof.exists())
+
+    def test_legacy_ten_field_readiness_requires_fresh_root_reissue(self):
+        self.issue()
+        prior = json.loads(self.proof.read_text())
+        del prior["verified_at_boot_seconds"]
+        self.proof.write_text(json.dumps(prior))
+        self.assertIn("READINESS ISSUED", self.issue())
+        self.assertIn("verified_at_boot_seconds", json.loads(self.proof.read_text()))
+
+    def test_foreign_readiness_preflight_rejects_before_service_enable(self):
+        # A previous malformed/foreign document must not cause unit
+        # persistence even if an otherwise valid live service is active.
+        self.fake.enabled = False
+        self.proof.write_text(json.dumps({"relay_id": "another-record"}))
+        with self.assertRaises(mod.Refusal):
+            self.issue()
+        self.assertFalse(self.fake.enabled)
+        self.assertFalse(any(x[:2] == ["systemctl", "enable"] for x in self.fake.calls))
+        self.proof.unlink()
+        self.policy.write_text("e" * 64 + "\n")
+        with self.assertRaises(mod.Refusal):
+            self.issue()
+        self.assertFalse(self.fake.enabled)
+
+    def test_revocation_refuses_missing_or_mismatched_claim(self):
+        self.issue()
+        keydir = self.layout.key_dir(self.relay)
+        owner_path = keydir / "owner.json"
+        owner = json.loads(owner_path.read_text())
+        owner["gateway_php_uid"] = None
+        owner_path.write_text(json.dumps(owner))
+        prior = self.proof.read_bytes()
+        with self.assertRaisesRegex(mod.Refusal, "PHP UID claim"):
+            self.issuer.revoke()
+        self.assertEqual(prior, self.proof.read_bytes())
+
+    def test_boot_clock_unreadable_or_malformed_never_issues_proof(self):
+        boot = self.layout.at("/proc/sys/kernel/random/boot_id")
+        boot.write_text("NOT-A-BOOT-ID\n")
+        with self.assertRaisesRegex(mod.Refusal, "boot ID"):
+            self.issue()
+        boot.write_text("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n")
+        self.layout.at("/proc/uptime").write_text("nonsense")
+        with self.assertRaisesRegex(mod.Refusal, "uptime"):
+            self.issue()
+        self.assertFalse(self.policy.exists())
+        self.assertFalse(self.proof.exists())
+
+    def test_exclusive_lifecycle_lock_rejects_concurrent_retirement(self):
+        fd = os.open(self.layout.lock_path(self.relay), os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(mod.Refusal, "lifecycle maintenance"):
+                self.issue()
+        finally:
+            os.close(fd)
+        self.assertFalse(self.policy.exists())
+
+    def test_renewal_reaudits_live_host_and_reuses_exact_generation(self):
+        with mock.patch.object(mod.time, "time", return_value=1794000000):
+            self.issue()
+        first = json.loads(self.proof.read_text())
+        with mock.patch.object(mod.time, "time", return_value=1794000040):
+            self.issue()
+        second = json.loads(self.proof.read_text())
+        self.assertEqual(first["policy_generation"], second["policy_generation"])
+        self.assertEqual(40, second["verified_at_unix"] - first["verified_at_unix"])
+        self.fake.active = False
+        old_bytes = self.proof.read_bytes()
+        with self.assertRaises(mod.Refusal):
+            self.issue()
+        self.assertEqual(old_bytes, self.proof.read_bytes())
+
+    def test_revocation_durable_removes_only_scoped_evidence_and_can_reissue(self):
+        self.issue()
+        before = self.layout.unit(self.relay).read_bytes()
+        other = self.layout.evidence_dir / "unrelated-other.json"
+        other.write_text("KEEP ME")
+        self.assertIn("READINESS REVOKED", self.issuer.revoke())
+        self.assertFalse(self.proof.exists())
+        self.assertFalse(self.policy.exists())
+        self.assertEqual(before, self.layout.unit(self.relay).read_bytes())
+        self.assertEqual("KEEP ME", other.read_text())
+        self.assertTrue(self.fake.active)
+        self.assertIn("READINESS ISSUED", self.issue())
+
+    def test_foreign_owned_policy_or_manifest_never_overwritten(self):
+        self.policy.write_text("b" * 64 + "\n")
+        before = self.policy.read_bytes()
+        with self.assertRaisesRegex(mod.Refusal, "differs"):
+            self.issue()
+        self.assertEqual(before, self.policy.read_bytes())
+        self.assertFalse(self.proof.exists())
+        self.policy.unlink()
+        self.proof.write_text(json.dumps({"relay_id": "other-record"}))
+        old = self.proof.read_bytes()
+        with self.assertRaisesRegex(mod.Refusal, "not owned"):
+            self.issue()
+        self.assertEqual(old, self.proof.read_bytes())
+        self.assertFalse(self.policy.exists())
+
+    def test_crash_between_policy_and_lease_is_safe_and_recoverable(self):
+        with mock.patch.object(self.issuer, "_write_json_atomic", side_effect=OSError("power interruption")):
+            with self.assertRaisesRegex(OSError, "power interruption"):
+                self.issue()
+        self.assertTrue(self.policy.is_file())
+        self.assertFalse(self.proof.exists())
+        self.assertIn("READINESS ISSUED", self.issue())
+
+    def test_revocation_rejects_foreign_policy_and_preserves_it(self):
+        self.issue()
+        self.policy.write_text("e" * 64 + "\n")
+        old = self.proof.read_bytes()
+        with self.assertRaisesRegex(mod.Refusal, "foreign readiness"):
+            self.issuer.revoke()
+        self.assertEqual(old, self.proof.read_bytes())
+        self.assertEqual("e" * 64 + "\n", self.policy.read_text())
+
+    def test_retirement_removes_readiness_without_contacting_intermediary(self):
+        # Legacy unjournaled audit fixture is not a valid current SSH Setup
+        # retirement candidate. Verify the evidence revocation without
+        # forging an intermediary cleanup or touching its resources.
+        self.issue()
+        self.issuer.revoke()
+        self.assertFalse(any(cmd[0] in ("ssh", "scp", "curl") for cmd in self.fake.calls))
+        self.assertTrue(self.fake.active)
+
+
 class StagedSetupHost(AuditHost):
     """Root-bound service/nft/useradd fixture with real disposable SSH keygen."""
 
@@ -1635,6 +1840,21 @@ class StagedSetupHost(AuditHost):
         if argv[:2] == ["/usr/sbin/userdel", self.relay.ssh_user]:
             self.calls.append(argv)
             self.user_created = False
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:3] == ["systemctl", "start", "--no-block"]:
+            self.calls.append(argv)
+            if self.setup_fail_command == "start":
+                return subprocess.CompletedProcess(argv, 1, "", "simulated failed admission")
+            # Models completion after the real ExecStartPre has obtained
+            # the root lock (not an assertion of actual systemd timing).
+            self.active = True
+            self.listener = True
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:2] == ["systemctl", "enable"]:
+            self.calls.append(argv)
+            if self.setup_fail_command == "enable":
+                return subprocess.CompletedProcess(argv, 1, "", "simulated enable failure")
+            self.enabled = True
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv[:3] == ["systemctl", "enable", "--now"]:
             self.calls.append(argv)
@@ -2781,3 +3001,103 @@ class GatewayStagedSetupTests(unittest.TestCase):
         with self.assertRaisesRegex(mod.Refusal, "source is missing or modified"):
             mod.GatewayAclRecovery(self.relay, self.layout, self.fake).ensure(self.uid)
         self.assertEqual(before, self.fake.nft_mutations)
+
+
+
+class GatewayOperatorActivationTests(unittest.TestCase):
+    """Two-phase root-controlled activation plus separately issued readiness."""
+
+    make_setup = GatewayStagedSetupTests.make_setup
+
+    def setUp(self):
+        GatewayStagedSetupTests.setUp(self)
+        self.setup.setup()
+        self.issuer = mod.GatewayReadinessIssuer(self.relay, self.layout, self.fake)
+        proc = self.layout.at("/proc/7654")
+        proc.mkdir(mode=0o755, parents=True, exist_ok=True)
+        (proc / "status").write_text("Name:\tssh\nUid:\t1500\t1500\t1500\t1500\n")
+        (proc / "exe").symlink_to("/usr/bin/ssh")
+        self.policy = self.layout.evidence(self.relay, ".policy")
+        self.proof = self.layout.evidence(self.relay, ".json")
+
+    def test_activate_is_nonblocking_and_only_issuer_enables_after_audit(self):
+        self.assertIn("NOT READY", self.issuer.activate(self.uid, True, True))
+        self.assertTrue(self.fake.active)
+        self.assertFalse(self.fake.enabled)
+        self.assertFalse(self.policy.exists())
+        self.assertFalse(self.proof.exists())
+        self.assertIn(["systemctl", "start", "--no-block", self.relay.unit_name], self.fake.calls)
+        self.assertFalse(any(x[:3] == ["systemctl", "enable", "--now"] for x in self.fake.calls))
+        self.assertIn("READINESS ISSUED", self.issuer.issue(self.uid, True, True))
+        self.assertTrue(self.fake.enabled)
+        self.assertEqual(self.retirement._generation()["host_generation"],
+                         json.loads(self.proof.read_text())["policy_generation"])
+
+    def test_missing_operator_admission_proof_refuses_start(self):
+        for a,b in ((False, True), (True, False), (False, False)):
+            with self.subTest(a=a, b=b), self.assertRaisesRegex(mod.Refusal, "verify"):
+                self.issuer.activate(self.uid, a, b)
+        self.assertFalse(self.fake.active)
+        self.assertFalse(self.fake.enabled)
+        self.assertFalse(self.policy.exists())
+
+    def test_untampered_stage_required_before_start(self):
+        unit = self.layout.unit(self.relay)
+        original = unit.read_bytes()
+        unit.write_bytes(b"FOREIGN CONFIG")
+        with self.assertRaises(mod.Refusal):
+            self.issuer.activate(self.uid, True, True)
+        self.assertFalse(self.fake.active)
+        self.assertFalse(self.fake.enabled)
+        self.assertEqual(b"FOREIGN CONFIG", unit.read_bytes())
+        unit.write_bytes(original)
+        self.assertIn("START QUEUED", self.issuer.activate(self.uid, True, True))
+
+    def test_wrong_uid_rejects_start_without_touching_service(self):
+        with self.assertRaisesRegex(mod.Refusal, "PHP UID"):
+            self.issuer.activate(2020, True, True)
+        self.assertFalse(self.fake.active)
+
+    def test_concurrent_lifecycle_mutation_rejects_start(self):
+        lock = self.layout.lock_path(self.relay)
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(mod.Refusal, "maintenance"):
+                self.issuer.activate(self.uid, True, True)
+        finally:
+            os.close(fd)
+        self.assertFalse(self.fake.active)
+
+    def test_failed_start_or_failed_enable_never_writes_readiness(self):
+        self.fake.setup_fail_command = "start"
+        with self.assertRaisesRegex(mod.Refusal, "queue"):
+            self.issuer.activate(self.uid, True, True)
+        self.assertFalse(self.fake.active)
+        self.fake.setup_fail_command = None
+        self.issuer.activate(self.uid, True, True)
+        self.fake.setup_fail_command = "enable"
+        with self.assertRaisesRegex(mod.Refusal, "enable"):
+            self.issuer.issue(self.uid, True, True)
+        self.assertFalse(self.fake.enabled)
+        self.assertFalse(self.proof.exists())
+        self.fake.setup_fail_command = None
+        self.assertIn("READINESS ISSUED", self.issuer.issue(self.uid, True, True))
+
+    def test_host_policy_drift_blocks_persistence_and_lease(self):
+        self.issuer.activate(self.uid, True, True)
+        self.fake.loopback_guard = False
+        with self.assertRaises(mod.Refusal):
+            self.issuer.issue(self.uid, True, True)
+        self.assertFalse(self.fake.enabled)
+        self.assertFalse(self.proof.exists())
+
+    def test_stale_readiness_requires_explicit_revocation_before_new_start(self):
+        self.issuer.activate(self.uid, True, True)
+        self.issuer.issue(self.uid, True, True)
+        # Simulate manual stop/disable before a new controlled admission.
+        self.fake.active = self.fake.enabled = self.fake.listener = False
+        with self.assertRaisesRegex(mod.Refusal, "Revoke existing"):
+            self.issuer.activate(self.uid, True, True)
+        self.assertIn("REVOKED", self.issuer.revoke())
+        self.assertIn("START QUEUED", self.issuer.activate(self.uid, True, True))

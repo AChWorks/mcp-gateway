@@ -57,7 +57,12 @@ final class ConnectionRelayAdminTest extends TestCase
             ->assertSee('Stage / repair Gateway host resources')
             ->assertSee('setup-gateway')
             ->assertSee('It DOES NOT issue readiness')
-            ->assertSee('A PASS does not issue readiness evidence');
+            ->assertSee('A PASS does not issue readiness evidence')
+            ->assertSee('Operator-only Gateway activation and readiness evidence')
+            ->assertSee('activate-gateway')
+            ->assertSee('issue-readiness')
+            ->assertSee('revoke-readiness')
+            ->assertSee('confirmation flags are explicit privileged-operator attestations');
         $this->post('/admin/settings/connection-relays/'.$relay->id.'/toggle', [
             'relay_revision' => 1, 'enable' => '1', 'current_password' => self::PASSWORD,
         ])->assertSessionHasErrors('relay');
@@ -591,9 +596,23 @@ PYTHON;
         self::assertStringContainsString($relay->getKey(), $commands['public_enrollment']);
         self::assertStringNotContainsString('--host-key ', $commands['public_enrollment']);
         self::assertStringNotContainsString('--prior-fingerprint', $commands['public_enrollment']);
+        foreach (['activate_gateway' => 'activate-gateway', 'issue_readiness' => 'issue-readiness'] as $key => $action) {
+            self::assertStringContainsString('"$destination" '.$action, $commands[$key]);
+            self::assertStringContainsString('flock -s -w 15 9', $commands[$key]);
+            self::assertStringContainsString('--php-uid ', $commands[$key]);
+            self::assertStringContainsString('--confirm-php-fpm-cli-isolation', $commands[$key]);
+            self::assertStringContainsString('--confirm-peer-egress', $commands[$key]);
+            self::assertStringContainsString($relay->getKey(), $commands[$key]);
+            self::assertStringContainsString($commands['sha256'], $commands[$key]);
+            self::assertStringNotContainsString('--prior-fingerprint', $commands[$key]);
+        }
+        self::assertStringContainsString('"$destination" revoke-readiness', $commands['revoke_readiness']);
+        self::assertStringNotContainsString('--confirm-', $commands['revoke_readiness']);
+        self::assertStringNotContainsString('--php-uid', $commands['revoke_readiness']);
+        self::assertStringContainsString($commands['sha256'], $commands['revoke_readiness']);
         self::assertStringContainsString($commands['sha256'], $commands['audit_gateway']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
-        self::assertSame('1658e749005dfc1e28d89d4ec127a4faef592d6a6c1bd6148943b4c5ba87bba4', $commands['upgrade_from_sha256']);
+        self::assertSame('a6125a1fc7e8fb61e858fdb4fbba51158abb0964109da84371e1b80bb0542bd7', $commands['upgrade_from_sha256']);
         self::assertStringContainsString('mode=install', $commands['bootstrap']);
         self::assertStringContainsString('test -x "$destination"', $commands['bootstrap']);
         self::assertStringNotContainsString('mode=upgrade', $commands['bootstrap']);
