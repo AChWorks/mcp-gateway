@@ -572,7 +572,7 @@ PYTHON;
         self::assertStringNotContainsString('--prior-fingerprint', $commands['public_enrollment']);
         self::assertStringContainsString($commands['sha256'], $commands['audit_gateway']);
         self::assertStringContainsString($commands['sha256'], $commands['bootstrap']);
-        self::assertSame('e329acf8076dade75696791c3a1d002b018612b2cd7155c2c09bbf95d0b84911', $commands['upgrade_from_sha256']);
+        self::assertSame('886f727e1dc85ab2ed32dd59c6f82d7177686752d27694f8d22350abbe8da360', $commands['upgrade_from_sha256']);
         self::assertStringContainsString('mode=install', $commands['bootstrap']);
         self::assertStringContainsString('test -x "$destination"', $commands['bootstrap']);
         self::assertStringNotContainsString('mode=upgrade', $commands['bootstrap']);

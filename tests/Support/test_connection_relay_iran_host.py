@@ -41,11 +41,15 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.input_path.write_bytes(self.snapshot_bytes)
 
     def export(self, record="01JAE000000000000000000077", relay="iran-stage",
-               host="192.0.2.9", port=2222, user="relay-control", key=None):
+               host="192.0.2.9", port=2222, user="relay-control", key=None,
+               revision=1, fingerprint="a" * 64, generation="b" * 64):
         return ("\n".join([
-            "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT",
+            "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT V2",
             "Relay: " + relay,
             "Record: " + record,
+            "Configuration revision: " + str(revision),
+            "Host fingerprint: " + fingerprint,
+            "Host generation: " + generation,
             "Control endpoint: " + host + ":" + str(port),
             "Control user on Iran: " + user,
             "Ed25519 PUBLIC KEY (never copy the private key):",
@@ -70,6 +74,10 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         self.assertEqual("iran-stage", value.relay_id)
         self.assertEqual("relay-control", value.control_user)
         self.assertEqual(2222, value.control_port)
+        self.assertEqual(1, value.revision)
+        self.assertEqual("a" * 64, value.host_fingerprint)
+        self.assertEqual("b" * 64, value.host_generation)
+        self.assertEqual(2, value.owner_record()["version"])
         self.assertEqual("relay-control", value.owner_record()["control_user"])
         self.assertNotIn("proposed_iran_user", value.owner_record())
         self.assertNotIn("PRIVATE KEY", value.public_key.decode())
@@ -95,6 +103,87 @@ class IranOfflinePublicStageTests(unittest.TestCase):
         before = {entry.name: entry.read_bytes() for entry in base.iterdir()}
         self.assertIn("ALREADY STAGED INACTIVE", self.stage())
         self.assertEqual(before, {entry.name: entry.read_bytes() for entry in base.iterdir()})
+
+    def test_changed_gateway_revision_or_generation_cannot_adopt_staged_identity(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        before = {item.name: item.read_bytes() for item in stage.iterdir()}
+        for kwargs in (
+            {"revision": 2, "fingerprint": "c" * 64, "generation": "d" * 64},
+            {"revision": 1, "fingerprint": "c" * 64},
+            {"revision": 1, "generation": "d" * 64},
+        ):
+            with self.subTest(kwargs=kwargs):
+                next_snapshot = mod.parse_gateway_export(self.export(**kwargs))
+                with self.assertRaisesRegex(mod.Refusal, "differs"):
+                    mod.operate("stage", next_snapshot, self.layout)
+                with self.assertRaisesRegex(mod.Refusal, "differs"):
+                    mod.operate("inspect", next_snapshot, self.layout)
+                with self.assertRaisesRegex(mod.Refusal, "differs"):
+                    mod.operate("retire", next_snapshot, self.layout)
+                self.assertEqual(before, {item.name: item.read_bytes()
+                                          for item in stage.iterdir()})
+        self.assertIn("NOT ENROLLED", self.inspect())
+        self.assertIn("STAGE RETIRED", self.retire())
+        next_snapshot = mod.parse_gateway_export(
+            self.export(revision=2, fingerprint="c" * 64, generation="d" * 64)
+        )
+        self.assertIn("STAGED INACTIVE", mod.operate("stage", next_snapshot, self.layout))
+        self.assertEqual(2, next_snapshot.owner_record()["configuration_revision"])
+        self.assertEqual("d" * 64, next_snapshot.owner_record()["host_generation"])
+        self.assertEqual(2, next_snapshot.owner_record()["version"])
+
+    def test_versioned_public_export_rejects_v1_and_noncanonical_generation(self):
+        original = self.snapshot_bytes
+        legacy_v1 = (
+            original.replace(b" INPUT V2", b" INPUT")
+            .replace(b"Configuration revision: 1\n", b"")
+            .replace(b"Host fingerprint: " + b"a" * 64 + b"\n", b"")
+            .replace(b"Host generation: " + b"b" * 64 + b"\n", b"")
+        )
+        self.assertEqual(8, len(legacy_v1.splitlines()))
+        invalid = [
+            legacy_v1,
+            original.replace(b" INPUT V2", b" INPUT"),
+            original.replace(b"Configuration revision: 1", b"Configuration revision: 0"),
+            original.replace(b"Configuration revision: 1", b"Configuration revision: 01"),
+            original.replace(b"Configuration revision: 1", b"Configuration revision: 4294967296"),
+            original.replace(b"Configuration revision: 1", b"Configuration revision: -1"),
+            original.replace(b"Configuration revision: 1", b"Configuration revision: 1.0"),
+            original.replace(b"Host fingerprint: " + b"a" * 64,
+                             b"Host fingerprint: " + b"A" * 64),
+            original.replace(b"Host fingerprint: " + b"a" * 64,
+                             b"Host fingerprint: " + b"a" * 63),
+            original.replace(b"Host generation: " + b"b" * 64,
+                             b"Host generation: " + b"b" * 63),
+            original.replace(b"Host generation: " + b"b" * 64,
+                             b"Host generation: " + b"g" * 64),
+            original.replace(b"Host generation: ", b"Generation: "),
+            original.replace(b"Host generation: " + b"b" * 64 + b"\n", b""),
+            original.replace(b"Configuration revision: 1\n", b"Configuration revision: 1\n" * 2),
+        ]
+        for exported in invalid:
+            with self.subTest(export=exported[:110]):
+                with self.assertRaises(mod.Refusal):
+                    mod.parse_gateway_export(exported)
+        self.assertFalse(self.layout.stages.exists())
+
+    def test_legacy_v1_staging_claim_is_not_silently_migrated_or_retired(self):
+        self.stage()
+        stage = self.layout.stage(self.snapshot)
+        legacy_claim = self.snapshot.owner_record()
+        legacy_claim["version"] = 1
+        for name in ("configuration_revision", "host_fingerprint", "host_generation"):
+            del legacy_claim[name]
+        (stage / "owner.json").write_bytes(mod._encode(legacy_claim))
+        before = {item.name: item.read_bytes() for item in stage.iterdir()}
+        for action in (self.stage, self.inspect, self.retire):
+            with self.subTest(action=action.__name__):
+                with self.assertRaisesRegex(mod.Refusal, "differs"):
+                    action()
+                self.assertEqual(before, {item.name: item.read_bytes()
+                                          for item in stage.iterdir()})
+        self.assertFalse((stage / "retiring.json").exists())
 
     def test_cold_boot_missing_run_lock_can_be_recreated_without_changing_stage(self):
         self.stage()
@@ -165,6 +254,11 @@ class IranOfflinePublicStageTests(unittest.TestCase):
             ).public_enrollment()
             snapshot = mod.parse_gateway_export((text + "\n").encode("ascii"))
             self.assertEqual(source_case.relay.record_id, snapshot.record_id)
+            self.assertEqual(source_case.relay.revision, snapshot.revision)
+            self.assertEqual(source_case.relay.fingerprint, snapshot.host_fingerprint)
+            self.assertEqual(
+                source_case.setup._generation()["host_generation"], snapshot.host_generation,
+            )
             self.assertEqual(
                 (source_case.layout.key_dir(source_case.relay) / "control_key.pub").read_text().strip(),
                 snapshot.public_key.decode().strip(),

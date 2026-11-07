@@ -28,7 +28,7 @@ class Refusal(Exception):
     pass
 
 
-_HEADER = "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT"
+_HEADER = "PUBLIC ONLY - OFFLINE IRAN ENROLLMENT INPUT V2"
 _KEY_HEADER = "Ed25519 PUBLIC KEY (never copy the private key):"
 _TRAILER = ("NOT ENROLLED. Restrict Iran SSHD forwarding and public egress separately; "
             "verify both hosts and issue independent readiness before enabling.")
@@ -43,6 +43,9 @@ _KEY_B64 = re.compile(r"[A-Za-z0-9+/]+={0,2}\Z")
 class Snapshot:
     relay_id: str
     record_id: str
+    revision: int
+    host_fingerprint: str
+    host_generation: str
     control_host: str
     control_port: int
     control_user: str
@@ -50,9 +53,12 @@ class Snapshot:
 
     def owner_record(self) -> dict:
         return {
-            "version": 1,
+            "version": 2,
             "relay_id": self.relay_id,
             "relay_record_id": self.record_id,
+            "configuration_revision": self.revision,
+            "host_fingerprint": self.host_fingerprint,
+            "host_generation": self.host_generation,
             "control_host": self.control_host,
             "control_port": self.control_port,
             "control_user": self.control_user,
@@ -69,20 +75,29 @@ def parse_gateway_export(raw: bytes) -> Snapshot:
         lines = raw.decode("ascii").splitlines()
     except UnicodeDecodeError as error:
         raise Refusal("Public enrollment export must be plain ASCII.") from error
-    if (len(lines) != 8 or lines[0] != _HEADER
-        or lines[5] != _KEY_HEADER or lines[7] != _TRAILER):
+    if (len(lines) != 11 or lines[0] != _HEADER
+        or lines[8] != _KEY_HEADER or lines[10] != _TRAILER):
         raise Refusal("Expected the exact verified Gateway public-enrollment text.")
     fields = [
         ("Relay: ", lines[1]), ("Record: ", lines[2]),
-        ("Control endpoint: ", lines[3]), ("Control user on Iran: ", lines[4]),
+        ("Configuration revision: ", lines[3]),
+        ("Host fingerprint: ", lines[4]),
+        ("Host generation: ", lines[5]),
+        ("Control endpoint: ", lines[6]), ("Control user on Iran: ", lines[7]),
     ]
     if any(not line.startswith(prefix) for prefix, line in fields):
         raise Refusal("Public enrollment metadata fields are missing or out of order.")
-    relay_id, record_id, endpoint, control_user = [
+    relay_id, record_id, revision, fingerprint, generation, endpoint, control_user = [
         line[len(prefix):] for prefix, line in fields
     ]
     if not _RELAY.fullmatch(relay_id) or not _ULID.fullmatch(record_id):
         raise Refusal("Invalid Relay ID or immutable record ID.")
+    if (not revision.isdecimal() or len(revision) > 10
+        or not 1 <= int(revision) <= 4294967295
+        or str(int(revision)) != revision
+        or re.fullmatch(r"[a-f0-9]{64}", fingerprint) is None
+        or re.fullmatch(r"[a-f0-9]{64}", generation) is None):
+        raise Refusal("Missing or non-canonical Relay revision, fingerprint or generation.")
     if ":" not in endpoint:
         raise Refusal("Control endpoint needs an explicit port.")
     host, port = endpoint.rsplit(":", 1)
@@ -91,7 +106,7 @@ def parse_gateway_export(raw: bytes) -> Snapshot:
         raise Refusal("Invalid Iran control host or SSH port.")
     if not _USER.fullmatch(control_user) or control_user == "root":
         raise Refusal("Iran control principal must be a dedicated non-root identity.")
-    public_fields = lines[6].split(" ")
+    public_fields = lines[9].split(" ")
     if (len(public_fields) != 2 or public_fields[0] != "ssh-ed25519"
         or not _KEY_B64.fullmatch(public_fields[1])):
         raise Refusal("Expected a single exact Ed25519 public key without options or comment.")
@@ -103,8 +118,8 @@ def parse_gateway_export(raw: bytes) -> Snapshot:
         or decoded[:15] != b"\x00\x00\x00\x0bssh-ed25519"
         or decoded[15:19] != b"\x00\x00\x00\x20"):
         raise Refusal("Invalid Ed25519 wire-format key.")
-    return Snapshot(relay_id, record_id, host, int(port), control_user,
-                    (lines[6] + "\n").encode("ascii"))
+    return Snapshot(relay_id, record_id, int(revision), fingerprint, generation,
+                    host, int(port), control_user, (lines[9] + "\n").encode("ascii"))
 
 
 @dataclass(frozen=True)
