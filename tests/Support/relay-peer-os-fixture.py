@@ -758,8 +758,14 @@ else:
                     if found.returncode == 0:
                         if json.loads(found.stdout)[0]["ifindex"] == target["outer_ifindex"]:
                             result = command(["ip", "link", "delete", target["outer"]], check=False)
-                            if result.returncode:
-                                failures.append("Could not remove owned fixture interface: " + target["outer"])
+                            # Namespace teardown can remove its host veth peer between
+                            # the identity check and deletion. Verify absence, not
+                            # the command exit status alone, before declaring a leak.
+                            if (result.returncode
+                                and command(["ip", "link", "show", "dev", target["outer"]],
+                                            check=False).returncode == 0):
+                                failures.append("Could not remove owned fixture interface: "
+                                                + target["outer"] + ": " + result.stderr[-240:])
                         else:
                             failures.append("Changed interface preserved: " + target["outer"])
             except BaseException as error:
