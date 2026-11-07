@@ -1370,26 +1370,25 @@ async function connectionRelays(browser) {
         await page.goto(base + '/admin/settings/connection-relays');
         const enabledFixture = page.locator('article.target-subsection')
             .filter({hasText:'Iran intermediary — synthetic browser fixture'});
-        assert.equal(await enabledFixture.getByText('Enabled — host evidence current', {exact:true}).count(), 1,
-            'Only the synthetic, explicitly attested Relay may be visibly Enabled');
-        assert.ok(await enabledFixture.getByText('does not prove a working route', {exact:false}).count(),
-            'Host readiness must not claim actual Target authentication');
-        const degradedFixture = page.locator('article.target-subsection')
+        assert.equal(await enabledFixture.getByText('Enabled', {exact:true}).count(), 1,
+            'An explicitly enabled Relay is displayed as Enabled');
+        assert.ok(await enabledFixture.getByText('Test local Relay connection', {exact:false}).count(),
+            'Normal Relay Test must remain available');
+
+        const secondEnabledFixture = page.locator('article.target-subsection')
             .filter({hasText:'Unverified enabled intermediary'});
-        assert.equal(await degradedFixture.getByText('Degraded — routing blocked', {exact:true}).count(), 1,
-            'Enabled Relay without verified host evidence must be visibly Degraded');
-        assert.ok(await degradedFixture.getByText('Gateway Repair is not available yet', {exact:false}).count(),
-            'Degraded Relay must not advertise an unavailable Repair action');
-        assert.ok(await degradedFixture.getByText('Bound Target operations fail closed', {exact:false}).count(),
-            'Degraded status must explain fail-closed routing');
-        assert.ok(await page.getByRole('heading', {name:'Before enabling a Relay'}).count());
-        assert.equal(await page.locator('#relay-setup-heading').count(), 1);
-        const technical = page.locator('details.target-help-details').first();
+        assert.equal(await secondEnabledFixture.getByText('Enabled', {exact:true}).count(), 1,
+            'Enabled status is not a fabricated remote-host readiness attestation');
+        assert.ok(await secondEnabledFixture.getByText('Test local Relay connection', {exact:false}).count(),
+            'An enabled Relay uses the same normal Test action');
+
+        const technical = enabledFixture.locator('details.target-help-details').first();
         assert.equal(await technical.evaluate(node => node.open), false);
         await technical.locator('summary').focus();
         await page.keyboard.press('Enter');
         assert.equal(await technical.evaluate(node => node.open), true);
-        assert.ok(await page.getByText('Operator procedure:').count());
+        assert.ok(await enabledFixture.getByText('Connect Gateway to Relay', {exact:false}).count());
+        assert.ok(await enabledFixture.getByText('OpenSSH', {exact:false}).count());
         const add = page.locator('form[action$="/settings/connection-relays"]');
         const ownerPassword = add.locator('input[name="current_password"]');
         assert.equal(await ownerPassword.count(), 1);
@@ -1453,10 +1452,10 @@ async function connectionRelays(browser) {
         await page.goto(base + '/admin/settings/connection-relays');
         const disabledFixture = page.locator('article.target-subsection')
             .filter({hasText:'Unusable saved intermediary'});
-        assert.equal(await disabledFixture.getByText('Draft — host unverified', {exact:true}).count(), 1,
-            'A newly saved disabled Relay without host evidence is a Draft');
-        assert.ok(await disabledFixture.getByText('Do not assume host resources are absent', {exact:false}).count(),
-            'Draft status cannot infer absence of privileged host resources');
+        assert.equal(await disabledFixture.getByText('Disabled', {exact:true}).count(), 1,
+            'A saved disabled Relay is displayed as Disabled');
+        assert.ok(await disabledFixture.getByText('Test local Relay connection', {exact:false}).count(),
+            'Local tunnel testing remains available without fake readiness state');
 
         const nonOwner = await create(browser);
         try {
