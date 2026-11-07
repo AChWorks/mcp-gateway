@@ -1,6 +1,6 @@
 # Connection Relays — simple native OpenSSH connection
 
-**Status:** Source-only development. A successful CI check is not proof of an installed, working Gateway -> Relay -> Target link. This document replaces the older privileged helper / firewall / attestation protocol.
+**Availability:** Implemented and reviewed in current source, but use only with an installed release that includes the feature. Isolated native OpenSSH forwarding has been exercised; full installed Owner UI, authenticated PHP SSH/SFTP and WordPress OAuth acceptance remains open in [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284). A successful CI check or merge is not proof of a working installed Gateway -> Relay -> Target link. This guide supersedes the older privileged host-helper protocol.
 
 ## Purpose
 
@@ -18,8 +18,8 @@ The Gateway reuses its existing outbound destination checks and Target authentic
 
 1. Ensure the Gateway host has a standard OpenSSH client and the intermediary is reachable by SSH. The intermediary needs working SSHD and a login permitted to forward TCP connections; no Gateway-specific software or firewall management is required.
 2. In **System > Connection Relays**, register the Relay ID, name, server/port, SSH account, *independently checked server public host key* and an unused Gateway local SOCKS5 port. Saving does not run a command.
-3. Copy and run **Prepare a local SSH key and pinned host key** on the Gateway under the Unix account that will run the tunnel. The command uses per-Relay files in that account's \`~/.ssh/mcp-gateway-relays/\`. It prints the **public client key**; add it to the Relay SSH account's \`authorized_keys\`. Never put private keys in the web UI, Issue, logs or on the Relay.
-4. Copy and run **Connect Gateway to Relay** on the Gateway. It uses \`ssh -N -T -D 127.0.0.1:<port>\` with the stored host-key pin, \`BatchMode\` and \`ExitOnForwardFailure\`. This runs in the foreground. Use an **existing** process manager/supervisor to keep the command running across terminal closure or reboot, according to that hosting environment. Gateway deliberately does not create systemd services, Unix users, firewall rules or hidden host resources.
+3. Copy and run **Prepare a local SSH key and pinned host key** on the Gateway under the Unix account that will run the tunnel. The command uses per-Relay files in that account's `~/.ssh/mcp-gateway-relays/`. It prints the **public client key**; add it to the Relay SSH account's `authorized_keys`. Never put private keys in the web UI, Issue, logs or on the Relay.
+4. Copy and run **Connect Gateway to Relay** on the Gateway. It uses `ssh -N -T -D 127.0.0.1:<port>` with the stored host-key pin, `BatchMode` and `ExitOnForwardFailure`. This runs in the foreground. Use an **existing** process manager/supervisor to keep the command running across terminal closure or reboot, according to that hosting environment. Gateway deliberately does not create systemd services, Unix users, firewall rules or hidden host resources.
 5. In the Admin Relay card, choose **Test local Relay connection**. This checks only the SOCKS5 greeting and may run while disabled. Then **Enable Relay**. On SSH or WordPress Target creation/edit, select that Relay and test normal Target connectivity and authentication. Multiple Targets may select the same Relay.
 
 **Important:** A pinned *server host key* authenticates the SSH intermediary; a separate *client key* is the Gateway's login to it. The Target's real SSH server key or HTTPS certificate/OAuth remains independently verified, just as for Direct.
@@ -39,7 +39,7 @@ The generated SSH command binds TCP only to **127.0.0.1**. On a multi-tenant hos
 
 A stored record, enabled flag or local SOCKS5 greeting is not proof of a successful Target connection. SSH/SFTP must still check the actual Target's pinned host key and login; WordPress HTTPS must check hostname, TLS certificate and OAuth credentials. Existing Direct and Reverse SSH connection modes must remain independent.
 
-If an older experimental privileged \`connection-relay-gateway.py\` or \`connection-relay-peer.py\` installation exists on a **real host**, removing these files from source does **not** stop, upgrade or remove its old root-owned systemd/firewall/key resources. Do not blindly delete live host files: identify the actual existing instance and remove it using a separately approved, scoped host cleanup/migration plan. No such installation has been established or changed by this source refactor.
+If an older experimental privileged `connection-relay-gateway.py` or `connection-relay-peer.py` installation exists on a **real host**, removing these files from source does **not** stop, upgrade or remove its old root-owned systemd/firewall/key resources. Do not blindly delete live host files: identify the actual existing instance and remove it using a separately approved, scoped host cleanup/migration plan. No such installation has been established or changed by this source refactor.
 
 ## Acceptance
 

@@ -6,7 +6,7 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## Rolling browser-update support window
 
-**Direct browser updates are supported only from the three most recent preceding published stable MCP Gateway releases to the current release.** The exact supported source versions are recorded in the tagged repository source's `bin/released-baselines.txt` manifest, validated by CI; this source-only manifest is **not** included in the production deployment ZIP. The operator release notes describe the three-release policy. For v2.5.8, the three preceding published tagged sources are v2.5.5, v2.5.6 and v2.5.7; use that window only when v2.5.8 has been explicitly published as an official, verified Release. Older direct-upgrade attempts are **unsupported and unverified**, even if the updater does not actively reject them.
+**Direct browser updates are supported only from the three most recent preceding published stable MCP Gateway releases to the current release.** The exact supported source versions are recorded in the tagged repository source's `bin/released-baselines.txt` manifest, validated by CI; this source-only manifest is **not** included in the production deployment ZIP. The operator release notes describe the three-release policy. The published v2.5.8 release supports direct browser updates from v2.5.5, v2.5.6 and v2.5.7. For a different destination release, use its own tagged baseline manifest and verified release assets rather than extending this example by assumption. Older direct-upgrade attempts are **unsupported and unverified**, even if the updater does not actively reject them.
 
 For an older installation, do not skip blindly to the newest release. Preserve an independently restorable full code/database/secret backup, inspect each archived official intermediate version's supported upgrade window, and plan a sequential supported hop to a version within the current three-release window. Verify SHA256/signatures, installation health, schema and recovery after each hop. If the exact hop or old installed runtime cannot be verified, use a tested migration/reinstall/restore plan with operator approval rather than assuming a direct update is safe. Existing browser-updater authorization, maintenance, pre-migration backup validation and fail-closed recovery behavior still apply; narrowing the support window does not weaken these controls.
 
@@ -347,8 +347,8 @@ asset-level immutability.
 this policy was enabled. Their stable tags and independently checked asset
 hashes remain useful, but GitHub reports `immutable: false` for those
 historic Releases. Do not claim enabling the new setting retroactively
-locked their assets. This new protection applies to future Releases,
-including v2.5.8 once published.
+locked their assets. The first verified immutable Release under this policy was v2.5.8;
+the protection also applies to subsequent Releases.
 
 The repository Owner/admin must also establish a **GitHub-enforced** tag policy in
 `AChWorks/mcp-gateway` (GitHub **Settings → Rulesets → New tag ruleset**):

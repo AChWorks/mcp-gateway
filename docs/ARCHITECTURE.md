@@ -23,6 +23,8 @@
             MariaDB/MySQL + private keys, sessions and spool
 ```
 
+Optional **connection routing** does not create another Target connector: SSH and WordPress Targets may explicitly use one shared [native OpenSSH/SOCKS5 Connection Relay](CONNECTION-RELAYS.md), while an inbound-blocked SSH Target may use a [managed](REVERSE-SSH-MANAGED.md) or [manual](REVERSE-SSH-OPERATOR.md) Reverse SSH route. The selected connector still verifies the actual remote identity and credentials, and normal Direct routing stays independent. The routing guides own setup, behavior and supported acceptance; this architecture does not duplicate their operating procedures.
+
 The deployed application is PHP/Laravel with one authenticated public MCP endpoint and a server-rendered Blade Admin. Private keys, encrypted Target credentials and temporary data remain outside `public/`. The normal hosting profile needs no mandatory separate daemon, Redis, message broker or Node production build. Remote **SSH Jobs** may use the *Target host's own* supported systemd user or root manager; that is not a Gateway-host worker.
 
 A separate, optional authenticated `/mcp/file-transfer/ssh/{targetId}/upload|download` HTTPS binary sidecar serves **supported SSH whole-file operations**. It is not an additional MCP server and is gated by effective configuration, authenticated identity, Target permissions, safe spool admission and SSH destination trust. The normal MCP JSON Tool payload is not a general binary-file transport.
