@@ -623,6 +623,27 @@ class Retirement:
             return False
         raise Refusal("Cannot prove the Relay systemd service cannot restart automatically.")
 
+    def _unit_persistently_enabled(self) -> bool:
+        """Readiness requires permanent boot enablement, not mere linkage.
+
+        Keep _unit_enabled() conservative for Retirement/Setup: transient
+        enablement and aliases are still resources that must be accounted for.
+        Only systemctl's exact positive enabled state proves durable
+        [Install] activation for the already-verified canonical unit.
+        """
+        result = self.run(["systemctl", "is-enabled", self.relay.unit_name])
+        state = result.stdout.strip()
+        if state == "enabled" and result.returncode == 0:
+            return True
+        if state in {"enabled-runtime", "alias", "static", "indirect", "generated",
+                     "transient"} and result.returncode == 0:
+            return False
+        if state in {"linked", "linked-runtime", "masked", "masked-runtime", "disabled"} and result.returncode in {1, 3}:
+            return False
+        if state == "not-found" and result.returncode == 4:
+            return False
+        raise Refusal("Cannot positively verify permanent Relay systemd boot enablement.")
+
     def _listening(self, ports: set[int]) -> bool:
         result = self.run(["ss", "-H", "-lnt"])
         if result.returncode != 0:
@@ -1528,8 +1549,8 @@ class GatewayPolicyAudit(Retirement):
             or hashlib.sha256(self._canonical_exec(info["ExecStart"]).encode()).hexdigest()
                 != managed["unit_exec_sha256"]):
             raise Refusal("Effective Relay systemd service is not the approved active definition.")
-        if not self._unit_active() or (require_enabled and not self._unit_enabled()):
-            raise Refusal("Relay service is stopped or cannot survive reboot.")
+        if not self._unit_active() or (require_enabled and not self._unit_persistently_enabled()):
+            raise Refusal("Relay service is stopped or has no verified permanent boot enablement.")
         keydir = self.layout.key_dir(self.relay)
         if not self._owned(keydir, True):
             raise Refusal("Dedicated SSH control credential namespace is missing.")
@@ -1853,6 +1874,21 @@ class GatewayReadinessIssuer(GatewayPolicyAudit):
                 raise Refusal("Existing readiness evidence is not owned by the current Relay identity.")
         return path
 
+    def _read_lease_clock(self) -> tuple[str, int, int]:
+        """Read a single live boot/uptime/Unix sample; refuse invalid clocks."""
+        boot = self.layout.at("/proc/sys/kernel/random/boot_id").read_text().strip()
+        uptime = self.layout.at("/proc/uptime").read_text().strip()
+        if not re.fullmatch(r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}", boot):
+            raise Refusal("No valid current Gateway host boot ID.")
+        match = re.fullmatch(r"([0-9]+)\.[0-9]+[ \t]+[0-9]+\.[0-9]+", uptime)
+        if match is None:
+            raise Refusal("No valid boot-relative Gateway host uptime.")
+        seconds = int(match[1])
+        now = int(time.time())
+        if seconds < 0 or now < 1:
+            raise Refusal("Invalid readiness verification clock.")
+        return boot, seconds, now
+
     def issue(
         self, php_uid: int, php_fpm_cli_verified: bool,
         peer_egress_verified: bool,
@@ -1883,25 +1919,22 @@ class GatewayReadinessIssuer(GatewayPolicyAudit):
             if (self._owned(policy_path)
                 and policy_path.read_bytes() != (policy + "\n").encode("ascii")):
                 raise Refusal("Existing root-owned readiness policy differs from the current generation.")
-            boot = self.layout.at("/proc/sys/kernel/random/boot_id").read_text().strip()
-            uptime = self.layout.at("/proc/uptime").read_text().strip()
-            if not re.fullmatch(r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}", boot):
-                raise Refusal("No valid current Gateway host boot ID.")
-            match = re.fullmatch(r"([0-9]+)\.[0-9]+[ \t]+[0-9]+\.[0-9]+", uptime)
-            if match is None:
-                raise Refusal("No valid boot-relative Gateway host uptime.")
-            seconds = int(match[1])
-            now = int(time.time())
-            if seconds < 0 or now < 1:
-                raise Refusal("Invalid readiness verification clock.")
-            if self._unit_enabled():
+            # Clock readability/identity must fail closed before any new
+            # persistent systemd mutation. The final lease uses a fresh
+            # sample after the last successful effective host audit.
+            self._read_lease_clock()
+            if self._unit_persistently_enabled():
                 self._audit_locked(php_uid)
             else:
                 self._audit_locked(php_uid, require_enabled=False)
                 enabled = self.run(["systemctl", "enable", self.relay.unit_name])
                 if enabled.returncode:
                     raise Refusal("Cannot enable audited Relay service: " + enabled.stderr[:140])
+                # Do not trust enable's exit status: systemd may still
+                # report enabled-runtime, linked, alias or another state.
+                # _audit_locked requires exact permanent enablement.
                 self._audit_locked(php_uid)
+            boot, seconds, now = self._read_lease_clock()
             proof = {
                 "relay_id": self.relay.relay_id,
                 "host_fingerprint": self.relay.fingerprint,

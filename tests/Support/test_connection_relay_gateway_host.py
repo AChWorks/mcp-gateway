@@ -1801,6 +1801,135 @@ class GatewayReadinessIssuerTests(unittest.TestCase):
         self.assertTrue(self.fake.active)
 
 
+    def _model_unit_enablement(self, initial_state: str, next_state: str | None = "enabled",
+                               enable_exit: int = 0, after_enable=None):
+        """Model only this Relay unit's actual systemctl state and side effects."""
+        state = {"value": initial_state}
+        def systemctl(argv):
+            if argv == ["systemctl", "is-enabled", self.relay.unit_name]:
+                self.fake.calls.append(argv)
+                code = 0 if state["value"] in {"enabled", "enabled-runtime", "alias"} else 1
+                return subprocess.CompletedProcess(argv, code, state["value"] + "\n", "")
+            if argv == ["systemctl", "enable", self.relay.unit_name]:
+                self.fake.calls.append(argv)
+                if enable_exit:
+                    return subprocess.CompletedProcess(argv, enable_exit, "", "simulated enable failure")
+                if next_state is not None:
+                    state["value"] = next_state
+                if after_enable is not None:
+                    after_enable()
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            return self.fake(argv)
+        self.issuer.run = systemctl
+        return state
+
+    def test_durable_enabled_state_needs_no_enable_mutation(self):
+        state = self._model_unit_enablement("enabled")
+        self.assertIn("READINESS ISSUED", self.issue())
+        self.assertEqual("enabled", state["value"])
+        self.assertFalse(any(command[:2] == ["systemctl", "enable"] for command in self.fake.calls))
+
+    def test_transient_linked_alias_and_disabled_require_permanent_enablement(self):
+        for state in ("enabled-runtime", "linked", "linked-runtime", "alias", "disabled"):
+            with self.subTest(state=state):
+                self.fake.calls.clear()
+                model = self._model_unit_enablement(state)
+                self.assertIn("READINESS ISSUED", self.issue())
+                self.assertEqual("enabled", model["value"])
+                self.assertEqual(
+                    [["systemctl", "enable", self.relay.unit_name]],
+                    [c for c in self.fake.calls if c[:2] == ["systemctl", "enable"]],
+                )
+                self.assertTrue(self.proof.is_file())
+                # No sibling or non-Relay unit is changed.
+                self.assertFalse(any(
+                    c[0] == "systemctl" and c[1] in {"enable", "disable", "start"}
+                    and self.relay.unit_name not in c
+                    for c in self.fake.calls
+                ))
+                self.issuer.revoke()
+
+    def test_transient_and_linked_states_never_attest_if_enable_remains_nonpersistent(self):
+        for state in ("enabled-runtime", "linked", "linked-runtime", "alias", "disabled"):
+            with self.subTest(state=state):
+                self.fake.calls.clear()
+                self._model_unit_enablement(state, next_state=state)
+                with self.assertRaisesRegex(mod.Refusal, "permanent|survive reboot|boot enablement"):
+                    self.issue()
+                self.assertEqual(
+                    [["systemctl", "enable", self.relay.unit_name]],
+                    [c for c in self.fake.calls if c[:2] == ["systemctl", "enable"]],
+                )
+                self.assertFalse(self.proof.exists())
+                self.assertFalse(self.policy.exists())
+
+    def test_failed_permanent_enable_cannot_issue_lease(self):
+        self._model_unit_enablement("enabled-runtime", enable_exit=1)
+        with self.assertRaisesRegex(mod.Refusal, "Cannot enable"):
+            self.issue()
+        self.assertFalse(self.proof.exists())
+        self.assertFalse(self.policy.exists())
+
+    def test_post_enable_live_audit_failure_blocks_lease(self):
+        self._model_unit_enablement(
+            "enabled-runtime", after_enable=lambda: setattr(self.fake, "listening_address", "0.0.0.0"),
+        )
+        with self.assertRaisesRegex(mod.Refusal, "non-loopback"):
+            self.issue()
+        self.assertFalse(self.proof.exists())
+        self.assertFalse(self.policy.exists())
+
+    def test_inconsistent_enabled_exit_code_never_proves_persistence(self):
+        def broken(argv):
+            if argv == ["systemctl", "is-enabled", self.relay.unit_name]:
+                self.fake.calls.append(argv)
+                return subprocess.CompletedProcess(argv, 4, "enabled\n", "systemd failure")
+            return self.fake(argv)
+        self.issuer.run = broken
+        with self.assertRaisesRegex(mod.Refusal, "permanent|boot enablement|systemd"):
+            self.issue()
+        self.assertFalse(self.proof.exists())
+        self.assertFalse(self.policy.exists())
+
+    def test_retirement_keeps_conservative_transient_and_linkage_detection(self):
+        for state in ("enabled", "enabled-runtime", "linked", "linked-runtime", "alias"):
+            with self.subTest(state=state):
+                def fake(argv, state=state):
+                    if argv == ["systemctl", "is-enabled", self.relay.unit_name]:
+                        return subprocess.CompletedProcess(argv, 0 if state in {"enabled", "enabled-runtime", "alias"} else 1, state + "\n", "")
+                    return self.fake(argv)
+                self.op.run = fake
+                self.assertTrue(self.op._unit_enabled())
+
+    def test_root_audit_is_read_only_and_rejects_nonpersistent_enablement(self):
+        for state in ("enabled-runtime", "linked", "linked-runtime", "alias", "disabled"):
+            with self.subTest(state=state):
+                self.fake.calls.clear()
+                self._model_unit_enablement(state)
+                self.op.run = self.issuer.run
+                with self.assertRaisesRegex(mod.Refusal, "permanent boot enablement"):
+                    self.op.audit(1010)
+                self.assertFalse(any(c[:2] == ["systemctl", "enable"] for c in self.fake.calls))
+                self.assertFalse(self.proof.exists())
+                self.assertFalse(self.policy.exists())
+
+    def test_readiness_timestamp_is_sampled_after_final_live_audit(self):
+        sequence = []
+        original_audit = self.issuer._audit_locked
+        def tracked_audit(*args, **kwargs):
+            sequence.append("audit")
+            return original_audit(*args, **kwargs)
+        def tracked_clock():
+            sequence.append("clock")
+            return 1794000000
+        with mock.patch.object(self.issuer, "_audit_locked", side_effect=tracked_audit):
+            with mock.patch.object(mod.time, "time", side_effect=tracked_clock):
+                self.issue()
+        self.assertIn("audit", sequence)
+        self.assertEqual("clock", sequence[-1])
+        self.assertEqual(1794000000, json.loads(self.proof.read_text())["verified_at_unix"])
+
+
 class StagedSetupHost(AuditHost):
     """Root-bound service/nft/useradd fixture with real disposable SSH keygen."""
 
