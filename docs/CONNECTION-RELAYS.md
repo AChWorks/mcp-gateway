@@ -1,6 +1,6 @@
 # Connection Relays — simple native OpenSSH connection
 
-**Availability:** Implemented and reviewed in current source, but use only with an installed release that includes the feature. Isolated native OpenSSH forwarding has been exercised; full installed Owner UI, authenticated PHP SSH/SFTP and WordPress OAuth acceptance remains open in [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284). A successful CI check or merge is not proof of a working installed Gateway -> Relay -> Target link. This guide supersedes the older privileged host-helper protocol.
+**Availability:** Implemented and reviewed in current source, but use only with an installed release that includes the feature. An isolated source-installed Gateway has passed the real Owner login and Relay Admin lifecycle through edit/test/bind/unbind, with actual OpenSSH SOCKS5, HTTPS/TLS, interruption and no-Direct-fallback checks. Authenticated installed SSH/SFTP, full WordPress OAuth/MCP through Relay and offline Relay Delete remain open in [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284). A successful CI check or merge is not proof of a working installed Gateway -> Relay -> Target link. This guide supersedes the older privileged host-helper protocol.
 
 ## Purpose
 
