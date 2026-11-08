@@ -81,7 +81,7 @@ The [Managed Reverse SSH operator guide](docs/REVERSE-SSH-MANAGED.md) has one-ti
 
 ## Connect Targets through a Relay
 
-**Source-integrated; field acceptance open ([Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284)):** The current `main` includes Connection Relays and an isolated native SSH/SFTP/WordPress HTTPS path has been exercised. Complete installed Owner UI, authenticated SSH-client and WordPress OAuth acceptance remains pending. Check that your **installed release** includes this feature before following these steps. A Relay is a reusable SSH intermediary for SSH/SFTP/WordPress Targets, independent of its country.
+**Source-integrated; field acceptance open ([Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284)):** The current `main` includes Connection Relays; an isolated source-installed Gateway has passed Owner login, Relay Create/Edit/Enable/Disable/Test, Target bind/unbind, SOCKS5/HTTPS identity checks and no-Direct-fallback recovery. Valid authenticated installed SSH/SFTP, full WordPress OAuth/MCP and offline Relay Delete acceptance remain pending. Check that your **installed release** includes this feature before following these steps. A Relay is a reusable SSH intermediary for SSH/SFTP/WordPress Targets, independent of its country.
 
 1. In **System > Connection Relays**, add the Relay SSH endpoint, independently verified SSH server public host key and an unused Gateway-local SOCKS5 port.
 2. On the Gateway host, run the copyable **Prepare SSH key** command, add its printed **public** key to the SSH account on the intermediary, then run the native `ssh -N -T -D` command. Keep that process running with an existing supervisor if required.
