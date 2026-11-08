@@ -422,7 +422,7 @@ final class SshManagedReverseAdminTest extends TestCase
         $oldEnrollmentId = $row->id;
         $url = '/admin/targets/retry-target/reverse-ssh/reissue';
         $this->get('/admin/targets/retry-target')->assertOk()
-            ->assertSee('Retry Pending Setup without deleting this Target')
+            ->assertSee('Retry pending Managed Reverse setup (advanced)')
             ->assertSee('Reissue one-use install command');
         $this->post($url, [
             'confirm_target_id' => 'wrong',

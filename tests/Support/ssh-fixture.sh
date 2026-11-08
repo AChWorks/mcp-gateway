@@ -180,6 +180,13 @@ start_daemon() {
     allow_password=no
     host_key_prefix=relay_secondary_host
     keys_file=.ssh/relay_authorized_keys_secondary
+  elif [[ "${name}" == "relay-onboarding" ]]; then
+    # The new generated intermediary command appends to authorized_keys,
+    # unlike the older fixture with its separately provisioned login file.
+    allow_forwarding=local
+    allow_password=no
+    host_key_prefix=control_host
+    keys_file=.ssh/authorized_keys
   fi
   cat > "${config}" <<EOF_CONFIG
 Port ${port}
@@ -248,6 +255,10 @@ start_daemon relay-control "${ports[12]}" \
   "PermitOpen 127.0.0.1:46231 [::1]:46231 127.0.0.1:46244" "PermitListen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
 start_daemon relay-control-secondary 46256 \
   "PermitOpen 127.0.0.1:46231 [::1]:46231 127.0.0.1:46244" "PermitListen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
+# The new disposable two-command flow must authorize its generated login key
+# in the existing OS account and use that same key with an independent SSHD.
+start_daemon relay-onboarding 46257 \
+  "PermitOpen 127.0.0.1:46231" "PermitListen none" "PermitTTY no" "ForceCommand /bin/false" "AllowStreamLocalForwarding no"
 # Client-initiated OpenSSH -R: listener and actual pinned end-host sshd
 # remain separate SSH authentication and trust domains.
 printf '[127.0.0.1]:%s %s\n' "${ports[11]}" "$(cat "${root}/control_host_ed25519.pin")" > "${root}/reverse_known_hosts"

@@ -10,6 +10,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
@@ -117,6 +118,20 @@ Route::middleware('web')->get('/__browser__/experience/{role}', static function 
             'local_socks_port' => $socksPort,
         ]);
         DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
+    }
+    if (! ConnectionRelay::query()->where('relay_id', 'ui-two-command')->exists()) {
+        $key = implode(' ', array_slice(
+            preg_split('/\s+/', trim(EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH'))), 0, 2,
+        ));
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'ui-two-command',
+            'display_name' => 'Two-command onboarding browser fixture',
+            'control_host' => '198.51.100.45', 'control_port' => 22,
+            'control_user' => 'browser-fixture-account',
+            'control_host_key' => $key,
+            'local_socks_port' => 46084,
+        ]);
+        app(ConnectionRelayOnboarding::class)->prepare($relay);
     }
     Auth::login($user);
 

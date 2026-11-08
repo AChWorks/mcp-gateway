@@ -12,7 +12,7 @@
                     <input type="hidden" name="intent_id" value="{{ $refreshIntent?->id }}">
                     <label>
                         {{ __('Confirm exact Target ID') }}
-                        <input name="confirm_target_id" required maxlength="64" autocomplete="off" placeholder="{{ $target->target_id }}" id="reconcile_refresh_target_id" @error('confirm_target_id') aria-invalid="true" aria-describedby="reconcile_refresh_target_id-error" @enderror>
+                        <input name="confirm_target_id" required maxlength="64" autocomplete="off" data-admin-manual-entry data-admin-server-value="" placeholder="{{ $target->target_id }}" id="reconcile_refresh_target_id" @error('confirm_target_id') aria-invalid="true" aria-describedby="reconcile_refresh_target_id-error" @enderror>
                     </label>
                     @error('confirm_target_id')<p class="field-error" id="reconcile_refresh_target_id-error" role="alert">{{ $message }}</p>@enderror
                     <label><input type="checkbox" name="wordpress_client_revoked" value="yes" required id="reconcile_refresh_client_revoked" @error('wordpress_client_revoked') aria-invalid="true" aria-describedby="reconcile_refresh_client_revoked-error" @enderror> {{ __('I personally verified WordPress saved removal of this exact Gateway client from Approved OAuth Clients, invalidating any unknown successor tokens.') }}</label>

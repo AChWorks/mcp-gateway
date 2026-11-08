@@ -2100,3 +2100,84 @@ input[type="file"]:focus-visible {
         --ui-panel-shadow: none;
     }
 }
+
+/* Shared read-only label/value presentation; ordinary <dl> defaults stacked
+   the status, host, fingerprint and dates into an unreadable vertical column. */
+.detail-list {
+    display: grid;
+    grid-template-columns: minmax(11rem, 0.32fr) minmax(0, 1fr);
+    column-gap: 1.3rem;
+    margin-block: 0.85rem;
+}
+.detail-list > dt,
+.detail-list > dd {
+    min-width: 0;
+    margin: 0;
+    padding-block: 0.68rem;
+    border-block-end: 1px solid var(--ui-border);
+    overflow-wrap: anywhere;
+}
+.detail-list > dt {
+    color: var(--ui-muted);
+    font-weight: 650;
+}
+.detail-list code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+/* Keep heading landmarks inside native summary without duplicating copy. */
+.admin-disclosure-heading {
+    display: inline;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+}
+/* Native details let long pages stay navigable without hiding key status.
+   Required recovery/error state opens server-side without JavaScript. */
+.admin-collapsible-panel > summary {
+    cursor: pointer;
+    font-size: 1.08rem;
+    font-weight: 750;
+    padding-block: 0.25rem;
+}
+.admin-collapsible-panel > summary:focus-visible,
+.target-help-details summary:focus-visible {
+    outline: 3px solid var(--ui-focus);
+    outline-offset: 3px;
+}
+.admin-collapsible-panel[open] > :not(summary) {
+    margin-block-start: var(--ui-panel-stack-gap);
+}
+.admin-collapsible-panel .form-stack,
+.admin-collapsible-panel .detail-list {
+    max-width: none;
+}
+.relay-state {
+    margin: 0.55rem 0 0;
+    color: var(--ui-ink);
+}
+.relay-setup-steps {
+    display: grid;
+    gap: var(--ui-panel-stack-gap);
+    margin: 0.75rem 0;
+    padding-inline-start: 1.5rem;
+}
+.relay-setup-steps > li { min-width: 0; }
+.relay-setup-steps textarea {
+    width: 100%;
+    resize: vertical;
+    overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+    .detail-list {
+        grid-template-columns: minmax(0, 1fr);
+        row-gap: 0;
+    }
+    .detail-list > dt {
+        padding-block-end: 0.15rem;
+        border-block-end: 0;
+    }
+    .detail-list > dd {
+        padding-block-start: 0.15rem;
+    }
+}

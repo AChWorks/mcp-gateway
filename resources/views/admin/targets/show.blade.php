@@ -70,8 +70,11 @@
     @include($connectorUi->operationsView)
 @endif
 
-<section class="panel panel-wide" aria-label="{{ __('Target information') }}">
-    <dl class="detail-list">
+<section class="panel panel-wide" aria-labelledby="target-info-title">
+    <h2 id="target-info-title">{{ __('Target connection and identity') }}</h2>
+    <details class="target-help-details">
+        <summary>{{ __('Registered SSH/connector details and diagnostic history') }}</summary>
+        <dl class="detail-list">
         <dt>{{ __('Target ID') }}</dt><dd><code>{{ $target->target_id }}</code></dd>
         <dt>{{ __('Connector') }}</dt><dd>{{ $connectorUi?->label ?? __('Unsupported connector') }} <code class="small-code">{{ $target->connector_type }}</code></dd>
         <dt>{{ __('Connection state') }}</dt><dd>{{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}</dd>
@@ -87,7 +90,8 @@
         @if ($connectorUi?->detailRowsView !== null)
             @include($connectorUi->detailRowsView)
         @endif
-    </dl>
+        </dl>
+    </details>
     @if ($connectorUi?->detailActionsView !== null)
         @include($connectorUi->detailActionsView)
     @else
@@ -99,12 +103,13 @@
 @endif
 
 @can('targets.remove', $target)
-<section class="panel panel-danger" aria-labelledby="target-remove-title">
-    <h2 id="target-remove-title">{{ __('Remove Target') }}</h2>
+<details class="panel panel-danger admin-collapsible-panel" @if ($errors->any() && in_array(old('target_remove_action'), ['remove', 'forget'], true)) open @endif >
+    <summary><h2 id="target-remove-title" class="admin-disclosure-heading">{{ __('Remove Target — advanced / destructive') }}</h2></summary>
     @if ($canRemoveSafely)
         <p class="muted" id="remove-target-help">{{ __('Removing a Target permanently removes its scoped assignments and local connector metadata. Disconnect its connector first. A later Target with the same ID cannot inherit prior permissions.') }}</p>
         <form method="post" action="{{ route('admin.targets.destroy', ['target' => $target->target_id]) }}" class="form-stack" aria-describedby="remove-target-help">
             @csrf
+            <input type="hidden" name="target_remove_action" value="remove">
             @method('DELETE')
             <label>
                 <input type="checkbox" name="confirm_remove" value="yes" required id="remove_target_confirmation" @error('confirm_remove') aria-invalid="true" @enderror aria-describedby="remove-target-help{{ $errors->has('confirm_remove') ? ' remove_target_confirmation-error' : '' }}">
@@ -124,10 +129,11 @@
                     <p class="field-help" id="forget-target-help">{{ __('This permanently deletes the Target, encrypted credentials, pending OAuth/refresh/revocation state and Target-specific access assignments from this Gateway. No remote connection or revocation is attempted. Existing remote OAuth authorization or Unix-account access may remain valid, and remote in-flight operations cannot be undone. Revoke access separately at the remote service when possible.') }}</p>
                     <form method="post" action="{{ route('admin.targets.forget', ['target' => $target->target_id]) }}" class="form-stack" aria-describedby="forget-target-help">
                         @csrf
+                        <input type="hidden" name="target_remove_action" value="forget">
                         @method('DELETE')
                         <div class="field">
                             <label for="forget_target_id">{{ __('Type the exact Target ID to permanently remove locally:') }} <code>{{ $target->target_id }}</code></label>
-                            <input id="forget_target_id" name="confirm_target_id" type="text" maxlength="64" required autocomplete="off" spellcheck="false" @error('confirm_target_id') aria-invalid="true" aria-describedby="forget_target_id-error" @enderror>
+                            <input id="forget_target_id" name="confirm_target_id" type="text" maxlength="64" required autocomplete="off" data-admin-manual-entry data-admin-server-value="" spellcheck="false" @error('confirm_target_id') aria-invalid="true" aria-describedby="forget_target_id-error" @enderror>
                             @error('confirm_target_id')<p class="form-error" role="alert" id="forget_target_id-error">{{ $message }}</p>@enderror
                         </div>
                         <label class="target-trust-confirmation">
@@ -156,7 +162,7 @@
     @error('target')
         <p class="form-error" role="alert">{{ $message }}</p>
     @enderror
-</section>
+</details>
 @endcan
 
 @endsection

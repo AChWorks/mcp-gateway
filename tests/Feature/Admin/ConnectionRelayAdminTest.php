@@ -13,6 +13,8 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayHostService;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\SshDirect\SshDirectTargetAdapter;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
@@ -22,7 +24,10 @@ use App\Infrastructure\Http\OutboundRequestException;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use phpseclib4\Crypt\EC;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 final class ConnectionRelayAdminTest extends TestCase
@@ -39,17 +44,26 @@ final class ConnectionRelayAdminTest extends TestCase
         ])->assertSessionHasNoErrors();
         $relay = ConnectionRelay::query()->sole();
         self::assertFalse($relay->enabled);
+        self::assertNotEmpty($relay->login_private_key_encrypted);
+        self::assertNotEmpty($relay->login_public_key);
+        self::assertStringStartsWith('-----BEGIN OPENSSH PRIVATE KEY-----',
+            app(ConnectionRelayOnboarding::class)->privateKey($relay));
 
         $this->get('/admin/settings/connection-relays')->assertOk()
-            ->assertSee('Set up or reconnect with OpenSSH')
-            ->assertSee('ssh-keygen')
-            ->assertSee('ssh -N -T -D 127.0.0.1:46081')
-            ->assertSee('StrictHostKeyChecking=yes')
-            ->assertSee('-l')
+            ->assertSee('Two-command Relay setup')
+            ->assertSee('On the intermediary Relay server')
+            ->assertSee('On the Gateway server')
+            ->assertSee('gateway:relay-install')
             ->assertSee('Test local Relay connection')
-            ->assertDontSee('issue-readiness')
+            ->assertDontSee('BEGIN OPENSSH PRIVATE KEY')
+            ->assertDontSee($relay->login_private_key_encrypted)
             ->assertDontSee('nftables')
             ->assertDontSee('setup-gateway');
+        $unit = app(ConnectionRelayHostService::class)->unitText($relay);
+        self::assertStringContainsString('ssh -N -T -D 127.0.0.1:46081', $unit);
+        self::assertStringContainsString('StrictHostKeyChecking=yes', $unit);
+        self::assertStringContainsString('Restart=always', $unit);
+        self::assertStringContainsString('WantedBy=multi-user.target', $unit);
 
         $this->post('/admin/settings/connection-relays/'.$relay->getKey().'/toggle', [
             'relay_revision' => 1, 'enable' => '1', 'current_password' => self::PASSWORD,
@@ -57,6 +71,165 @@ final class ConnectionRelayAdminTest extends TestCase
         self::assertTrue($relay->fresh()->enabled);
         $this->get('/admin/targets/create?connector_type=ssh_direct')
             ->assertOk()->assertSee('value="iran-1"', false);
+    }
+
+    public function test_legacy_relay_can_prepare_two_commands_only_with_owner_reauthentication(): void
+    {
+        $relay = $this->readyRelay();
+        self::assertNull($relay->login_public_key);
+        $owner = $this->user('owner');
+        $this->actingAs($owner);
+        $route = '/admin/settings/connection-relays/'.$relay->getKey().'/prepare';
+
+        $this->post($route, ['relay_revision' => 1, 'current_password' => 'wrong'])
+            ->assertSessionHasErrors('current_password');
+        self::assertNull($relay->fresh()->login_public_key);
+        $this->post($route, ['relay_revision' => 999, 'current_password' => self::PASSWORD])
+            ->assertSessionHasErrors('relay_revision');
+        self::assertNull($relay->fresh()->login_public_key);
+        $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertSee('Prepare the two complete setup commands');
+        $this->post($route, ['relay_revision' => 1, 'current_password' => self::PASSWORD])
+            ->assertSessionHasNoErrors();
+        self::assertNotNull($relay->fresh()->login_public_key);
+        $first = $relay->fresh()->login_public_key;
+        $this->post($route, ['relay_revision' => 1, 'current_password' => self::PASSWORD])
+            ->assertSessionHasNoErrors();
+        self::assertSame($first, $relay->fresh()->login_public_key, 'Repeat setup must not rotate the key.');
+        $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertSee('gateway:relay-install')->assertDontSee('BEGIN OPENSSH PRIVATE KEY');
+    }
+
+    public function test_generated_full_relay_command_preserves_all_existing_authorized_keys_entries(): void
+    {
+        $root = sys_get_temp_dir().'/gateway-relay-command-'.bin2hex(random_bytes(8));
+        $home = $root.'/home';
+        $bin = $root.'/bin';
+        self::assertTrue(mkdir($root, 0700));
+        self::assertTrue(mkdir($home, 0700));
+        self::assertTrue(mkdir($bin, 0700));
+        try {
+            // Run the exact generated sh -c payload, replacing only sudo and
+            // privileged OS helpers with fixture-scoped equivalents. The real
+            // authorized_keys file of this host is never opened or modified.
+            file_put_contents($bin.'/getent', <<<'SH'
+#!/bin/sh
+[ "$1" = passwd ] && [ "$2" = fixture-relay ] || exit 1
+printf 'fixture-relay:x:9999:9999::%s:/bin/sh\n' "$RELAY_TEST_HOME"
+SH
+            );
+            file_put_contents($bin.'/install', <<<'SH'
+#!/bin/sh
+for item do destination="$item"; done
+mkdir -p "$destination" && chmod 700 "$destination"
+SH
+            );
+            file_put_contents($bin.'/chown', "#!/bin/sh\nexit 0\n");
+            foreach (['getent', 'install', 'chown'] as $helper) {
+                chmod($bin.'/'.$helper, 0755);
+            }
+            $key = EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH');
+            $parts = preg_split('/\s+/', trim($key));
+            self::assertIsArray($parts);
+            $key = $parts[0].' '.$parts[1];
+            $relay = new ConnectionRelay([
+                'relay_id' => 'fixture-relay', 'control_user' => 'fixture-relay',
+                'control_host' => 'relay.example.test', 'control_port' => 22,
+                'local_socks_port' => 46081, 'control_host_key' => $key,
+            ]);
+            $relay->login_public_key = $key;
+            $command = app(ConnectionRelayOnboarding::class)->commands($relay)['relay'];
+            self::assertStringStartsWith('sudo sh -c ', $command);
+            self::assertStringNotContainsString('PRIVATE KEY', $command);
+            $authorized = $home.'/.ssh/authorized_keys';
+            $previous = 'ssh-ed25519 AAAA-existing-key another-user';
+            foreach ([
+                'empty' => ['', $key."\n"],
+                'terminated' => [$previous."\n", $previous."\n".$key."\n"],
+                'unterminated' => [$previous, $previous."\n".$key."\n"],
+                'identical' => [$previous."\n".$key."\n", $previous."\n".$key."\n"],
+            ] as $case => [$original, $expected]) {
+                if (! is_dir($home.'/.ssh')) {
+                    mkdir($home.'/.ssh', 0700);
+                }
+                file_put_contents($authorized, $original);
+                for ($repeat = 0; $repeat < 2; $repeat++) {
+                    $process = Process::fromShellCommandline(substr($command, strlen('sudo ')), null, [
+                        'PATH' => $bin.':'.getenv('PATH'),
+                        'RELAY_TEST_HOME' => $home,
+                    ]);
+                    $process->mustRun();
+                    self::assertSame($expected, file_get_contents($authorized),
+                        $case.' iteration '.$repeat.' must preserve unrelated bytes and append exactly once.');
+                }
+            }
+        } finally {
+            File::deleteDirectory($root);
+        }
+    }
+
+    public function test_failed_relay_edit_expands_only_its_disclosure(): void
+    {
+        $relay = $this->readyRelay();
+        $this->actingAs($this->user('owner'));
+        $base = '/admin/settings/connection-relays/'.$relay->getKey();
+        $this->post($base.'/toggle', [
+            'relay_revision' => 1, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+        $result = $this->from('/admin/settings/connection-relays')->put($base, [
+            ...$this->relayFields(), 'relay_revision' => 2, 'current_password' => self::PASSWORD,
+            'control_host_key' => 'invalid server public host key',
+            'edit_relay_id' => $relay->getKey(), 'relay_action' => 'edit',
+            'relay_action_id' => $relay->getKey(),
+        ])->assertSessionHasErrors('control_host_key');
+
+        $location = $result->headers->get('Location');
+        $html = $this->get($location ?? '/admin/settings/connection-relays')->assertOk()->getContent();
+
+        self::assertMatchesRegularExpression(
+            '/<details class="target-help-details"\s+open\s*>\s*<summary>Edit Relay connection<\/summary>/',
+            $html,
+        );
+        self::assertMatchesRegularExpression(
+            '/<details class="target-help-details"\s*>\s*<summary>Delete Relay<\/summary>/',
+            $html,
+        );
+    }
+
+    public function test_failed_rename_and_delete_open_only_the_submitting_relay_panel(): void
+    {
+        $relay = $this->readyRelay();
+        $this->actingAs($this->user('owner'));
+        $base = '/admin/settings/connection-relays/'.$relay->getKey();
+        $index = '/admin/settings/connection-relays';
+        $this->post($base.'/toggle', [
+            'relay_revision' => 1, 'enable' => '0', 'current_password' => self::PASSWORD,
+        ])->assertSessionHasNoErrors();
+
+        foreach ([
+            ['rename', 'put', $base.'/name', [
+                'display_name' => '', 'relay_revision' => 2, 'current_password' => self::PASSWORD,
+            ], 'display_name'],
+            ['delete', 'delete', $base, [
+                'relay_revision' => 2, 'confirm_relay_id' => 'incorrect',
+                'current_password' => self::PASSWORD,
+            ], 'confirm_relay_id'],
+        ] as [$action, $method, $url, $fields, $errorKey]) {
+            $response = $this->from($index)->$method($url, [
+                ...$fields, 'relay_action' => $action,
+                'relay_action_id' => $relay->getKey(),
+            ])->assertSessionHasErrors($errorKey);
+            $html = $this->get((string) $response->headers->get('Location'))->assertOk()->getContent();
+            foreach (['rename' => 'Rename Relay', 'edit' => 'Edit Relay connection', 'delete' => 'Delete Relay'] as $candidate => $summary) {
+                $opening = $candidate === $action ? '\s+open' : '';
+                self::assertMatchesRegularExpression(
+                    '/<details class="target-help-details"'.$opening.'\s*>\s*<summary>'
+                        .preg_quote($summary, '/').'<\/summary>/',
+                    $html,
+                    $action.' error must reveal its own panel, not '.$candidate,
+                );
+            }
+        }
     }
 
     public function test_disabled_relay_remains_selected_on_failure_and_never_rebinds_to_direct(): void

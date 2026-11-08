@@ -1,12 +1,8 @@
 @if ($sshHasCredential)
     @canany(['ssh.file.read', 'ssh.file.write'], $target)
-        <section class="panel panel-wide" aria-labelledby="ssh-browser-file-title">
-            <div class="section-heading">
-                <div>
-                    <div class="eyebrow">{{ __('Authenticated browser file handoff') }}</div>
-                    <h2 id="ssh-browser-file-title">{{ __('SSH file upload and download') }}</h2>
-                </div>
-            </div>
+        <details class="panel panel-wide admin-collapsible-panel" @if ($errors->has('file_exchange') || $errors->has('local_file') || $errors->has('destination') || $errors->has('private_staging_dir') || $errors->has('path')) open @endif >
+            <summary><h2 id="ssh-browser-file-title" class="admin-disclosure-heading">{{ __('SSH file upload and download (advanced)') }}</h2></summary>
+            <p class="field-help">{{ __('Authenticated browser file handoff') }}</p>
             @if ($target->operations_paused)
                 <p class="muted">{{ __('SSH browser upload and download are unavailable while this Target is paused.') }}</p>
             @elseif (config('ssh.file_transfer.enabled', false) === true)
@@ -51,6 +47,6 @@
             @else
                 <p class="muted">{{ __('Whole-file browser exchange is disabled on this Gateway. It requires an explicitly approved SSH_FILE_TRANSFER_ENABLED deployment change; bounded SFTP tools remain independent.') }}</p>
             @endif
-        </section>
+        </details>
     @endcanany
 @endif

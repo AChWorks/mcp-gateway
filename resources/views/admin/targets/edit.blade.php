@@ -48,7 +48,7 @@
 @can('security.manage')
 @if(auth()->user()?->getRawOriginal('role') === 'owner' && in_array($target->connector_type, ['ssh_direct','wp_ai_bridge'], true))
 <section class="panel panel-wide target-enrollment" aria-labelledby="target-route-heading">
-    <h2 id="target-route-heading">{{ __('Connection route') }}</h2>
+    <h2 id="target-route-heading">{{ __('Network routing') }}</h2>
     <p class="field-help">{{ __('This route is shared by the Target’s SSH/SFTP or WordPress/OAuth/MCP operations. A change fences retained SSH Jobs and requires reconnection. Switch only after finishing pending authentication, revocation and remote operations.') }}</p>
     <form class="form-stack" method="post" action="{{ route('admin.targets.relay-route.update', ['target' => $target->target_id]) }}">
         @csrf
@@ -75,14 +75,14 @@
 
 @can('security.manage')
 @if (! empty($configurationRevision))
-    <section class="panel panel-wide target-enrollment" aria-label="{{ __('Connector settings') }}">
-        <h2>{{ __('Connection settings') }}</h2>
+    <details class="panel panel-wide target-enrollment admin-collapsible-panel" @if ($errors->any() && old('configuration_revision') !== null) open @endif >
+        <summary><h2 class="admin-disclosure-heading">{{ __('Advanced connector connection settings') }}</h2></summary>
         <p class="field-help">{{ __('Only Owners can rotate connector endpoints and encrypted credentials. Changes are audited and require the current Owner password. Existing Target access permissions remain unchanged.') }}</p>
 
         @if ($connectorUi?->configurationView !== null)
             @include($connectorUi->configurationView)
         @endif
-    </section>
+    </details>
 @else
     <p class="muted">{{ __('This historical connector does not offer a configuration editor while its adapter is paused.') }}</p>
 @endif

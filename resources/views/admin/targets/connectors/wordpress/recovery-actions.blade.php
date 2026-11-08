@@ -30,7 +30,7 @@
                                     @csrf
                                     <input type="hidden" name="intent_id" value="{{ $revocationIntent->id }}">
                                     <label>{{ __('Type exact Target ID') }}
-                                        <input name="confirm_target_id" required maxlength="64" autocomplete="off" placeholder="{{ $target->target_id }}" id="cancel_disconnect_target_id" @error('confirm_target_id') aria-invalid="true" aria-describedby="cancel_disconnect_target_id-error" @enderror>
+                                        <input name="confirm_target_id" required maxlength="64" autocomplete="off" data-admin-manual-entry data-admin-server-value="" placeholder="{{ $target->target_id }}" id="cancel_disconnect_target_id" @error('confirm_target_id') aria-invalid="true" aria-describedby="cancel_disconnect_target_id-error" @enderror>
                                     </label>
                                     @error('confirm_target_id')<p class="field-error" id="cancel_disconnect_target_id-error" role="alert">{{ $message }}</p>@enderror
                                     <label>{{ __('Your current Gateway password') }}
@@ -59,7 +59,7 @@
                                 @csrf
                                 <input type="hidden" name="intent_id" value="{{ $revocationIntent->id }}">
                                 <label>{{ __('Type exact Target ID') }}
-                                    <input name="confirm_target_id" required maxlength="64" autocomplete="off" placeholder="{{ $target->target_id }}" id="reconcile_disconnect_target_id" @error('confirm_target_id') aria-invalid="true" aria-describedby="reconcile_disconnect_target_id-error" @enderror>
+                                    <input name="confirm_target_id" required maxlength="64" autocomplete="off" data-admin-manual-entry data-admin-server-value="" placeholder="{{ $target->target_id }}" id="reconcile_disconnect_target_id" @error('confirm_target_id') aria-invalid="true" aria-describedby="reconcile_disconnect_target_id-error" @enderror>
                                 </label>
                                 @error('confirm_target_id')<p class="field-error" id="reconcile_disconnect_target_id-error" role="alert">{{ $message }}</p>@enderror
                                 <label><input type="checkbox" name="wordpress_client_revoked" value="yes" required id="reconcile_disconnect_client_revoked" @error('wordpress_client_revoked') aria-invalid="true" aria-describedby="reconcile_disconnect_client_revoked-error" @enderror>

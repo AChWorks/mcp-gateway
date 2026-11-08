@@ -81,17 +81,13 @@ The [Managed Reverse SSH operator guide](docs/REVERSE-SSH-MANAGED.md) has one-ti
 
 ## Connect Targets through a Relay
 
-**Source-integrated; field acceptance open ([Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284)):** The current `main` includes Connection Relays; an isolated source-installed Gateway has passed Owner login, Relay Create/Edit/Enable/Disable/Test, Target bind/unbind, SOCKS5/HTTPS identity checks and no-Direct-fallback recovery. Valid authenticated installed SSH/SFTP, full WordPress OAuth/MCP and offline Relay Delete acceptance remain pending. Check that your **installed release** includes this feature before following these steps. A Relay is a reusable SSH intermediary for SSH/SFTP/WordPress Targets, independent of its country.
+One reusable OpenSSH intermediary can route SSH/SFTP and WordPress connections for multiple Targets. Each Target explicitly selects Direct or a named Relay; an unavailable selected Relay never silently falls back to Direct.
 
-1. In **System > Connection Relays**, add the Relay SSH endpoint, independently verified SSH server public host key and an unused Gateway-local SOCKS5 port.
-2. On the Gateway host, run the copyable **Prepare SSH key** command, add its printed **public** key to the SSH account on the intermediary, then run the native `ssh -N -T -D` command. Keep that process running with an existing supervisor if required.
-3. Use **Test local Relay connection**, then **Enable Relay**. Select it on SSH or WordPress Targets and use their normal Connect / Test / Retry actions.
-4. On failure, the selected route remains selected; retest or reconnect normally, or deliberately choose a different Relay/Direct route on the Target. Gateway does not implement automatic failover or a special connection-recovery policy.
-5. To edit or delete a Relay, first Disable it. Deleting requires the Owner to reassign/detach its Targets and does **not** contact the intermediary. Stop the old SSH process separately if one is running.
+**Release distinction:** The currently published v2.6.0 uses a manually supervised foreground SSH tunnel. The ongoing development candidate replaces it with **two complete host-specific setup commands** (Relay server first, Gateway server second), native OpenSSH, and a persistent Gateway-side systemd service. This new onboarding must be reviewed, released and installed before it works on an operator host.
 
-No Gateway-managed firewall, custom privileged host agent, readiness attestation or intermediary installer is required. A local SOCKS5 greeting alone does not prove the actual Target identity; SSH host-key and WordPress HTTPS/TLS/OAuth checks remain part of the normal Target connection. The local listener is loopback-only but may be reachable by other Unix accounts on a shared Gateway host; choose appropriate trusted hosting/isolation.
+In **System > Connection Relays**, enter the intermediary endpoint and its independently verified SSH **server** public host key, then save as Owner. The UI generates the Gateway login identity without displaying its private key. Copy and run the first command on the intermediary to authorize that public client key, then run the second on the Gateway to install/start the native persistent tunnel. Test the local SOCKS5 endpoint, enable routing, and verify each real Target separately. Local status is not full Target authentication. Direct and Reverse SSH remain independent, and deliberate route edits/deletion do not automatically clean host-owned services.
 
-See the [short Connection Relays guide](docs/CONNECTION-RELAYS.md). Source changes do not deploy or authorize privileged host changes.
+See the [Relay operator guide](docs/CONNECTION-RELAYS.md), [active test issue #284](https://github.com/AChWorks/mcp-gateway/issues/284), and [Admin UX issue #303](https://github.com/AChWorks/mcp-gateway/issues/303). Source changes do not deploy or authorize privileged host changes.
 
 ## Connect ChatGPT or another MCP client
 

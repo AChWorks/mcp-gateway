@@ -1,52 +1,60 @@
-# Connection Relays — simple native OpenSSH connection
+# Connection Relays — two complete host commands
 
-**Availability:** Implemented and reviewed in current source, but use only with an installed release that includes the feature. An isolated source-installed Gateway has passed the real Owner login and Relay Admin lifecycle through edit/test/bind/unbind, with actual OpenSSH SOCKS5, HTTPS/TLS, interruption and no-Direct-fallback checks. Authenticated installed SSH/SFTP, full WordPress OAuth/MCP through Relay and offline Relay Delete remain open in [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284). A successful CI check or merge is not proof of a working installed Gateway -> Relay -> Target link. This guide supersedes the older privileged host-helper protocol.
+**Version scope:** This describes the candidate after v2.6.0, not the currently published release. Do not assume these instructions work on an installed Gateway until the source has been independently reviewed, released and installed. See [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284).
 
-## Purpose
+## How Relay routing works
 
-One reusable SSH intermediary can carry SSH/SFTP and WordPress HTTPS connections for several Targets. The Relay is **not** a new connector, a VPN, a Gateway security appliance or a per-Target tunnel. Its geographic location is irrelevant.
+Gateway PHP → localhost SOCKS5 → native OpenSSH on the Gateway → existing intermediary SSHD → selected SSH/SFTP or WordPress HTTPS Target. Multiple Targets may share one intermediary. A Target that selects a Relay never silently falls back to Direct on failure; Direct SSH and Reverse SSH remain separate connection modes.
 
-    Gateway PHP -> 127.0.0.1:<local-port> SOCKS5
-        -> standard OpenSSH client (-N -D)
-        -> standard SSHD on the Relay server
-        -> Target TCP address
-        -> normal SSH login / SFTP or HTTPS TLS + WordPress OAuth
+## First-time setup
 
-The Gateway reuses its existing outbound destination checks and Target authentication. An enabled Target binding always keeps its chosen Relay unless the Owner changes it. If the Relay is disconnected, the Target's next connection/test receives a normal connection error; no custom failover, automatic Direct switching, new background retry policy or special renewal loop is implemented.
+1. On the intended Relay server, confirm that an existing SSH account and the selected port permit SSH key login and TCP forwarding. Get the server's **public SSH host key** using its trusted local console; for an existing Ed25519 SSHD key, run:
+   ```bash
+   sudo awk '{print $1, $2}' /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+   Compare its SHA256 fingerprint independently before trusting it. A network scan alone is not identity verification. This key identifies the SSHD server; it is **not** the Gateway client login key.
+2. In **System → Connection Relays**, enter Relay ID, name, SSH endpoint/port, existing Unix username, verified public **server** host key, and unused Gateway-local SOCKS5 port. Save as Owner. The Gateway generates an Ed25519 client **login** keypair; its private half remains encrypted with the Gateway APP_KEY and never appears on the page or in the two commands. For a Relay registered before this feature, use the Owner-approved **Prepare the two complete setup commands** button; it does not modify an existing running tunnel.
+3. Copy **Command 1 — run on Relay server** and run it in a trusted shell on the intermediary. It installs the generated public **client** login key into that existing account's authorized_keys, without overwriting other entries or changing the system SSHD.
+4. Copy **Command 2 — run on Gateway server** and run it in a trusted shell on the Gateway, never on the intermediary. It selects an already-installed compatible PHP CLI and runs the Gateway's own Artisan installer with sudo. This reads the encrypted login key locally, writes a protected SSH identity and independently pinned server key under /etc/mcp-gateway-relays/ID, installs an OpenSSH systemd service, starts it and enables startup after reboot. Neither command requires a manual key copy between machines or an open terminal afterward.
+5. Select **Test local Relay connection**, then **Enable Relay for Targets**, and verify the real SSH/SFTP or WordPress Target separately. An Enabled registration is only a route choice; local SOCKS5 success is not Target authentication.
 
-## One-time setup
+### Prerequisites and expected failures
 
-1. Ensure the Gateway host has a standard OpenSSH client and the intermediary is reachable by SSH. The intermediary needs working SSHD and a login permitted to forward TCP connections; no Gateway-specific software or firewall management is required.
-2. In **System > Connection Relays**, register the Relay ID, name, server/port, SSH account, *independently checked server public host key* and an unused Gateway local SOCKS5 port. Saving does not run a command.
-3. Copy and run **Prepare a local SSH key and pinned host key** on the Gateway under the Unix account that will run the tunnel. The command uses per-Relay files in that account's `~/.ssh/mcp-gateway-relays/`. It prints the **public client key**; add it to the Relay SSH account's `authorized_keys`. Never put private keys in the web UI, Issue, logs or on the Relay.
-4. Copy and run **Connect Gateway to Relay** on the Gateway. It uses `ssh -N -T -D 127.0.0.1:<port>` with the stored host-key pin, `BatchMode` and `ExitOnForwardFailure`. This runs in the foreground. Use an **existing** process manager/supervisor to keep the command running across terminal closure or reboot, according to that hosting environment. Gateway deliberately does not create systemd services, Unix users, firewall rules or hidden host resources.
-5. In the Admin Relay card, choose **Test local Relay connection**. This checks only the SOCKS5 greeting and may run while disabled. Then **Enable Relay**. On SSH or WordPress Target creation/edit, select that Relay and test normal Target connectivity and authentication. Multiple Targets may select the same Relay.
+The Relay host must already have SSHD, the named Unix account, permission for public-key login, and TCP forwarding. The Gateway host must already have OpenSSH client, an application-compatible CLI PHP, a functioning systemd service manager and the appropriate sudo rights. The two commands do not install/change SSHD, firewall or user accounts. Missing prerequisites generate explicit errors; do not claim unattended setup where they are absent.
 
-**Important:** A pinned *server host key* authenticates the SSH intermediary; a separate *client key* is the Gateway's login to it. The Target's real SSH server key or HTTPS certificate/OAuth remains independently verified, just as for Direct.
+**Port conflict:** A pre-existing manually started foreground SSH tunnel may still use the selected SOCKS5 port. On initial installation **and reinstallation**, the Gateway installer checks the real local TCP listening socket against the active systemd OpenSSH service and its process. It does not trust a generic SOCKS5 greeting from some other program. When a foreign listener occupies the expected port, stop only that exact identified process, verify the port is free, and rerun the single Gateway command. The installer will not terminate the foreign process automatically.
 
-## Everyday use and recovery
+## Operating and removing a Relay
 
-- **Connected:** use the Target normally; the Gateway's native clients send approved numeric destinations through the selected SOCKS5 route.
-- **Disconnected / timeout / failure:** run Test again, inspect/restart the existing SSH process or normal Target connection, and retry. The feature does not pick another route automatically. If that Relay is unusable, the Owner can select a different registered Relay on the Target.
-- **Edit host / port / account / pinned key / local SOCKS port:** Disable the Relay, stop its old SSH process, edit saved settings (assigned Targets may stay assigned), rerun the appropriate setup command and restart the SSH process. Then Enable and Test. No root-only rotation receipt or permanent lifecycle fence.
-- **Rename:** change the display name without stopping the SSH process.
-- **Disable:** stops Gateway routing through that Relay and invalidates stale Target binding epochs; it does not kill the OS SSH process. Assigned Targets stay assigned, and can be retested after re-enabling.
-- **Delete:** Disable, explicitly detach/reassign all Targets, then confirm the exact Relay ID and Owner password and delete the Gateway registration. This does **not** need the intermediary reachable or a special host cleanup receipt. Stop the old SSH process and remove its files separately as appropriate. No remote resources are claimed to be removed.
+- A successful persistent service is named mcp-gateway-relay-ID.service on the **Gateway** host. It starts after reboot and restarts on ordinary SSH process failure. Inspect its exact status and logs with systemctl status and journalctl -u when diagnosing issues.
+- To edit routing details, Disable Relay in Admin, edit the endpoint/host key/port and rerun the applicable complete commands. The Gateway command is idempotent and updates its **own** service configuration. Always independently verify a changed SSHD host key.
+- Disable in Gateway Admin blocks new routed Target operations but deliberately does **not** stop the host SSH service; existing Target selections remain. This distinction prevents silent Direct fallback.
+- To permanently delete a Relay record, Disable it and deliberately detach/reassign its Targets, then confirm exact ID and Owner password. A successful Gateway DB deletion does **not** assert that any host service or authorized_keys entry was removed, or require contacting the intermediary. Stop and remove the exact known host-owned service, key and authorized_keys entry separately under authorized host maintenance, without touching unrelated services or keys.
+- Existing pre-v2.6 experimental helper/firewall/root-owned host resources, if installed, are not managed by this new native OpenSSH flow. Identify and reconcile them separately; never blindly delete live host-owned files.
 
-## Operational boundaries
+### Exact host-owned cleanup and rollback
 
-The generated SSH command binds TCP only to **127.0.0.1**. On a multi-tenant host, loopback does **not** prevent unrelated local Unix users from reaching that port. **This is a hosting trust consideration**, not a reason to build another Gateway firewall management framework. Use an adequately trusted host or existing OS isolation when that distinction matters.
+**Run only during separately authorized host maintenance, after disabling the Relay and detaching/reassigning its Targets.** On the **Gateway host**, replace `<relay-id>` below with the exact existing registration ID (not the display name). Before any deletion, identify the real unit and verify its first line is exactly `# Managed by MCP Gateway Relay <relay-id>`, its `FragmentPath` is the expected `/etc/systemd/system/mcp-gateway-relay-<relay-id>.service`, and the private-key directory belongs to that Relay. If any ownership/path differs, **stop this procedure** rather than deleting it.
 
-A stored record, enabled flag or local SOCKS5 greeting is not proof of a successful Target connection. SSH/SFTP must still check the actual Target's pinned host key and login; WordPress HTTPS must check hostname, TLS certificate and OAuth credentials. Existing Direct and Reverse SSH connection modes must remain independent.
+```bash
+id='<relay-id>'
+unit="mcp-gateway-relay-${id}.service"
+sudo systemctl show "$unit" -p FragmentPath -p ActiveState -p MainPID
+sudo systemctl cat "$unit"
+sudo ls -ld "/etc/mcp-gateway-relays/$id"
+sudo ls -l "/etc/mcp-gateway-relays/$id"
+```
 
-If an older experimental privileged `connection-relay-gateway.py` or `connection-relay-peer.py` installation exists on a **real host**, removing these files from source does **not** stop, upgrade or remove its old root-owned systemd/firewall/key resources. Do not blindly delete live host files: identify the actual existing instance and remove it using a separately approved, scoped host cleanup/migration plan. No such installation has been established or changed by this source refactor.
+Once verified and authorized, stop and disable **only that unit** using `sudo systemctl disable --now "$unit"`. Confirm that `sudo systemctl is-active "$unit"` no longer reports active and its exact SOCKS port is no longer owned by that service. Then remove **only** the identified unit file (`/etc/systemd/system/$unit`) and the two known files under its dedicated directory (`id_ed25519`, `known_hosts`); run `sudo systemctl daemon-reload`, and remove the dedicated directory with `rmdir` only if empty. Do not use broad wildcard deletions. Recheck `systemctl status "$unit"` and the known port after cleanup. Leave the service and files intact if other consumers or uncertain ownership are discovered.
 
-## Acceptance
+On the **intermediary Relay host**, inspect the existing Unix account's `authorized_keys` and remove **only the exact generated public client key** for this Relay after verifying no other active session uses it. Back up that file within its existing access controls; retain every unrelated entry and maintain its mode/owner. Do not remove the SSHD, Unix account, firewall state, or unrelated keys. Deleting the Gateway database registration by itself does **not** perform any of these host operations.
 
-- Real Gateway -> one standard OpenSSH intermediary -> two or more Targets, with SSH/SFTP and WordPress HTTPS tests on a permitted isolated environment.
-- Normal disconnect, reconnect and retry, including a downed intermediary and explicit Owner-driven Relay change.
-- Create, edit, enable, disable, test, Target binding/unbinding and delete without a custom privileged host protocol.
-- Keep authentication, Owner permissions, client destination validation, existing Direct and Reverse SSH intact.
-- Exact-candidate source tests and independent review before Owner-approved Merge. Production/privileged host deployment requires its own approval.
+**Database migration rollback is deliberately guarded.** The onboarding-identity migration's `down()` refuses to drop columns while a record retains encrypted Relay login material. This prevents silently losing a key needed by a running service. A standard `migrate:rollback` is safe for empty/legacy records with no generated identity; it intentionally fails for populated identities. For a downgrade involving generated keys, first arrange explicit host-side service/authorization reconciliation and a separately approved data/key migration plan, preserve a tested backup, and only clear retired identity data when it is truly no longer in use. Do not bypass the guard, delete records en masse, or rotate APP_KEY as a workaround.
 
-[Current work and accepted Owner decisions](https://github.com/AChWorks/mcp-gateway/issues/284)
+## Security and acceptance boundary
+
+A pinned **Relay SSHD host key** authenticates the intermediary. The real SSH Target key or WordPress TLS/OAuth remains independently validated after the SOCKS5 hop. Binding to 127.0.0.1 does not isolate other local Unix users on a shared host; use existing OS isolation if the environment requires it. Preserve encrypted keys and APP_KEY together for recovery. Never send private login credentials through the web form, terminal chat, or logs.
+
+**Still to verify for this candidate:** real two-command installation on isolated hosts, terminal closure and reboot recovery, SSH/SFTP/WordPress authenticated Target operations, no-Direct fallback, safe offline deletion, and independently reviewed exact-candidate release. A source test or Release does not prove a Production deployment.
+
+[Issue #284: Connection Relay acceptance](https://github.com/AChWorks/mcp-gateway/issues/284) · [Issue #303: Admin UI issues](https://github.com/AChWorks/mcp-gateway/issues/303)

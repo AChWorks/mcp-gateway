@@ -10,6 +10,7 @@ use App\Domain\Access\GatewayRole;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Support\CorrelationId;
@@ -24,7 +25,7 @@ use InvalidArgumentException;
 
 final class ConnectionRelayController extends Controller
 {
-    public function index(Request $request): View
+    public function index(Request $request, ConnectionRelayOnboarding $onboarding): View
     {
         $this->authorizeOwner($request);
 
@@ -33,7 +34,7 @@ final class ConnectionRelayController extends Controller
         return view('admin.connection-relays.index', [
             'relays' => $relays,
             'commands' => $relays->mapWithKeys(
-                fn (ConnectionRelay $relay): array => [$relay->id => $this->sshCommands($relay)],
+                fn (ConnectionRelay $relay): array => [$relay->id => $onboarding->commands($relay)],
             ),
             'counts' => DB::table('targets')->whereNotNull('relay_record_id')
                 ->selectRaw('relay_record_id, count(*) as total')
@@ -43,6 +44,7 @@ final class ConnectionRelayController extends Controller
 
     public function store(
         Request $request, AdministratorPasswordConfirmation $password, ActivityRecorder $activity,
+        ConnectionRelayOnboarding $onboarding,
     ): RedirectResponse {
         $this->authorizeOwner($request);
         $fields = $request->validate($this->rules());
@@ -51,8 +53,8 @@ final class ConnectionRelayController extends Controller
         $this->assertUnique($fields);
 
         try {
-            DB::transaction(static function () use ($fields, $endpoint, $pin, $activity): void {
-                ConnectionRelay::query()->create([
+            DB::transaction(static function () use ($fields, $endpoint, $pin, $activity, $onboarding): void {
+                $relay = ConnectionRelay::query()->create([
                     'relay_id' => $fields['relay_id'],
                     'display_name' => $fields['display_name'],
                     'control_host' => $endpoint->host,
@@ -61,6 +63,7 @@ final class ConnectionRelayController extends Controller
                     'control_host_key' => $pin->canonicalLine(),
                     'local_socks_port' => (int) $fields['local_socks_port'],
                 ]);
+                $onboarding->prepare($relay);
                 $activity->recordRequired(CorrelationId::current(), 'connection-relay-register', 'success');
             }, 3);
         } catch (UniqueConstraintViolationException) {
@@ -69,7 +72,7 @@ final class ConnectionRelayController extends Controller
         }
 
         return redirect()->route('admin.connection-relays.index')
-            ->with('status', __('Relay saved disabled. Prepare the SSH key and start the native OpenSSH tunnel, then enable and test the Relay.'));
+            ->with('status', __('Relay saved disabled. Follow the two complete server commands, test the local tunnel, and then enable the Relay.'));
     }
 
     public function toggle(
@@ -304,33 +307,28 @@ final class ConnectionRelayController extends Controller
         }
     }
 
-    /** @return array{prepare:string,start:string,stop:string} */
-    private function sshCommands(ConnectionRelay $relay): array
-    {
-        $directory = '"$HOME/.ssh/mcp-gateway-relays"';
-        $key = '"$HOME/.ssh/mcp-gateway-relays/'.$relay->relay_id.'"';
-        $known = '"$HOME/.ssh/mcp-gateway-relays/'.$relay->relay_id.'.known_hosts"';
-        $alias = 'mcp-relay-'.$relay->relay_id;
-        $pin = escapeshellarg($alias.' '.$relay->control_host_key);
+    public function prepare(
+        Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
+        ConnectionRelayOnboarding $onboarding, ActivityRecorder $activity,
+    ): RedirectResponse {
+        $this->authorizeOwner($request);
+        $fields = $request->validate(['relay_revision' => ['required', 'integer', 'min:1']]);
+        $password->confirm($request);
 
-        $prepare = 'mkdir -p '.$directory.' && chmod 700 '.$directory
-            .' && { test -f '.$key.' || ssh-keygen -q -t ed25519 -N '.escapeshellarg('').' -f '.$key.'; }'
-            ." && printf '%s\\n' ".$pin.' > '.$known
-            .' && cat '.$key.'.pub';
+        DB::transaction(static function () use ($relay, $fields, $onboarding, $activity): void {
+            $locked = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
+            if ((int) $locked->lifecycle_revision !== (int) $fields['relay_revision']) {
+                throw ValidationException::withMessages(['relay_revision' => __('Relay settings changed. Refresh and retry.')]);
+            }
+            if ($locked->login_public_key !== null) {
+                return;
+            }
+            $onboarding->prepare($locked);
+            $activity->recordRequired(CorrelationId::current(), 'connection-relay-prepare-onboarding', 'success');
+        }, 3);
 
-        $start = 'ssh -N -T -D 127.0.0.1:'.$relay->local_socks_port
-            .' -p '.$relay->control_port.' -i '.$key
-            .' -o IdentitiesOnly=yes -o BatchMode=yes'
-            .' -o StrictHostKeyChecking=yes -o UserKnownHostsFile='.$known
-            .' -o HostKeyAlias='.escapeshellarg($alias)
-            .' -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 '
-            .' -l '.escapeshellarg($relay->control_user).' '.escapeshellarg($relay->control_host);
-
-        return [
-            'prepare' => $prepare,
-            'start' => $start,
-            'stop' => __('Stop the native SSH process or its existing supervisor before removing the local key.'),
-        ];
+        return redirect()->route('admin.connection-relays.index')
+            ->with('status', __('Two complete Relay setup commands are ready. Run the Relay command first.'));
     }
 
     private function authorizeOwner(Request $request): void

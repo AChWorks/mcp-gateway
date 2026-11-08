@@ -334,6 +334,15 @@ async function navigation(browser) {
         assert.equal(await page.locator('#ssh_password').isDisabled(), true);
 
         await page.goto(base + '/admin/targets/ui-ssh-connected/edit');
+        const advancedConnector = page.locator('details.admin-collapsible-panel')
+            .filter({has: page.locator('#ssh_edit_auth_method')});
+        assert.equal(await advancedConnector.evaluate(el => el.open), false,
+            'SSH credential rotation starts intentionally collapsed');
+        assert.equal(await advancedConnector.getByRole('heading',
+            {name: 'Advanced connector connection settings'}).count(), 1,
+            'Collapsible connection settings retain a navigable heading');
+        await advancedConnector.locator('summary').click();
+        assert.equal(await page.locator('#ssh_edit_auth_method').isVisible(), true);
         await page.locator('#ssh_edit_auth_method').selectOption('private_key');
         assert.equal(await page.locator('#ssh_edit_password').isDisabled(), true);
         assert.equal(await page.locator('#ssh_edit_private_key').isDisabled(), false);
@@ -868,7 +877,18 @@ async function attachmentUnload(browser) {
         await page.goto(base + '/admin/targets/ui-ssh-connected');
         // Resume is an actual local-only inventory mutation; no connector call.
         await page.getByRole('button', { name: 'Resume Target operations', exact: true }).click();
-        await page.locator('#ssh_download_path').waitFor();
+        const fileDisclosure = page.locator('details.admin-collapsible-panel')
+            .filter({has: page.locator('#ssh_download_path')});
+        const removalDisclosure = page.locator('details.admin-collapsible-panel')
+            .filter({has: page.locator('#forget_target_id')});
+        assert.equal(await fileDisclosure.evaluate(el => el.open), false,
+            'SSH file transfer starts collapsed without suppressing primary Verify');
+        assert.equal(await removalDisclosure.evaluate(el => el.open), false,
+            'Destructive Target operations start collapsed');
+        await fileDisclosure.locator('summary').click();
+        await removalDisclosure.locator('summary').click();
+        assert.equal(await page.locator('#ssh_download_path').isVisible(), true);
+        assert.equal(await page.locator('#forget_target_id').isVisible(), true);
         const upload = page.locator('form').filter({ has: page.locator('#ssh_upload_file') });
         const downloadForm = page.locator('form').filter({ has: page.locator('#ssh_download_path') });
         const forget = page.locator('form').filter({ has: page.locator('#forget_target_id') });
@@ -1007,6 +1027,10 @@ async function semanticDirtyForms(browser) {
         assert.equal(await identityForm.getAttribute('data-admin-dirty'), null, 'Reverted edit must clear dirty state');
 
         const sshForm = page.locator('#ssh-reconfiguration');
+        const connectorDisclosure = page.locator('details.admin-collapsible-panel').filter({has: sshForm});
+        assert.equal(await connectorDisclosure.evaluate(el => el.open), false);
+        await connectorDisclosure.locator('summary').click();
+        assert.equal(await sshForm.isVisible(), true);
         const trust = page.locator('#ssh_edit_trust_confirmed');
         assert.equal(await sshForm.getAttribute('data-admin-dirty'), null, 'SSH edit initializes clean');
         await trust.check();
@@ -1370,25 +1394,45 @@ async function connectionRelays(browser) {
         await page.goto(base + '/admin/settings/connection-relays');
         const enabledFixture = page.locator('article.target-subsection')
             .filter({hasText:'Iran intermediary — synthetic browser fixture'});
-        assert.equal(await enabledFixture.getByText('Enabled', {exact:true}).count(), 1,
-            'An explicitly enabled Relay is displayed as Enabled');
+        assert.equal(await enabledFixture.getByText('Enabled for Targets', {exact:true}).count(), 1,
+            'An enabled Relay is presented as a routing choice, not connectivity proof');
         assert.ok(await enabledFixture.getByText('Test local Relay connection', {exact:false}).count(),
             'Normal Relay Test must remain available');
 
         const secondEnabledFixture = page.locator('article.target-subsection')
             .filter({hasText:'Unverified enabled intermediary'});
-        assert.equal(await secondEnabledFixture.getByText('Enabled', {exact:true}).count(), 1,
+        assert.equal(await secondEnabledFixture.getByText('Enabled for Targets', {exact:true}).count(), 1,
             'Enabled status is not a fabricated remote-host readiness attestation');
         assert.ok(await secondEnabledFixture.getByText('Test local Relay connection', {exact:false}).count(),
             'An enabled Relay uses the same normal Test action');
 
-        const technical = enabledFixture.locator('details.target-help-details').first();
-        assert.equal(await technical.evaluate(node => node.open), false);
+        const technical = enabledFixture.locator('details.relay-setup-details').first();
+        assert.equal(await technical.evaluate(node => node.open), true,
+            'Legacy Relay must open its preparation guidance before two commands exist');
         await technical.locator('summary').focus();
         await page.keyboard.press('Enter');
+        assert.equal(await technical.evaluate(node => node.open), false);
+        await page.keyboard.press('Enter');
         assert.equal(await technical.evaluate(node => node.open), true);
-        assert.ok(await enabledFixture.getByText('Connect Gateway to Relay', {exact:false}).count());
-        assert.ok(await enabledFixture.getByText('OpenSSH', {exact:false}).count());
+        assert.equal(await technical.getByRole('button',
+            {name:'Prepare the two complete setup commands'}).count(), 1);
+        assert.equal(await technical.locator('textarea[readonly]').count(), 0,
+            'No command may be fabricated before the legacy key is prepared');
+
+        const generated = page.locator('article.target-subsection')
+            .filter({hasText:'Two-command onboarding browser fixture'});
+        const setup = generated.locator('details.relay-setup-details');
+        assert.equal(await setup.evaluate(node => node.open), false,
+            'Prepared two-command setup should be collapsible');
+        await setup.locator('summary').click();
+        const generatedCommands = await setup.locator('textarea[readonly]').evaluateAll(controls =>
+            controls.map(control => control.value));
+        assert.equal(generatedCommands.length, 2, 'One complete command must be shown per host');
+        assert.ok(generatedCommands[0].includes('authorized_keys'));
+        assert.ok(generatedCommands[1].includes('gateway:relay-install'));
+        assert.ok(generatedCommands.every(value => !value.includes('BEGIN OPENSSH PRIVATE KEY')));
+        assert.equal(await setup.locator('[data-copy-command]').count(), 2);
+        assert.equal(await generated.getByText('Disabled for Targets', {exact:true}).count(), 1);
         const add = page.locator('form[action$="/settings/connection-relays"]');
         const ownerPassword = add.locator('input[name="current_password"]');
         assert.equal(await ownerPassword.count(), 1);
@@ -1452,8 +1496,8 @@ async function connectionRelays(browser) {
         await page.goto(base + '/admin/settings/connection-relays');
         const disabledFixture = page.locator('article.target-subsection')
             .filter({hasText:'Unusable saved intermediary'});
-        assert.equal(await disabledFixture.getByText('Disabled', {exact:true}).count(), 1,
-            'A saved disabled Relay is displayed as Disabled');
+        assert.equal(await disabledFixture.getByText('Disabled for Targets', {exact:true}).count(), 1,
+            'A saved disabled Relay is labelled as routing-disabled, not disconnected');
         assert.ok(await disabledFixture.getByText('Test local Relay connection', {exact:false}).count(),
             'Local tunnel testing remains available without fake readiness state');
 

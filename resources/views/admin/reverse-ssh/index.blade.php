@@ -21,8 +21,6 @@
     <details class="target-help-details" @if($status === 'Degraded') open @endif>
         <summary>{{ __('View technical readiness and host diagnostics') }}</summary>
         <dl class="detail-list">
-        <dt>{{ __('Configuration') }}</dt><dd><strong>{{ __($configurationState) }}</strong></dd>
-        <dt>{{ __('Local host state') }}</dt><dd><strong>{{ __($status) }}</strong></dd>
         <dt>{{ __('Restricted key reader') }}</dt><dd>{{ $fileReady ? __('Available locally') : __('Missing or not writable by PHP') }}</dd>
         <dt>{{ __('Key policy publication') }}</dt><dd>{{ $policyReconciled ? __('Reconciled') : __('Pending or mismatched — Owner repair required') }}</dd>
         <dt>{{ __('Local SSH host verification') }}</dt><dd>{{ __($readiness['reason']) }}</dd>
@@ -109,7 +107,6 @@
     </div>
     @if ($gateway && ! $editing)
         <dl class="detail-list" aria-label="{{ __('Saved Gateway Reverse SSH settings') }}">
-            <dt>{{ __('Configuration') }}</dt><dd><strong>{{ __('Saved') }}</strong></dd>
             <dt>{{ __('Revision') }}</dt><dd>{{ $gateway->revision }}</dd>
             <dt>{{ __('Key publication') }}</dt><dd>{{ $gateway->publication_pending ? __('Pending reconciliation') : __('Reconciled') }}</dd>
             <dt>{{ __('Feature state') }}</dt><dd>{{ $gateway->enabled ? __('Enabled') : __('Disabled') }}</dd>
@@ -117,7 +114,6 @@
             <dt>{{ __('Control SSH port') }}</dt><dd><code>{{ $gateway->control_port }}</code></dd>
             <dt>{{ __('Restricted control username') }}</dt><dd><code>{{ $gateway->control_user }}</code></dd>
             <dt>{{ __('Pinned control SSHD fingerprint') }}</dt><dd><code>{{ $gatewayFingerprint ?? __('Unavailable — inspect saved key') }}</code></dd>
-            <dt>{{ __('Host readiness') }}</dt><dd>{{ __($status) }}</dd>
         </dl>
         <p class="field-help">{{ __('This saved configuration does not prove host readiness or any remote Target is connected. Review the local checks above, then enroll Targets under Targets → Add Target.') }}</p>
     @else
