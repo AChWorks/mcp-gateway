@@ -58,7 +58,7 @@
             autocomplete="off" spellcheck="false"
             aria-describedby="relay-{{ $prefix }}-key-help{{ $restore && $errors->has('control_host_key') ? ' relay-'.$prefix.'-key-error' : '' }}"
             @if($restore && $errors->has('control_host_key')) aria-invalid="true" @endif>{{ $draft('control_host_key', $editing ? $relay->control_host_key : '') }}</textarea>
-        <p class="field-help" id="relay-{{ $prefix }}-key-help">{{ __('Paste the independently checked PUBLIC SSH host key, not a login key or password. Private keys never belong in this form.') }}</p>
+        <p class="field-help" id="relay-{{ $prefix }}-key-help">{{ __('On the trusted Relay server console, run:') }} <code>sudo awk '{print $1, $2}' /etc/ssh/ssh_host_ed25519_key.pub</code>. {{ __('Paste that one-line PUBLIC server host key here and verify its SHA256 fingerprint independently. This is NOT the Gateway login key. Do not paste private keys, credentials, or a fingerprint into this field.') }}</p>
         @if($restore) @error('control_host_key')<p class="field-error" role="alert" id="relay-{{ $prefix }}-key-error">{{ $message }}</p>@enderror @endif
     </div>
 </div>

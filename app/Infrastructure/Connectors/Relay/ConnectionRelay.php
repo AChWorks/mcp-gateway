@@ -16,6 +16,9 @@ final class ConnectionRelay extends Model
         'control_user', 'control_host_key', 'local_socks_port',
     ];
 
+    /** @var list<string> */
+    protected $hidden = ['login_private_key_encrypted'];
+
     protected function casts(): array
     {
         return [

@@ -23,7 +23,7 @@
             <div class="section-heading">
                 <div>
                     <h3 id="relay-title-{{ $relay->id }}">{{ $relay->display_name }}</h3>
-                    <p class="field-help">{{ $relay->enabled ? __('Enabled') : __('Disabled') }}</p>
+                    <p class="relay-state" role="status"><span class="badge {{ $relay->enabled ? 'badge-success' : 'badge-neutral' }}">{{ $relay->enabled ? __('Enabled for Targets') : __('Disabled for Targets') }}</span> <span class="field-help">{{ __('This status is a routing setting, not proof that the local tunnel is running.') }}</span></p>
                 </div>
             </div>
             <dl class="summary-list summary-grid">
@@ -33,19 +33,41 @@
                 <div><dt>{{ __('Assigned Targets') }}</dt><dd>{{ $counts[$relay->id] ?? 0 }}</dd></div>
             </dl>
 
-            <details class="target-help-details">
-                <summary>{{ __('Set up or reconnect with OpenSSH') }}</summary>
-                <p class="field-help">{{ __('Run these commands on the Gateway host using the Unix account that will maintain this SSH tunnel. This uses ordinary OpenSSH, not a Gateway-managed firewall or installer.') }}</p>
-                <div class="field">
-                    <label for="relay-prepare-{{ $relay->id }}">{{ __('1. Prepare a local SSH key and pinned host key') }}</label>
-                    <textarea id="relay-prepare-{{ $relay->id }}" readonly spellcheck="false" rows="4">{{ $commands[$relay->id]['prepare'] }}</textarea>
-                    <p class="field-help">{{ __('Add only the printed PUBLIC key to the Relay server SSH account authorized_keys. Keep the private key on the Gateway host. Verify the Relay server host key independently before saving it here.') }}</p>
-                </div>
-                <div class="field">
-                    <label for="relay-connect-{{ $relay->id }}">{{ __('2. Connect Gateway to Relay') }}</label>
-                    <textarea id="relay-connect-{{ $relay->id }}" readonly spellcheck="false" rows="5">{{ $commands[$relay->id]['start'] }}</textarea>
-                    <p class="field-help">{{ __('The command stays in the foreground until disconnected. For continuous service, run it under your existing process supervisor; restart it there after a failure or configuration edit. Gateway does not start, stop or install system services.') }}</p>
-                </div>
+            <details class="target-help-details relay-setup-details" @if ($commands[$relay->id] === null) open @endif>
+                <summary>{{ __('Two-command Relay setup (no open terminal required)') }}</summary>
+                @if ($commands[$relay->id] !== null)
+                    <p class="field-help">{{ __('Run exactly one complete command on each indicated host. Start with the Relay host, then the Gateway host. The Gateway command installs a persistent OpenSSH service that survives terminal close and host reboot; private keys never appear in this page.') }}</p>
+                    <ol class="relay-setup-steps">
+                        <li>
+                            <div class="field">
+                                <label for="relay-peer-{{ $relay->id }}">{{ __('On the intermediary Relay server (SSH account setup)') }}</label>
+                                <textarea id="relay-peer-{{ $relay->id }}" readonly spellcheck="false" rows="7">{{ $commands[$relay->id]['relay'] }}</textarea>
+                                <div class="action-row"><button type="button" class="button button-secondary" data-copy-command="relay-peer-{{ $relay->id }}">{{ __('Copy Relay command') }}</button><output role="status" aria-live="polite" data-copy-status-for="relay-peer-{{ $relay->id }}"></output></div>
+                                <p class="field-help">{{ __('Sets up this Relay account’s authorized public login key. Use a trusted shell on the Relay server; the account and SSHD forwarding must already be available.') }}</p>
+                            </div>
+                        </li>
+                        <li>
+                            <div class="field">
+                                <label for="relay-connect-{{ $relay->id }}">{{ __('On the Gateway server (install and start persistent tunnel)') }}</label>
+                                <textarea id="relay-connect-{{ $relay->id }}" readonly spellcheck="false" rows="3">{{ $commands[$relay->id]['gateway'] }}</textarea>
+                                <div class="action-row"><button type="button" class="button button-secondary" data-copy-command="relay-connect-{{ $relay->id }}">{{ __('Copy Gateway command') }}</button><output role="status" aria-live="polite" data-copy-status-for="relay-connect-{{ $relay->id }}"></output></div>
+                                <p class="field-help">{{ __('Installs the exact registered Relay identity, pinned server key and automatic service startup. No manual SSH key copy, systemd editing or foreground tunnel is needed. If an old manual tunnel already occupies this port, stop that exact process before running this command.') }}</p>
+                            </div>
+                        </li>
+                    </ol>
+                    <p class="field-help">{{ __('After both commands succeed, Test local Relay connection and verify SSH/SFTP or WordPress on the actual Target. Enabled is a routing choice, not a live host health probe.') }}</p>
+                @else
+                    <p class="field-help">{{ __('This Relay was registered before the two-command setup. Prepare a new encrypted Gateway client key and matching public-key command. Your existing manual tunnel is not stopped by this action.') }}</p>
+                    <form method="post" class="form-stack" action="{{ route('admin.connection-relays.prepare', ['relay' => $relay->id]) }}">
+                        @csrf
+                        <input type="hidden" name="relay_revision" value="{{ $relay->lifecycle_revision }}">
+                        <div class="field">
+                            <label for="relay-prepare-password-{{ $relay->id }}">{{ __('Current Owner password') }}</label>
+                            <input id="relay-prepare-password-{{ $relay->id }}" type="password" name="current_password" data-admin-requires-intent autocomplete="current-password" maxlength="255" required>
+                        </div>
+                        <button class="button button-secondary" type="submit">{{ __('Prepare the two complete setup commands') }}</button>
+                    </form>
+                @endif
             </details>
 
             <form method="post" class="form-stack" action="{{ route('admin.connection-relays.test', ['relay' => $relay->id]) }}">
@@ -86,7 +108,7 @@
             @if (! $relay->enabled)
                 <details class="target-help-details">
                     <summary>{{ __('Edit Relay connection') }}</summary>
-                    <p class="field-help">{{ __('Change the host, SSH account, pinned host key or local port. Restart the OpenSSH command after saving. Assigned Targets keep this Relay and can be retested normally.') }}</p>
+                    <p class="field-help">{{ __('Change the host, SSH account, pinned host key or local port. After saving, rerun the two displayed host commands to reconcile the persistent SSH service. Assigned Targets stay selected and can be retested normally.') }}</p>
                     <form class="form-stack" method="post" action="{{ route('admin.connection-relays.update', ['relay' => $relay->id]) }}" autocomplete="off">
                         @csrf
                         @method('PUT')
@@ -135,6 +157,7 @@
 
 <section class="panel panel-wide" aria-labelledby="relay-add-heading">
     <h2 id="relay-add-heading">{{ __('Add Connection Relay') }}</h2>
+    <p class="field-help">{{ __('Before saving, obtain the PUBLIC SSH host key from the trusted console of the intermediary server and check its fingerprint. The form creates the Gateway client login identity separately. After saving, you will receive two complete host-specific setup commands; no private login key will be displayed.') }}</p>
     <form class="form-stack" method="post" action="{{ route('admin.connection-relays.store') }}" autocomplete="off">
         @csrf
         @include('admin.connection-relays.partials.fields', ['prefix' => 'add', 'editing' => false, 'relay' => null])

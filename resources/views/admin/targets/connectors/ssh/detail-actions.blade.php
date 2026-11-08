@@ -36,13 +36,14 @@
             </div>
         @endif
         @if ($managedReverse->state !== 'revoked' && $target->connection_state === \App\Domain\Targets\TargetConnectionState::Pending)
-            <h3>{{ __('Retry Pending Setup without deleting this Target') }}</h3>
+            <details class="target-help-details" @if ($errors->any()) open @endif>
+                <summary>{{ __('Retry pending Managed Reverse setup (advanced)') }}</summary>
             <p class="field-help">{{ __('An expired, rejected or ambiguous one-use claim can be reissued with the same Target ID. The old token and control key are fenced, and the old listener port is quarantined. Any old Target service must be stopped separately. The new install command is shown once.') }}</p>
             <form class="form-stack" method="post" action="{{ route('admin.reverse-ssh.targets.reissue', ['target' => $target->target_id]) }}">
                 @csrf
                 <div class="field">
                     <label for="reverse_reissue_id">{{ __('Type exact Target ID to reissue') }}: <code>{{ $target->target_id }}</code></label>
-                    <input id="reverse_reissue_id" name="confirm_target_id" required maxlength="64" autocomplete="off">
+                    <input id="reverse_reissue_id" name="confirm_target_id" required maxlength="64" autocomplete="off" data-admin-manual-entry data-admin-server-value="">
                 </div>
                 <div class="field">
                     <label for="reverse_reissue_password">{{ __('Current Owner password') }}</label>
@@ -50,6 +51,7 @@
                 </div>
                 <button class="button button-secondary" type="submit">{{ __('Reissue one-use install command') }}</button>
             </form>
+            </details>
         @endif
         @if ($managedReverse->state === 'revoked' && $managedReverse->publication_pending)
             <div class="alert alert-error" role="status">{{ __('Gateway credential and route were revoked; publication of the updated control key reader is still pending. Retry reconciliation below. Do not forget this Target until the reader is reconciled.') }}</div>
@@ -57,13 +59,14 @@
             <p class="field-help">{{ __('Managed Reverse SSH authorization was revoked and the host key policy reconciled. No further enrollment is permitted for this Target record.') }}</p>
         @endif
         @if ($managedReverse->state !== 'revoked' || $managedReverse->publication_pending)
-        <h3>{{ $managedReverse->state === 'revoked' ? __('Reconcile revoked host key') : __('Revoke managed Reverse SSH') }}</h3>
+        <details class="target-help-details" @if ($errors->any()) open @endif>
+            <summary>{{ $managedReverse->state === 'revoked' ? __('Reconcile revoked host key (advanced)') : __('Revoke managed Reverse SSH (destructive)') }}</summary>
         <p class="field-help">{{ __('Stops future Gateway operations, removes restricted control key authorization and local login credentials. Existing remote control sessions and the Target-side systemd service are NOT stopped by this request. Perform Target-side cleanup separately.') }}</p>
         <form class="form-stack" method="post" action="{{ route('admin.reverse-ssh.targets.revoke', ['target' => $target->target_id]) }}">
             @csrf
             <div class="field">
                 <label for="reverse_revoke_id">{{ __('Type exact Target ID to revoke') }}: <code>{{ $target->target_id }}</code></label>
-                <input id="reverse_revoke_id" name="confirm_target_id" required maxlength="64" autocomplete="off">
+                <input id="reverse_revoke_id" name="confirm_target_id" required maxlength="64" autocomplete="off" data-admin-manual-entry data-admin-server-value="">
             </div>
             <div class="field">
                 <label for="reverse_revoke_password">{{ __('Current Owner password') }}</label>
@@ -73,6 +76,7 @@
                 <button class="button button-danger" type="submit">{{ $managedReverse->state === 'revoked' ? __('Retry host key revocation') : __('Revoke managed Reverse SSH access') }}</button>
             </div>
         </form>
+        </details>
         @endif
     </div>
 @endif

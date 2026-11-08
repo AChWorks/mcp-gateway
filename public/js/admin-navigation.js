@@ -347,6 +347,27 @@
         destination.focus({ preventScroll: true });
     });
 
+    // Generated OpenSSH setup commands are public-key and host-local installer
+    // commands, never private credentials. Native textarea selection remains
+    // available when the clipboard API is blocked or JavaScript is disabled.
+    document.addEventListener('click', async event => {
+        const button = event.target.closest?.('[data-copy-command]');
+        if (!button || !event.isTrusted) return;
+        const id = button.dataset.copyCommand;
+        const control = document.getElementById(id);
+        if (!(control instanceof HTMLTextAreaElement) || !control.readOnly) return;
+        const status = Array.from(document.querySelectorAll('[data-copy-status-for]'))
+            .find(node => node.dataset.copyStatusFor === id);
+        try {
+            await navigator.clipboard.writeText(control.value);
+            if (status) status.textContent = 'Command copied.';
+        } catch {
+            control.focus();
+            control.select();
+            if (status) status.textContent = 'Select and copy this command manually.';
+        }
+    });
+
     document.addEventListener('input', markDirty);
     document.addEventListener('change', markDirty);
     document.addEventListener('focusin', event => {

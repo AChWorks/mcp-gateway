@@ -10,6 +10,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -30,11 +31,13 @@ final class AdminUiPresentationTest extends TestCase
             'control_host_key' => 'ssh-ed25519 synthetic-display-only',
             'local_socks_port' => 46901,
         ]);
+        app(ConnectionRelayOnboarding::class)->prepare($relay);
+        $relay->refresh();
         $this->actingAs($this->owner());
         $html = $this->get('/admin/settings/connection-relays')
             ->assertOk()
-            ->assertSee('Set up or reconnect with OpenSSH')
-            ->assertSee('Connect Gateway to Relay')
+            ->assertSee('Two-command Relay setup')
+            ->assertSee('gateway:relay-install')
             ->assertSee('Delete Relay')
             ->assertDontSee('nftables')
             ->assertDontSee('issue-readiness')
@@ -57,6 +60,26 @@ final class AdminUiPresentationTest extends TestCase
         $this->get('/admin/settings/connection-relays')->assertOk()
             ->assertDontSee('Type Relay ID to confirm')
             ->assertSee('Rename Relay');
+    }
+
+    public function test_collapsible_target_sections_and_shared_diagnostic_rows_are_semantic(): void
+    {
+        $targetSource = file_get_contents(resource_path('views/admin/targets/show.blade.php'));
+        $sshSource = file_get_contents(resource_path('views/admin/targets/connectors/ssh/detail-actions.blade.php'));
+        $reverseSource = file_get_contents(resource_path('views/admin/reverse-ssh/index.blade.php'));
+        $css = file_get_contents(public_path('css/admin.css'));
+        self::assertIsString($targetSource);
+        self::assertIsString($sshSource);
+        self::assertIsString($reverseSource);
+        self::assertIsString($css);
+        self::assertStringContainsString('<details class="panel panel-danger admin-collapsible-panel"', $targetSource);
+        self::assertStringContainsString('Registered SSH/connector details and diagnostic history', $targetSource);
+        self::assertStringContainsString('Retry pending Managed Reverse setup (advanced)', $sshSource);
+        self::assertStringContainsString('Revoke managed Reverse SSH (destructive)', $sshSource);
+        self::assertStringContainsString('data-admin-manual-entry data-admin-server-value=""', $sshSource);
+        self::assertStringContainsString('.detail-list {', $css);
+        self::assertStringContainsString('.admin-collapsible-panel > summary', $css);
+        self::assertSame(0, substr_count($reverseSource, "<dt>{{ __('Host readiness') }}</dt>"));
     }
 
     public function test_all_admin_owner_reauthentication_fields_share_the_explicit_intent_guard(): void
@@ -463,7 +486,8 @@ final class AdminUiPresentationTest extends TestCase
 
         $targetEditor = file_get_contents(resource_path('views/admin/targets/edit.blade.php'));
         self::assertIsString($targetEditor);
-        self::assertSame(3, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
+        self::assertSame(2, substr_count($targetEditor, '<section class="panel panel-wide target-enrollment"'));
+        self::assertStringContainsString('admin-collapsible-panel', $targetEditor);
         self::assertStringContainsString('aria-labelledby="target-route-heading"', $targetEditor);
     }
 

@@ -13,6 +13,8 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayHostService;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\SshDirect\SshDirectTargetAdapter;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
@@ -39,17 +41,26 @@ final class ConnectionRelayAdminTest extends TestCase
         ])->assertSessionHasNoErrors();
         $relay = ConnectionRelay::query()->sole();
         self::assertFalse($relay->enabled);
+        self::assertNotEmpty($relay->login_private_key_encrypted);
+        self::assertNotEmpty($relay->login_public_key);
+        self::assertStringStartsWith('-----BEGIN OPENSSH PRIVATE KEY-----',
+            app(ConnectionRelayOnboarding::class)->privateKey($relay));
 
         $this->get('/admin/settings/connection-relays')->assertOk()
-            ->assertSee('Set up or reconnect with OpenSSH')
-            ->assertSee('ssh-keygen')
-            ->assertSee('ssh -N -T -D 127.0.0.1:46081')
-            ->assertSee('StrictHostKeyChecking=yes')
-            ->assertSee('-l')
+            ->assertSee('Two-command Relay setup')
+            ->assertSee('On the intermediary Relay server')
+            ->assertSee('On the Gateway server')
+            ->assertSee('gateway:relay-install')
             ->assertSee('Test local Relay connection')
-            ->assertDontSee('issue-readiness')
+            ->assertDontSee('BEGIN OPENSSH PRIVATE KEY')
+            ->assertDontSee($relay->login_private_key_encrypted)
             ->assertDontSee('nftables')
             ->assertDontSee('setup-gateway');
+        $unit = app(ConnectionRelayHostService::class)->unitText($relay);
+        self::assertStringContainsString('ssh -N -T -D 127.0.0.1:46081', $unit);
+        self::assertStringContainsString('StrictHostKeyChecking=yes', $unit);
+        self::assertStringContainsString('Restart=always', $unit);
+        self::assertStringContainsString('WantedBy=multi-user.target', $unit);
 
         $this->post('/admin/settings/connection-relays/'.$relay->getKey().'/toggle', [
             'relay_revision' => 1, 'enable' => '1', 'current_password' => self::PASSWORD,
@@ -57,6 +68,33 @@ final class ConnectionRelayAdminTest extends TestCase
         self::assertTrue($relay->fresh()->enabled);
         $this->get('/admin/targets/create?connector_type=ssh_direct')
             ->assertOk()->assertSee('value="iran-1"', false);
+    }
+
+    public function test_legacy_relay_can_prepare_two_commands_only_with_owner_reauthentication(): void
+    {
+        $relay = $this->readyRelay();
+        self::assertNull($relay->login_public_key);
+        $owner = $this->user('owner');
+        $this->actingAs($owner);
+        $route = '/admin/settings/connection-relays/'.$relay->getKey().'/prepare';
+
+        $this->post($route, ['relay_revision' => 1, 'current_password' => 'wrong'])
+            ->assertSessionHasErrors('current_password');
+        self::assertNull($relay->fresh()->login_public_key);
+        $this->post($route, ['relay_revision' => 999, 'current_password' => self::PASSWORD])
+            ->assertSessionHasErrors('relay_revision');
+        self::assertNull($relay->fresh()->login_public_key);
+        $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertSee('Prepare the two complete setup commands');
+        $this->post($route, ['relay_revision' => 1, 'current_password' => self::PASSWORD])
+            ->assertSessionHasNoErrors();
+        self::assertNotNull($relay->fresh()->login_public_key);
+        $first = $relay->fresh()->login_public_key;
+        $this->post($route, ['relay_revision' => 1, 'current_password' => self::PASSWORD])
+            ->assertSessionHasNoErrors();
+        self::assertSame($first, $relay->fresh()->login_public_key, 'Repeat setup must not rotate the key.');
+        $this->get('/admin/settings/connection-relays')->assertOk()
+            ->assertSee('gateway:relay-install')->assertDontSee('BEGIN OPENSSH PRIVATE KEY');
     }
 
     public function test_disabled_relay_remains_selected_on_failure_and_never_rebinds_to_direct(): void

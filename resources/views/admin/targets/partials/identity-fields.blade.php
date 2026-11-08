@@ -26,7 +26,6 @@
             </div>
             @if(auth()->user()?->getRawOriginal('role') === 'owner')
                 <div class="target-subsection">
-                    <h3>{{ __('Connection route') }}</h3>
                     @include('admin.targets.partials.connection-relay-selector', [
                         'selectId' => 'connection_relay_id',
                         'initialRelayId' => old('connection_relay_id'),
