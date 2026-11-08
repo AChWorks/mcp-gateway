@@ -54,6 +54,8 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@action,"'.$url.'")]/input[@name="_method"][@value="DELETE"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//label[@for="relay-connect-'.$relay->getKey().'"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//textarea[@id="relay-connect-'.$relay->getKey().'"][@readonly])'));
+        self::assertSame(2, (int) $xpath->evaluate('count(//div[contains(@class,"field-control-actions")]/textarea[@readonly])'));
+        self::assertSame(2, (int) $xpath->evaluate('count(//div[contains(@class,"field-control-actions")]/div[contains(@class,"action-row")]/button[@data-copy-command])'));
         self::assertSame(0, (int) $xpath->evaluate('count(//input[@name="confirm_gateway_cleanup"])'));
 
         DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
@@ -82,6 +84,9 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringContainsString("old('managed_reverse_action') === 'revoke'", $sshSource);
         self::assertStringContainsString('data-admin-manual-entry data-admin-server-value=""', $sshSource);
         self::assertStringContainsString('.detail-list {', $css);
+        self::assertStringContainsString('.field-control-actions > .action-row {', $css);
+        self::assertStringContainsString('.target-help-details code.command-snippet {', $css);
+        self::assertStringNotContainsString('.target-help-details code {', $css);
         self::assertStringContainsString('.admin-collapsible-panel > summary', $css);
         self::assertSame(0, substr_count($reverseSource, "<dt>{{ __('Host readiness') }}</dt>"));
     }
@@ -127,6 +132,21 @@ final class AdminUiPresentationTest extends TestCase
         ));
         self::assertSame(1, (int) $xpath->evaluate(
             'count(//main/section[contains(@class,"panel")][@aria-labelledby="reverse-config"])',
+        ));
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//section[@aria-labelledby="reverse-status"]//ul[contains(@class,"diagnostic-command-list")][@role="list"][@aria-label="Host inspection commands"])',
+        ));
+        self::assertSame(2, (int) $xpath->evaluate(
+            'count(//section[@aria-labelledby="reverse-status"]//ul[@role="list"][@aria-label="Host inspection commands"]/li/code[contains(@class,"command-snippet")])',
+        ));
+        self::assertSame('sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager', trim((string) $xpath->evaluate(
+            'string((//ul[@role="list"][@aria-label="Host inspection commands"]/li/code)[1])',
+        )));
+        self::assertSame('sudo ss -lntp', trim((string) $xpath->evaluate(
+            'string((//ul[@role="list"][@aria-label="Host inspection commands"]/li/code)[2])',
+        )));
+        self::assertSame(0, (int) $xpath->evaluate(
+            'count(//section[@aria-labelledby="reverse-status"]//p/code)',
         ));
         self::assertSame(1, (int) $xpath->evaluate(
             'count(//form[@method="post"]//label[@for="reverse_owner_password"])',
