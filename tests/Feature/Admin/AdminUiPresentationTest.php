@@ -133,9 +133,18 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate(
             'count(//main/section[contains(@class,"panel")][@aria-labelledby="reverse-config"])',
         ));
-        self::assertSame(2, (int) $xpath->evaluate(
-            'count(//section[@aria-labelledby="reverse-status"]//ul[contains(@class,"diagnostic-command-list")]/li/code[contains(@class,"command-snippet")])',
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//section[@aria-labelledby="reverse-status"]//ul[contains(@class,"diagnostic-command-list")][@role="list"][@aria-label="Host inspection commands"])',
         ));
+        self::assertSame(2, (int) $xpath->evaluate(
+            'count(//section[@aria-labelledby="reverse-status"]//ul[@role="list"][@aria-label="Host inspection commands"]/li/code[contains(@class,"command-snippet")])',
+        ));
+        self::assertSame('sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager', trim((string) $xpath->evaluate(
+            'string((//ul[@role="list"][@aria-label="Host inspection commands"]/li/code)[1])',
+        )));
+        self::assertSame('sudo ss -lntp', trim((string) $xpath->evaluate(
+            'string((//ul[@role="list"][@aria-label="Host inspection commands"]/li/code)[2])',
+        )));
         self::assertSame(0, (int) $xpath->evaluate(
             'count(//section[@aria-labelledby="reverse-status"]//p/code)',
         ));

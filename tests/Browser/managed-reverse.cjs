@@ -27,6 +27,12 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
                 await page.getByRole('heading', { name: 'Gateway host readiness' }).waitFor();
                 const readinessDetails = page.locator('section[aria-labelledby="reverse-status"] details.target-help-details');
                 await readinessDetails.locator('summary').click();
+                const diagnosticList = readinessDetails.getByRole('list', { name: 'Host inspection commands' });
+                assert.equal(await diagnosticList.count(), 1, 'Technical readiness command list must have an accessible role');
+                assert.deepEqual((await diagnosticList.getByRole('listitem').allTextContents()).map(text => text.trim()), [
+                    'sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager',
+                    'sudo ss -lntp',
+                ]);
                 const readinessSpacing = await page.evaluate(() => {
                     const section = document.querySelector('section[aria-labelledby="reverse-status"]');
                     const intro = section.querySelector(':scope > p.field-help');
