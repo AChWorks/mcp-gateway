@@ -5,6 +5,7 @@ namespace Tests\Unit;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayHostService;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 use RuntimeException;
 
 final class ConnectionRelayHostServiceTest extends TestCase
@@ -28,6 +29,29 @@ final class ConnectionRelayHostServiceTest extends TestCase
         self::assertStringContainsString('Restart=always', $unit);
         self::assertStringContainsString('WantedBy=multi-user.target', $unit);
         self::assertStringNotContainsString('PRIVATE KEY', $unit);
+    }
+
+    public function test_socket_ownership_requires_the_actual_listening_process(): void
+    {
+        $socket = stream_socket_server('tcp://127.0.0.1:0', $errorNumber, $error);
+        self::assertIsResource($socket);
+        try {
+            $name = stream_socket_get_name($socket, false);
+            self::assertIsString($name);
+            $port = (int) substr($name, strrpos($name, ':') + 1);
+            $service = new ConnectionRelayHostService;
+            $inodes = (new ReflectionMethod($service, 'listeningInodes'))->invoke($service, $port);
+            self::assertNotEmpty($inodes, 'The real kernel socket inode must be discoverable.');
+            $owns = new ReflectionMethod($service, 'pidOwnsSockets');
+            self::assertTrue($owns->invoke($service, getmypid(), $inodes));
+            self::assertFalse($owns->invoke($service, 0, $inodes));
+            self::assertFalse($owns->invoke($service, getmypid(), ['9999999999999']));
+            $foreign = new ReflectionMethod($service, 'managedServiceOwnsSockets');
+            self::assertFalse($foreign->invoke($service, 'mcp-gateway-relay-not-installed.service', $inodes),
+                'A foreign SOCKS listener cannot be attributed to a missing managed unit.');
+        } finally {
+            fclose($socket);
+        }
     }
 
     public function test_untrusted_systemd_value_is_refused(): void

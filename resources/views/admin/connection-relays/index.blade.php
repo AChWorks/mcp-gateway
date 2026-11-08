@@ -33,7 +33,7 @@
                 <div><dt>{{ __('Assigned Targets') }}</dt><dd>{{ $counts[$relay->id] ?? 0 }}</dd></div>
             </dl>
 
-            <details class="target-help-details relay-setup-details" @if ($commands[$relay->id] === null) open @endif>
+            <details class="target-help-details relay-setup-details" @if ($commands[$relay->id] === null) open @endif >
                 <summary>{{ __('Two-command Relay setup (no open terminal required)') }}</summary>
                 @if ($commands[$relay->id] !== null)
                     <p class="field-help">{{ __('Run exactly one complete command on each indicated host. Start with the Relay host, then the Gateway host. The Gateway command installs a persistent OpenSSH service that survives terminal close and host reboot; private keys never appear in this page.') }}</p>
@@ -87,10 +87,12 @@
                 <button class="button {{ $relay->enabled ? 'button-secondary' : 'button-primary' }}" type="submit">{{ $relay->enabled ? __('Disable Relay') : __('Enable Relay for Targets') }}</button>
             </form>
 
-            <details class="target-help-details">
+            <details class="target-help-details" @if ($errors->any() && old('relay_action') === 'rename' && old('relay_action_id') === (string) $relay->getKey()) open @endif >
                 <summary>{{ __('Rename Relay') }}</summary>
                 <form method="post" class="form-stack" action="{{ route('admin.connection-relays.rename', ['relay' => $relay->id]) }}" autocomplete="off">
                     @csrf
+                    <input type="hidden" name="relay_action" value="rename">
+                    <input type="hidden" name="relay_action_id" value="{{ $relay->getKey() }}">
                     @method('PUT')
                     <input type="hidden" name="relay_revision" value="{{ $relay->lifecycle_revision }}">
                     <div class="field">
@@ -106,11 +108,13 @@
             </details>
 
             @if (! $relay->enabled)
-                <details class="target-help-details">
+                <details class="target-help-details" @if ($errors->any() && old('relay_action') === 'edit' && old('relay_action_id') === (string) $relay->getKey()) open @endif >
                     <summary>{{ __('Edit Relay connection') }}</summary>
                     <p class="field-help">{{ __('Change the host, SSH account, pinned host key or local port. After saving, rerun the two displayed host commands to reconcile the persistent SSH service. Assigned Targets stay selected and can be retested normally.') }}</p>
                     <form class="form-stack" method="post" action="{{ route('admin.connection-relays.update', ['relay' => $relay->id]) }}" autocomplete="off">
                         @csrf
+                    <input type="hidden" name="relay_action" value="edit">
+                    <input type="hidden" name="relay_action_id" value="{{ $relay->getKey() }}">
                         @method('PUT')
                         <input type="hidden" name="relay_revision" value="{{ $relay->lifecycle_revision }}">
                         <input type="hidden" name="edit_relay_id" value="{{ $relay->getKey() }}">
@@ -124,11 +128,13 @@
                 </details>
 
                 @if ((int) ($counts[$relay->id] ?? 0) === 0)
-                    <details class="target-help-details">
+                    <details class="target-help-details" @if ($errors->any() && old('relay_action') === 'delete' && old('relay_action_id') === (string) $relay->getKey()) open @endif >
                         <summary>{{ __('Delete Relay') }}</summary>
                         <p class="field-help">{{ __('This removes the Gateway record. Stop its old SSH tunnel separately if it is still running. No connection to the intermediary is required to delete the record.') }}</p>
                         <form method="post" class="form-stack" action="{{ route('admin.connection-relays.destroy', ['relay' => $relay->id]) }}" autocomplete="off">
                             @csrf
+                    <input type="hidden" name="relay_action" value="delete">
+                    <input type="hidden" name="relay_action_id" value="{{ $relay->getKey() }}">
                             @method('DELETE')
                             <input type="hidden" name="relay_revision" value="{{ $relay->lifecycle_revision }}">
                             <div class="field">

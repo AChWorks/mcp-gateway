@@ -83,7 +83,13 @@ final class ConnectionRelayOnboarding
             .'authorized="$home/.ssh/authorized_keys"'."\n"
             .'[ ! -L "$authorized" ] || { echo "Refusing symlinked authorized_keys" >&2; exit 1; }'."\n"
             .'touch "$authorized"; chown "$account" "$authorized"; chmod 600 "$authorized"'."\n"
-            .'grep -Fqx -- "$key" "$authorized" || printf "%s\\n" "$key" >> "$authorized"'."\n"
+            .'if ! grep -Fqx -- "$key" "$authorized"; then'."\n"
+            .'  if [ -s "$authorized" ]; then'."\n"
+            .'    last="$(tail -c 1 "$authorized" | od -An -tu1 | tr -d "[:space:]")"'."\n"
+            .'    [ "$last" = 10 ] || printf "\\n" >> "$authorized"'."\n"
+            .'  fi'."\n"
+            .'  printf "%s\\n" "$key" >> "$authorized"'."\n"
+            .'fi'."\n"
             .'echo "Relay login key installed. SSHD must allow TCP forwarding for this account."';
 
         return [

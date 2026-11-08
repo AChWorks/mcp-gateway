@@ -1,7 +1,7 @@
 @if ($sshHasCredential)
     @canany(['ssh.file.read', 'ssh.file.write'], $target)
-        <details class="panel panel-wide admin-collapsible-panel" @if ($errors->has('file_exchange') || $errors->has('local_file') || $errors->has('destination') || $errors->has('private_staging_dir') || $errors->has('path')) open @endif>
-            <summary id="ssh-browser-file-title">{{ __('SSH file upload and download (advanced)') }}</summary>
+        <details class="panel panel-wide admin-collapsible-panel" @if ($errors->has('file_exchange') || $errors->has('local_file') || $errors->has('destination') || $errors->has('private_staging_dir') || $errors->has('path')) open @endif >
+            <summary><h2 id="ssh-browser-file-title" class="admin-disclosure-heading">{{ __('SSH file upload and download (advanced)') }}</h2></summary>
             <p class="field-help">{{ __('Authenticated browser file handoff') }}</p>
             @if ($target->operations_paused)
                 <p class="muted">{{ __('SSH browser upload and download are unavailable while this Target is paused.') }}</p>

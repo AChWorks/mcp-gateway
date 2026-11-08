@@ -2125,6 +2125,13 @@ input[type="file"]:focus-visible {
     white-space: normal;
     overflow-wrap: anywhere;
 }
+/* Keep heading landmarks inside native summary without duplicating copy. */
+.admin-disclosure-heading {
+    display: inline;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+}
 /* Native details let long pages stay navigable without hiding key status.
    Required recovery/error state opens server-side without JavaScript. */
 .admin-collapsible-panel > summary {

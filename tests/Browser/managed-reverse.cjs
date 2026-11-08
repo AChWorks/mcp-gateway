@@ -32,8 +32,14 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
                 assert.equal(await page.locator('input[name="current_password"]').count(), 1);
                 assert.equal(await page.locator('form[action$="/settings/reverse-ssh/repair"]').count(), 0);
                 await page.goto(base + '/__browser__/managed-reverse-pending');
-                await page.getByRole('heading', { name: 'Retry Pending Setup without deleting this Target' }).waitFor();
+                await page.getByRole('heading', { name: 'Retry pending Managed Reverse setup (advanced)' }).waitFor();
                 const reissue = page.locator('form[action$="/reverse-ssh/reissue"]');
+                const recovery = page.locator('details.target-help-details').filter({has: reissue});
+                assert.equal(await recovery.evaluate(el => el.open), false,
+                    'Recovery starts collapsed without hiding primary connection state');
+                await recovery.locator('summary').click();
+                assert.equal(await reissue.isVisible(), true,
+                    'Native disclosure reveals the actual recovery form');
                 assert.equal(await reissue.count(), 1);
                 assert.equal(await reissue.locator('input[name="confirm_target_id"]').count(), 1);
                 assert.equal(await reissue.locator('input[name="current_password"]').count(), 1);
@@ -72,10 +78,20 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
         await page.goto(base + '/__browser__/experience/owner');
         await page.goto(base + '/__browser__/managed-reverse-pending');
         const form = page.locator('form[action$="/reverse-ssh/reissue"]');
+        const recovery = page.locator('details.target-help-details').filter({has: form});
+        assert.equal(await recovery.evaluate(el => el.open), false);
+        // Native summary must work even when JavaScript is entirely disabled.
+        await recovery.locator('summary').focus();
+        await page.keyboard.press('Enter');
+        assert.equal(await recovery.evaluate(el => el.open), true);
+        assert.equal(await form.isVisible(), true);
         await form.locator('[name="confirm_target_id"]').fill('ui-managed-pending');
         await form.locator('[name="current_password"]').fill('wrong-password');
         await form.getByRole('button', { name: 'Reissue one-use install command' }).click();
         await page.getByRole('alert').filter({ hasText: 'Managed Reverse SSH action was not completed' }).waitFor();
+        assert.equal(await recovery.evaluate(el => el.open), true,
+            'Failed no-JS recovery must remain expanded with its validation feedback visible');
+        assert.equal(await form.isVisible(), true);
         assert.equal(await page.getByRole('button', { name: 'Reissue one-use install command' }).count(), 1,
             'Wrong password must not remove the Owner recovery path.');
         await page.goto(base + '/__browser__/experience/viewer');

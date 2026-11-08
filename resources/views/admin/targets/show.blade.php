@@ -72,7 +72,7 @@
 
 <section class="panel panel-wide" aria-labelledby="target-info-title">
     <h2 id="target-info-title">{{ __('Target connection and identity') }}</h2>
-    <details class="target-help-details" @if ($errors->any()) open @endif>
+    <details class="target-help-details">
         <summary>{{ __('Registered SSH/connector details and diagnostic history') }}</summary>
         <dl class="detail-list">
         <dt>{{ __('Target ID') }}</dt><dd><code>{{ $target->target_id }}</code></dd>
@@ -103,12 +103,13 @@
 @endif
 
 @can('targets.remove', $target)
-<details class="panel panel-danger admin-collapsible-panel" @if ($errors->any()) open @endif>
-    <summary id="target-remove-title">{{ __('Remove Target — advanced / destructive') }}</summary>
+<details class="panel panel-danger admin-collapsible-panel" @if ($errors->any() && in_array(old('target_remove_action'), ['remove', 'forget'], true)) open @endif >
+    <summary><h2 id="target-remove-title" class="admin-disclosure-heading">{{ __('Remove Target — advanced / destructive') }}</h2></summary>
     @if ($canRemoveSafely)
         <p class="muted" id="remove-target-help">{{ __('Removing a Target permanently removes its scoped assignments and local connector metadata. Disconnect its connector first. A later Target with the same ID cannot inherit prior permissions.') }}</p>
         <form method="post" action="{{ route('admin.targets.destroy', ['target' => $target->target_id]) }}" class="form-stack" aria-describedby="remove-target-help">
             @csrf
+            <input type="hidden" name="target_remove_action" value="remove">
             @method('DELETE')
             <label>
                 <input type="checkbox" name="confirm_remove" value="yes" required id="remove_target_confirmation" @error('confirm_remove') aria-invalid="true" @enderror aria-describedby="remove-target-help{{ $errors->has('confirm_remove') ? ' remove_target_confirmation-error' : '' }}">
@@ -128,6 +129,7 @@
                     <p class="field-help" id="forget-target-help">{{ __('This permanently deletes the Target, encrypted credentials, pending OAuth/refresh/revocation state and Target-specific access assignments from this Gateway. No remote connection or revocation is attempted. Existing remote OAuth authorization or Unix-account access may remain valid, and remote in-flight operations cannot be undone. Revoke access separately at the remote service when possible.') }}</p>
                     <form method="post" action="{{ route('admin.targets.forget', ['target' => $target->target_id]) }}" class="form-stack" aria-describedby="forget-target-help">
                         @csrf
+                        <input type="hidden" name="target_remove_action" value="forget">
                         @method('DELETE')
                         <div class="field">
                             <label for="forget_target_id">{{ __('Type the exact Target ID to permanently remove locally:') }} <code>{{ $target->target_id }}</code></label>

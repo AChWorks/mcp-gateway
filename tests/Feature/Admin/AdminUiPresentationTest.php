@@ -74,8 +74,12 @@ final class AdminUiPresentationTest extends TestCase
         self::assertIsString($css);
         self::assertStringContainsString('<details class="panel panel-danger admin-collapsible-panel"', $targetSource);
         self::assertStringContainsString('Registered SSH/connector details and diagnostic history', $targetSource);
+        self::assertStringContainsString('<summary><h2 id="target-remove-title" class="admin-disclosure-heading">', $targetSource);
+        self::assertStringContainsString('<summary><h3 class="admin-disclosure-heading">', $sshSource);
         self::assertStringContainsString('Retry pending Managed Reverse setup (advanced)', $sshSource);
         self::assertStringContainsString('Revoke managed Reverse SSH (destructive)', $sshSource);
+        self::assertStringContainsString("old('managed_reverse_action') === 'reissue'", $sshSource);
+        self::assertStringContainsString("old('managed_reverse_action') === 'revoke'", $sshSource);
         self::assertStringContainsString('data-admin-manual-entry data-admin-server-value=""', $sshSource);
         self::assertStringContainsString('.detail-list {', $css);
         self::assertStringContainsString('.admin-collapsible-panel > summary', $css);

@@ -71,8 +71,14 @@ final class ConnectionRelayHostService
         if ($existing !== null && ! str_starts_with($existing, '# Managed by MCP Gateway Relay '.$id."\n")) {
             throw new RuntimeException('An unrelated service already occupies the Relay unit name; no changes made.');
         }
-        if ($existing === null && $this->portResponds((int) $relay->local_socks_port)) {
-            throw new RuntimeException('Local SOCKS port is already in use. Stop the old foreground tunnel first; nothing was changed.');
+        // A pre-existing unit file does not prove it owns a live listener:
+        // an old foreground SSH -D or unrelated SOCKS server may have taken
+        // over the port while that unit was stopped.
+        $listeners = $this->listeningInodes((int) $relay->local_socks_port);
+        if ($listeners !== [] && ($existing === null
+            || ! $this->managedServiceOwnsSockets($unitName, $listeners))) {
+            throw new RuntimeException('Local SOCKS port is occupied by a process other than the registered '
+                .$unitName.'. Identify and stop only that conflicting process, then retry; no files or services were changed.');
         }
         if (! is_executable('/usr/bin/ssh')) {
             throw new RuntimeException('OpenSSH client not found at /usr/bin/ssh.');
@@ -93,9 +99,11 @@ final class ConnectionRelayHostService
         if ($existing !== null && $changed) {
             $this->run(['systemctl', 'restart', $unitName]);
         }
-        if (! $this->waitForSocks((int) $relay->local_socks_port)) {
-            throw new RuntimeException('Relay service was installed but SOCKS5 is not responding. Check: systemctl status '
-                .$unitName.' and journalctl -u '.$unitName.' --no-pager.');
+        if (! $this->waitForManagedSocks($unitName, (int) $relay->local_socks_port)) {
+            throw new RuntimeException('Relay service was installed, but its active OpenSSH process was not verified '
+                .'as the owner of the expected SOCKS5 listener. Check: systemctl status '
+                .$unitName.' and journalctl -u '.$unitName.' --no-pager. '
+                .'If another process occupies this port, stop that exact process before retrying.');
         }
     }
 
@@ -147,33 +155,140 @@ final class ConnectionRelayHostService
         }
     }
 
-    private function portResponds(int $port): bool
+    /**
+     * Return actual kernel listening socket inodes on the exact IPv4 loopback
+     * port, including wildcard binds that conflict with 127.0.0.1. This is
+     * kernel-owned evidence, not an arbitrary SOCKS greeting or a stale unit.
+     *
+     * @return list<string>
+     */
+    private function listeningInodes(int $port): array
     {
-        $socket = @stream_socket_client('tcp://127.0.0.1:'.$port, $errno, $error, 0.5);
-        if (! is_resource($socket)) {
+        $lines = @file('/proc/net/tcp', FILE_IGNORE_NEW_LINES);
+        if (! is_array($lines)) {
+            throw new RuntimeException('Cannot inspect Linux TCP listeners in /proc/net/tcp.');
+        }
+        $inodes = [];
+        foreach (array_slice($lines, 1) as $line) {
+            $parts = preg_split('/\s+/', trim($line));
+            if (! is_array($parts) || count($parts) < 10 || $parts[3] !== '0A') {
+                continue;
+            }
+            $address = explode(':', $parts[1], 2);
+            if (count($address) !== 2 || strtoupper($address[1]) !== sprintf('%04X', $port)
+                || ! in_array(strtoupper($address[0]), ['0100007F', '00000000'], true)) {
+                continue;
+            }
+            $inodes[] = $parts[9];
+        }
+
+        return array_values(array_unique($inodes));
+    }
+
+    /**
+     * Verify that the actual active systemd MainPID (our native SSH binary)
+     * holds every local listener under examination. /proc/PID/net/tcp alone
+     * is not sufficient: it enumerates a network namespace, not PID ownership.
+     *
+     * @param  list<string>  $inodes
+     */
+    private function managedServiceOwnsSockets(string $unitName, array $inodes): bool
+    {
+        if ($inodes === []) {
             return false;
         }
-        fclose($socket);
+        $pid = $this->managedSshMainPid($unitName);
+        if ($pid === null) {
+            return false;
+        }
+
+        return $this->pidOwnsSockets($pid, $inodes);
+    }
+
+    private function managedSshMainPid(string $unitName): ?int
+    {
+        $process = new Process(['systemctl', 'show', '--no-pager',
+            '--property=ActiveState,MainPID', $unitName]);
+        $process->setTimeout(5);
+        $process->run();
+        if (! $process->isSuccessful()) {
+            return null;
+        }
+        $output = $process->getOutput();
+        if (preg_match('/^ActiveState=active$/m', $output) !== 1
+            || preg_match('/^MainPID=([1-9][0-9]*)$/m', $output, $matches) !== 1) {
+            return null;
+        }
+        $pid = (int) $matches[1];
+        $exe = @readlink('/proc/'.$pid.'/exe');
+        $expected = realpath('/usr/bin/ssh');
+        if ($expected === false || $exe !== $expected) {
+            return null;
+        }
+
+        return $pid;
+    }
+
+    /**
+     * A true result requires the process itself to own the kernel socket
+     * inodes, not merely to share their network namespace.
+     *
+     * @param  list<string>  $inodes
+     */
+    private function pidOwnsSockets(int $pid, array $inodes): bool
+    {
+        if ($pid <= 0 || $inodes === []) {
+            return false;
+        }
+        $fdPaths = glob('/proc/'.$pid.'/fd/*');
+        if (! is_array($fdPaths)) {
+            return false;
+        }
+        $owned = [];
+        foreach ($fdPaths as $path) {
+            // A file descriptor can close between glob() and readlink().
+            if (! is_link($path)) {
+                continue;
+            }
+            $socket = @readlink($path);
+            if ($socket !== false && preg_match('/^socket:\[([0-9]+)\]$/D', $socket, $match) === 1) {
+                $owned[$match[1]] = true;
+            }
+        }
+        foreach ($inodes as $inode) {
+            if (! isset($owned[$inode])) {
+                return false;
+            }
+        }
 
         return true;
     }
 
-    private function waitForSocks(int $port): bool
+    private function waitForManagedSocks(string $unitName, int $port): bool
     {
         for ($attempt = 0; $attempt < 10; $attempt++) {
-            $socket = @stream_socket_client('tcp://127.0.0.1:'.$port, $errno, $error, 0.5);
-            if (is_resource($socket)) {
-                stream_set_timeout($socket, 1);
-                $written = fwrite($socket, "\x05\x01\x00");
-                $reply = $written === 3 ? fread($socket, 2) : false;
-                fclose($socket);
-                if ($reply === "\x05\x00") {
-                    return true;
-                }
+            $listeners = $this->listeningInodes($port);
+            if ($listeners !== [] && $this->managedServiceOwnsSockets($unitName, $listeners)
+                && $this->socksResponds($port)) {
+                return true;
             }
             usleep(500000);
         }
 
         return false;
+    }
+
+    private function socksResponds(int $port): bool
+    {
+        $socket = @stream_socket_client('tcp://127.0.0.1:'.$port, $errno, $error, 0.5);
+        if (! is_resource($socket)) {
+            return false;
+        }
+        stream_set_timeout($socket, 1);
+        $written = fwrite($socket, "\x05\x01\x00");
+        $reply = $written === 3 ? fread($socket, 2) : false;
+        fclose($socket);
+
+        return $reply === "\x05\x00";
     }
 }

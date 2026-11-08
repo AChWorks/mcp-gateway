@@ -334,6 +334,15 @@ async function navigation(browser) {
         assert.equal(await page.locator('#ssh_password').isDisabled(), true);
 
         await page.goto(base + '/admin/targets/ui-ssh-connected/edit');
+        const advancedConnector = page.locator('details.admin-collapsible-panel')
+            .filter({has: page.locator('#ssh_edit_auth_method')});
+        assert.equal(await advancedConnector.evaluate(el => el.open), false,
+            'SSH credential rotation starts intentionally collapsed');
+        assert.equal(await advancedConnector.getByRole('heading',
+            {name: 'Advanced connector connection settings'}).count(), 1,
+            'Collapsible connection settings retain a navigable heading');
+        await advancedConnector.locator('summary').click();
+        assert.equal(await page.locator('#ssh_edit_auth_method').isVisible(), true);
         await page.locator('#ssh_edit_auth_method').selectOption('private_key');
         assert.equal(await page.locator('#ssh_edit_password').isDisabled(), true);
         assert.equal(await page.locator('#ssh_edit_private_key').isDisabled(), false);
@@ -1452,8 +1461,8 @@ async function connectionRelays(browser) {
         await page.goto(base + '/admin/settings/connection-relays');
         const disabledFixture = page.locator('article.target-subsection')
             .filter({hasText:'Unusable saved intermediary'});
-        assert.equal(await disabledFixture.getByText('Disabled', {exact:true}).count(), 1,
-            'A saved disabled Relay is displayed as Disabled');
+        assert.equal(await disabledFixture.getByText('Disabled for Targets', {exact:true}).count(), 1,
+            'A saved disabled Relay is labelled as routing-disabled, not disconnected');
         assert.ok(await disabledFixture.getByText('Test local Relay connection', {exact:false}).count(),
             'Local tunnel testing remains available without fake readiness state');
 
