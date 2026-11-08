@@ -1,6 +1,6 @@
 # Connection Relays — two complete host commands
 
-**Version scope:** These steps are implemented in **v2.6.1**, not **v2.6.0**. Use the generated installer only after the official v2.6.1 Release is verified and installed on the Gateway. The earlier release cannot execute these new host commands. See [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284) for installed-host acceptance.
+**Version scope:** These steps are implemented in **v2.6.1 and later**, not **v2.6.0**. Use the generated installer only after a verified official v2.6.1-or-later Release is installed on the Gateway. v2.6.2 improves Admin layout and accessible command presentation without changing the two commands, Relay routing or native systemd behavior. The older v2.6.0 release cannot execute the new host commands. See [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284) for installed-host acceptance.
 
 ## How Relay routing works
 
