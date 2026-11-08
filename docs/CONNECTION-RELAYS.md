@@ -1,6 +1,6 @@
 # Connection Relays — two complete host commands
 
-**Version scope:** This describes the candidate after v2.6.0, not the currently published release. Do not assume these instructions work on an installed Gateway until the source has been independently reviewed, released and installed. See [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284).
+**Version scope:** These steps are implemented in **v2.6.1**, not **v2.6.0**. Use the generated installer only after the official v2.6.1 Release is verified and installed on the Gateway. The earlier release cannot execute these new host commands. See [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284) for installed-host acceptance.
 
 ## How Relay routing works
 
@@ -55,6 +55,6 @@ On the **intermediary Relay host**, inspect the existing Unix account's `authori
 
 A pinned **Relay SSHD host key** authenticates the intermediary. The real SSH Target key or WordPress TLS/OAuth remains independently validated after the SOCKS5 hop. Binding to 127.0.0.1 does not isolate other local Unix users on a shared host; use existing OS isolation if the environment requires it. Preserve encrypted keys and APP_KEY together for recovery. Never send private login credentials through the web form, terminal chat, or logs.
 
-**Still to verify for this candidate:** real two-command installation on isolated hosts, terminal closure and reboot recovery, SSH/SFTP/WordPress authenticated Target operations, no-Direct fallback, safe offline deletion, and independently reviewed exact-candidate release. A source test or Release does not prove a Production deployment.
+**Installed-host acceptance still required:** physical separate-host two-command installation, terminal closure and real reboot recovery; authenticated registered SSH/SFTP/retained Jobs; WordPress OAuth consent/token/MCP; real no-Direct-fallback interruption/recovery and offline Owner UI deletion. Disposable GitHub CI already exercised native systemd and OpenSSH, but its fixtures do not prove the real installed NL/IR environment. A source test or Release alone never proves Production deployment.
 
 [Issue #284: Connection Relay acceptance](https://github.com/AChWorks/mcp-gateway/issues/284) · [Issue #303: Admin UI issues](https://github.com/AChWorks/mcp-gateway/issues/303)
