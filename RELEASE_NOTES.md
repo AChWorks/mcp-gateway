@@ -1,3 +1,17 @@
+# MCP Gateway v2.6.2
+
+**Stable v2.6.2 — relationship-based Admin spacing and accessible technical diagnostics.**
+
+This release packages the independently HIGH_ASSURANCE-approved [Admin presentation corrections in PR #306](https://github.com/AChWorks/mcp-gateway/pull/306), merged after the published v2.6.1. It does **not** change Connection Relay routing, authentication, SSH transports, target binding, database schema, environment settings or host firewall behavior. It does not install itself on an operator host.
+
+- **Consistent spacing by purpose:** shared Admin CSS tokens distinguish independent panels, subordinate sections and tightly related field/control actions. Relay setup presents each generated textarea immediately with its corresponding Copy button, while explanation text and the two distinct host steps remain visually separate, including mobile/RTL layouts.
+- **Clearer diagnostics:** Reverse SSH host inspection commands are separate LTR code snippets in a labeled semantic list. The explicit `role="list"` preserves Safari/VoiceOver list semantics despite visual `list-style: none`; command strings and existing operator steps remain unchanged. Only actual command snippets are block-level; inline help code stays inline.
+- **Source acceptance:** [PR #306 exact-candidate CI](https://github.com/AChWorks/mcp-gateway/actions/runs/42531715452), [real Chromium Admin suite](https://github.com/AChWorks/mcp-gateway/actions/runs/42531715430), and [commit attribution](https://github.com/AChWorks/mcp-gateway/actions/runs/42531715417) passed. Independent delta re-review resolved the previous required accessibility finding. Chromium and DOM checks do **not** prove direct native Safari/VoiceOver execution. Latest post-merge checks are recorded on the [merged PR](https://github.com/AChWorks/mcp-gateway/pull/306).
+- **Direct Browser Update window:** this release supports upgrade from the three preceding officially published stable versions **v2.5.8, v2.6.0 and v2.6.1**. All three official baseline ZIPs, checksum integrity, updater behavior and failed-update backup recovery must pass the release workflow. Older direct updates are unsupported; follow a verified intermediate upgrade or recovery plan.
+- **Operational boundary:** v2.6.1 introduced the existing persistent two-command Connection Relay service; v2.6.2 changes only Admin presentation of those commands, not their content or systemd setup. The [real NL/IR field acceptance in Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284) remains open for SSH Jobs, WordPress OAuth/MCP through registered Relay Targets, loss/recovery, offline deletion, reboot/firewall persistence and stale GeoIP-source correction. A GitHub Release never upgrades Production automatically or authorizes additional privileged host changes.
+
+Operator references: [README](README.md), [Admin UI quality](docs/ADMIN-UI-QUALITY.md), [Connection Relays](docs/CONNECTION-RELAYS.md), [Deployment/Update](docs/DEPLOYMENT.md), [Issue #284](https://github.com/AChWorks/mcp-gateway/issues/284).
+
 # MCP Gateway v2.6.1
 
 **Stable v2.6.1 — persistent two-command Relays and clearer Admin setup.**
