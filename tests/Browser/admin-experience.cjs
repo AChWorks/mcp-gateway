@@ -1432,6 +1432,58 @@ async function connectionRelays(browser) {
         assert.ok(generatedCommands[1].includes('gateway:relay-install'));
         assert.ok(generatedCommands.every(value => !value.includes('BEGIN OPENSSH PRIVATE KEY')));
         assert.equal(await setup.locator('[data-copy-command]').count(), 2);
+        // Related textareas and Copy actions form one compact group, unlike
+        // explanatory copy or independent host setup steps.
+        for (const width of [360, 768, 1440]) {
+            await page.setViewportSize({width, height: 920});
+            for (const dir of ['ltr', 'rtl']) {
+                await page.evaluate(value => { document.documentElement.dir = value; }, dir);
+                const spacing = await setup.evaluate(node => {
+                    const entries = [...node.querySelectorAll('.relay-setup-steps > li')];
+                    const rect = element => element.getBoundingClientRect();
+                    return {
+                        overflow: document.documentElement.scrollWidth - innerWidth,
+                        stepGap: rect(entries[1]).top - rect(entries[0]).bottom,
+                        groups: entries.map(entry => {
+                            const group = entry.querySelector('.field-control-actions');
+                            const textarea = group.querySelector('textarea');
+                            const action = group.querySelector('.action-row');
+                            const help = group.nextElementSibling;
+                            return {
+                                controlGap: rect(action).top - rect(textarea).bottom,
+                                helpGap: rect(help).top - rect(action).bottom,
+                                actionMargin: getComputedStyle(action).marginTop,
+                                inBounds: rect(action).left >= rect(group).left - 1 &&
+                                    rect(action).right <= rect(group).right + 1,
+                            };
+                        }),
+                    };
+                });
+                assert.ok(spacing.overflow <= 1, 'Relay command viewport overflow ' + JSON.stringify({width, dir, spacing}));
+                assert.ok(spacing.stepGap >= 16, 'Separate host steps are too close ' + JSON.stringify({width, dir, spacing}));
+                assert.equal(spacing.groups.length, 2);
+                for (const group of spacing.groups) {
+                    assert.ok(group.controlGap >= 3 && group.controlGap <= 10,
+                        'Copy action is detached from textarea ' + JSON.stringify({width, dir, group}));
+                    assert.ok(group.helpGap >= group.controlGap + 2,
+                        'Explanation must be more distinct than attached Copy ' + JSON.stringify({width, dir, group}));
+                    assert.equal(group.actionMargin, '0px');
+                    assert.ok(group.inBounds, 'Copy action escaped command group');
+                }
+            }
+        }
+        await page.evaluate(() => {
+            document.documentElement.dir = 'ltr';
+            window.__fixtureCopiedRelayCommand = null;
+            Object.defineProperty(navigator, 'clipboard', {
+                configurable: true,
+                value: {writeText: async value => { window.__fixtureCopiedRelayCommand = value; }},
+            });
+        });
+        await setup.locator('button[data-copy-command]').first().click();
+        await page.waitForFunction(() => window.__fixtureCopiedRelayCommand !== null);
+        assert.equal(await page.evaluate(() => window.__fixtureCopiedRelayCommand), generatedCommands[0],
+            'Copy Relay must copy exactly the adjacent command after its layout grouping changes');
         assert.equal(await generated.getByText('Disabled for Targets', {exact:true}).count(), 1);
         const add = page.locator('form[action$="/settings/connection-relays"]');
         const ownerPassword = add.locator('input[name="current_password"]');

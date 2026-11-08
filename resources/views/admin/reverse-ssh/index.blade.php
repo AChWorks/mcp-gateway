@@ -30,7 +30,12 @@
         <dt>{{ __('Activated enrollments') }}</dt><dd>{{ $active }}</dd>
         </dl>
         <p class="field-help">{{ __('Local readiness checks a bounded SSH handshake with the pinned control host key, but does not prove systemd supervision, firewall policy, PHP/host namespace equivalence or remote Target egress.') }}</p>
-        <p class="field-help">{{ __('With separately approved host access, inspect') }} <code>sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager</code> {{ __('and') }} <code>sudo ss -lntp</code>. {{ __('Run the verified release installer with --preflight and actual --app, --php-user and dedicated --port before privileged setup.') }}</p>
+        <p class="field-help">{{ __('With separately approved host access, inspect these host checks:') }}</p>
+        <ul class="diagnostic-command-list" aria-label="{{ __('Host inspection commands') }}">
+            <li><code class="command-snippet" dir="ltr">sudo systemctl status mcp-gateway-reverse-sshd.service --no-pager</code></li>
+            <li><code class="command-snippet" dir="ltr">sudo ss -lntp</code></li>
+        </ul>
+        <p class="field-help">{{ __('Run the verified release installer with --preflight and actual --app, --php-user and dedicated --port before privileged setup.') }}</p>
     </details>
     @if ($errors->any() && (! $editing || session('reverse_ssh_operation')))
         <div class="alert alert-error" role="alert" data-admin-feedback tabindex="-1" autofocus>

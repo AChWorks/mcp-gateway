@@ -41,16 +41,20 @@
                         <li>
                             <div class="field">
                                 <label for="relay-peer-{{ $relay->id }}">{{ __('On the intermediary Relay server (SSH account setup)') }}</label>
-                                <textarea id="relay-peer-{{ $relay->id }}" readonly spellcheck="false" rows="7">{{ $commands[$relay->id]['relay'] }}</textarea>
-                                <div class="action-row"><button type="button" class="button button-secondary" data-copy-command="relay-peer-{{ $relay->id }}">{{ __('Copy Relay command') }}</button><output role="status" aria-live="polite" data-copy-status-for="relay-peer-{{ $relay->id }}"></output></div>
+                                <div class="field-control-actions">
+                                    <textarea id="relay-peer-{{ $relay->id }}" readonly spellcheck="false" dir="ltr" rows="7">{{ $commands[$relay->id]['relay'] }}</textarea>
+                                    <div class="action-row"><button type="button" class="button button-secondary" data-copy-command="relay-peer-{{ $relay->id }}">{{ __('Copy Relay command') }}</button><output role="status" aria-live="polite" data-copy-status-for="relay-peer-{{ $relay->id }}"></output></div>
+                                </div>
                                 <p class="field-help">{{ __('Sets up this Relay account’s authorized public login key. Use a trusted shell on the Relay server; the account and SSHD forwarding must already be available.') }}</p>
                             </div>
                         </li>
                         <li>
                             <div class="field">
                                 <label for="relay-connect-{{ $relay->id }}">{{ __('On the Gateway server (install and start persistent tunnel)') }}</label>
-                                <textarea id="relay-connect-{{ $relay->id }}" readonly spellcheck="false" rows="3">{{ $commands[$relay->id]['gateway'] }}</textarea>
-                                <div class="action-row"><button type="button" class="button button-secondary" data-copy-command="relay-connect-{{ $relay->id }}">{{ __('Copy Gateway command') }}</button><output role="status" aria-live="polite" data-copy-status-for="relay-connect-{{ $relay->id }}"></output></div>
+                                <div class="field-control-actions">
+                                    <textarea id="relay-connect-{{ $relay->id }}" readonly spellcheck="false" dir="ltr" rows="3">{{ $commands[$relay->id]['gateway'] }}</textarea>
+                                    <div class="action-row"><button type="button" class="button button-secondary" data-copy-command="relay-connect-{{ $relay->id }}">{{ __('Copy Gateway command') }}</button><output role="status" aria-live="polite" data-copy-status-for="relay-connect-{{ $relay->id }}"></output></div>
+                                </div>
                                 <p class="field-help">{{ __('Installs the exact registered Relay identity, pinned server key and automatic service startup. No manual SSH key copy, systemd editing or foreground tunnel is needed. If an old manual tunnel already occupies this port, stop that exact process before running this command.') }}</p>
                             </div>
                         </li>

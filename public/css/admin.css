@@ -40,6 +40,8 @@
     --ui-panel-padding: clamp(1rem, 2vw, 1.5rem);
     --ui-panel-shadow: 0 2px 8px rgb(24 35 51 / 3%);
     --ui-panel-stack-gap: 1.25rem;
+    --ui-context-gap: 0.85rem;
+    --ui-field-action-gap: 0.35rem;
     color: var(--ui-ink);
     background: var(--ui-canvas);
 }
@@ -588,6 +590,12 @@ code {
     margin-block-start: var(--ui-panel-stack-gap);
 }
 
+/* An introductory status and its technical disclosure are one section,
+   with a deliberate pause before the bordered diagnostics. */
+.panel > .field-help + .target-help-details {
+    margin-block-start: var(--ui-context-gap);
+}
+
 .panel-danger {
     width: 100%;
     max-width: none;
@@ -662,6 +670,22 @@ fieldset {
     min-width: 0;
     display: grid;
     gap: 0.45rem;
+}
+
+/* A field control and its attached action are one unit. The explanation
+   follows with a larger interval than the control-to-action gap. */
+.field-control-actions {
+    display: grid;
+    gap: var(--ui-field-action-gap);
+    min-width: 0;
+}
+
+.field-control-actions > .action-row {
+    margin-block-start: 0;
+}
+
+.field > .field-control-actions + .field-help {
+    margin-block-start: 0.3rem;
 }
 
 .field label,
@@ -1523,7 +1547,7 @@ td input[type="checkbox"] {
 
 .target-subsection {
     display: grid;
-    gap: 0.85rem;
+    gap: var(--ui-context-gap);
     padding: 1rem;
     border-radius: 0.75rem;
     border: 1px solid var(--ui-border);
@@ -1590,7 +1614,9 @@ td input[type="checkbox"] {
     gap: 0.7rem;
 }
 
-.target-help-details code {
+/* Explicit command snippets stay block-level; inline code in labels,
+   explanations and read-only rows must remain in the text flow. */
+.target-help-details code.command-snippet {
     display: block;
     padding: 0.65rem;
     background: var(--ui-surface-subtle);
@@ -1598,6 +1624,25 @@ td input[type="checkbox"] {
     font-size: 0.87rem;
     white-space: normal;
     overflow-wrap: anywhere;
+}
+
+/* Avoid accumulating form/action margins on top of a parent grid gap. */
+.target-help-details[open] > .form-stack,
+.target-subsection > .form-stack,
+.target-subsection > .action-row {
+    margin-block-start: 0;
+}
+
+.diagnostic-command-list {
+    display: grid;
+    gap: var(--ui-field-action-gap);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.diagnostic-command-list > li {
+    min-width: 0;
 }
 
 .target-ssh-shortcuts {
@@ -2159,7 +2204,7 @@ input[type="file"]:focus-visible {
 .relay-setup-steps {
     display: grid;
     gap: var(--ui-panel-stack-gap);
-    margin: 0.75rem 0;
+    margin: 0;
     padding-inline-start: 1.5rem;
 }
 .relay-setup-steps > li { min-width: 0; }

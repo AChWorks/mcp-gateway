@@ -25,6 +25,29 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
                 await page.goto(base + '/__browser__/experience/owner');
                 await page.goto(base + '/admin/settings/reverse-ssh');
                 await page.getByRole('heading', { name: 'Gateway host readiness' }).waitFor();
+                const readinessDetails = page.locator('section[aria-labelledby="reverse-status"] details.target-help-details');
+                await readinessDetails.locator('summary').click();
+                const readinessSpacing = await page.evaluate(() => {
+                    const section = document.querySelector('section[aria-labelledby="reverse-status"]');
+                    const intro = section.querySelector(':scope > p.field-help');
+                    const details = section.querySelector('details.target-help-details');
+                    const codes = [...details.querySelectorAll('.diagnostic-command-list code')];
+                    const lastInstruction = details.querySelector('.diagnostic-command-list + p.field-help');
+                    return {
+                        overflow: document.documentElement.scrollWidth - innerWidth,
+                        introGap: details.getBoundingClientRect().top - intro.getBoundingClientRect().bottom,
+                        commandCount: codes.length,
+                        blocks: codes.every(code => getComputedStyle(code).display === 'block'),
+                        orphanPeriod: lastInstruction.textContent.trim().startsWith('.'),
+                    };
+                });
+                assert.ok(readinessSpacing.overflow <= 1,
+                    'Readiness diagnostics overflow ' + JSON.stringify({width, dark, readinessSpacing}));
+                assert.ok(readinessSpacing.introGap >= 9,
+                    'Status introduction touches diagnostics ' + JSON.stringify({width, dark, readinessSpacing}));
+                assert.equal(readinessSpacing.commandCount, 2);
+                assert.equal(readinessSpacing.blocks, true);
+                assert.equal(readinessSpacing.orphanPeriod, false);
                 assert.equal(await page.getByRole('heading', { name: 'Configure Reverse SSH' }).count(), 1);
                 assert.equal(await page.getByText('Remote Target reachability', { exact: true }).count(), 1);
                 // Fresh unconfigured host needs configuration confirmation,
