@@ -733,6 +733,33 @@ not a high-volume detailed server error log. Nothing records OAuth tokens,
 client assertions, passwords, SSH keys, shell text, SFTP paths, file contents,
 raw untrusted HTTP response bodies or raw exception messages.
 
+**OAuth client failures use the same canonical evidence, without changing the
+protocol response.** A rejected `/oauth/token` or `/oauth/revoke` request keeps
+its standard OAuth error (for example, `invalid_client`) and correlation ID.
+In privileged Activity and logs, `oauth_failure_stage` and
+`oauth_failure_reason` retain the exact server-observed authentication check;
+`exception_class` and the upstream HTTP status are included only when known.
+This separates a missing/disabled client profile, invalid authentication
+method, a JWKS key-ID miss, bad signature, invalid audience/time, replayed
+assertion, DCR secret failure, and a client-metadata HTTP outage. The
+original JWT/secret/claim or response body is never logged. For example:
+
+| Observed reason | Next investigation (not a blind retry) |
+| --- | --- |
+| `client_profile_unavailable` | Inspect the configured client profile and its disabled/generation state |
+| `assertion_key_id_unavailable` | Compare current approved JWKS with the advertised key ID and cache refresh |
+| `assertion_signature_invalid` | Check approved key rotation/signature without bypassing verification |
+| `assertion_time_invalid`, `assertion_lifetime_invalid` | Inspect synchronized clocks and assertion issuance/expiry |
+| `assertion_audience_invalid` | Compare issuer and expected OAuth token/revocation audience |
+| `assertion_replayed` | Require a fresh signed assertion with a new `jti` |
+| `secret_mismatch_or_client_unavailable` | Inspect the registered DCR client/credential method without exposing its secret |
+| `metadata_temporarily_unavailable` | Inspect the observed HTTP status and Gateway-to-ChatGPT reachability |
+
+If a field is absent, the Gateway has not proven that cause. Distinguish
+client-authentication failure from later refresh-grant validation and from
+upstream availability. Source/tests and an official Release do not prove the
+new evidence exists on the installed host until an approved upgrade.
+
 The fresh-install web installer and standalone authenticated browser updater
 also display a short support reference on server-side failure. They run before
 or during Laravel bootstrap, so **their references are written to the PHP

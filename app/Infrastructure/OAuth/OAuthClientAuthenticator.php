@@ -2,7 +2,6 @@
 
 namespace App\Infrastructure\OAuth;
 
-use League\OAuth2\Server\Exception\OAuthServerException;
 use Psr\Http\Message\ServerRequestInterface;
 
 final readonly class OAuthClientAuthenticator
@@ -19,18 +18,23 @@ final readonly class OAuthClientAuthenticator
         $parameters = $request->getParsedBody();
         $clientId = is_array($parameters) ? ($parameters['client_id'] ?? null) : null;
         if (! is_string($clientId) || $clientId === '' || strlen($clientId) > 255) {
-            throw OAuthServerException::invalidClient($request);
+            throw OAuthClientAuthDiagnostic::invalidClient($request, 'client_identity', 'client_id_missing_or_invalid');
         }
 
-        $profile = $this->profiles->active($clientId);
+        try {
+            $profile = $this->profiles->active($clientId);
+        } catch (\Throwable $exception) {
+            OAuthClientAuthDiagnostic::remember('client_profile', 'profile_lookup_failed', $exception);
+            throw $exception;
+        }
         if ($profile === null) {
-            throw OAuthServerException::invalidClient($request);
+            throw OAuthClientAuthDiagnostic::invalidClient($request, 'client_profile', 'client_profile_unavailable');
         }
 
         return match ($profile['strategy']) {
             'cimd_private_key_jwt', 'pinned_private_key_jwt' => $this->privateKeyJwt->validate($request, $allowedAudiences),
             'dcr_client_secret_post' => $this->dcrSecret->validate($request, $clientId),
-            default => throw OAuthServerException::invalidClient($request),
+            default => throw OAuthClientAuthDiagnostic::invalidClient($request, 'client_profile', 'authentication_strategy_unsupported'),
         };
     }
 }

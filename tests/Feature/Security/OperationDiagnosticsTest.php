@@ -14,6 +14,29 @@ final class OperationDiagnosticsTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_oauth_diagnostics_retain_bounded_authentication_reason_and_actionable_next_step(): void
+    {
+        $safe = OperationDiagnostics::safeContext([
+            'oauth_failure_stage' => 'jwks_resolution',
+            'oauth_failure_reason' => 'assertion_key_id_unavailable',
+            'client_assertion' => 'SECRET_SENTINEL',
+            'oauth_failure_stage_extra' => 'SECRET_SENTINEL',
+            'oauth_failure_reason_invalid' => 'SECRET_SENTINEL',
+        ]);
+        self::assertSame('jwks_resolution', $safe['oauth_failure_stage']);
+        self::assertSame('assertion_key_id_unavailable', $safe['oauth_failure_reason']);
+        self::assertStringNotContainsString('SECRET_SENTINEL', json_encode($safe, JSON_THROW_ON_ERROR));
+        self::assertStringContainsString('JWKS', OperationDiagnostics::nextStep('invalid_client', $safe));
+        self::assertStringContainsString('authentication', strtolower(OperationDiagnostics::summary('invalid_client', $safe)));
+
+        $unsafe = OperationDiagnostics::safeContext([
+            'oauth_failure_stage' => str_repeat('z', 300),
+            'oauth_failure_reason' => 'invalid value: token=SECRET_SENTINEL',
+        ]);
+        self::assertArrayNotHasKey('oauth_failure_stage', $unsafe);
+        self::assertArrayNotHasKey('oauth_failure_reason', $unsafe);
+    }
+
     public function test_safe_diagnostics_log_only_whitelisted_fields_and_a_lookup_reference(): void
     {
         Log::spy();

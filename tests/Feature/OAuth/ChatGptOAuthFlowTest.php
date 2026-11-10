@@ -1014,6 +1014,54 @@ final class ChatGptOAuthFlowTest extends TestCase
         ])->assertOk();
     }
 
+    public function test_invalid_client_diagnostics_identify_signature_and_audience_without_exposing_assertions(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+        $base = [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        ];
+
+        [$foreignPrivateKey] = $this->newClientKeypair();
+        $invalidSignature = $this->clientAssertion(
+            (string) config('oauth.issuer').'/oauth/token',
+            privateKey: $foreignPrivateKey,
+        );
+        $this->post('/oauth/token', [...$base, 'client_assertion' => $invalidSignature])
+            ->assertUnauthorized()->assertJsonPath('error', 'invalid_client');
+        $this->assertLatestClientAuthFailure('jwt_signature', 'assertion_signature_invalid', $invalidSignature);
+
+        $invalidAudience = $this->clientAssertion('https://wrong.example/oauth/token');
+        $this->post('/oauth/token', [...$base, 'client_assertion' => $invalidAudience])
+            ->assertUnauthorized()->assertJsonPath('error', 'invalid_client');
+        $this->assertLatestClientAuthFailure('jwt_audience', 'assertion_audience_invalid', $invalidAudience);
+
+        // Diagnostic classification never consumes the original authorization code.
+        $this->post('/oauth/token', [
+            ...$base,
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertOk();
+    }
+
+    private function assertLatestClientAuthFailure(string $stage, string $reason, string $assertion): void
+    {
+        $event = DB::table('activity_events')
+            ->where('error_code', 'invalid_client')
+            ->orderByDesc('id')
+            ->first();
+        self::assertNotNull($event);
+        $context = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame($stage, $context['oauth_failure_stage'] ?? null);
+        self::assertSame($reason, $context['oauth_failure_reason'] ?? null);
+        self::assertStringNotContainsString($assertion, (string) $event->diagnostic_context);
+    }
+
     public function test_refresh_scope_can_narrow_and_drops_refresh_authority(): void
     {
         Log::spy();

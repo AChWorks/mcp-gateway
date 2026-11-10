@@ -135,6 +135,27 @@ its own effect/recovery certainty. New connector families reuse these
 shared components when their real protocol and trust policy fit; unsupported
 preflight stays explicitly unavailable, not guessed or silently successful.
 
+## Diagnostic fidelity when adding failure paths
+
+Reuse `ActivityRecorder`, `OperationDiagnostics`, and `CorrelationId` across
+Admin, MCP, OAuth and connector operations; do not create a separate logging
+backend. A failure handler should retain the original *observed* error code
+and, when available, its source/stage, outcome certainty, proven dispatch
+state and actionable next step. Use a stable bounded reason identifier for
+failures that otherwise collapse to a protocol compatibility code, as the
+OAuth client-authentication path does for `invalid_client`. Do not invent a
+provider cause when only a generic downstream rejection was received.
+
+Capture diagnostic context at the branch that knows the reason, not by trying
+to reconstruct it from exception text after the fact. Store the context via
+the existing safe/redacted Activity boundary so Admin and authorized AI use
+the same evidence. Public protocol responses may remain generic, and all
+logging is best-effort: failure of a diagnostic sink must not change an
+operation, authentication decision or effect certainty. Never log tokens,
+assertions, client secrets, passwords, signing keys, arbitrary request bodies
+or payload-derived diagnostic identifiers. A new branch needs a focused test
+for observed reason, public response stability and sensitive-value exclusion.
+
 ## Admin UI foundation
 
 The administration panel uses one small server-rendered visual system in `public/css/admin.css`. New Admin views must reuse this foundation rather than falling back to browser-native controls or creating a second page-specific design system.
