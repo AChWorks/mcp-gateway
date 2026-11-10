@@ -35,6 +35,14 @@ final class OperationDiagnosticsTest extends TestCase
         ]);
         self::assertArrayNotHasKey('oauth_failure_stage', $unsafe);
         self::assertArrayNotHasKey('oauth_failure_reason', $unsafe);
+        // A superficially safe identifier from a remote response is not
+        // necessarily a trusted server-side authentication decision.
+        $unrecognized = OperationDiagnostics::safeContext([
+            'oauth_failure_stage' => 'unknown_provider_stage',
+            'oauth_failure_reason' => 'secret_shaped_but_identifier_safe',
+        ]);
+        self::assertArrayNotHasKey('oauth_failure_stage', $unrecognized);
+        self::assertArrayNotHasKey('oauth_failure_reason', $unrecognized);
     }
 
     public function test_safe_diagnostics_log_only_whitelisted_fields_and_a_lookup_reference(): void
