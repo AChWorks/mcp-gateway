@@ -22,6 +22,24 @@ final class AdminUiPresentationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_activity_error_disclosure_uses_the_recorded_oauth_reason_for_actionable_guidance(): void
+    {
+        $reference = 'f21c6524-6ac7-4de5-b3b6-a3d135f2b6e5';
+        app(ActivityRecorder::class)->record($reference, 'oauth-token-refresh', 'failure', null, 'invalid_client', [
+            'oauth_failure_stage' => 'jwks_resolution',
+            'oauth_failure_reason' => 'assertion_key_id_unavailable',
+            'client_assertion' => 'NEVER_INCLUDE_RAW_ASSERTION',
+        ]);
+
+        $this->actingAs($this->owner())
+            ->get('/admin/activity?diagnostic_reference='.$reference)
+            ->assertOk()
+            ->assertSee('Explain error')
+            ->assertSee('assertion_key_id_unavailable')
+            ->assertSee('JWKS')
+            ->assertDontSee('NEVER_INCLUDE_RAW_ASSERTION');
+    }
+
     public function test_relay_management_uses_native_accessible_forms_without_privileged_host_controls(): void
     {
         $relay = ConnectionRelay::query()->create([

@@ -82,8 +82,8 @@
                             @if ($item['error_code'] !== null)
                                 <details>
                                     <summary>{{ __('Explain error') }}</summary>
-                                    <p>{{ \App\Support\OperationDiagnostics::summary($item['error_code']) }}</p>
-                                    <p><strong>{{ __('Suggested checks') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep($item['error_code']) }}</p>
+                                    <p>{{ \App\Support\OperationDiagnostics::summary($item['error_code'], $item['diagnostics']) }}</p>
+                                    <p><strong>{{ __('Suggested checks') }}:</strong> {{ \App\Support\OperationDiagnostics::nextStep($item['error_code'], $item['diagnostics']) }}</p>
                                     @if ($item['diagnostics'] !== [])
                                         @foreach ($item['diagnostics'] as $field => $value)
                                             <div>
