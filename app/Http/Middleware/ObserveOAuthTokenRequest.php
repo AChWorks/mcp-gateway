@@ -24,6 +24,7 @@ final readonly class ObserveOAuthTokenRequest
         try {
             $response = $next($request);
         } catch (Throwable $throwable) {
+            $request->attributes->set('gateway_error_logged', true);
             $observed = $request->attributes->get(OAuthClientAuthDiagnostic::ATTRIBUTE);
             $details = is_array($observed) ? OperationDiagnostics::safeContext($observed) : [];
             $this->activity->record(
@@ -62,22 +63,37 @@ final readonly class ObserveOAuthTokenRequest
 
         $outcome = $response->isSuccessful() ? 'success' : 'failure';
         $correlationId = CorrelationId::current();
-        $authenticationEvidence = [];
-        if (in_array($errorCode, ['invalid_client', 'oauth_client_metadata_unavailable'], true)) {
-            $observed = $request->attributes->get(OAuthClientAuthDiagnostic::ATTRIBUTE);
-            if (is_array($observed)) {
-                $authenticationEvidence = OperationDiagnostics::safeContext($observed);
-            }
-        }
+        // The authenticator, not the public OAuth error code, owns the
+        // observed failure provenance. An unexpected profile lookup failure
+        // may already have been rendered as a 500 by the framework pipeline.
+        $observed = $request->attributes->get(OAuthClientAuthDiagnostic::ATTRIBUTE);
+        $authenticationEvidence = ! $response->isSuccessful() && is_array($observed)
+            ? OperationDiagnostics::safeContext($observed) : [];
+        $details = [
+            ...$authenticationEvidence,
+            ...($response->getStatusCode() === 429 ? [
+                'failure_origin' => 'gateway_admission',
+                'request_not_sent' => true,
+            ] : []),
+        ];
 
+        // ActivityRecorder owns failure logging. Do not emit a second info
+        // record here or let the outer HTTP middleware duplicate a 5xx warning.
+        if ($response->getStatusCode() >= 500) {
+            $request->attributes->set('gateway_error_logged', true);
+        }
         $this->activity->record(
             $correlationId,
             $operation,
             $outcome,
             null,
             $errorCode,
-            $authenticationEvidence,
+            $details,
         );
+
+        if (! $response->isSuccessful()) {
+            return $response;
+        }
 
         try {
             Log::info($isRevocation ? 'OAuth token revocation completed.' : 'OAuth token exchange completed.', [

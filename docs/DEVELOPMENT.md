@@ -387,7 +387,7 @@ For the production endpoint, preserve the SDK's DNS-rebinding/Host protection an
 
 The bootstrap deliberately isolates protocol packages behind `app/Infrastructure` adapters.
 
-- `mcp/sdk` `0.8.1` — official PHP MCP SDK; owns MCP server/client framing and Streamable HTTP behavior.
+- `mcp/sdk` `0.9.0` — official PHP MCP SDK; owns MCP server/client framing and Streamable HTTP behavior. This replaces advisory-affected `0.8.1` (GHSA-f4rf-6ghj-mhr6); Gateway's OAuth routes still use its own controllers and must not rely on SDK OAuth middleware for request limits.
 - `symfony/psr-http-message-bridge` `8.1.x` — converts Laravel/Symfony HTTP Foundation requests and responses at the SDK boundary.
 - `league/oauth2-server` `9.4.1` — owns authorization-code, PKCE, access/refresh-token issuance, rotation primitives, signed access tokens, and token/code revocation semantics.
 - `firebase/php-jwt` `7.1.x` — owns JWK parsing and RS256 client-assertion signature verification; Gateway policy still validates exact client/claims/audience/lifetime/replay.

@@ -8,6 +8,7 @@ use Illuminate\Cache\RateLimiting\Unlimited;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -161,6 +162,34 @@ final class RateLimitObservabilityTest extends TestCase
         self::assertCount(2, $limits);
         self::assertSame(1, $limits[0]->maxAttempts);
         self::assertSame(1, $limits[1]->maxAttempts);
+    }
+
+    public function test_rate_limited_token_and_revocation_requests_retain_activity_without_log_amplification(): void
+    {
+        RateLimiter::for('oauth-token', static function (Request $request): Limit {
+            return Limit::perMinute(1)->by('oauth-bounded:'.$request->path().':'.$request->ip());
+        });
+        $this->post('/oauth/token', ['client_id' => 'invalid'])->assertStatus(400);
+        $this->post('/oauth/revoke', ['client_id' => 'invalid'])->assertStatus(401);
+        Log::spy();
+        foreach (['/oauth/token' => 'oauth-token-unknown', '/oauth/revoke' => 'oauth-token-revoke'] as $path => $operation) {
+            for ($i = 0; $i < 6; $i++) {
+                $response = $this->post($path, ['client_id' => 'invalid', 'client_secret' => 'sentinel-input'])
+                    ->assertStatus(429)->assertHeader(CorrelationId::HEADER);
+                $id = (string) $response->headers->get(CorrelationId::HEADER);
+                self::assertTrue(Str::isUuid($id));
+                $event = DB::table('activity_events')->where('correlation_id', $id)->first();
+                self::assertNotNull($event);
+                self::assertSame($operation, $event->operation);
+                self::assertSame('rate_limited', $event->error_code);
+                $details = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+                self::assertSame('gateway_admission', $details['failure_origin']);
+                self::assertTrue($details['request_not_sent']);
+                self::assertStringNotContainsString('sentinel-input', (string) $event->diagnostic_context);
+            }
+            Log::shouldNotHaveReceived('warning');
+            Log::shouldNotHaveReceived('info');
+        }
     }
 
     public function test_oauth_token_throttle_is_correlated_recorded_and_does_not_store_token_input(): void

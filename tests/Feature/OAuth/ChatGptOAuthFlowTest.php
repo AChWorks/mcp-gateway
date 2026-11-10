@@ -164,11 +164,27 @@ final class ChatGptOAuthFlowTest extends TestCase
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
         ];
 
+        Log::spy();
         $response = $this->postJson('/oauth/token', $payload)
             ->assertStatus(503)
             ->assertHeader('Retry-After', '60')
+            ->assertHeader(CorrelationId::HEADER)
             ->assertJsonPath('error', 'temporarily_unavailable');
         self::assertStringContainsString('no-store', (string) $response->headers->get('Cache-Control'));
+        $reference = (string) $response->headers->get(CorrelationId::HEADER);
+        self::assertTrue(Str::isUuid($reference));
+        $activity = DB::table('activity_events')->where('correlation_id', $reference)->first();
+        self::assertNotNull($activity);
+        self::assertSame('oauth_client_metadata_unavailable', $activity->error_code);
+        $context = json_decode((string) $activity->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('metadata_temporarily_unavailable', $context['oauth_failure_reason'] ?? null);
+        Log::shouldHaveReceived('warning')->once()->with(
+            'Gateway operation failure.',
+            \Mockery::on(static fn (array $context): bool => ($context['correlation_id'] ?? null) === $reference
+                && ($context['error_code'] ?? null) === 'oauth_client_metadata_unavailable'),
+        );
+        Log::shouldHaveReceived('warning')->once();
+        Log::shouldNotHaveReceived('info');
 
         $this->postJson('/oauth/token', [...$payload, 'client_id' => 'https://attacker.example/client.json'])
             ->assertUnauthorized();
@@ -197,7 +213,8 @@ final class ChatGptOAuthFlowTest extends TestCase
             new Client(['handler' => HandlerStack::create($mock)]),
         ));
 
-        $this->postJson('/oauth/revoke', [
+        Log::spy();
+        $failure = $this->postJson('/oauth/revoke', [
             'client_id' => self::CLIENT_ID,
             'token' => 'synthetic-revocation-fixture',
             'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
@@ -205,7 +222,21 @@ final class ChatGptOAuthFlowTest extends TestCase
         ])
             ->assertStatus(503)
             ->assertHeader('Retry-After', '60')
+            ->assertHeader(CorrelationId::HEADER)
             ->assertJsonPath('error', 'temporarily_unavailable');
+        $reference = (string) $failure->headers->get(CorrelationId::HEADER);
+        self::assertTrue(Str::isUuid($reference));
+        $activity = DB::table('activity_events')->where('correlation_id', $reference)->first();
+        self::assertNotNull($activity);
+        self::assertSame('oauth-token-revoke', $activity->operation);
+        self::assertSame('oauth_client_metadata_unavailable', $activity->error_code);
+        Log::shouldHaveReceived('warning')->once()->with(
+            'Gateway operation failure.',
+            \Mockery::on(static fn (array $context): bool => ($context['correlation_id'] ?? null) === $reference
+                && ($context['operation'] ?? null) === 'oauth-token-revoke'),
+        );
+        Log::shouldHaveReceived('warning')->once();
+        Log::shouldNotHaveReceived('info');
 
         self::assertSame(0, DB::table('oauth_authorizations')->whereNotNull('revoked_at')->count());
     }
