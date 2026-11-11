@@ -74,8 +74,8 @@ final readonly class OperationDiagnosticsMcpToolHandlers
                 'diagnostics' => $item['diagnostics'],
                 'diagnostic_state' => $item['diagnostics'] === []
                     ? 'not_recorded_or_expired' : 'available',
-                'summary' => $error === null ? null : OperationDiagnostics::summary($error),
-                'next_step' => $error === null ? null : OperationDiagnostics::nextStep($error),
+                'summary' => $error === null ? null : OperationDiagnostics::summary($error, $item['diagnostics'], $item['operation']),
+                'next_step' => $error === null ? null : OperationDiagnostics::nextStep($error, $item['diagnostics'], $item['operation']),
             ];
         }
 

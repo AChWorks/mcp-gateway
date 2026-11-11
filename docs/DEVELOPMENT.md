@@ -135,6 +135,27 @@ its own effect/recovery certainty. New connector families reuse these
 shared components when their real protocol and trust policy fit; unsupported
 preflight stays explicitly unavailable, not guessed or silently successful.
 
+## Diagnostic fidelity when adding failure paths
+
+Reuse `ActivityRecorder`, `OperationDiagnostics`, and `CorrelationId` across
+Admin, MCP, OAuth and connector operations; do not create a separate logging
+backend. A failure handler should retain the original *observed* error code
+and, when available, its source/stage, outcome certainty, proven dispatch
+state and actionable next step. Use a stable bounded reason identifier for
+failures that otherwise collapse to a protocol compatibility code, as the
+OAuth client-authentication path does for `invalid_client`. Do not invent a
+provider cause when only a generic downstream rejection was received.
+
+Capture diagnostic context at the branch that knows the reason, not by trying
+to reconstruct it from exception text after the fact. Store the context via
+the existing safe/redacted Activity boundary so Admin and authorized AI use
+the same evidence. Public protocol responses may remain generic, and all
+logging is best-effort: failure of a diagnostic sink must not change an
+operation, authentication decision or effect certainty. Never log tokens,
+assertions, client secrets, passwords, signing keys, arbitrary request bodies
+or payload-derived diagnostic identifiers. A new branch needs a focused test
+for observed reason, public response stability and sensitive-value exclusion.
+
 ## Admin UI foundation
 
 The administration panel uses one small server-rendered visual system in `public/css/admin.css`. New Admin views must reuse this foundation rather than falling back to browser-native controls or creating a second page-specific design system.
@@ -366,7 +387,7 @@ For the production endpoint, preserve the SDK's DNS-rebinding/Host protection an
 
 The bootstrap deliberately isolates protocol packages behind `app/Infrastructure` adapters.
 
-- `mcp/sdk` `0.8.1` — official PHP MCP SDK; owns MCP server/client framing and Streamable HTTP behavior.
+- `mcp/sdk` `0.9.0` — official PHP MCP SDK; owns MCP server/client framing and Streamable HTTP behavior. This replaces advisory-affected `0.8.1` (GHSA-f4rf-6ghj-mhr6); Gateway's OAuth routes still use its own controllers and must not rely on SDK OAuth middleware for request limits.
 - `symfony/psr-http-message-bridge` `8.1.x` — converts Laravel/Symfony HTTP Foundation requests and responses at the SDK boundary.
 - `league/oauth2-server` `9.4.1` — owns authorization-code, PKCE, access/refresh-token issuance, rotation primitives, signed access tokens, and token/code revocation semantics.
 - `firebase/php-jwt` `7.1.x` — owns JWK parsing and RS256 client-assertion signature verification; Gateway policy still validates exact client/claims/audience/lifetime/replay.

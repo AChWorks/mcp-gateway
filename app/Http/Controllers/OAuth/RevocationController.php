@@ -41,8 +41,12 @@ final readonly class RevocationController
                 ->header('Cache-Control', 'no-store')
                 ->header('Pragma', 'no-cache');
         } catch (OAuthServerException $exception) {
+            $request->attributes->set('oauth_token_error_code', $exception->getErrorType());
+
             return $this->bridge->error($exception);
         } catch (OAuthClientMetadataUnavailable) {
+            $request->attributes->set('oauth_token_error_code', 'oauth_client_metadata_unavailable');
+
             // No credential can be revoked safely before authenticating its
             // owning client. Keep the request retryable without bypassing JWKS.
             return response()->json([

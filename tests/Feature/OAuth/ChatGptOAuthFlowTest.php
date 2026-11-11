@@ -164,11 +164,27 @@ final class ChatGptOAuthFlowTest extends TestCase
             'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
         ];
 
+        Log::spy();
         $response = $this->postJson('/oauth/token', $payload)
             ->assertStatus(503)
             ->assertHeader('Retry-After', '60')
+            ->assertHeader(CorrelationId::HEADER)
             ->assertJsonPath('error', 'temporarily_unavailable');
         self::assertStringContainsString('no-store', (string) $response->headers->get('Cache-Control'));
+        $reference = (string) $response->headers->get(CorrelationId::HEADER);
+        self::assertTrue(Str::isUuid($reference));
+        $activity = DB::table('activity_events')->where('correlation_id', $reference)->first();
+        self::assertNotNull($activity);
+        self::assertSame('oauth_client_metadata_unavailable', $activity->error_code);
+        $context = json_decode((string) $activity->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('metadata_temporarily_unavailable', $context['oauth_failure_reason'] ?? null);
+        Log::shouldHaveReceived('warning')->once()->with(
+            'Gateway operation failure.',
+            \Mockery::on(static fn (array $context): bool => ($context['correlation_id'] ?? null) === $reference
+                && ($context['error_code'] ?? null) === 'oauth_client_metadata_unavailable'),
+        );
+        Log::shouldHaveReceived('warning')->once();
+        Log::shouldNotHaveReceived('info');
 
         $this->postJson('/oauth/token', [...$payload, 'client_id' => 'https://attacker.example/client.json'])
             ->assertUnauthorized();
@@ -197,7 +213,8 @@ final class ChatGptOAuthFlowTest extends TestCase
             new Client(['handler' => HandlerStack::create($mock)]),
         ));
 
-        $this->postJson('/oauth/revoke', [
+        Log::spy();
+        $failure = $this->postJson('/oauth/revoke', [
             'client_id' => self::CLIENT_ID,
             'token' => 'synthetic-revocation-fixture',
             'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
@@ -205,7 +222,21 @@ final class ChatGptOAuthFlowTest extends TestCase
         ])
             ->assertStatus(503)
             ->assertHeader('Retry-After', '60')
+            ->assertHeader(CorrelationId::HEADER)
             ->assertJsonPath('error', 'temporarily_unavailable');
+        $reference = (string) $failure->headers->get(CorrelationId::HEADER);
+        self::assertTrue(Str::isUuid($reference));
+        $activity = DB::table('activity_events')->where('correlation_id', $reference)->first();
+        self::assertNotNull($activity);
+        self::assertSame('oauth-token-revoke', $activity->operation);
+        self::assertSame('oauth_client_metadata_unavailable', $activity->error_code);
+        Log::shouldHaveReceived('warning')->once()->with(
+            'Gateway operation failure.',
+            \Mockery::on(static fn (array $context): bool => ($context['correlation_id'] ?? null) === $reference
+                && ($context['operation'] ?? null) === 'oauth-token-revoke'),
+        );
+        Log::shouldHaveReceived('warning')->once();
+        Log::shouldNotHaveReceived('info');
 
         self::assertSame(0, DB::table('oauth_authorizations')->whereNotNull('revoked_at')->count());
     }
@@ -1012,6 +1043,54 @@ final class ChatGptOAuthFlowTest extends TestCase
             ...$tokenRequest,
             'client_assertion' => $this->clientAssertion($audience),
         ])->assertOk();
+    }
+
+    public function test_invalid_client_diagnostics_identify_signature_and_audience_without_exposing_assertions(): void
+    {
+        $user = $this->operator();
+        [$code, $verifier] = $this->approvedAuthorizationCode($user);
+        $base = [
+            'grant_type' => 'authorization_code',
+            'client_id' => self::CLIENT_ID,
+            'redirect_uri' => self::REDIRECT_URI,
+            'code' => $code,
+            'code_verifier' => $verifier,
+            'resource' => config('oauth.resource'),
+            'client_assertion_type' => 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+        ];
+
+        [$foreignPrivateKey] = $this->newClientKeypair();
+        $invalidSignature = $this->clientAssertion(
+            (string) config('oauth.issuer').'/oauth/token',
+            privateKey: $foreignPrivateKey,
+        );
+        $this->post('/oauth/token', [...$base, 'client_assertion' => $invalidSignature])
+            ->assertUnauthorized()->assertJsonPath('error', 'invalid_client');
+        $this->assertLatestClientAuthFailure('jwt_signature', 'assertion_signature_invalid', $invalidSignature);
+
+        $invalidAudience = $this->clientAssertion('https://wrong.example/oauth/token');
+        $this->post('/oauth/token', [...$base, 'client_assertion' => $invalidAudience])
+            ->assertUnauthorized()->assertJsonPath('error', 'invalid_client');
+        $this->assertLatestClientAuthFailure('jwt_audience', 'assertion_audience_invalid', $invalidAudience);
+
+        // Diagnostic classification never consumes the original authorization code.
+        $this->post('/oauth/token', [
+            ...$base,
+            'client_assertion' => $this->clientAssertion((string) config('oauth.issuer').'/oauth/token'),
+        ])->assertOk();
+    }
+
+    private function assertLatestClientAuthFailure(string $stage, string $reason, string $assertion): void
+    {
+        $event = DB::table('activity_events')
+            ->where('error_code', 'invalid_client')
+            ->orderByDesc('id')
+            ->first();
+        self::assertNotNull($event);
+        $context = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame($stage, $context['oauth_failure_stage'] ?? null);
+        self::assertSame($reason, $context['oauth_failure_reason'] ?? null);
+        self::assertStringNotContainsString($assertion, (string) $event->diagnostic_context);
     }
 
     public function test_refresh_scope_can_narrow_and_drops_refresh_authority(): void

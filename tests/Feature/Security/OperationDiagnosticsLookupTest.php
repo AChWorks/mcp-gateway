@@ -56,6 +56,26 @@ final class OperationDiagnosticsLookupTest extends TestCase
             ->assertDontSee('PRIVATE_TOKEN');
     }
 
+    public function test_oauth_client_diagnostics_provide_specific_safe_guidance_to_ai(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $reference = (string) Str::uuid();
+        app(ActivityRecorder::class)->record($reference, 'oauth-token-refresh', 'failure', null, 'invalid_client', [
+            'oauth_failure_stage' => 'jwks_resolution',
+            'oauth_failure_reason' => 'assertion_key_id_unavailable',
+            'client_assertion' => 'DO_NOT_RECORD_THE_ASSERTION',
+        ]);
+
+        $result = app(OperationDiagnosticsMcpToolHandlers::class)->read($owner, $reference);
+        self::assertTrue($result['ok']);
+        self::assertCount(1, $result['events']);
+        self::assertSame('jwks_resolution', $result['events'][0]['diagnostics']['oauth_failure_stage']);
+        self::assertStringContainsString('JWKS', $result['events'][0]['next_step']);
+        self::assertStringContainsString('OAuth client authentication', $result['events'][0]['summary']);
+        self::assertStringNotContainsString('DO_NOT_RECORD_THE_ASSERTION', json_encode($result, JSON_THROW_ON_ERROR));
+
+    }
+
     public function test_escaped_secrets_cannot_leak_via_activity_logs_admin_or_mcp(): void
     {
         $owner = $this->user('owner', 'all');

@@ -78,6 +78,34 @@ final class OperationDiagnostics
         ], true)) {
             $safe['failure_stage'] = $stage;
         }
+        // Trusted OAuth authenticators record exact rejected phases/reasons
+        // without copying request bodies, JWT claims, secrets or provider text.
+        // Keep the evidence available through the existing Activity/Admin/AI
+        // diagnostic path; invalid_client remains the public OAuth response.
+        $oauthStages = [
+            'client_identity', 'client_profile', 'client_auth_method', 'client_assertion',
+            'dcr_client_auth', 'jwt_header', 'jwks_resolution', 'jwt_signature',
+            'jwt_time', 'jwt_claims', 'jwt_audience', 'jwt_replay', 'request_execution',
+        ];
+        $oauthReasons = [
+            'client_id_missing_or_invalid', 'client_profile_unavailable', 'profile_lookup_failed',
+            'authentication_strategy_unsupported', 'secret_method_or_format_invalid',
+            'secret_mismatch_or_client_unavailable', 'conflicting_authentication_methods',
+            'assertion_missing_or_invalid_type', 'malformed_assertion_header',
+            'unsupported_assertion_header', 'assertion_key_id_unavailable',
+            'assertion_signature_invalid', 'assertion_time_invalid', 'assertion_verification_failed',
+            'verified_header_mismatch', 'assertion_claims_invalid', 'assertion_lifetime_invalid',
+            'assertion_audience_invalid', 'assertion_replayed', 'metadata_temporarily_unavailable',
+            'unexpected_authentication_failure', 'unhandled_exception',
+        ];
+        $oauthStage = $details['oauth_failure_stage'] ?? null;
+        if (is_string($oauthStage) && in_array($oauthStage, $oauthStages, true)) {
+            $safe['oauth_failure_stage'] = $oauthStage;
+        }
+        $oauthReason = $details['oauth_failure_reason'] ?? null;
+        if (is_string($oauthReason) && in_array($oauthReason, $oauthReasons, true)) {
+            $safe['oauth_failure_reason'] = $oauthReason;
+        }
         // Shared SSRF rejection context. Only policy-defined reason names and
         // literal numeric IPs enter the operator log or browser diagnostics.
         $rejection = $details['outbound_rejection_reason'] ?? null;
@@ -210,9 +238,14 @@ final class OperationDiagnostics
     }
 
     /** @param array<string, mixed> $details */
-    public static function summary(string $code, array $details = []): string
+    public static function summary(string $code, array $details = [], ?string $operation = null): string
     {
         return match ($code) {
+            'invalid_client' => __('OAuth client authentication failed. Inspect the recorded authentication stage and reason.'),
+            'oauth_client_metadata_unavailable' => __('The OAuth client metadata or signing keys could not be obtained reliably.'),
+            'request_failed' => self::hasOAuthClientFailureContext($details, $operation)
+                ? __('OAuth client authentication failed. Inspect the recorded authentication stage and reason.')
+                : __('The operation did not complete safely. Consult the error code and server diagnostic log.'),
             'network_failure' => self::networkSummary($details),
             'tls_failure' => __('The remote TLS certificate, hostname or secure handshake could not be verified.'),
             'unsafe_target' => self::outboundSummary($details),
@@ -264,9 +297,14 @@ final class OperationDiagnostics
     }
 
     /** @param array<string, mixed> $details */
-    public static function nextStep(string $code, array $details = []): string
+    public static function nextStep(string $code, array $details = [], ?string $operation = null): string
     {
         return match ($code) {
+            'invalid_client' => self::oauthClientNextStep($details),
+            'oauth_client_metadata_unavailable' => __('Check the Gateway host network and HTTPS response from the approved ChatGPT client metadata and JWKS URLs. Do not weaken cryptographic client authentication.'),
+            'request_failed' => self::hasOAuthClientFailureContext($details, $operation)
+                ? self::oauthClientNextStep($details)
+                : __('Find the matching operation, error code, time and diagnostic reference in the Gateway logs.'),
             'network_failure' => self::networkNextStep($details),
             'tls_failure' => __('Check certificate validity, hostname/SNI and full certificate chain from the Gateway host. Do not disable TLS verification.'),
             'unsafe_target' => self::outboundNextStep($details),
@@ -313,6 +351,39 @@ final class OperationDiagnostics
             'target_paused' => __('Ask the Owner to resume this Target. Stored connection and permissions are unchanged.'),
             'server_error', 'file_unavailable' => __('Look up the diagnostic reference in authorized Admin Activity or operation-diagnostics-read. Inspect the owning component if its original cause was not received.'),
             default => __('Find the matching operation, error code, time and diagnostic reference in the Gateway logs.'),
+        };
+    }
+
+    /** @param array<string, mixed> $details */
+    private static function hasOAuthClientFailureContext(array $details, ?string $operation): bool
+    {
+        // request_failed is shared across connectors. Never reclassify it
+        // from an OAuth-shaped field without the owning OAuth operation and
+        // the server-authored, allowlisted authentication evidence.
+        return in_array($operation, [
+            'oauth-token-refresh', 'oauth-token-refresh-recovery',
+            'oauth-token-authorization-code', 'oauth-token-revoke', 'oauth-token-unknown',
+        ], true) && isset(self::safeContext($details)['oauth_failure_reason']);
+    }
+
+    /** @param array<string, mixed> $details */
+    private static function oauthClientNextStep(array $details): string
+    {
+        return match (self::safeContext($details)['oauth_failure_reason'] ?? null) {
+            'assertion_key_id_unavailable' => __('The asserted key ID is absent from the current approved JWKS. Check client key rotation, metadata reachability and the JWKS refresh cache; do not disable signature verification.'),
+            'assertion_signature_invalid', 'assertion_verification_failed' => __('Compare the client assertion signing key against the approved OAuth client JWKS. Check recently rotated keys and key material; do not revoke all consents without evidence.'),
+            'assertion_time_invalid', 'assertion_lifetime_invalid' => __('Verify NTP synchronization on the Gateway and the client assertion issue/expiry window. The client must issue a fresh assertion.'),
+            'assertion_audience_invalid' => __('Compare the assertion audience with the exact Gateway OAuth issuer and token/revocation endpoints.'),
+            'assertion_replayed' => __('Use a fresh, unique client assertion ID for each request; do not replay a previous signed assertion.'),
+            'malformed_assertion_header', 'unsupported_assertion_header', 'verified_header_mismatch' => __('Check the client JWT encoding and signed header, including an approved RS256 algorithm and recognized key ID.'),
+            'assertion_missing_or_invalid_type', 'conflicting_authentication_methods' => __('Check that the OAuth client uses exactly its registered authentication method and supplies a fresh well-formed client assertion.'),
+            'assertion_claims_invalid' => __('Check the signed client assertion issuer, subject, unique ID and required claims against the registered client identity.'),
+            'client_id_missing_or_invalid' => __('Check that the OAuth request supplies the exact approved, bounded client ID. Do not create replacement credentials before identifying the mismatch.'),
+            'profile_lookup_failed', 'unexpected_authentication_failure', 'unhandled_exception' => __('Inspect the recorded exception class and the Gateway database, PHP and dependency health for this correlation ID. Do not assume a client credential was revoked.'),
+            'client_profile_unavailable', 'authentication_strategy_unsupported' => __('Check the configured OAuth client identity, enabled profile and stored generation without changing existing user grants.'),
+            'secret_mismatch_or_client_unavailable', 'secret_method_or_format_invalid' => __('For a DCR client, verify the original registered client identity and client_secret_post method. Do not log or expose the client secret.'),
+            'metadata_temporarily_unavailable' => __('Check outbound HTTPS reachability of the approved OAuth client metadata/JWKS endpoints and retry only after the temporary dependency failure clears.'),
+            default => __('Use the correlation ID to inspect the trusted OAuth authentication stage and reason; check the approved client identity, signing keys and request method. A 401 alone does not prove token expiry.'),
         };
     }
 

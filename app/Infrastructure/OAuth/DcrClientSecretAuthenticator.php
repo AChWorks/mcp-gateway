@@ -3,7 +3,6 @@
 namespace App\Infrastructure\OAuth;
 
 use Illuminate\Support\Facades\DB;
-use League\OAuth2\Server\Exception\OAuthServerException;
 use Psr\Http\Message\ServerRequestInterface;
 
 final readonly class DcrClientSecretAuthenticator
@@ -17,13 +16,13 @@ final readonly class DcrClientSecretAuthenticator
             || array_key_exists('client_assertion', $parameters)
             || array_key_exists('client_assertion_type', $parameters)
             || $request->getHeaderLine('Authorization') !== '') {
-            throw OAuthServerException::invalidClient($request);
+            throw OAuthClientAuthDiagnostic::invalidClient($request, 'dcr_client_auth', 'secret_method_or_format_invalid');
         }
 
         $stored = DB::table('oauth_dcr_clients')->where('client_id', $clientId)
             ->first(['secret_hash']);
         if ($stored === null || ! hash_equals((string) $stored->secret_hash, hash('sha256', $secret))) {
-            throw OAuthServerException::invalidClient($request);
+            throw OAuthClientAuthDiagnostic::invalidClient($request, 'dcr_client_auth', 'secret_mismatch_or_client_unavailable');
         }
 
         return $clientId;

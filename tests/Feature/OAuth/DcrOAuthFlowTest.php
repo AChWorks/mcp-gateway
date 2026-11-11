@@ -147,7 +147,25 @@ final class DcrOAuthFlowTest extends TestCase
         $revoke = ['client_id' => $first['client_id'], 'client_secret' => $secret,
             'token' => $replacement, 'token_type_hint' => 'refresh_token'];
         $this->post('/oauth/revoke', [...$revoke, 'client_secret' => 'incorrect-secret'])
-            ->assertUnauthorized();
+            ->assertUnauthorized()->assertJsonPath('error', 'invalid_client');
+        $revocationFailure = DB::table('activity_events')
+            ->where('operation', 'oauth-token-revoke')->where('error_code', 'invalid_client')
+            ->orderByDesc('id')->first();
+        self::assertNotNull($revocationFailure);
+        $revocationDetails = json_decode((string) $revocationFailure->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('dcr_client_auth', $revocationDetails['oauth_failure_stage'] ?? null);
+        self::assertSame('secret_method_or_format_invalid', $revocationDetails['oauth_failure_reason'] ?? null);
+        self::assertStringNotContainsString($secret, (string) $revocationFailure->diagnostic_context);
+        $wellFormedWrongSecret = str_repeat('x', 48);
+        $this->post('/oauth/revoke', [...$revoke, 'client_secret' => $wellFormedWrongSecret])
+            ->assertUnauthorized()->assertJsonPath('error', 'invalid_client');
+        $mismatchFailure = DB::table('activity_events')
+            ->where('operation', 'oauth-token-revoke')->where('error_code', 'invalid_client')
+            ->orderByDesc('id')->first();
+        self::assertNotNull($mismatchFailure);
+        $mismatchDetails = json_decode((string) $mismatchFailure->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('secret_mismatch_or_client_unavailable', $mismatchDetails['oauth_failure_reason'] ?? null);
+        self::assertStringNotContainsString($wellFormedWrongSecret, (string) $mismatchFailure->diagnostic_context);
         $this->post('/oauth/revoke', array_diff_key($revoke, ['client_secret' => true]))
             ->assertUnauthorized();
         $this->post('/oauth/revoke', [...$revoke, 'client_assertion' => 'mixed-method'])

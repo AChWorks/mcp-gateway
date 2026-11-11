@@ -3,7 +3,9 @@
 namespace App\Http\Middleware;
 
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\OAuth\OAuthClientAuthDiagnostic;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -16,17 +18,27 @@ final readonly class ObserveOAuthTokenRequest
 
     public function handle(Request $request, Closure $next): Response
     {
-        $operation = $this->operation($request->input('grant_type'));
+        $isRevocation = $request->is('oauth/revoke');
+        $operation = $isRevocation ? 'oauth-token-revoke' : $this->operation($request->input('grant_type'));
 
         try {
             $response = $next($request);
         } catch (Throwable $throwable) {
+            $request->attributes->set('gateway_error_logged', true);
+            $observed = $request->attributes->get(OAuthClientAuthDiagnostic::ATTRIBUTE);
+            $details = is_array($observed) ? OperationDiagnostics::safeContext($observed) : [];
             $this->activity->record(
                 CorrelationId::current(),
                 $operation,
                 'failure',
                 null,
                 'server_failure',
+                [
+                    ...$details,
+                    'exception_class' => $throwable::class,
+                    'oauth_failure_stage' => $details['oauth_failure_stage'] ?? 'request_execution',
+                    'oauth_failure_reason' => $details['oauth_failure_reason'] ?? 'unhandled_exception',
+                ],
             );
 
             throw $throwable;
@@ -51,17 +63,40 @@ final readonly class ObserveOAuthTokenRequest
 
         $outcome = $response->isSuccessful() ? 'success' : 'failure';
         $correlationId = CorrelationId::current();
+        // The authenticator, not the public OAuth error code, owns the
+        // observed failure provenance. An unexpected profile lookup failure
+        // may already have been rendered as a 500 by the framework pipeline.
+        $observed = $request->attributes->get(OAuthClientAuthDiagnostic::ATTRIBUTE);
+        $authenticationEvidence = ! $response->isSuccessful() && is_array($observed)
+            ? OperationDiagnostics::safeContext($observed) : [];
+        $details = [
+            ...$authenticationEvidence,
+            ...($response->getStatusCode() === 429 ? [
+                'failure_origin' => 'gateway_admission',
+                'request_not_sent' => true,
+            ] : []),
+        ];
 
+        // ActivityRecorder owns failure logging. Do not emit a second info
+        // record here or let the outer HTTP middleware duplicate a 5xx warning.
+        if ($response->getStatusCode() >= 500) {
+            $request->attributes->set('gateway_error_logged', true);
+        }
         $this->activity->record(
             $correlationId,
             $operation,
             $outcome,
             null,
             $errorCode,
+            $details,
         );
 
+        if (! $response->isSuccessful()) {
+            return $response;
+        }
+
         try {
-            Log::info('OAuth token exchange completed.', [
+            Log::info($isRevocation ? 'OAuth token revocation completed.' : 'OAuth token exchange completed.', [
                 'correlation_id' => $correlationId,
                 'operation' => $operation,
                 'outcome' => $outcome,
@@ -70,6 +105,7 @@ final readonly class ObserveOAuthTokenRequest
                 'requested_scopes' => $this->requestedScopes($request),
                 'refresh_token_issued' => $this->refreshTokenIssued($request, $response),
                 'recovered' => $recovered,
+                ...$authenticationEvidence,
             ]);
         } catch (Throwable) {
             // Diagnostics must never change the token exchange outcome.

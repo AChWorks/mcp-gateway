@@ -27,7 +27,7 @@ Route::post('/reverse-ssh/enroll/{enrollment}/claim', ManagedReverseClaimControl
 
 Route::post('/oauth/register', DcrRegistrationController::class)->middleware('throttle:oauth-register');
 Route::post('/oauth/token', TokenController::class)->middleware([EnsureCorrelationId::class, ObserveOAuthTokenRequest::class, 'throttle:oauth-token']);
-Route::post('/oauth/revoke', RevocationController::class)->middleware('throttle:oauth-token');
+Route::post('/oauth/revoke', RevocationController::class)->middleware([EnsureCorrelationId::class, ObserveOAuthTokenRequest::class, 'throttle:oauth-token']);
 
 Route::match(['POST', 'DELETE', 'OPTIONS'], '/mcp', [GatewayMcpEndpoint::class, 'handle'])
     ->middleware([EnsureCorrelationId::class, 'throttle:mcp-edge', RequireMcpAccessToken::class, 'throttle:mcp']);
