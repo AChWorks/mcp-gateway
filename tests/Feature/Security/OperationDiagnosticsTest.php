@@ -45,6 +45,37 @@ final class OperationDiagnosticsTest extends TestCase
         self::assertArrayNotHasKey('oauth_failure_reason', $unrecognized);
     }
 
+    public function test_request_failed_guidance_requires_both_oauth_operation_and_trusted_reason(): void
+    {
+        $details = OperationDiagnostics::safeContext([
+            'oauth_failure_stage' => 'client_profile',
+            'oauth_failure_reason' => 'profile_lookup_failed',
+            'exception_class' => \RuntimeException::class,
+            'client_assertion' => 'SENSITIVE_ASSERTION',
+        ]);
+
+        self::assertStringContainsString('OAuth client authentication failed',
+            OperationDiagnostics::summary('request_failed', $details, 'oauth-token-refresh'));
+        self::assertStringContainsString('Gateway database, PHP and dependency health',
+            OperationDiagnostics::nextStep('request_failed', $details, 'oauth-token-refresh'));
+        self::assertStringNotContainsString('SENSITIVE_ASSERTION',
+            OperationDiagnostics::nextStep('request_failed', $details, 'oauth-token-refresh'));
+
+        $genericSummary = OperationDiagnostics::summary('request_failed');
+        $genericNextStep = OperationDiagnostics::nextStep('request_failed');
+        foreach ([
+            [[], 'oauth-token-refresh'],
+            [$details, 'ssh-file-read'],
+            [$details, null],
+            [['oauth_failure_reason' => 'unrecognized_remote_reason'], 'oauth-token-refresh'],
+        ] as [$context, $operation]) {
+            self::assertSame($genericSummary,
+                OperationDiagnostics::summary('request_failed', $context, $operation));
+            self::assertSame($genericNextStep,
+                OperationDiagnostics::nextStep('request_failed', $context, $operation));
+        }
+    }
+
     public function test_safe_diagnostics_log_only_whitelisted_fields_and_a_lookup_reference(): void
     {
         Log::spy();

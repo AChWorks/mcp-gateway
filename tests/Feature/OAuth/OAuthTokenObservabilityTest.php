@@ -216,8 +216,15 @@ final class OAuthTokenObservabilityTest extends TestCase
         $lookup = app(OperationDiagnosticsMcpToolHandlers::class)->read($owner, $ref);
         self::assertTrue($lookup['ok']);
         self::assertSame($details, $lookup['events'][0]['diagnostics']);
+        self::assertSame('request_failed', $lookup['events'][0]['error_code']);
+        self::assertSame('oauth-token-refresh', $lookup['events'][0]['operation']);
+        self::assertStringContainsString('OAuth client authentication failed', $lookup['events'][0]['summary']);
+        self::assertStringContainsString('Gateway database, PHP and dependency health', $lookup['events'][0]['next_step']);
         $this->actingAs($owner)->get('/admin/activity?diagnostic_reference='.$ref)
-            ->assertOk()->assertSee('profile_lookup_failed')->assertDontSee($referenceToken);
+            ->assertOk()->assertSee('profile_lookup_failed')
+            ->assertSee('OAuth client authentication failed')
+            ->assertSee('Gateway database, PHP and dependency health')
+            ->assertDontSee($referenceToken)->assertDontSee('SENTINEL_REFRESH_NOT_PERSISTED');
     }
 
     public function test_diagnostic_logging_failure_does_not_change_token_response(): void

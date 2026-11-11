@@ -238,11 +238,14 @@ final class OperationDiagnostics
     }
 
     /** @param array<string, mixed> $details */
-    public static function summary(string $code, array $details = []): string
+    public static function summary(string $code, array $details = [], ?string $operation = null): string
     {
         return match ($code) {
             'invalid_client' => __('OAuth client authentication failed. Inspect the recorded authentication stage and reason.'),
             'oauth_client_metadata_unavailable' => __('The OAuth client metadata or signing keys could not be obtained reliably.'),
+            'request_failed' => self::hasOAuthClientFailureContext($details, $operation)
+                ? __('OAuth client authentication failed. Inspect the recorded authentication stage and reason.')
+                : __('The operation did not complete safely. Consult the error code and server diagnostic log.'),
             'network_failure' => self::networkSummary($details),
             'tls_failure' => __('The remote TLS certificate, hostname or secure handshake could not be verified.'),
             'unsafe_target' => self::outboundSummary($details),
@@ -294,11 +297,14 @@ final class OperationDiagnostics
     }
 
     /** @param array<string, mixed> $details */
-    public static function nextStep(string $code, array $details = []): string
+    public static function nextStep(string $code, array $details = [], ?string $operation = null): string
     {
         return match ($code) {
             'invalid_client' => self::oauthClientNextStep($details),
             'oauth_client_metadata_unavailable' => __('Check the Gateway host network and HTTPS response from the approved ChatGPT client metadata and JWKS URLs. Do not weaken cryptographic client authentication.'),
+            'request_failed' => self::hasOAuthClientFailureContext($details, $operation)
+                ? self::oauthClientNextStep($details)
+                : __('Find the matching operation, error code, time and diagnostic reference in the Gateway logs.'),
             'network_failure' => self::networkNextStep($details),
             'tls_failure' => __('Check certificate validity, hostname/SNI and full certificate chain from the Gateway host. Do not disable TLS verification.'),
             'unsafe_target' => self::outboundNextStep($details),
@@ -346,6 +352,18 @@ final class OperationDiagnostics
             'server_error', 'file_unavailable' => __('Look up the diagnostic reference in authorized Admin Activity or operation-diagnostics-read. Inspect the owning component if its original cause was not received.'),
             default => __('Find the matching operation, error code, time and diagnostic reference in the Gateway logs.'),
         };
+    }
+
+    /** @param array<string, mixed> $details */
+    private static function hasOAuthClientFailureContext(array $details, ?string $operation): bool
+    {
+        // request_failed is shared across connectors. Never reclassify it
+        // from an OAuth-shaped field without the owning OAuth operation and
+        // the server-authored, allowlisted authentication evidence.
+        return in_array($operation, [
+            'oauth-token-refresh', 'oauth-token-refresh-recovery',
+            'oauth-token-authorization-code', 'oauth-token-revoke', 'oauth-token-unknown',
+        ], true) && isset(self::safeContext($details)['oauth_failure_reason']);
     }
 
     /** @param array<string, mixed> $details */
