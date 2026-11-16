@@ -164,7 +164,7 @@
             // A trusted click/keyboard activation on this SEPARATE control
             // is proof of the Owner's decision. Password input/change never is.
             checkbox.addEventListener('click', event => {
-                if (!event.isTrusted || !checkbox.checked || field.disabled || field.value === '') {
+                if (!event.isTrusted || !checkbox.checked || field.matches(':disabled') || field.value === '') {
                     checkbox.checked = false;
                     approval.value = null;
                     if (event.isTrusted && field.value === '') field.focus();
@@ -403,7 +403,11 @@
             // without DOM events cannot substitute a different credential.
             const unapproved = Array.from(form.querySelectorAll(
                 'input[name="current_password"][data-admin-requires-intent]')).find(field => {
-                if (field.disabled) return false;
+                // A field inside a disabled connector fieldset is disabled
+                // for form submission even though field.disabled is false.
+                // Match effective HTML disabled semantics, not only its own
+                // attribute, or an inactive credential blocks another Target.
+                if (field.matches(':disabled')) return false;
                 const approval = ownerApprovals.get(field);
                 return !approval || !approval.checkbox.checked || !field.value
                     || approval.value !== field.value;
