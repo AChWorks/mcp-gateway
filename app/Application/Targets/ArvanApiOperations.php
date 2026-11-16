@@ -1,0 +1,264 @@
+<?php
+
+namespace App\Application\Targets;
+
+use App\Application\Access\AccessControl;
+use App\Application\Mcp\McpDispatchAdmission;
+use App\Domain\Access\GatewayPermission;
+use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
+use App\Infrastructure\Http\Api\ApiHttpTransport;
+use App\Infrastructure\Http\Api\OpenApiOperationCatalog;
+use App\Infrastructure\Http\OutboundRequestException;
+use App\Infrastructure\Http\SafeHttpClient;
+use App\Models\User;
+use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
+use InvalidArgumentException;
+use RuntimeException;
+use Throwable;
+
+/**
+ * Shared application-level Target operations, independent of MCP transport.
+ * A later Admin action can invoke the SAME service without a self-MCP call.
+ * A new API path doesn't need a Gateway tool, code registration or version.
+ */
+final readonly class ArvanApiOperations
+{
+    public function __construct(
+        private AccessControl $access,
+        private McpDispatchAdmission $admission,
+        private ActivityRecorder $activity,
+        private SafeHttpClient $http,
+        private ApiHttpTransport $transport,
+        private OpenApiOperationCatalog $catalog,
+        private ArvanApiTargetVault $vault,
+    ) {}
+
+    /** @return array<string, mixed> */
+    public function catalog(
+        User $user, string $targetId, int $offset = 0, int $limit = 20, ?string $search = null,
+    ): array {
+        $operation = 'arvan-api-catalog';
+        $target = $this->target($user, $targetId, GatewayPermission::ArvanApiInspect);
+        if (! $target instanceof Target) {
+            return $this->failed($operation, null, 'target_not_found');
+        }
+        if (($reason = $this->blockedReason($user, $target, GatewayPermission::ArvanApiInspect)) !== null) {
+            return $this->failed($operation, $target, $reason);
+        }
+        if ($offset < 0 || $limit < 1 || $limit > 100 || ($search !== null && mb_strlen($search) > 255)) {
+            return $this->failed($operation, $target, 'invalid_input');
+        }
+        $config = $this->config($target);
+        if ($config?->spec_url === null) {
+            return $this->failed($operation, $target, 'catalog_unavailable', [
+                'reason' => 'Target has no Owner-configured OpenAPI description URL.',
+            ]);
+        }
+
+        try {
+            // Public documentation retrieval never receives the API key.
+            $response = $this->http->getApiDocument($config->spec_url);
+            if ($response->status < 200 || $response->status >= 300) {
+                return $this->failed($operation, $target, 'catalog_unavailable', [
+                    'http_status' => $response->status, 'failure_origin' => 'downstream_http',
+                    'failure_stage' => 'remote_http',
+                ]);
+            }
+            $result = $this->catalog->page($this->catalog->parse($response->body), $offset, $limit, $search);
+        } catch (OutboundRequestException|InvalidArgumentException $exception) {
+            return $this->failed($operation, $target, 'catalog_unavailable', [
+                'failure_stage' => 'operation',
+                'exception_class' => $exception::class,
+                'source_error_message' => $exception->getMessage(),
+            ]);
+        }
+
+        $this->activity->record(CorrelationId::current(), $operation, 'success', $target);
+
+        return ['ok' => true, 'target_id' => $target->target_id,
+            'base_url' => $config->base_url,
+            'operations' => $result['operations'],
+            'total' => $result['total'],
+            'next_offset' => $result['next_offset'],
+            'note' => 'Catalog is untrusted descriptive data, not a new authorization grant. Explicit method/path permission is checked at dispatch.',
+        ];
+    }
+
+    /**
+     * A registered API root can execute new compatible endpoints even when
+     * an OpenAPI catalog is absent/stale. Never take an absolute URL or secret
+     * from the client. Caller-selected methods are classified by effect.
+     *
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>
+     */
+    public function execute(
+        User $user, string $targetId, string $method, string $path,
+        array $query = [], ?string $bodyJson = null,
+    ): array {
+        $operation = 'arvan-api-request';
+        $method = strtoupper(trim($method));
+        $permission = match ($method) {
+            'GET', 'HEAD', 'OPTIONS' => GatewayPermission::ArvanApiRead,
+            'POST', 'PUT', 'PATCH' => GatewayPermission::ArvanApiWrite,
+            'DELETE' => GatewayPermission::ArvanApiDestructive,
+            default => GatewayPermission::ArvanApiUnclassified,
+        };
+        $target = $this->target($user, $targetId, $permission);
+        if (! $target instanceof Target) {
+            return $this->failed($operation, null, 'target_not_found');
+        }
+        if (($reason = $this->blockedReason($user, $target, $permission)) !== null) {
+            return $this->failed($operation, $target, $reason);
+        }
+        if (! preg_match('/^[A-Z][A-Z0-9-]*$/D', $method)
+            || in_array($method, ['CONNECT', 'TRACE'], true)
+            || $path === '' || strlen($path) > 1024
+            || ($bodyJson !== null && ! json_validate($bodyJson))) {
+            return $this->failed($operation, $target, 'invalid_input');
+        }
+
+        $config = $this->config($target);
+        $credential = $this->credential($target);
+        if (! $config instanceof ArvanApiTargetConfig || ! $credential instanceof TargetCredential) {
+            return $this->failed($operation, $target, 'credential_unavailable');
+        }
+        try {
+            $key = $this->vault->open($target, $config, $credential);
+        } catch (RuntimeException) {
+            return $this->failed($operation, $target, 'credential_unavailable');
+        }
+
+        // Fresh authorization and revocation boundary AFTER reading Target and
+        // credential. No token is sent if identity/grants/pause changed.
+        $freshUser = User::query()->find($user->getKey());
+        $currentConfig = $this->config($target);
+        $currentCredential = $this->credential($target);
+        if (! $freshUser instanceof User
+            || $this->blockedReason($freshUser, $target, $permission) !== null
+            || ! $currentConfig instanceof ArvanApiTargetConfig
+            || ! $currentCredential instanceof TargetCredential
+            || ! hash_equals($currentConfig->base_url, $config->base_url)
+            || ! hash_equals((string) $currentCredential->encrypted_payload, (string) $credential->encrypted_payload)) {
+            return $this->failed($operation, $target, 'forbidden');
+        }
+
+        try {
+            $response = $this->transport->request(
+                $config->base_url, $method, $path, $query, $bodyJson,
+                ['Authorization' => 'Apikey '.$key, 'Accept' => 'application/json'],
+            );
+        } catch (OutboundRequestException $exception) {
+            $unknown = $permission !== GatewayPermission::ArvanApiRead && ! $exception->preDispatch;
+
+            return $this->failed($operation, $target, $unknown ? 'outcome_unknown' : $exception->reason, [
+                ...$exception->details,
+                'failure_origin' => $exception->preDispatch ? 'gateway_admission' : 'gateway_transport',
+                'request_not_sent' => $exception->preDispatch,
+                'effect_unconfirmed' => $unknown,
+                'retry_safe' => $exception->preDispatch,
+                'method' => $method,
+                'relative_path' => $path,
+            ], $unknown);
+        } catch (Throwable $exception) {
+            return $this->failed($operation, $target, 'outcome_unknown', [
+                'exception_class' => $exception::class,
+                'failure_origin' => 'unknown',
+                'effect_unconfirmed' => true,
+                'retry_safe' => false,
+            ], true);
+        }
+
+        $status = $response->status;
+        $requestId = $response->header('X-Request-ID');
+        if ($requestId !== null) {
+            // Provider response headers are untrusted, too. Do not echo a
+            // credential (or embedded control chars) as a diagnostic ID.
+            $requestId = preg_replace('/[\x00-\x1f\x7f]/', '', str_replace($key, '[REDACTED]', $requestId));
+            $requestId = mb_strcut((string) $requestId, 0, 256, 'UTF-8');
+        }
+        $body = str_replace($key, '[REDACTED]', $response->body);
+        $decoded = json_decode($body, true);
+        $payload = json_last_error() === JSON_ERROR_NONE ? $decoded : $body;
+        if ($status < 200 || $status >= 300) {
+            $unknown = $permission !== GatewayPermission::ArvanApiRead;
+
+            return $this->failed($operation, $target, $unknown ? 'outcome_unknown' : 'upstream_http_error', [
+                'failure_origin' => 'downstream_http', 'failure_stage' => 'remote_http',
+                'http_status' => $status, 'upstream_request_id' => $requestId,
+                'method' => $method, 'relative_path' => $path,
+                'source_error_details' => [
+                    'provider_request_id' => $requestId,
+                    'method' => $method,
+                    'relative_path' => $path,
+                    'response_excerpt' => mb_substr($body, 0, 4096),
+                    'response_truncated' => mb_strlen($body) > 4096,
+                ],
+                'effect_unconfirmed' => $unknown, 'retry_safe' => false,
+            ], $unknown);
+        }
+        $this->activity->record(CorrelationId::current(), $operation, 'success', $target, null, [
+            'http_status' => $status, 'upstream_request_id' => $requestId,
+            'method' => $method, 'relative_path' => $path,
+        ]);
+
+        return ['ok' => true, 'target_id' => $target->target_id,
+            'http_status' => $status, 'upstream_request_id' => $requestId, 'data' => $payload,
+        ];
+    }
+
+    private function target(User $user, string $targetId, GatewayPermission $permission): ?Target
+    {
+        if (preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $targetId) !== 1) {
+            return null;
+        }
+
+        return $this->access->scopeTargets(Target::query(), $user, $permission)
+            ->where('connector_type', 'arvancloud')->where('target_id', $targetId)->first();
+    }
+
+    private function blockedReason(User $user, Target $target, GatewayPermission $permission): ?string
+    {
+        if (! $this->access->allows($user, $permission, $target)
+            || ! $this->admission->allows($user)) {
+            return 'forbidden';
+        }
+
+        return TargetOperationGate::isPaused($target) ? 'target_paused' : null;
+    }
+
+    private function config(Target $target): ?ArvanApiTargetConfig
+    {
+        return ArvanApiTargetConfig::query()->where('target_record_id', $target->getKey())->first();
+    }
+
+    private function credential(Target $target): ?TargetCredential
+    {
+        return TargetCredential::query()->where('target_record_id', $target->getKey())
+            ->where('connector_type', 'arvancloud')
+            ->where('purpose', ArvanApiTargetVault::PURPOSE)->first();
+    }
+
+    /** @param array<string,mixed> $details
+     * @return array<string,mixed>
+     */
+    private function failed(string $operation, ?Target $target, string $code, array $details = [], bool $unknown = false): array
+    {
+        $reference = CorrelationId::current();
+        $this->activity->record($reference, $operation, $unknown ? 'unknown' : 'failure', $target, $code, $details);
+
+        return ['ok' => false, 'error' => [
+            'code' => $code,
+            'message' => $unknown
+                ? 'ArvanCloud may have applied the change; inspect the remote state before retrying.'
+                : 'ArvanCloud API operation could not complete.',
+            'next_step' => OperationDiagnostics::nextStep($code),
+            'diagnostic_reference' => $reference,
+        ]];
+    }
+}

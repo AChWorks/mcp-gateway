@@ -261,6 +261,13 @@ final class TargetController extends Controller
                 abort_unless($user->getRawOriginal('role') === GatewayRole::Owner->value, 403);
                 $confirmation->confirm($request);
             }
+            if ($adapter->type() === 'arvancloud') {
+                // API key enrollment must not be available to an ordinary
+                // Target creator. Require Owner authority and fresh password.
+                Gate::authorize(GatewayPermission::SecurityManage->value);
+                abort_unless($user->getRawOriginal('role') === GatewayRole::Owner->value, 403);
+                $confirmation->confirm($request);
+            }
             if ($adapter->type() === 'ssh_direct'
                 && ($validated['ssh_route_mode'] ?? 'direct') === 'reverse') {
                 // Enrollment over an inbound-blocked route is an explicit

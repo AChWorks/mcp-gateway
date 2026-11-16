@@ -27,6 +27,18 @@ final class SafeHttpClient
         return $this->send('GET', $url, $headers, [], 'none', relay: $relay);
     }
 
+    /**
+     * On-demand API schema fetch has its own configurable JSON/YAML budget,
+     * independent of the small WordPress operation response default.
+     */
+    public function getApiDocument(string $url): SafeHttpResponse
+    {
+        $budget = (int) config('bridge.http.api_document_max_bytes', 2097152);
+
+        return $this->send('GET', $url, [], [], 'none',
+            min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $budget)));
+    }
+
     /** Only the allowlisted ChatGPT file origin may include signed queries. */
     public function getChatgptFile(string $url, int $maxBytes): SafeHttpResponse
     {
@@ -67,6 +79,32 @@ final class SafeHttpClient
         return $this->send('POST', $url, $headers, $json, 'json', $responseLimitBytes, $timing, relay: $relay);
     }
 
+    /**
+     * Shared fixed-destination JSON API transport. The owning registered
+     * connector binds the endpoint, credential and operation authorization.
+     * GET/HEAD/DELETE and arbitrary HTTP API methods retain their verb;
+     * redirects, DNS rebinding and TLS policy remain SafeHttpClient-owned.
+     *
+     * @param  array<string, string>  $headers
+     * @param  array<string, mixed>  $query
+     */
+    public function requestJson(string $method, string $url, array $headers = [], ?string $jsonBody = null, array $query = []): SafeHttpResponse
+    {
+        if (preg_match('/^[A-Z][A-Z0-9-]*$/D', $method) !== 1 || in_array($method, ['CONNECT', 'TRACE'], true)) {
+            throw new OutboundRequestException('invalid_input', 'Unsupported outbound HTTP method.', [], true);
+        }
+        if ($jsonBody !== null) {
+            json_decode($jsonBody, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw new OutboundRequestException('invalid_input', 'Outbound JSON body is invalid.', [], true);
+            }
+        }
+
+        return $this->send($method, $url, $headers, $jsonBody ?? [], $jsonBody === null ? 'none' : 'raw_json',
+            responseLimitBytes: min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, (int) config('bridge.http.api_response_max_bytes', 1048576))),
+            query: $query);
+    }
+
     /** @param array<string, string> $headers */
     public function delete(string $url, array $headers = [], ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
@@ -75,10 +113,11 @@ final class SafeHttpClient
 
     /**
      * @param  array<string, string>  $headers
-     * @param  array<string, mixed>  $payload
-     * @param  'none'|'form'|'json'  $format
+     * @param  array<string, mixed>|string  $payload
+     * @param  'none'|'form'|'json'|'raw_json'  $format
+     * @param  array<string,mixed>  $query
      */
-    private function send(string $method, string $url, array $headers, array $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null, ?LocalSocks5Route $relay = null): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array|string $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null, ?LocalSocks5Route $relay = null, array $query = []): SafeHttpResponse
     {
         $network = $this->settings->httpTimeoutsSeconds();
         $connectTimeout = $network['connect'];
@@ -136,6 +175,7 @@ final class SafeHttpClient
 
             $request = Http::withOptions([
                 'allow_redirects' => false,
+                ...($query === [] ? [] : ['query' => $query]),
                 'verify' => true,
                 // Never transparently decompress an opaque signed-file byte stream.
                 ...($fileSink === null ? [] : ['decode_content' => false]),
@@ -158,11 +198,20 @@ final class SafeHttpClient
             $timing?->outboundCall();
             try {
                 $response = match ($method) {
-                    'POST' => $format === 'json'
-                        ? $request->asJson()->post($target->url, $payload)
-                        : $request->asForm()->post($target->url, $payload),
-                    'DELETE' => $request->delete($target->url),
-                    default => $request->get($target->url),
+                    'POST' => match ($format) {
+                        'json' => $request->asJson()->post($target->url, $payload),
+                        'raw_json' => $request->withBody((string) $payload, 'application/json')->send('POST', $target->url),
+                        default => $request->asForm()->post($target->url, $payload),
+                    },
+                    'DELETE' => $format === 'none'
+                        ? $request->delete($target->url)
+                        : $request->withBody((string) $payload, 'application/json')->send($method, $target->url),
+                    'GET' => $format === 'raw_json'
+                        ? $request->withBody((string) $payload, 'application/json')->send('GET', $target->url)
+                        : $request->get($target->url),
+                    default => $format === 'raw_json'
+                        ? $request->withBody((string) $payload, 'application/json')->send($method, $target->url)
+                        : $request->send($method, $target->url),
                 };
             } catch (ConnectionException|RequestException $exception) {
                 if ($responseBody->limitExceeded()) {

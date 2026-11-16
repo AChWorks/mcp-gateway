@@ -23,6 +23,23 @@ final class TargetRecoveryPresentation
         ?object $credentialMetadata = null,
         bool $oauthFlowPending = false,
     ): array {
+        if ($target->connector_type === 'arvancloud') {
+            $verified = (string) $target->getRawOriginal('connection_state') === TargetConnectionState::Connected->value;
+
+            return [
+                'title' => $verified ? __('ArvanCloud API last verified') : __('ArvanCloud API needs verification'),
+                'description' => __('Authenticated read-only probe is historical evidence; it is not a live connection. Deleting the local credential does not revoke the remote Machine User key.'),
+                'reachability' => $target->last_tested_at === null
+                    ? __('No authenticated probe has been recorded.')
+                    : __('Most recent recorded probe: :time', ['time' => (string) $target->last_tested_at]),
+                'authorization' => __('Bound encrypted Machine User API key; API scopes remain provider-controlled.'),
+                'operation' => __('API requests use this exact registered Target. Target Pause prevents new requests.'),
+                'history' => $target->last_error_code === null ? null
+                    : __('Recorded diagnostic: :code', ['code' => $target->last_error_code]),
+                'tone' => $verified ? 'neutral' : 'caution',
+                'canFinish' => false, 'canCancel' => false, 'needsExternalProof' => false,
+            ];
+        }
         if (! in_array($target->connector_type, ['wp_ai_bridge', 'ssh_direct'], true)) {
             return [
                 'title' => __('Connector unavailable'),

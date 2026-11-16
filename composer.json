@@ -19,7 +19,8 @@
         "phpseclib/phpseclib": "^4.0.2",
         "react/dns": "^1.14",
         "react/event-loop": "^1.6",
-        "symfony/psr-http-message-bridge": "^8.1"
+        "symfony/psr-http-message-bridge": "^8.1",
+        "symfony/yaml": "^7.0 || ^8.0"
     },
     "require-dev": {
         "larastan/larastan": "^3.12",

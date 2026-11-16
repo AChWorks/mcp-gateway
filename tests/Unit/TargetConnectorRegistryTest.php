@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Application\Targets\TargetConnectorRegistry;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetAdapter;
 use App\Infrastructure\Connectors\SshDirect\SshDirectTargetAdapter;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetAdapter;
 use InvalidArgumentException;
@@ -14,9 +15,10 @@ final class TargetConnectorRegistryTest extends TestCase
     {
         $registry = app(TargetConnectorRegistry::class);
 
-        self::assertSame(['wp_ai_bridge', 'ssh_direct'], $registry->types());
+        self::assertSame(['wp_ai_bridge', 'ssh_direct', 'arvancloud'], $registry->types());
         self::assertInstanceOf(WpAiBridgeTargetAdapter::class, $registry->forType('wp_ai_bridge'));
         self::assertInstanceOf(SshDirectTargetAdapter::class, $registry->forType('ssh_direct'));
+        self::assertInstanceOf(ArvanApiTargetAdapter::class, $registry->forType('arvancloud'));
         self::assertSame($registry->forType('ssh_direct'), $registry->forType('ssh_direct'));
         self::assertSame($registry->forType('wp_ai_bridge'), $registry->forType('wp_ai_bridge'));
     }

@@ -12,7 +12,7 @@ This is the implementer/operator contract for connecting a new Target to MCP Gat
 | Existing SSH password/key server | The ssh_direct connector with verified pinned server host key; NO OAuth token-rotation scheduler |
 | A new downstream MCP-over-HTTPS service | Connector-owned credential/lifecycle and shared HTTP MCP transport where appropriate; WordPress-specific OAuth is not a universal requirement |
 
-Current source connector types are declared in app/Application/Targets/TargetConnectorRegistry.php. Only `wp_ai_bridge` and `ssh_direct` are supported built-in connector types; unsupported stored types are rejected for registration, inventory filters and execution. An architecture entry does not mean a released or deployed capability.
+Current source connector types are declared in app/Application/Targets/TargetConnectorRegistry.php. Only `wp_ai_bridge`, `ssh_direct` and `arvancloud` are supported built-in connector types; unsupported stored types are rejected for registration, inventory filters and execution. An architecture entry does not mean a released or deployed capability.
 
 ## 2. External integrators: choose a contract before choosing a Gateway adapter
 
@@ -23,6 +23,10 @@ A Target product that **already speaks supported standard MCP over an authentica
 The first **source-only** request-only 2026-07-28 downstream wire slice is documented in [Downstream MCP transport](OUTBOUND-MCP-TRANSPORT.md). It has no registered adapter or product credential/linking lifecycle and is **not** an already usable Generic MCP Target. The 2025-11-25 AChrix Bridge handshake and current WordPress session protocol are deliberately not silently conflated with this primitive.
 
 For a non-MCP product, first determine whether its native authenticated API or an embedded application Bridge can expose explicit discoverable operations and a trustworthy authorization boundary. Adapt only that genuinely different provider protocol at the connector edge. A new connector must not create a second Gateway-wide credential system, Group model, diagnostics store, resource policy, MCP endpoint, or file-transfer infrastructure. An AChrix/Rixa application integration must follow **its actual upstream signed contract** and cannot be inferred from a possible future CMS framework component.
+
+### ArvanCloud REST/OpenAPI reference implementation
+
+The [ArvanCloud API connector](ARVANCLOUD-API-CONNECTOR.md) implements a separate HTTP API family, not a downstream MCP Target. Its registered HTTPS root, encrypted API credential and Owner-controlled lifecycle are provider-specific; `ApiHttpTransport` and `OpenApiOperationCatalog` are small shared primitives suitable for **future REST connectors** with their own authenticated identity and grants. Endpoint discovery is on-demand from untrusted OpenAPI schemas; compatible new relative paths and HTTP methods require no gateway tool code change. Arbitrary hosts, redirects, authentication headers and code loading are not offered to AI.
 
 ### What the provider must specify
 

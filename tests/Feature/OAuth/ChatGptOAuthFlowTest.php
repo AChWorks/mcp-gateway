@@ -427,6 +427,8 @@ final class ChatGptOAuthFlowTest extends TestCase
             'wordpress-abilities-read',
             'wordpress-content-publish-create',
             'wordpress-ability-execute',
+            'arvan-api-catalog',
+            'arvan-api-request',
             'ssh-command-run',
             'ssh-job-start',
             'ssh-jobs-list',
@@ -458,6 +460,32 @@ final class ChatGptOAuthFlowTest extends TestCase
             ->assertJsonPath('result.structuredContent.ok', true)
             ->assertJsonPath('result.structuredContent.targets', [])
             ->assertJsonPath('result.structuredContent.truncated', false);
+
+        // The new registered API operation is callable through the SAME
+        // authenticated MCP tool gateway; unknown Targets never reach a
+        // downstream HTTP provider or leak another tenant's existence.
+        $unassignedApi = $this->withHeaders([
+            ...$mcpHeaders,
+            'MCP-Protocol-Version' => '2026-07-28',
+            'Mcp-Method' => 'tools/call',
+            'Mcp-Name' => 'arvan-api-request',
+        ])->postJson('/mcp', [
+            'jsonrpc' => '2.0',
+            'id' => 12,
+            'method' => 'tools/call',
+            'params' => [
+                'name' => 'arvan-api-request',
+                'arguments' => [
+                    'target_id' => 'unassigned-arvan-cloud',
+                    'method' => 'GET',
+                    'path' => '/domains',
+                ],
+                '_meta' => $modernMeta,
+            ],
+        ]);
+        $unassignedApi->assertOk()
+            ->assertJsonPath('result.structuredContent.ok', false)
+            ->assertJsonPath('result.structuredContent.error.code', 'target_not_found');
 
         // Real OAuth ingress must bind the verified client/profile to
         // diagnostic Activity records, not only check the Target grant.
@@ -591,6 +619,8 @@ final class ChatGptOAuthFlowTest extends TestCase
             'wordpress-abilities-read',
             'wordpress-content-publish-create',
             'wordpress-ability-execute',
+            'arvan-api-catalog',
+            'arvan-api-request',
             'ssh-command-run',
             'ssh-job-start',
             'ssh-jobs-list',

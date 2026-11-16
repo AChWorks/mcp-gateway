@@ -31,6 +31,9 @@ return [
         'connect_timeout_seconds' => (int) env('BRIDGE_REMOTE_CONNECT_TIMEOUT_SECONDS', 2),
         'request_timeout_seconds' => (int) env('BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS', 5),
         'max_response_bytes' => (int) env('BRIDGE_REMOTE_MAX_RESPONSE_BYTES', 65536),
+        // Shared fixed-destination REST/OpenAPI adapter budgets. No per-endpoint hardcoding.
+        'api_document_max_bytes' => (int) env('GATEWAY_API_DOCUMENT_MAX_BYTES', 2097152),
+        'api_response_max_bytes' => (int) env('GATEWAY_API_RESPONSE_MAX_BYTES', 1048576),
         // Readonly tools can legitimately return larger structured results than OAuth/metadata.
         // SafeHttpClient always clamps both limits to its absolute decoded-body ceiling.
         'readonly_tool_max_response_bytes' => (int) env('BRIDGE_REMOTE_READONLY_TOOL_MAX_RESPONSE_BYTES', 262144),

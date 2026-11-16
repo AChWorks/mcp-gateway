@@ -28,7 +28,7 @@ final class TargetDomainFoundationTest extends TestCase
             'connector_type' => 'ssh_direct',
         ]);
 
-        self::assertSame(['wp_ai_bridge', 'ssh_direct'], Target::KNOWN_CONNECTOR_TYPES);
+        self::assertSame(['wp_ai_bridge', 'ssh_direct', 'arvancloud'], Target::KNOWN_CONNECTOR_TYPES);
         self::assertSame(TargetConnectionState::Disconnected, $wp->refresh()->connection_state);
         self::assertSame('wp_ai_bridge', $wp->connector_type);
         self::assertSame('ssh_direct', $ssh->connector_type);

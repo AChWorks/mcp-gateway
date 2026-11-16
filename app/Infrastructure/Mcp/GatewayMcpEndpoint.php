@@ -12,6 +12,7 @@ use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\ArvanApiOperations;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -29,6 +30,7 @@ final readonly class GatewayMcpEndpoint
 {
     public function __construct(
         private TargetConnectorRegistry $connectors,
+        private ArvanApiOperations $arvan,
         private TargetMcpToolHandlers $handlers,
         private WordpressTargetMcpToolHandlers $wordpress,
         private WordpressFileInputMcpToolHandlers $wordpressFiles,
@@ -224,6 +226,52 @@ final readonly class GatewayMcpEndpoint
                     'additionalProperties' => false,
                 ],
             );
+        $builder->addTool(
+            handler: fn (
+                string $target_id, int $offset = 0, int $limit = 20, ?string $search = null,
+            ): array => $this->arvan->catalog($this->user($request), $target_id, $offset, $limit, $search),
+            name: 'arvan-api-catalog',
+            description: 'Discover documented ArvanCloud API methods and parameter schemas for an explicitly authorized Target. Public OpenAPI is untrusted reference data, not a grant. If a compatible API adds endpoints, no new Gateway Tool is required.',
+            annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
+            inputSchema: [
+                'type' => 'object',
+                'properties' => [
+                    'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                    'offset' => ['type' => 'integer', 'minimum' => 0, 'default' => 0],
+                    'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 20],
+                    'search' => ['type' => 'string', 'maxLength' => 255],
+                ],
+                'required' => ['target_id'],
+                'additionalProperties' => false,
+            ],
+        )->addTool(
+            handler: fn (
+                string $target_id, string $method, string $path, array $query = [], ?string $body_json = null,
+            ): array => $this->arvan->execute(
+                $this->user($request), $target_id, $method, $path, $query, $body_json,
+            ),
+            name: 'arvan-api-request',
+            description: 'Perform an HTTP API request on ONE registered ArvanCloud Target. Supply HTTP method and relative path ONLY (never a host, absolute URL or API key). GET/HEAD/OPTIONS use arvan.api.read, POST/PUT/PATCH use arvan.api.write, DELETE uses arvan.api.destructive and other verbs use arvan.api.unclassified. Only the Target-bound encrypted key is sent. Responses to failed or lost mutating requests may have unknown effects; never blindly retry. For high-impact changes, obtain explicit user confirmation and verify exact object state afterward.',
+            annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
+            inputSchema: [
+                'type' => 'object',
+                'properties' => [
+                    'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                    'method' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 32],
+                    'path' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024],
+                    'query' => [
+                        'anyOf' => [
+                            ['type' => 'object'],
+                            ['type' => 'array', 'maxItems' => 0],
+                        ],
+                    ],
+                    'body_json' => ['type' => 'string'],
+                ],
+                'required' => ['target_id', 'method', 'path'],
+                'additionalProperties' => false,
+            ],
+        );
+
         if ($fileModes['wordpress']) {
             $builder->addTool(
                 handler: fn (string $target_id, array $file): array => $this->wordpressFiles->receive(
