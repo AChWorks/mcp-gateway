@@ -13,10 +13,10 @@
     "require": {
         "php": "^8.4.1",
         "firebase/php-jwt": "^7.1",
-        "laravel/framework": "^13.31",
+        "laravel/framework": "^13.40",
         "league/oauth2-server": "^9.4.1",
         "mcp/sdk": "0.9.0",
-        "phpseclib/phpseclib": "^4.0.2",
+        "phpseclib/phpseclib": "^4.0.3",
         "react/dns": "^1.14",
         "react/event-loop": "^1.6",
         "symfony/psr-http-message-bridge": "^8.1",

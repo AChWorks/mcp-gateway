@@ -165,7 +165,7 @@ final readonly class SshFileRuntime
                     $this->requireVersion($before, $expectedSize, $expectedMtime);
                     $bytesToRead = max(0, min($length, $before['size'] - $offset));
                     $bytes = $bytesToRead > 0 ? $sftp->get($path, null, $offset, $bytesToRead) : '';
-                    if (! is_string($bytes) || strlen($bytes) !== $bytesToRead) {
+                    if (strlen($bytes) !== $bytesToRead) {
                         throw new SshTargetConnectionException('source_changed');
                     }
                     $after = $this->stableRegularFile($sftp, $path);
@@ -311,7 +311,7 @@ final readonly class SshFileRuntime
                     // Check actual remote stored bytes, not just server-reported
                     // size. Small inline payloads fit inside the bounded range.
                     $remote = $data === '' ? '' : $sftp->get($temporary, null, 0, strlen($data));
-                    if (! is_string($remote) || strlen($remote) !== strlen($data)
+                    if (strlen($remote) !== strlen($data)
                         || ! hash_equals(hash('sha256', $data), hash('sha256', $remote))) {
                         throw new SshTargetConnectionException('write_unverified');
                     }

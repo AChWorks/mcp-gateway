@@ -245,7 +245,7 @@ final class SshSubsystemOnlySftp extends SFTP
 
         // Upstream SFTP resets its per-packet timeout, so clamp every wait
         // to the remaining whole-operation budget before blocking.
-        $this->curTimeout = $this->curTimeout === null || $this->curTimeout <= 0
+        $this->curTimeout = $this->curTimeout <= 0
             ? $remaining : min($this->curTimeout, $remaining);
     }
 }
