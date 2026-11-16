@@ -11,6 +11,8 @@ use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use Tests\TestCase;
 
 /** Actual OpenSSH fixture, loopback-only policy explicitly injected in CI. */
@@ -96,8 +98,17 @@ final class SshCommandFixtureTest extends TestCase
         self::assertSame(0, $result['result']['exit_code']);
     }
 
+    // PHP memory_get_peak_usage(true) is the high-water mark for the ENTIRE
+    // PHPUnit process, not the SSH operation. An earlier unrelated test can
+    // permanently consume the 128-MiB budget before this fixture starts.
+    // Isolate only this resource assertion with a fresh PHP process, retaining
+    // the exact 128-MiB bound and all real SSH stream/exit/byte assertions.
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_multi_megabyte_outputs_are_drained_without_stderr_heap_growth(): void
     {
+        $baselineCurrent = memory_get_usage(true);
+        $baselinePeak = memory_get_peak_usage(true);
         $target = $this->target('password');
         $result = app(SshCommandMcpToolHandlers::class)->run($this->owner(), $target->target_id,
             "head -c 2097152 /dev/zero | tr '\\000' s; head -c 2097152 /dev/zero | tr '\\000' e >&2; exit 7");
@@ -111,7 +122,10 @@ final class SshCommandFixtureTest extends TestCase
         self::assertSame(8192, $data['stderr_bytes']);
         self::assertTrue($data['stdout_truncated']);
         self::assertTrue($data['stderr_truncated']);
-        self::assertLessThan(128 * 1024 * 1024, memory_get_peak_usage(true));
+        self::assertLessThan(128 * 1024 * 1024, memory_get_peak_usage(true), sprintf(
+            'Isolated SSH stream peak memory in bytes: before_current=%d, before_peak=%d, after_current=%d, after_peak=%d.',
+            $baselineCurrent, $baselinePeak, memory_get_usage(true), memory_get_peak_usage(true),
+        ));
     }
 
     public function test_timeout_is_unknown_and_command_is_not_retried(): void

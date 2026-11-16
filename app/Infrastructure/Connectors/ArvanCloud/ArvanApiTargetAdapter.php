@@ -8,6 +8,7 @@ use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorResult;
 use App\Application\Targets\TargetEndpointPreflight;
 use App\Application\Targets\TargetEnrollmentPreflight;
+use App\Application\Targets\TargetOperationGate;
 use App\Application\Targets\TargetPreflightResult;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -207,11 +208,14 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     public function disconnect(Target $target): TargetConnectorResult
     {
         DB::transaction(function () use ($target): void {
-            TargetCredential::query()->where('target_record_id', $target->getKey())
+            // All changes that invalidate a probe take the same Target row
+            // lock used for conditional probe settlement, never across I/O.
+            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+            TargetCredential::query()->where('target_record_id', $locked->getKey())
                 ->where('connector_type', $this->type())
                 ->where('purpose', ArvanApiTargetVault::PURPOSE)->delete();
-            $target->forceFill(['connection_state' => TargetConnectionState::Disconnected, 'connected_at' => null])->save();
-            $this->activity->recordRequired(CorrelationId::current(), 'arvan-target-disconnect', 'success', $target);
+            $locked->forceFill(['connection_state' => TargetConnectionState::Disconnected, 'connected_at' => null])->save();
+            $this->activity->recordRequired(CorrelationId::current(), 'arvan-target-disconnect', 'success', $locked);
         });
 
         return new TargetConnectorResult(statusMessage: __('Gateway deleted its local ArvanCloud credential. Revoke the Machine User API key in ArvanCloud separately if required.'));
@@ -219,6 +223,9 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
 
     public function test(Target $target): TargetConnectorResult
     {
+        // Connect, Reconnect and Test must share ONE fresh per-dispatch pause
+        // boundary. Local Disconnect/credential recovery remains available.
+        $this->requireUnpaused($target);
         $config = $this->config($target);
         if ($config->probe_path === null) {
             throw new TargetConnectorFailure(
@@ -227,8 +234,12 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             );
         }
         try {
-            $key = $this->vault->open($target, $config, $this->credential($target)
-                ?? throw new RuntimeException('ArvanCloud credential was disconnected.'));
+            $credential = $this->credential($target)
+                ?? throw new RuntimeException('ArvanCloud credential was disconnected.');
+            $key = $this->vault->open($target, $config, $credential);
+            // Recheck immediately before invoking the transport. A pause or
+            // removal after the initial form load cannot dispatch a new probe.
+            $this->requireUnpaused($target);
             $response = $this->transport->request(
                 $config->base_url, 'GET', $config->probe_path, [],
                 null, ['Authorization' => 'Apikey '.$key],
@@ -239,13 +250,41 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                     null, 'upstream_http_error', ['http_status' => $response->status],
                 );
             }
-            $target->forceFill([
-                'connection_state' => TargetConnectionState::Connected,
-                'connected_at' => now(),
-                'last_tested_at' => now(),
-                'last_success_at' => now(),
-                'last_error_code' => null,
-            ])->save();
+
+            // HTTP I/O happened WITHOUT a DB lock. The result is evidence
+            // only for the exact credential/configuration used to dispatch.
+            // The same short Target row lock serializes rotation, Disconnect
+            // and this conditional health update.
+            DB::transaction(function () use ($target, $config, $credential): void {
+                $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
+                if (! $locked instanceof Target || TargetOperationGate::isPaused($locked)) {
+                    throw new TargetConnectorFailure(
+                        __('The Target was paused or removed during the probe; no connection state was changed.'),
+                        null, 'probe_stale',
+                    );
+                }
+                $currentConfig = $this->config($locked);
+                $currentCredential = $this->credential($locked);
+                if (! hash_equals($config->base_url, $currentConfig->base_url)
+                    || $config->probe_path !== $currentConfig->probe_path
+                    || $config->spec_url !== $currentConfig->spec_url
+                    || ! $currentCredential instanceof TargetCredential
+                    || ! hash_equals((string) $credential->getKey(), (string) $currentCredential->getKey())
+                    || ! hash_equals((string) $credential->encrypted_payload, (string) $currentCredential->encrypted_payload)) {
+                    throw new TargetConnectorFailure(
+                        __('The API configuration or key changed during the probe. Reload and verify the current credentials.'),
+                        null, 'probe_stale',
+                    );
+                }
+
+                $locked->forceFill([
+                    'connection_state' => TargetConnectionState::Connected,
+                    'connected_at' => now(),
+                    'last_tested_at' => now(),
+                    'last_success_at' => now(),
+                    'last_error_code' => null,
+                ])->save();
+            });
 
             return new TargetConnectorResult(statusMessage: __('Authenticated ArvanCloud GET probe succeeded.'));
         } catch (TargetConnectorFailure $exception) {
@@ -259,6 +298,16 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             throw new TargetConnectorFailure(
                 __('ArvanCloud API key is unavailable or no longer valid locally.'),
                 null, 'credential_unavailable', [],
+            );
+        }
+    }
+
+    private function requireUnpaused(Target $target): void
+    {
+        if (TargetOperationGate::isPaused($target)) {
+            throw new TargetConnectorFailure(
+                __('Resume Target operations before starting an authenticated ArvanCloud probe.'),
+                null, 'target_paused',
             );
         }
     }

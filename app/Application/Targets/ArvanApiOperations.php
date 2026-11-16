@@ -148,6 +148,11 @@ final readonly class ArvanApiOperations
             return $this->failed($operation, $target, 'forbidden');
         }
 
+        // Use a stable, correlatable HTTP identity for all dispatched
+        // outcomes. Never copy query, JSON body, key or raw client headers
+        // into Activity. The path is selectively redacted before persistence.
+        $identity = $this->apiIdentity($method, $path, $key);
+
         try {
             $response = $this->transport->request(
                 $config->base_url, $method, $path, $query, $bodyJson,
@@ -162,8 +167,7 @@ final readonly class ArvanApiOperations
                 'request_not_sent' => $exception->preDispatch,
                 'effect_unconfirmed' => $unknown,
                 'retry_safe' => $exception->preDispatch,
-                'method' => $method,
-                'relative_path' => $path,
+                'api_operation' => $identity,
             ], $unknown);
         } catch (Throwable $exception) {
             return $this->failed($operation, $target, 'outcome_unknown', [
@@ -171,6 +175,7 @@ final readonly class ArvanApiOperations
                 'failure_origin' => 'unknown',
                 'effect_unconfirmed' => true,
                 'retry_safe' => false,
+                'api_operation' => $identity,
             ], true);
         }
 
@@ -190,12 +195,10 @@ final readonly class ArvanApiOperations
 
             return $this->failed($operation, $target, $unknown ? 'outcome_unknown' : 'upstream_http_error', [
                 'failure_origin' => 'downstream_http', 'failure_stage' => 'remote_http',
-                'http_status' => $status, 'upstream_request_id' => $requestId,
-                'method' => $method, 'relative_path' => $path,
+                'http_status' => $status,
+                'api_operation' => [...$identity, 'provider_request_id' => $requestId],
                 'source_error_details' => [
                     'provider_request_id' => $requestId,
-                    'method' => $method,
-                    'relative_path' => $path,
                     'response_excerpt' => mb_substr($body, 0, 4096),
                     'response_truncated' => mb_strlen($body) > 4096,
                 ],
@@ -203,12 +206,31 @@ final readonly class ArvanApiOperations
             ], $unknown);
         }
         $this->activity->record(CorrelationId::current(), $operation, 'success', $target, null, [
-            'http_status' => $status, 'upstream_request_id' => $requestId,
-            'method' => $method, 'relative_path' => $path,
+            'http_status' => $status,
+            'api_operation' => [...$identity, 'provider_request_id' => $requestId],
         ]);
 
         return ['ok' => true, 'target_id' => $target->target_id,
             'http_status' => $status, 'upstream_request_id' => $requestId, 'data' => $payload,
+        ];
+    }
+
+    /**
+     * Bounded identity for operator reconciliation; secrets, body and query
+     * are never retained. Hash lets the operator compare an unredacted known
+     * request path if an opaque credential-like segment was masked.
+     *
+     * @return array{method:string,relative_path:string,path_sha256:string}
+     */
+    private function apiIdentity(string $method, string $path, string $key): array
+    {
+        $encoded = [rawurlencode($key), urlencode($key), $key];
+        $redacted = str_replace($encoded, '[REDACTED]', $path);
+
+        return [
+            'method' => $method,
+            'relative_path' => $redacted,
+            'path_sha256' => hash('sha256', $path),
         ];
     }
 
