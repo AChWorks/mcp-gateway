@@ -80,8 +80,8 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     {
         try {
             $base = $this->canonical((string) $input['api_base_url']);
-            $spec = $this->nullableUrl($input['api_spec_url'] ?? null);
-            $probe = $this->probe($input['api_probe_path'] ?? null);
+            $spec = $this->validatedSpec($input['api_spec_url'] ?? null);
+            $probe = $this->validatedProbe($input['api_probe_path'] ?? null);
             $key = (string) $input['api_key'];
 
             return DB::transaction(function () use ($input, $base, $spec, $probe, $key): Target {
@@ -102,7 +102,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                     'target_record_id' => $target->getKey(),
                     'connector_type' => $this->type(),
                     'purpose' => ArvanApiTargetVault::PURPOSE,
-                    'encrypted_payload' => $this->vault->seal($target, $config, $key),
+                    'encrypted_payload' => $this->validatedSeal($target, $config, $key),
                 ]);
                 $this->activity->recordRequired(CorrelationId::current(), 'arvan-target-register', 'success', $target);
 
@@ -110,6 +110,8 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             });
         } catch (UniqueConstraintViolationException $exception) {
             throw new TargetConnectorFailure(__('Target ID is already in use.'), 'target_id', 'invalid_input', []);
+        } catch (TargetConnectorFailure $exception) {
+            throw $exception;
         } catch (UnsafeOutboundTarget|OutboundRequestException $exception) {
             throw new TargetConnectorFailure(__('ArvanCloud endpoint could not be safely verified.'), 'api_base_url', 'unsafe_target', []);
         } catch (InvalidArgumentException|RuntimeException $exception) {
@@ -152,8 +154,8 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     {
         try {
             $base = $this->canonical((string) $input['api_base_url']);
-            $spec = $this->nullableUrl($input['api_spec_url'] ?? null);
-            $probe = $this->probe($input['api_probe_path'] ?? null);
+            $spec = $this->validatedSpec($input['api_spec_url'] ?? null);
+            $probe = $this->validatedProbe($input['api_probe_path'] ?? null);
 
             DB::transaction(function () use ($target, $input, $base, $spec, $probe): void {
                 $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
@@ -163,13 +165,17 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                     throw new InvalidArgumentException('Target configuration changed. Reload to avoid overwriting current credentials.');
                 }
                 $changedBase = ! hash_equals($config->base_url, $base);
+                $changedProbe = $config->probe_path !== $probe;
                 $newKey = (string) ($input['api_key'] ?? '');
                 if ($changedBase && $newKey === '') {
-                    throw new InvalidArgumentException('A new key is required when changing the API endpoint.');
+                    throw new TargetConnectorFailure(
+                        __('Changing the API base URL requires a new Machine User API key. Enter it below and save again.'),
+                        'api_key', 'invalid_input',
+                    );
                 }
                 $config->forceFill(['base_url' => $base, 'spec_url' => $spec, 'probe_path' => $probe])->save();
                 if ($newKey !== '') {
-                    $sealed = $this->vault->seal($locked, $config, $newKey);
+                    $sealed = $this->validatedSeal($locked, $config, $newKey);
                     if ($credential instanceof TargetCredential) {
                         $credential->forceFill(['encrypted_payload' => $sealed])->save();
                     } else {
@@ -181,13 +187,15 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                         ]);
                     }
                 }
-                if ($changedBase || $newKey !== '') {
+                if ($changedBase || $changedProbe || $newKey !== '') {
                     $locked->forceFill(['connection_state' => TargetConnectionState::Disconnected, 'connected_at' => null])->save();
                 }
                 $this->activity->recordRequired(CorrelationId::current(), 'arvan-target-configure', 'success', $locked);
             });
 
-            return new TargetConnectorResult(statusMessage: __('ArvanCloud API settings saved. Re-test the credential if the endpoint or key changed.'));
+            return new TargetConnectorResult(statusMessage: __('ArvanCloud API settings saved. Run the authenticated GET connection test after changing the endpoint, probe or key.'));
+        } catch (TargetConnectorFailure $exception) {
+            throw $exception;
         } catch (UnsafeOutboundTarget|OutboundRequestException $exception) {
             throw new TargetConnectorFailure(__('API endpoint is unsafe or unreachable.'), 'api_base_url', 'unsafe_target', []);
         } catch (InvalidArgumentException|RuntimeException $exception) {
@@ -349,6 +357,51 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     private function canonical(string $url): string
     {
         return $this->policy->canonicalBaseUrl($url);
+    }
+
+    private function validatedSpec(mixed $url): ?string
+    {
+        try {
+            return $this->nullableUrl($url);
+        } catch (UnsafeOutboundTarget|OutboundRequestException|InvalidArgumentException|RuntimeException) {
+            throw new TargetConnectorFailure(
+                __('OpenAPI description URL must be a valid public HTTPS URL without credentials, query parameters or fragments.'),
+                'api_spec_url', 'invalid_input',
+            );
+        }
+    }
+
+    private function validatedProbe(mixed $path): ?string
+    {
+        try {
+            return $this->probe($path);
+        } catch (InvalidArgumentException) {
+            throw new TargetConnectorFailure(
+                __('Read-only GET probe path must start with / and cannot contain a query, fragment or path traversal.'),
+                'api_probe_path', 'invalid_input',
+            );
+        }
+    }
+
+    private function validatedSeal(Target $target, ArvanApiTargetConfig $config, string $key): string
+    {
+        // Distinguish bad submitted material from an actual Gateway vault
+        // failure, without reflecting either the key or a crypto exception.
+        if ($key === '' || strlen($key) > 4096 || preg_match('/[\x00-\x20\x7f]/', $key) === 1) {
+            throw new TargetConnectorFailure(
+                __('Machine User API key format is invalid. Paste a key without spaces or line breaks.'),
+                'api_key', 'invalid_input',
+            );
+        }
+
+        try {
+            return $this->vault->seal($target, $config, $key);
+        } catch (RuntimeException) {
+            throw new TargetConnectorFailure(
+                __('Gateway could not securely store this API key. No new key was saved; check Gateway encryption diagnostics before retrying.'),
+                'configuration', 'credential_storage_failed',
+            );
+        }
     }
 
     private function nullableUrl(mixed $url): ?string

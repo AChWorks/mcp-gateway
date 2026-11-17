@@ -236,6 +236,27 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(@class,"target-field-grid")]/div[contains(@class,"target-span-all")]/textarea[@id="ai_guidance"])'));
     }
 
+    public function test_arvan_enrollment_is_explained_to_owner_and_not_offered_to_roles_that_cannot_save_it(): void
+    {
+        $this->actingAs($this->owner())
+            ->get('/admin/targets/create?connector_type=arvancloud')
+            ->assertOk()
+            ->assertSee('value="arvancloud" selected', false)
+            ->assertSee('API root examples and version paths')
+            ->assertSee('Test connection');
+
+        $administrator = User::query()->create([
+            'name' => 'Target administrator', 'email' => 'target-admin-arvan@example.test',
+            'password' => 'password', 'role' => GatewayRole::Administrator,
+            'target_scope_mode' => TargetScopeMode::All, 'access_enabled' => true,
+        ]);
+        $this->actingAs($administrator)
+            ->get('/admin/targets/create')
+            ->assertOk()
+            ->assertDontSee('value="arvancloud"', false)
+            ->assertSee('ArvanCloud API key enrollment requires a Gateway Owner');
+    }
+
     public function test_endpoint_preflight_is_in_shared_enrollment_actions_for_both_connectors(): void
     {
         $this->actingAs($this->owner());

@@ -75,7 +75,9 @@
 
 @can('security.manage')
 @if (! empty($configurationRevision))
-    <details class="panel panel-wide target-enrollment admin-collapsible-panel" @if ($errors->any() && old('configuration_revision') !== null) open @endif >
+    <details id="target-connection-settings" class="panel panel-wide target-enrollment admin-collapsible-panel"
+        @if (session('target_configuration_failed') || ($errors->any() && old('configuration_revision') !== null)
+            || ($target->connector_type === 'arvancloud' && request()->query('section') === 'api-connection')) open @endif>
         <summary><h2 class="admin-disclosure-heading">{{ __('Advanced connector connection settings') }}</h2></summary>
         <p class="field-help">{{ __('Only Owners can rotate connector endpoints and encrypted credentials. Changes are audited and require the current Owner password. Existing Target access permissions remain unchanged.') }}</p>
 

@@ -15,6 +15,7 @@ final class ArvanTargetAdminPresenter implements TargetConnectorAdminPresenter
             enrollmentView: 'admin.targets.connectors.arvan.enrollment',
             configurationView: 'admin.targets.connectors.arvan.configuration',
             detailRowsView: 'admin.targets.connectors.arvan.detail-rows',
+            detailActionsView: 'admin.targets.connectors.arvan.detail-actions',
         );
     }
 

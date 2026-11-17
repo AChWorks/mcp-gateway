@@ -7,6 +7,7 @@ use App\Application\Targets\ArvanApiOperations;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetAdapter;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
@@ -69,6 +70,11 @@ final class ArvanApiConnectorTest extends TestCase
         self::assertStringNotContainsString(self::KEY, $credential->encrypted_payload);
         $this->get('/admin/targets/arvan-cdn')->assertOk()
             ->assertSee('ArvanCloud API root')->assertDontSee(self::KEY);
+        $editByRecoveryLink = $this->get('/admin/targets/arvan-cdn/edit?section=api-connection')->assertOk();
+        self::assertMatchesRegularExpression(
+            '/<details[^>]+id="target-connection-settings"[^>]*\\bopen\\b/',
+            (string) $editByRecoveryLink->getContent(),
+        );
         $this->get('/admin/targets/arvan-cdn/edit')->assertOk()
             ->assertSee('Advanced connector connection settings')->assertDontSee(self::KEY);
         Http::assertNothingSent();
@@ -78,6 +84,137 @@ final class ArvanApiConnectorTest extends TestCase
             ...$payload, 'target_id' => 'INVALID SPACE', 'api_key' => $keyFlashed,
         ])->assertSessionHasErrors('target_id');
         self::assertNotContains($keyFlashed, (array) session()->getOldInput());
+    }
+
+    public function test_arvan_target_details_offer_readonly_connection_test_and_truthful_local_disconnect(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $this->actingAs($owner);
+        $this->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Test ArvanCloud API key (read-only GET)')
+            ->assertSee('Remove stored API key (advanced)')
+            ->assertSee('Delete Gateway API key')
+            ->assertSee('revoke that key separately')
+            ->assertDontSee('This connector is not yet available for enrollment.')
+            ->assertDontSee(self::KEY);
+
+        $target->forceFill(['operations_paused' => true])->save();
+        $this->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertDontSee('action="'.route('admin.targets.test', ['target' => 'arvan-cdn']).'"', false)
+            ->assertSee('Resume Target operations above');
+        $target->forceFill(['operations_paused' => false])->save();
+
+        ArvanApiTargetConfig::query()->sole()->forceFill(['probe_path' => null])->save();
+        $this->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertDontSee('action="'.route('admin.targets.test', ['target' => 'arvan-cdn']).'"', false)
+            ->assertSee('Connection testing needs a known read-only GET probe path')
+            ->assertSee('Set a GET probe in advanced connection settings');
+        TargetCredential::query()->delete();
+        $this->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('No Machine User key is stored')
+            ->assertSee('Open advanced connection settings to add a key')
+            ->assertDontSee('Delete Gateway API key');
+        Http::assertNothingSent();
+    }
+
+    public function test_arvan_recovery_respects_effective_configuration_permission_without_removing_admin_test_or_disconnect(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $administrator = $this->user('administrator');
+        DB::table('user_target_access')->insert([
+            'user_id' => $administrator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
+
+        // An in-scope Administrator can still test and disconnect; neither
+        // permission grants the Owner-only connector configuration editor.
+        $this->actingAs($administrator)
+            ->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Test ArvanCloud API key (read-only GET)')
+            ->assertSee('Delete Gateway API key')
+            ->assertSee('A Gateway Owner must add a new key before this Target can be used again.')
+            ->assertDontSee('To use this Target again, enter a new key in its connection settings.');
+        $this->get('/admin/targets/arvan-cdn/edit?section=api-connection')->assertOk()
+            ->assertDontSee('id="target-connection-settings"', false);
+
+        // Removing a probe is an Owner configuration task. The Admin must
+        // see a next step, but not a link to a form they cannot access.
+        $config = ArvanApiTargetConfig::query()->sole();
+        $config->forceFill(['probe_path' => null])->save();
+        $this->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Ask a Gateway Owner to configure a read-only GET probe for this Target.')
+            ->assertSee('Delete Gateway API key')
+            ->assertDontSee('Set a GET probe in advanced connection settings')
+            ->assertDontSee('section=api-connection')
+            ->assertDontSee('Test ArvanCloud API key (read-only GET)');
+
+        $this->actingAs($owner)
+            ->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Set a GET probe in advanced connection settings')
+            ->assertSee('To use this Target again, enter a new key in its connection settings.')
+            ->assertDontSee('Ask a Gateway Owner to configure a read-only GET probe');
+        $this->get('/admin/targets/arvan-cdn/edit?section=api-connection')->assertOk()
+            ->assertSee('id="target-connection-settings"', false)
+            ->assertSee('Advanced connector connection settings');
+
+        // After deletion, the same authority distinction applies to the
+        // missing credential rather than advertising a dead recovery route.
+        $this->actingAs($administrator)
+            ->post(route('admin.targets.disconnect', ['target' => $target->target_id]))
+            ->assertAdminRedirect('/admin/targets/arvan-cdn');
+        self::assertSame(0, TargetCredential::query()->count());
+        $this->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Ask a Gateway Owner to add a Machine User API key')
+            ->assertDontSee('Open advanced connection settings to add a key')
+            ->assertDontSee('section=api-connection');
+        $this->actingAs($owner)
+            ->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Open advanced connection settings to add a key')
+            ->assertDontSee('Ask a Gateway Owner to add a Machine User API key');
+        Http::assertNothingSent();
+    }
+
+    public function test_arvan_configuration_errors_identify_correct_fields_and_probe_changes_clear_old_verification(): void
+    {
+        [$target] = $this->fixture();
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $revision = $adapter->configurationRevision($target);
+        $base = [
+            'configuration_revision' => $revision,
+            'api_base_url' => 'https://api.example.test/cdn/4.0',
+            'api_spec_url' => 'https://spec.example.test/openapi.yaml',
+            'api_probe_path' => '/domains',
+            'api_key' => '',
+        ];
+        foreach ([
+            [[...$base, 'api_base_url' => 'https://different.example.test/v10'], 'api_key'],
+            [[...$base, 'api_spec_url' => 'https://spec.example.test/openapi.yaml?token=secret'], 'api_spec_url'],
+            [[...$base, 'api_probe_path' => '/domains/../bad'], 'api_probe_path'],
+            [[...$base, 'api_key' => 'key with whitespace'], 'api_key'],
+        ] as [$invalid, $expectedField]) {
+            try {
+                $adapter->updateConfiguration($target, $invalid);
+                self::fail('Invalid Arvan configuration unexpectedly saved: '.$expectedField);
+            } catch (TargetConnectorFailure $exception) {
+                self::assertSame($expectedField, $exception->field);
+                self::assertSame('invalid_input', $exception->reason);
+            }
+        }
+        self::assertSame('/domains', ArvanApiTargetConfig::query()->sole()->probe_path);
+        self::assertSame(self::KEY, app(ArvanApiTargetVault::class)->open(
+            $target, ArvanApiTargetConfig::query()->sole(), TargetCredential::query()->sole(),
+        ));
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $freshRevision = $adapter->configurationRevision($target);
+        $adapter->updateConfiguration($target, [
+            ...$base, 'configuration_revision' => $freshRevision,
+            'api_probe_path' => '/availability-zones',
+        ]);
+        self::assertSame('/availability-zones', ArvanApiTargetConfig::query()->sole()->probe_path);
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertSame(1, TargetCredential::query()->count());
+        Http::assertNothingSent();
     }
 
     public function test_catalog_discovers_new_schema_and_api_uses_registered_origin_query_and_json_body(): void
