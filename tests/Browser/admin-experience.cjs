@@ -1091,6 +1091,8 @@ async function semanticDirtyForms(browser) {
         assert.deepEqual(prompts, [], 'Successful form submission/save does not warn');
 
         await page.goto(base + '/admin/targets/create?connector_type=ssh_direct');
+        assert.equal(await page.locator('#arvan-owner-password').isDisabled(), true,
+            'Inactive connector Owner confirmation must not block another connector form');
         await page.locator('#target_id').fill('ui-invalid-pin');
         await page.locator('#display_name').fill('Invalid host key fixture');
         await page.locator('#ssh_host').fill('example.test');

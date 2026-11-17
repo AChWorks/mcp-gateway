@@ -23,6 +23,7 @@ final class Target extends Model
     public const KNOWN_CONNECTOR_TYPES = [
         'wp_ai_bridge',
         'ssh_direct',
+        'arvancloud',
     ];
 
     public const AI_GUIDANCE_MAX_LENGTH = 800;

@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Domain\Targets\Target;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetAdapter;
 use App\Infrastructure\Connectors\SshDirect\SshDirectTargetAdapter;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetAdapter;
 use Illuminate\Contracts\Container\Container;
@@ -18,6 +19,7 @@ final class TargetConnectorRegistry
     private const IMPLEMENTED = [
         'wp_ai_bridge' => WpAiBridgeTargetAdapter::class,
         'ssh_direct' => SshDirectTargetAdapter::class,
+        'arvancloud' => ArvanApiTargetAdapter::class,
     ];
 
     /** @var array<string, TargetConnectorAdapter> */

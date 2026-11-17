@@ -42,7 +42,7 @@ final class TargetAuthorizationFoundationTest extends TestCase
                 static fn (string $value): bool => str_starts_with($value, 'agent.'))));
         }
 
-        self::assertSame(['wp_ai_bridge', 'ssh_direct'], Target::KNOWN_CONNECTOR_TYPES);
+        self::assertSame(['wp_ai_bridge', 'ssh_direct', 'arvancloud'], Target::KNOWN_CONNECTOR_TYPES);
     }
 
     public function test_unrelated_user_edit_preserves_unrecognized_denials_without_enabling_them(): void

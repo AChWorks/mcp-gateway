@@ -14,6 +14,7 @@ final class TargetConnectorAdmin
     private const PRESENTERS = [
         'wp_ai_bridge' => WordpressTargetAdminPresenter::class,
         'ssh_direct' => SshTargetAdminPresenter::class,
+        'arvancloud' => ArvanTargetAdminPresenter::class,
     ];
 
     /** @var array<string, TargetConnectorAdminPresenter> */

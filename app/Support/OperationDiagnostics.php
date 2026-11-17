@@ -166,6 +166,40 @@ final class OperationDiagnostics
             }
         }
 
+        // Explicit request identity for registered REST API operations.
+        // Preserve only one bounded relative path and method, never a query,
+        // request body, credential, Authorization header or full URL. The
+        // owning connector replaces its exact stored key before calling us.
+        // Retention and actor/Target scoping remain in the existing Activity
+        // and operation-diagnostics-read paths.
+        $api = $details['api_operation'] ?? null;
+        if (is_array($api)) {
+            $identity = [];
+            $method = $api['method'] ?? null;
+            if (is_string($method) && preg_match('/^[A-Z][A-Z0-9-]{0,31}$/D', $method) === 1) {
+                $identity['method'] = $method;
+            }
+            $path = $api['relative_path'] ?? null;
+            if (is_string($path) && strlen($path) <= 1024 && str_starts_with($path, '/')
+                && ! str_starts_with($path, '//')
+                && preg_match('/[?#\x00-\x20\x7f]/', $path) !== 1) {
+                $identity['relative_path'] = DiagnosticRedactor::text($path);
+            }
+            $fingerprint = $api['path_sha256'] ?? null;
+            if (is_string($fingerprint) && preg_match('/^[a-f0-9]{64}$/D', $fingerprint) === 1) {
+                $identity['path_sha256'] = $fingerprint;
+            }
+            $requestId = $api['provider_request_id'] ?? null;
+            if (is_string($requestId) && strlen($requestId) <= 256) {
+                $identity['provider_request_id'] = DiagnosticRedactor::text(
+                    preg_replace('/[\x00-\x1f\x7f]/', '', $requestId) ?? '',
+                );
+            }
+            if ($identity !== []) {
+                $safe['api_operation'] = $identity;
+            }
+        }
+
         // Timings are server-derived, numeric and bounded. Never accept
         // arbitrary stage labels, URLs or payload-shaped diagnostic fields.
         $timing = $details['timing'] ?? null;
