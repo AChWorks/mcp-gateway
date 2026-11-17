@@ -60,11 +60,12 @@ final class OpenApiOperationCatalog
                     && stripos($path.' '.$method.' '.$summary.' '.$operationId.' '.implode(' ', $tags), $search) === false) {
                     continue;
                 }
-                $parameters = [];
-                foreach (array_merge(
+                $parameterEntries = array_merge(
                     is_array($definitions['parameters'] ?? null) ? $definitions['parameters'] : [],
                     is_array($operation['parameters'] ?? null) ? $operation['parameters'] : [],
-                ) as $parameter) {
+                );
+                $parameters = [];
+                foreach ($parameterEntries as $parameter) {
                     if (! is_array($parameter)) {
                         continue;
                     }
@@ -77,6 +78,16 @@ final class OpenApiOperationCatalog
                     ];
                 }
                 $body = $this->resolve($spec, (array) ($operation['requestBody'] ?? []));
+                if ($body === [] && isset($spec['swagger'])) {
+                    $body = $this->swagger2RequestBody($spec, $operation, $parameterEntries);
+                }
+                if (is_array($body['content'] ?? null)) {
+                    foreach ($body['content'] as $media => $definition) {
+                        if (is_array($definition) && is_array($definition['schema'] ?? null)) {
+                            $body['content'][$media]['schema'] = $this->resolve($spec, $definition['schema']);
+                        }
+                    }
+                }
                 $matches[] = [
                     'method' => strtoupper($method),
                     'path' => $path,
@@ -100,6 +111,61 @@ final class OpenApiOperationCatalog
         ];
     }
 
+    /**
+     * Swagger 2 represents request bodies as body/formData parameters rather
+     * than OpenAPI 3 requestBody. Preserve their media types and required
+     * form fields for clients discovering older Arvan product APIs.
+     *
+     * @param  array<string,mixed>  $spec
+     * @param  array<string,mixed>  $operation
+     * @param  list<mixed>  $entries
+     * @return array<string,mixed>
+     */
+    private function swagger2RequestBody(array $spec, array $operation, array $entries): array
+    {
+        $body = null;
+        $formProperties = [];
+        $required = [];
+        $filePart = false;
+        foreach ($entries as $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+            $entry = $this->resolve($spec, $entry);
+            if (($entry['in'] ?? '') === 'body') {
+                $body = $entry;
+            } elseif (($entry['in'] ?? '') === 'formData' && is_string($entry['name'] ?? null)) {
+                $name = $entry['name'];
+                $isFile = ($entry['type'] ?? null) === 'file';
+                $filePart = $filePart || $isFile;
+                $formProperties[$name] = [
+                    'type' => 'string',
+                    ...($isFile ? ['format' => 'binary'] : (is_string($entry['type'] ?? null) ? ['type' => $entry['type']] : [])),
+                    ...(! empty($entry['description']) ? ['description' => $entry['description']] : []),
+                ];
+                if ($entry['required'] ?? false) {
+                    $required[] = $name;
+                }
+            }
+        }
+        if ($body === null && $formProperties === []) {
+            return [];
+        }
+        $consumes = $operation['consumes'] ?? $spec['consumes'] ?? [];
+        $media = is_array($consumes) ? array_values(array_filter($consumes, 'is_string')) : [];
+        if ($media === []) {
+            $media = $formProperties !== [] ? [$filePart ? 'multipart/form-data' : 'application/x-www-form-urlencoded'] : ['application/json'];
+        }
+        $schema = $formProperties !== []
+            ? ['type' => 'object', 'properties' => $formProperties, ...($required !== [] ? ['required' => $required] : [])]
+            : ($body['schema'] ?? ['type' => $body['type'] ?? 'object']);
+
+        return [
+            'required' => $required !== [] || ($body['required'] ?? false),
+            'content' => array_fill_keys($media, ['schema' => $schema]),
+        ];
+    }
+
     /** @param array<string,mixed> $spec
      * @param  array<string,mixed>  $entry
      * @return array<string,mixed>
@@ -107,7 +173,7 @@ final class OpenApiOperationCatalog
     private function resolve(array $spec, array $entry): array
     {
         $ref = $entry['$ref'] ?? null;
-        if (! is_string($ref) || ! str_starts_with($ref, '#/components/')) {
+        if (! is_string($ref) || ! str_starts_with($ref, '#/')) {
             return $entry;
         }
         $parts = explode('/', substr($ref, 2));

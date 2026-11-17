@@ -75,6 +75,76 @@ YAML;
         self::assertSame($parsed, $catalog->parse($json));
     }
 
+    public function test_openapi3_multipart_schema_references_expose_actual_field_names(): void
+    {
+        $source = <<<'YAML'
+openapi: 3.0.0
+paths:
+  /domains/{domain}/dns-records/import:
+    post:
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DnsRecordImport'
+components:
+  schemas:
+    DnsRecordImport:
+      type: object
+      properties:
+        f_zone_file:
+          type: string
+          format: binary
+YAML;
+        $catalog = new OpenApiOperationCatalog;
+        $operation = $catalog->page($catalog->parse($source))['operations'][0];
+        self::assertSame('binary',
+            $operation['request_body']['content']['multipart/form-data']['schema']['properties']['f_zone_file']['format']);
+    }
+
+    public function test_swagger2_body_and_form_data_are_exposed_without_endpoint_registrations(): void
+    {
+        $schema = <<<'JSON'
+{
+  "swagger": "2.0",
+  "consumes": ["application/json"],
+  "paths": {
+    "/videos/{video}/audio-tracks": {
+      "post": {
+        "consumes": ["multipart/form-data"],
+        "parameters": [
+          {"$ref": "#/parameters/Video"},
+          {"name": "lang", "in": "formData", "type": "string", "required": true},
+          {"name": "audio_track", "in": "formData", "type": "file", "required": true}
+        ]
+      }
+    },
+    "/tags": {
+      "post": {
+        "consumes": ["application/x-www-form-urlencoded"],
+        "parameters": [{"name": "title", "in": "formData", "type": "string", "required": true}]
+      }
+    },
+    "/servers": {
+      "post": {"parameters": [{"name": "payload", "in": "body", "required": true,
+        "schema": {"$ref": "#/definitions/Server"}}]}
+    }
+  },
+  "parameters": {"Video": {"name": "video", "in": "path", "required": true, "type": "string"}},
+  "definitions": {"Server": {"type": "object"}}
+}
+JSON;
+        $catalog = (new OpenApiOperationCatalog)->page((new OpenApiOperationCatalog)->parse($schema));
+        self::assertSame(3, $catalog['total']);
+        self::assertSame('video', $catalog['operations'][0]['parameters'][0]['name']);
+        $upload = $catalog['operations'][0]['request_body'];
+        self::assertTrue($upload['required']);
+        self::assertSame('binary', $upload['content']['multipart/form-data']['schema']['properties']['audio_track']['format']);
+        self::assertSame(['lang', 'audio_track'], $upload['content']['multipart/form-data']['schema']['required']);
+        self::assertArrayHasKey('application/x-www-form-urlencoded', $catalog['operations'][1]['request_body']['content']);
+        self::assertSame('object', $catalog['operations'][2]['request_body']['content']['application/json']['schema']['type']);
+    }
+
     public function test_malformed_documents_rejected_and_search_results_are_data_only(): void
     {
         $catalog = new OpenApiOperationCatalog;

@@ -153,12 +153,12 @@ Both the edge and authenticated-principal limit apply when relevant. Their effec
 
 ### Shared REST API and OpenAPI response budgets
 
-These settings are reused by registered REST/JSON API connectors, starting with ArvanCloud. They bound in-memory response collection; the established `SafeHttpClient` absolute ceiling, TLS/public-IP policy, request deadlines, provider limits and host limits also apply. Neither setting grants access, locks an API version nor restricts the list of endpoint paths.
+These settings are reused by registered REST API connectors, starting with ArvanCloud (JSON, text/YAML, form and inline multipart request bodies). They bound in-memory response collection; the established `SafeHttpClient` absolute ceiling, TLS/public-IP policy, request deadlines, provider limits and host limits also apply. Neither setting grants access, locks an API version nor restricts the list of endpoint paths.
 
 | Key | Sample default | Effect / operator note |
 | --- | --- | --- |
 | `GATEWAY_API_DOCUMENT_MAX_BYTES` | `2097152` bytes (2 MiB) | Maximum retrieved YAML/JSON OpenAPI description for on-demand, uncredentialed catalog discovery, subject to transport ceiling; adjust for actual provider descriptions |
-| `GATEWAY_API_RESPONSE_MAX_BYTES` | `1048576` bytes (1 MiB) | Maximum single JSON REST response for registered API Targets, subject to transport ceiling; large binary transfers require a separate streaming/transfer contract |
+| `GATEWAY_API_RESPONSE_MAX_BYTES` | `1048576` bytes (1 MiB) | Maximum single in-memory REST response for registered API Targets, subject to transport ceiling; large binary transfers require a separate streaming/transfer contract |
 
 ### Gateway-to-WP AI Bridge identity, OAuth and I/O
 

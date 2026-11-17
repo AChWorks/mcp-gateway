@@ -247,11 +247,14 @@ final readonly class GatewayMcpEndpoint
         )->addTool(
             handler: fn (
                 string $target_id, string $method, string $path, array $query = [], ?string $body_json = null,
+                ?string $body_text = null, ?string $content_type = null,
+                array $form_fields = [], array $form_files = [], ?string $accept = null,
             ): array => $this->arvan->execute(
                 $this->user($request), $target_id, $method, $path, $query, $body_json,
+                $body_text, $content_type, $form_fields, $form_files, $accept,
             ),
             name: 'arvan-api-request',
-            description: 'Perform an HTTP API request on ONE registered ArvanCloud Target. Supply HTTP method and relative path ONLY (never a host, absolute URL or API key). GET/HEAD/OPTIONS use arvan.api.read, POST/PUT/PATCH use arvan.api.write, DELETE uses arvan.api.destructive and other verbs use arvan.api.unclassified. Only the Target-bound encrypted key is sent. Responses to failed or lost mutating requests may have unknown effects; never blindly retry. For high-impact changes, obtain explicit user confirmation and verify exact object state afterward.',
+            description: 'Execute a compatible ArvanCloud API method on ONE registered Target; never supply a host, absolute URL, Authorization header or key. For request bodies choose one: body_json (optional content_type for JSON Patch/vendor JSON), body_text with content_type (e.g. Kubernetes YAML), or form_fields/form_files for URL-encoded/multipart fields and base64 file parts. For multipart form_fields, set content_type=multipart/form-data. Only an optional validated Accept media type is client-selectable as a header. GET/HEAD/OPTIONS use arvan.api.read, POST/PUT/PATCH write, DELETE destructive, others unclassified. Provider-side business effects may be destructive even on POST. Mutations with uncertain outcomes must be reconciled before retry; obtain user confirmation for high-impact changes.',
             annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
             inputSchema: [
                 'type' => 'object',
@@ -266,6 +269,29 @@ final readonly class GatewayMcpEndpoint
                         ],
                     ],
                     'body_json' => ['type' => 'string'],
+                    'body_text' => ['type' => 'string'],
+                    'content_type' => ['type' => 'string'],
+                    'accept' => ['type' => 'string'],
+                    'form_fields' => [
+                        'anyOf' => [
+                            ['type' => 'object'],
+                            ['type' => 'array', 'maxItems' => 0],
+                        ],
+                    ],
+                    'form_files' => [
+                        'type' => 'array',
+                        'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'name' => ['type' => 'string'],
+                                'filename' => ['type' => 'string'],
+                                'content_base64' => ['type' => 'string'],
+                                'content_type' => ['type' => 'string'],
+                            ],
+                            'required' => ['name', 'filename', 'content_base64'],
+                            'additionalProperties' => false,
+                        ],
+                    ],
                 ],
                 'required' => ['target_id', 'method', 'path'],
                 'additionalProperties' => false,

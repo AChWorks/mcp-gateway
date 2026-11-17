@@ -17,10 +17,14 @@ final readonly class ApiHttpTransport
     /**
      * @param  array<string, mixed>  $query
      * @param  array<string, string>  $trustedHeaders  Connector-owned only.
+     * @param  array<array-key, mixed>  $formFields  Form field names to scalar/list values.
+     * @param  list<mixed>  $formFiles  Inline base64 file parts (not local server paths).
      */
     public function request(
         string $registeredBase, string $method, string $relativePath, array $query = [],
         ?string $jsonBody = null, array $trustedHeaders = [],
+        ?string $bodyText = null, ?string $contentType = null,
+        array $formFields = [], array $formFiles = [], ?string $accept = null,
     ): SafeHttpResponse {
         if ($relativePath === '' || ! str_starts_with($relativePath, '/')
             || str_starts_with($relativePath, '//')
@@ -56,6 +60,110 @@ final readonly class ApiHttpTransport
             throw new OutboundRequestException('invalid_input', 'API query exceeds the single-request URL budget.', [], true);
         }
 
+        $modes = (int) ($jsonBody !== null) + (int) ($bodyText !== null)
+            + (int) ($formFields !== [] || $formFiles !== []);
+        if ($jsonBody !== null && ! json_validate($jsonBody)) {
+            throw new OutboundRequestException('invalid_input', 'Outbound JSON body is invalid.', [], true);
+        }
+        if ($modes > 1) {
+            throw new OutboundRequestException('invalid_input', 'Specify one API request body format.', [], true);
+        }
+        if ($contentType !== null && ! $this->validMediaType($contentType)) {
+            throw new OutboundRequestException('invalid_input', 'API request content type is invalid.', [], true);
+        }
+        if ($accept !== null && ! $this->validMediaType($accept)) {
+            throw new OutboundRequestException('invalid_input', 'API response accept type is invalid.', [], true);
+        }
+        if ($accept !== null) {
+            // Only this non-authentication header is caller-selectable; host,
+            // credentials and connector-owned headers remain authoritative.
+            $trustedHeaders['Accept'] = $accept;
+        }
+
+        if ($formFields !== [] || $formFiles !== []) {
+            if ($contentType !== null && ! in_array(strtolower($contentType), [
+                'multipart/form-data', 'application/x-www-form-urlencoded',
+            ], true)) {
+                throw new OutboundRequestException('invalid_input', 'Form content type is invalid.', [], true);
+            }
+            if ($formFiles !== [] && strtolower($contentType ?? '') === 'application/x-www-form-urlencoded') {
+                throw new OutboundRequestException('invalid_input', 'File parts require multipart/form-data.', [], true);
+            }
+
+            $parts = [];
+            $fields = [];
+            foreach ($formFields as $name => $value) {
+                if (! is_string($name) || ! $this->validPartName($name)
+                    || (! is_scalar($value) && ! is_array($value))) {
+                    throw new OutboundRequestException('invalid_input', 'API form field is invalid.', [], true);
+                }
+                $values = is_array($value) ? $value : [$value];
+                if ($values === []) {
+                    continue;
+                }
+                $encoded = [];
+                foreach ($values as $element) {
+                    if (! is_scalar($element)) {
+                        throw new OutboundRequestException('invalid_input', 'API form value is invalid.', [], true);
+                    }
+                    $encoded[] = is_bool($element) ? ($element ? 'true' : 'false') : (string) $element;
+                    $parts[] = ['name' => $name, 'contents' => end($encoded)];
+                }
+                $fields[$name] = is_array($value) ? $encoded : $encoded[0];
+            }
+
+            foreach ($formFiles as $file) {
+                if (! is_array($file)
+                    || ! is_string($file['name'] ?? null) || ! $this->validPartName($file['name'])
+                    || ! is_string($file['filename'] ?? null) || ! $this->validPartName($file['filename'])
+                    || ! is_string($file['content_base64'] ?? null)
+                    || ! $this->validMediaType($file['content_type'] ?? 'application/octet-stream')) {
+                    throw new OutboundRequestException('invalid_input', 'API upload part is invalid.', [], true);
+                }
+                $bytes = base64_decode($file['content_base64'], true);
+                if ($bytes === false) {
+                    throw new OutboundRequestException('invalid_input', 'API upload part base64 is invalid.', [], true);
+                }
+                $parts[] = [
+                    'name' => $file['name'], 'contents' => $bytes, 'filename' => $file['filename'],
+                    'headers' => ['Content-Type' => $file['content_type'] ?? 'application/octet-stream'],
+                ];
+            }
+            $multipart = $formFiles !== [] || strtolower($contentType ?? '') === 'multipart/form-data';
+            if ($multipart) {
+                return $this->http->requestApi($method, $url, $trustedHeaders, $query, multipartParts: $parts);
+            }
+
+            return $this->http->requestApi($method, $url, $trustedHeaders, $query, formFields: $fields);
+        }
+
+        if ($bodyText !== null) {
+            if ($contentType === null) {
+                throw new OutboundRequestException('invalid_input', 'Raw API request body requires a content type.', [], true);
+            }
+
+            return $this->http->requestApi($method, $url, $trustedHeaders, $query, $bodyText, $contentType);
+        }
+        if ($jsonBody !== null && $contentType !== null && strtolower($contentType) !== 'application/json') {
+            return $this->http->requestApi($method, $url, $trustedHeaders, $query, $jsonBody, $contentType);
+        }
+        if ($jsonBody === null && $contentType !== null) {
+            throw new OutboundRequestException('invalid_input', 'Content type requires a request body.', [], true);
+        }
+
         return $this->http->requestJson($method, $url, $trustedHeaders, $jsonBody, $query);
+    }
+
+    private function validMediaType(mixed $type): bool
+    {
+        return is_string($type) && strlen($type) <= 255
+            && preg_match('/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+(?:;[ \t]*[a-z0-9!#$&^_.+-]+=[a-z0-9!#$&^_.+-]+)*$/iD', $type) === 1;
+    }
+
+    private function validPartName(string $value): bool
+    {
+        return $value !== '' && strlen($value) <= 255
+            && ! str_contains($value, '/') && ! str_contains($value, '\\')
+            && preg_match('/[\x00-\x1f\x7f]/', $value) !== 1;
     }
 }
