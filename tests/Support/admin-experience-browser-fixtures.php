@@ -7,8 +7,11 @@
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
@@ -136,6 +139,45 @@ Route::middleware('web')->get('/__browser__/experience/{role}', static function 
     Auth::login($user);
 
     return redirect()->route('admin.dashboard');
+});
+
+// These four Arvan states use only synthetic local credentials and a .test
+// API hostname. Browser tests intercept both POST forms before any network
+// call; the authenticated/unauthenticated transport is tested in PHPUnit.
+Route::middleware(['web', 'auth'])->get('/__browser__/arvan-checks/{state}', static function (string $state) {
+    abort_unless(in_array($state, ['probe', 'no-probe', 'paused', 'no-key'], true), 404);
+    abort_unless(Auth::user()?->getRawOriginal('role') === 'owner', 403);
+    $target = Target::query()->firstOrCreate(['target_id' => 'ui-arvan-checks'], [
+        'display_name' => 'UI ArvanCloud check fixture',
+        'connector_type' => 'arvancloud',
+        'connection_state' => TargetConnectionState::Disconnected,
+    ]);
+    $config = ArvanApiTargetConfig::query()->firstOrCreate(['target_record_id' => $target->getKey()], [
+        'base_url' => 'https://api.example.test/cdn/4.0',
+        'spec_url' => null,
+        'probe_path' => '/domains',
+    ]);
+    $config->forceFill(['probe_path' => $state === 'no-probe' || $state === 'no-key' ? null : '/domains'])->save();
+    $target->forceFill([
+        'connection_state' => TargetConnectionState::Disconnected,
+        'operations_paused' => $state === 'paused',
+    ])->save();
+    $credential = TargetCredential::query()->where('target_record_id', $target->getKey())
+        ->where('purpose', ArvanApiTargetVault::PURPOSE)->first();
+    if ($state === 'no-key') {
+        $credential?->delete();
+    } elseif ($credential === null) {
+        TargetCredential::query()->create([
+            'target_record_id' => $target->getKey(),
+            'connector_type' => 'arvancloud',
+            'purpose' => ArvanApiTargetVault::PURPOSE,
+            'encrypted_payload' => app(ArvanApiTargetVault::class)->seal(
+                $target, $config, 'synthetic-browser-key-never-provider',
+            ),
+        ]);
+    }
+
+    return redirect()->route('admin.targets.show', ['target' => $target->target_id]);
 });
 
 // A disabled Relay stays selected and unavailable on Target Edit,

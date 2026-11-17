@@ -121,7 +121,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
 
     public function registrationStatus(): string
     {
-        return __('ArvanCloud API Target saved with an encrypted key. An authenticated GET health probe has not yet been verified.');
+        return __('ArvanCloud API Target saved with an encrypted key. Use the unauthenticated HTTPS endpoint check now, or configure an optional known read-only GET probe to verify the key.');
     }
 
     public function configurationRules(Target $target): array
@@ -193,7 +193,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 $this->activity->recordRequired(CorrelationId::current(), 'arvan-target-configure', 'success', $locked);
             });
 
-            return new TargetConnectorResult(statusMessage: __('ArvanCloud API settings saved. Run the authenticated GET connection test after changing the endpoint, probe or key.'));
+            return new TargetConnectorResult(statusMessage: __('ArvanCloud API settings saved. Check the HTTPS endpoint without a key, or configure an optional known read-only GET probe to verify authentication. Previous connection verification is reset after changing the API root, probe or key.'));
         } catch (TargetConnectorFailure $exception) {
             throw $exception;
         } catch (UnsafeOutboundTarget|OutboundRequestException $exception) {
@@ -229,6 +229,52 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         return new TargetConnectorResult(statusMessage: __('Gateway deleted its local ArvanCloud credential. Revoke the Machine User API key in ArvanCloud separately if required.'));
     }
 
+    /**
+     * Check the registered HTTPS API base without using any credential.
+     * HEAD is intentional: an HTTP 401/403/404/405 still proves that a TLS
+     * peer responded, but NEVER authenticates the Machine User or updates the
+     * stored connection state. No operator-supplied method/path is executed.
+     */
+    public function checkReachability(Target $target): TargetConnectorResult
+    {
+        $this->requireUnpaused($target);
+        $base = $this->config($target)->base_url;
+
+        try {
+            $this->requireUnpaused($target);
+            $response = $this->transport->request($base, 'HEAD', '/');
+
+            // A concurrent Pause, removal or API-root replacement invalidates
+            // even this read-only observation before it can be displayed.
+            if (TargetOperationGate::isPaused($target)
+                || ! hash_equals($base, $this->config($target)->base_url)) {
+                throw new TargetConnectorFailure(
+                    __('The API endpoint changed or the Target was paused during the reachability check. Reload and check the current Target.'),
+                    null, 'endpoint_check_stale',
+                );
+            }
+
+            return new TargetConnectorResult(statusMessage: __(
+                'The HTTPS server for the registered API root responded to an unauthenticated HEAD request (HTTP :status). This confirms HTTPS reachability only, not API path availability; the API key was NOT tested and the authenticated connection state was NOT changed. An HTTP error may mean the base path does not accept HEAD.',
+                ['status' => $response->status],
+            ));
+        } catch (TargetConnectorFailure $exception) {
+            throw $exception;
+        } catch (UnsafeOutboundTarget $exception) {
+            throw new TargetConnectorFailure(
+                __('The registered API endpoint is not allowed by the Gateway HTTPS/public-address policy. Check the configured API root and DNS; the API key was not tested.'),
+                null, 'unsafe_target',
+            );
+        } catch (OutboundRequestException $exception) {
+            throw new TargetConnectorFailure(
+                __('The Gateway could not complete an HTTPS HEAD check of the registered API base (:reason). Check DNS, TLS, network access and the API root. No API key was sent and authentication was not tested.', [
+                    'reason' => $exception->reason,
+                ]),
+                null, $exception->reason, $exception->details,
+            );
+        }
+    }
+
     public function test(Target $target): TargetConnectorResult
     {
         // Connect, Reconnect and Test must share ONE fresh per-dispatch pause
@@ -237,7 +283,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         $config = $this->config($target);
         if ($config->probe_path === null) {
             throw new TargetConnectorFailure(
-                __('Configure one known read-only GET probe path before declaring this account verified.'),
+                __('No authenticated GET probe is configured. You can check HTTPS reachability without an API key, or ask the Gateway Owner to save a known read-only GET path to verify the key.'),
                 'api_probe_path', 'probe_not_configured',
             );
         }
@@ -253,10 +299,12 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 null, ['Authorization' => 'Apikey '.$key],
             );
             if ($response->status < 200 || $response->status >= 300) {
-                throw new TargetConnectorFailure(
-                    __('ArvanCloud returned HTTP :status on the configured GET probe.', ['status' => $response->status]),
-                    null, 'upstream_http_error', ['http_status' => $response->status],
-                );
+                $message = match ($response->status) {
+                    401, 403 => __('The configured authenticated GET probe returned HTTP :status. Authorization was not confirmed; check the Machine User key, its product scopes and the selected GET path.', ['status' => $response->status]),
+                    404, 405 => __('The configured authenticated GET probe returned HTTP :status. Verify that this read-only GET path exists under the current API root; the API key was not verified.', ['status' => $response->status]),
+                    default => __('The configured authenticated GET probe returned HTTP :status. Authentication was not verified; check the provider status and configured GET endpoint.', ['status' => $response->status]),
+                };
+                throw new TargetConnectorFailure($message, null, 'upstream_http_error', ['http_status' => $response->status]);
             }
 
             // HTTP I/O happened WITHOUT a DB lock. The result is evidence

@@ -5,22 +5,22 @@
 ## 1. Runtime topology
 
 ```text
-    Authenticated AI / MCP client              Authenticated browser operator
-                     |                                     |
-           HTTPS OAuth + /mcp                  HTTPS session + /admin
-                     |                                     |
-         MCP protocol / transport                      Admin controllers
-                     \                                     /
-                      \---- application Target/access ----/
+    Authenticated AI / MCP client             Authenticated browser operator
+                    |                                      |
+          HTTPS OAuth + /mcp                   HTTPS session + /admin
+                    |                                      |
+         MCP protocol / transport                     Admin controllers
+                    \                                      /
+                     \-- application Target/access -----/
                                       |
-                     Connector registry + specific operations
-                              /                    \
-                WP AI Bridge Target           Direct SSH Target
-              HTTPS OAuth + MCP call        SSH / SFTP / systemd Jobs
-                              \                    /
-                       Registered downstream systems
+                         Registered connector adapters
+                        /              |             \
+           WP AI Bridge Target    Direct SSH Target   ArvanCloud API Target
+           HTTPS OAuth/MCP       SSH/SFTP/Jobs        Fixed-origin HTTPS REST
+                        \              |             /
+                         \------ downstream systems-/
 
-            MariaDB/MySQL + private keys, sessions and spool
+                MariaDB/MySQL + private keys, sessions and spool
 ```
 
 Optional **connection routing** does not create another Target connector: SSH and WordPress Targets may explicitly use one shared [native OpenSSH/SOCKS5 Connection Relay](CONNECTION-RELAYS.md), while an inbound-blocked SSH Target may use a [managed](REVERSE-SSH-MANAGED.md) or [manual](REVERSE-SSH-OPERATOR.md) Reverse SSH route. The selected connector still verifies the actual remote identity and credentials, and normal Direct routing stays independent. The routing guides own setup, behavior and supported acceptance; this architecture does not duplicate their operating procedures.
@@ -42,6 +42,8 @@ A separate, optional authenticated `/mcp/file-transfer/ssh/{targetId}/upload|dow
 | WordPress connection lifecycle | [`WpAiBridgeTargetConnectionService`](../app/Application/Targets/WpAiBridgeTargetConnectionService.php) | OAuth intent/recovery, exact credential/Target identity and remote lifecycle |
 | SSH identity and execution | [`SshVerifiedTransport`](../app/Infrastructure/Connectors/SshDirect/SshVerifiedTransport.php), [`SshJobCoordinator`](../app/Application/Targets/SshJobCoordinator.php) | Approved numeric peer and pinned host key before credentials; separate sync/SFTP/retained Job semantics |
 | Binary SSH exchange | [`TargetTransferCapabilities`](../app/Application/Files/TargetTransferCapabilities.php), [`SshWholeFileTransfer`](../app/Application/Files/SshWholeFileTransfer.php), [`SshWholeFileController`](../app/Http/Controllers/Mcp/SshWholeFileController.php) | Permission-filtered mode discovery, binary admission/staging, verified source/destination |
+| ArvanCloud REST operations | [`ArvanApiOperations`](../app/Application/Targets/ArvanApiOperations.php), [`ArvanApiTargetAdapter`](../app/Infrastructure/Connectors/ArvanCloud/ArvanApiTargetAdapter.php) | Bound Machine User key, exact registered API root, Target-scoped HTTP method permissions, safe lifecycle/Test and uncertain remote mutation outcomes |
+| Shared REST and OpenAPI primitives | [`ApiHttpTransport`](../app/Infrastructure/Http/Api/ApiHttpTransport.php), [`OpenApiOperationCatalog`](../app/Infrastructure/Http/Api/OpenApiOperationCatalog.php) | Safe fixed-origin HTTP execution and untrusted public OpenAPI catalog parsing; no arbitrary client-supplied origin or credential |
 | Safe outbound HTTP | [`SafeHttpClient`](../app/Infrastructure/Http/SafeHttpClient.php) | HTTPS origin/DNS/peer/TLS policy and bounded decoded responses |
 | Optional Target endpoint preflight | [`TargetEnrollmentPreflight`](../app/Application/Targets/TargetEnrollmentPreflight.php), [`TargetEndpointPreflight`](../app/Application/Targets/TargetEndpointPreflight.php) | One authenticated read-only Admin entry and typed HTTPS/SSH public-address policy checks; no provider contact, trust grant or credential use |
 | Diagnostics and Activity | [`OperationDiagnostics`](../app/Support/OperationDiagnostics.php), [`ActivityRecorder`](../app/Infrastructure/Activity/ActivityRecorder.php) | Safe classifications, correlation and bounded audit rather than raw remote payloads |
@@ -60,6 +62,10 @@ The authenticated client requests a bounded list or one explicit Target context.
 The MCP entry validates the exact `target_id`, input and Gateway permission class. The connector uses the Target-bound authenticated WordPress MCP identity to discover the relevant actual Ability schema/effect and execute it. A compatible newly added WordPress Ability may be reached without adding a public Gateway Tool; the selected user/client/Target grants and downstream WordPress principal still govern access. A missing or unclassified annotation does not invent either a ban or a grant.
 
 The transport and downstream result remain separate: a downstream text-only error cannot be retroactively assigned a specific original WordPress error code that was not received. A mutation after possible remote dispatch does not become safe to retry merely because its response failed.
+
+### ArvanCloud REST/OpenAPI requests
+
+An authenticated client selects an already registered `arvancloud` Target. The `arvan-api-catalog` tool reads optional public OpenAPI/Swagger metadata as untrusted **descriptions**, never as authorization; the `arvan-api-request` tool executes a compatible method and relative path against that Target's fixed HTTPS API root using its encrypted, bound Machine User key. The connector enforces exact role/user/client/Target scope, method-class permission, fresh Pause and credential revision checks, HTTPS DNS/TLS identity and redirect rejection. It does **not** grant arbitrary HTTP host selection, S3 SigV4 operations or resumable/binary streaming. A saved Target, source CI or official v2.7.0 Release is not authenticated real-provider proof; [ArvanCloud operator guidance](ARVANCLOUD-API-CONNECTOR.md) and [Issue #310](https://github.com/AChWorks/mcp-gateway/issues/310) own that acceptance.
 
 ### Direct SSH actions and Jobs
 
@@ -98,7 +104,7 @@ The public authenticated raw-HTTPS sidecar validates client/User/Target/operatio
              outcome certainty + correlated Activity
 ```
 
-**Implemented boundary (first #200 slice):** the shared Target/Access/Group/credential/Activity infrastructure and specific MCP WordPress/SSH execution families. `WordpressTargetOperations` is now a shared application-owned use case for WordPress Ability catalog and execution, consumed unchanged by the MCP entry and one **strictly read-only** Admin `wp-ai-bridge/bridge-info` operation on an authorized selected Target. The browser route is POST+CSRF+throttle; it requires `targets.view` and `wordpress.abilities.execute.readonly` on the exact Target and refuses unclassified/mutating/destructive metadata regardless of other grants. No Admin-to-own-MCP HTTP call is used. The entry-time effective permission decisions are an **upper bound**, not a permanent grant: after trusted downstream classification, the shared service reloads the current User and exact Target-scoped permission immediately before dispatch (and the Admin read-only pilot rechecks `targets.view`), followed by the existing fresh Target Pause fence. Later grants never elevate an initially denied execution class. Admin is **not** yet a general-purpose Ability browser, semantic publisher or group publisher; these remain future #200 stages with separate approved acceptance.
+**Implemented boundary (first #200 slice):** the shared Target/Access/Group/credential/Activity infrastructure and distinct MCP WordPress/SSH/ArvanCloud execution families. `WordpressTargetOperations` is now a shared application-owned use case for WordPress Ability catalog and execution, consumed unchanged by the MCP entry and one **strictly read-only** Admin `wp-ai-bridge/bridge-info` operation on an authorized selected Target. The browser route is POST+CSRF+throttle; it requires `targets.view` and `wordpress.abilities.execute.readonly` on the exact Target and refuses unclassified/mutating/destructive metadata regardless of other grants. No Admin-to-own-MCP HTTP call is used. The entry-time effective permission decisions are an **upper bound**, not a permanent grant: after trusted downstream classification, the shared service reloads the current User and exact Target-scoped permission immediately before dispatch (and the Admin read-only pilot rechecks `targets.view`), followed by the existing fresh Target Pause fence. Later grants never elevate an initially denied execution class. Admin is **not** yet a general-purpose Ability browser, semantic publisher or group publisher; these remain future #200 stages with separate approved acceptance.
 
 **Restricted publication source slice (#200 Phase B, integrated in main):** `wordpress-content-publish-create` exposes a fixed `wp-ai-bridge/content-upsert` invocation with `action=create`, `post_type=post`, `status=publish`, a bounded title/body and stable caller `operation_id` deterministically namespaced by **Gateway User, stable Target, authenticated upstream AI client (or independent human channel), and caller operation ID** before the upstream Bridge reserves create identities (avoids cross-user, cross-client, cross-Target and human/AI duplicate-key interference while preserving safe retry identity). It checks the actual registered Bridge schema/classification, Owner-managed `User + Target Group` semantic grants for non-Owner roles, normal effective Target/role/global/group/direct denies, current User and AI connection flag/profile **plus the exact originating OAuth token and consent** near dispatch, Target Pause and a no-blind-retry/unknown outcome. Ordinary `Operator` or `Administrator` roles may receive this narrower permission **without** automatically receiving AI connectivity. Broad dynamic `wordpress-ability-execute` remains separately controlled by the four existing effect permissions; a restricted semantic grant cannot be used as generic mutation authority. The service can also be invoked by a properly authenticated human adapter without any AI client, but **no human Admin publishing form or live content pilot is delivered by this slice**. On the single existing install only Owner exists; the schema change grants AI to that Owner, not to hypothetical other legacy accounts. No real WordPress publish operation or upstream change is included in source tests.
 

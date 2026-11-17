@@ -15,7 +15,7 @@ Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run
 3. Authorize the Target and grant specific Gateway users or Target Groups access.
 4. Connect your MCP client using Gateway OAuth, then choose a Target and use its permitted tools.
 
-**ArvanCloud REST APIs:** a registered `arvancloud` Target can discover optional OpenAPI YAML/JSON catalogs and execute compatible **dynamic** GET/POST/PUT/PATCH/DELETE operations, including provider-defined text/Patch media types and form/multipart request bodies using the existing Gateway OAuth, Target access, encrypted Machine User credential, Activity and safe HTTPS transport. A saved Target does not imply authenticated connectivity: configure a non-mutating GET probe and use the Target's **Test connection** action to verify that specific key/endpoint. This is not a public HTTP proxy or support for S3 signature/file transfers. See [ArvanCloud connector guide](docs/ARVANCLOUD-API-CONNECTOR.md).
+**ArvanCloud REST APIs:** a registered `arvancloud` Target can discover optional OpenAPI YAML/JSON catalogs and execute compatible **dynamic** GET/POST/PUT/PATCH/DELETE operations, including provider-defined text/Patch media types and form/multipart request bodies using the existing Gateway OAuth, Target access, encrypted Machine User credential, Activity and safe HTTPS transport. A saved Target does not imply authenticated connectivity. The post-v2.7.0 source changes (not included in the published v2.7.0 ZIP) provide two distinct actions: **Check HTTPS endpoint (no API key)** uses an unauthenticated HEAD without changing connection state; **Verify API key (read-only GET)** requires an **optional**, explicitly configured safe GET probe plus the stored key. Only a successful authenticated GET verifies that specific key/endpoint. This is not a public HTTP proxy or support for S3 signature/file transfers. See [ArvanCloud connector guide](docs/ARVANCLOUD-API-CONNECTOR.md).
 
 **For connector developers:** the codebase also includes a [bounded shared downstream MCP transport](docs/OUTBOUND-MCP-TRANSPORT.md) for future *registered and separately authorized* connectors speaking request-only stateless MCP `2026-07-28`. It reuses the Gateway's existing safe HTTPS transport; a connector still owns remote identity, credentials, authorization, protocol compatibility and operation policy. This is **not** an activated generic MCP Target, a way to enroll arbitrary MCP servers or a replacement for the existing WordPress/SSH connector paths. See the [connector integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md).
 
@@ -26,9 +26,9 @@ Targets can be **paused** without deleting their configuration or disconnecting 
 ## Requirements
 
 - Linux web hosting with **PHP 8.5 recommended** (PHP 8.4.1+ remains the Composer minimum) and the `curl`, `mbstring`, `openssl`, `pdo_mysql` and `sodium` extensions; cURL must support `CURLOPT_RESOLVE`.
-- **MariaDB** (10.11 recommended) or **MySQL**, with a dedicated database and user.
+- **MariaDB 12.3** for the primary CI-validated profile (MariaDB 10.11 and MySQL remain supported), with a dedicated database and user.
 - A stable **HTTPS** domain and a web server that can serve the application's `public/` directory.
-- A compatible **WP AI Bridge** installation for WordPress Targets, or an accessible SSH host and authorized credentials for Direct SSH Targets.
+- For **WordPress**, a compatible WP AI Bridge installation; for **SSH**, an accessible host and authorized credentials; for **ArvanCloud**, a scoped Machine User API key and the correct product/region HTTPS API root. Only configure the providers you intend to use.
 
 The official installation ZIP includes PHP dependencies: **Git and Composer are not needed on the hosting server**. Normal operation needs no Docker, Redis, Node.js, queue worker or separate MCP daemon.
 
@@ -41,7 +41,7 @@ The official installation ZIP includes PHP dependencies: **Git and Composer are 
 5. Sign in at **`/admin/login`**, then check **`/up`** and the Admin dashboard.
 6. Configure **one cron job every minute** to execute Laravel `schedule:run` using the site's matching PHP CLI **as the site worker, not root**. Confirm that the cron log shows it actually runs.
 
-**No control panel?** A regular Linux VPS works too: install Nginx, PHP-FPM 8.4, MariaDB and HTTPS, then use the same ZIP/web installer. Follow the [step-by-step panel-free Linux installation guide](docs/DEPLOYMENT.md#panel-free-linux-vps-nginx-php-fpm-and-mariadb), including Nginx rules for the standalone installer, temporary updater and OAuth endpoints.
+**No control panel?** A regular Linux VPS works too: install Nginx, PHP-FPM 8.5 (or another supported PHP 8.4.1+ runtime), MariaDB and HTTPS, then use the same ZIP/web installer. Follow the [step-by-step panel-free Linux installation guide](docs/DEPLOYMENT.md#panel-free-linux-vps-nginx-php-fpm-and-mariadb), including Nginx rules for the standalone installer, temporary updater and OAuth endpoints.
 
 The web installer is for **first installation only**; use the [update instructions](#update-an-existing-installation) for existing deployments. aaPanel/OpenLiteSpeed and CLI/source installation details, cron examples and recovery procedures are in [Deployment](docs/DEPLOYMENT.md).
 
@@ -95,7 +95,7 @@ See the [Relay operator guide](docs/CONNECTION-RELAYS.md), [active test issue #2
 
 1. From **Admin → Connection**, copy the Gateway MCP endpoint, normally **`https://gateway.example.com/mcp`**.
 2. Register it as a compatible MCP connection in your client and complete **Gateway OAuth** sign-in and consent with an authorized Gateway user/client profile.
-3. Use `targets-list` and `target-context` to select an authorized `target_id`, then call the WordPress or SSH tools available to that user and client.
+3. Use `targets-list` and `target-context` to select an authorized `target_id`, then call the permitted WordPress, SSH or ArvanCloud tools available to that user and client.
 
 Manage client profiles and grants under **Admin → AI clients** (`/admin/oauth-clients`). After an upgrade, refresh/reconnect the MCP connection if your client still displays an outdated Tool catalog.
 

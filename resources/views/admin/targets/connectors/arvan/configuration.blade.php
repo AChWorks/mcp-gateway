@@ -4,7 +4,7 @@
     @csrf
     @method('PUT')
     <input type="hidden" name="configuration_revision" value="{{ $configurationRevision }}">
-    <p class="field-help" id="arvan-configuration-help">{{ __('Save these connection settings separately from the Target display name. Changing the API root requires a new Machine User key, and changing the root, key or GET probe clears prior connection verification. Save first, then return to Target details to test the new settings. Passwords and keys are never restored after errors.') }}</p>
+    <p class="field-help" id="arvan-configuration-help">{{ __('Save these connection settings separately from the Target display name. Changing the API root requires a new Machine User key, and changing the root, key or GET probe clears prior connection verification. Save first, then return to Target details for an unauthenticated HTTPS reachability check or, when a known read-only GET probe is configured, API-key verification. Passwords and keys are never restored after errors.') }}</p>
     @error('configuration_revision')<p class="field-error" role="alert" id="arvan-configuration-revision-error">{{ $message }} {{ __('Reload this page if another edit changed the configuration.') }}</p>@enderror
     @error('configuration')<p class="field-error" role="alert" id="arvan-configuration-error">{{ $message }}</p>@enderror
 
@@ -35,7 +35,7 @@
             value="{{ old('api_probe_path', $arvanConfig->probe_path) }}"
             @error('api_probe_path') aria-invalid="true" @enderror
             aria-describedby="arvan-edit-api-probe-path-help{{ $errors->has('api_probe_path') ? ' arvan-edit-api-probe-path-error' : '' }}">
-        <p class="field-help" id="arvan-edit-api-probe-path-help">{{ __('Enter a known authenticated GET path beginning with /, such as /domains for CDN. Clearing it disables authenticated connection testing until a new path is saved.') }}</p>
+        <p class="field-help" id="arvan-edit-api-probe-path-help">{{ __('Enter a known authenticated GET path beginning with /, such as /domains for CDN. Leaving it blank keeps the key and API operations usable; HTTPS endpoint reachability can still be checked without authentication, but the key is not verified by that check.') }}</p>
         @error('api_probe_path')<p class="field-error" role="alert" id="arvan-edit-api-probe-path-error">{{ $message }}</p>@enderror
     </div>
     <div class="field">

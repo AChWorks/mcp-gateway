@@ -15,6 +15,7 @@ use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetAdapter;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetAdapter;
@@ -227,7 +228,7 @@ final class TargetConnectionController extends Controller
         }
     }
 
-    public function test(Target $target, TargetConnectorRegistry $connectors): RedirectResponse
+    public function test(Request $request, Target $target, TargetConnectorRegistry $connectors): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsTest->value, $target);
         if (TargetOperationGate::isPaused($target)) {
@@ -235,12 +236,26 @@ final class TargetConnectionController extends Controller
                 ->withErrors(['target' => __('Resume Target operations before starting a new connection test.')]);
         }
 
+        // The normal Target test contract is unchanged for WordPress/SSH.
+        // Only ArvanCloud offers a second, explicitly requested HEAD check
+        // against its immutable stored origin; the request cannot select a URL.
+        $mode = $target->connector_type === 'arvancloud'
+            ? ($request->validate(['arvan_check' => ['sometimes', 'in:endpoint,authenticated']])['arvan_check'] ?? 'authenticated')
+            : 'authenticated';
+
+        $operation = $target->connector_type === 'arvancloud' && $mode === 'endpoint'
+            ? 'target-endpoint-reachability' : 'target-metadata-test';
+
         try {
-            return $this->result($target, $connectors->forTarget($target)->test($target), 'test');
+            $adapter = $connectors->forTarget($target);
+            $check = $mode === 'endpoint' && $adapter instanceof ArvanApiTargetAdapter
+                ? $adapter->checkReachability($target) : $adapter->test($target);
+
+            return $this->result($target, $check, 'test');
         } catch (TargetConnectorFailure $exception) {
-            return $this->failed($target, $exception->getMessage(), 'target-metadata-test', $exception->reason ?? 'connector_failure', $exception->diagnostics);
+            return $this->failed($target, $exception->getMessage(), $operation, $exception->reason ?? 'connector_failure', $exception->diagnostics);
         } catch (Throwable $exception) {
-            return $this->unexpected($target, 'target-metadata-test', $exception);
+            return $this->unexpected($target, $operation, $exception);
         }
     }
 
@@ -361,6 +376,7 @@ final class TargetConnectionController extends Controller
         // evidence; no SSH command or remote credential revocation takes place.
         // Other connector operations can have uncertain side effects.
         $message = match ($operation) {
+            'target-endpoint-reachability' => __('The unauthenticated HTTPS endpoint check could not be confirmed. No API key or mutating request was sent and authentication status was not updated. Review the diagnostic reference and configured API root before retrying.'),
             'target-metadata-test' => $target->connector_type === 'ssh_direct'
                 ? __('SSH verification did not complete reliably. No remote command or credential revocation was requested. The saved verification state may be incomplete; reload Target details and review the diagnostic reference before deciding to verify again.')
                 : __('The remote connection check did not complete reliably. Its saved verification result may be incomplete; reload Target details and inspect diagnostics before deciding whether a fresh check is safe.'),

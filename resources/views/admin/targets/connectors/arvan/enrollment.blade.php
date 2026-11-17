@@ -37,7 +37,7 @@
             autocomplete="off" spellcheck="false" value="{{ old('api_probe_path') }}" placeholder="/domains"
             @error('api_probe_path') aria-invalid="true" @enderror
             aria-describedby="arvan-api-probe-path-help{{ $errors->has('api_probe_path') ? ' arvan-api-probe-path-error' : '' }}">
-        <p class="field-help" id="arvan-api-probe-path-help">{{ __('Enter a known, authenticated, non-mutating path beginning with / under the selected API root. Example for CDN: /domains. If left empty, the Target can be saved but its authenticated Test connection action cannot succeed until you configure a probe.') }}</p>
+        <p class="field-help" id="arvan-api-probe-path-help">{{ __('Enter a known, authenticated, non-mutating path beginning with / under the selected API root. Example for CDN: /domains. Leave it blank if no safe authenticated GET path is known: the Target and authorized API requests still work, and the HTTPS endpoint check remains available without verifying the API key.') }}</p>
         @error('api_probe_path')<p class="field-error" role="alert" id="arvan-api-probe-path-error">{{ $message }}</p>@enderror
     </div>
 
