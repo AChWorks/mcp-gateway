@@ -13,6 +13,7 @@ Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run
 1. Install the Gateway on your own HTTPS domain.
 2. In **Targets > Add Target**, select **WordPress**, **SSH** or **ArvanCloud API**. For SSH choose Direct SSH, optional Managed Reverse SSH, or advanced Manual Reverse SSH on the same form; inbound-blocked hosts require separately approved Gateway Reverse SSH setup.
 3. Authorize the Target and grant specific Gateway users or Target Groups access.
+   In the source Admin UI, **Users → Global restrictions**, **Target Groups → Capability restrictions**, and **Users → Target access → Edit** share connector-specific Deny controls for WordPress, ArvanCloud API and SSH. A checked ArvanCloud `arvan.api.*` permission restricts that operation class; unchecked is not an independent grant beyond the role, Target scope, group restrictions or Machine User key. This ArvanCloud permission-panel correction is **not included in the immutable v2.7.2 installation ZIP** until a later release delivers it.
 4. Connect your MCP client using Gateway OAuth, then choose a Target and use its permitted tools.
 
 **Supported connectors:** WordPress through WP AI Bridge, SSH through verified OpenSSH/SFTP/Jobs, and registered ArvanCloud Machine User HTTPS REST/OpenAPI Targets. Each Target has its own identity, approved downstream principal, Gateway permissions and connection state. See the workflows below; a saved Target or available tool is not proof that the downstream credential works.

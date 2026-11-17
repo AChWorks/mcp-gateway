@@ -1091,6 +1091,7 @@ final class AdminUiPresentationTest extends TestCase
                 ->assertOk()
                 ->assertSee('Shared Target management')
                 ->assertSee('WordPress (WP AI Bridge)')
+                ->assertSee('ArvanCloud API')
                 ->assertSee('Direct SSH')
                 ->assertDontSee('AI Server Agent')
                 ->assertDontSee('View paused Agent permission identifiers (read-only)')
@@ -1121,6 +1122,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame('gateway', GatewayPermission::SecurityManage->adminGroup());
         self::assertSame('targets', GatewayPermission::TargetsView->adminGroup());
         self::assertSame('wordpress', GatewayPermission::WordpressAbilitiesInspect->adminGroup());
+        self::assertSame('arvancloud', GatewayPermission::ArvanApiRead->adminGroup());
         self::assertSame('ssh', GatewayPermission::SshCommandRun->adminGroup());
         self::assertNull(GatewayPermission::tryFrom('agent.command.run'));
         self::assertTrue(collect(GatewayPermission::cases())->every(

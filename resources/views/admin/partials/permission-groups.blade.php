@@ -31,6 +31,12 @@
             'status' => __('Available'),
             'future' => false,
         ],
+        'arvancloud' => [
+            'title' => __('ArvanCloud API'),
+            'help' => __('These permissions govern the registered ArvanCloud API Target only. Checked boxes DENY catalog inspection or the corresponding API request class; the user Role, Target scope, group rules and Machine User key still constrain access.'),
+            'status' => __('Available'),
+            'future' => false,
+        ],
         'ssh' => [
             'title' => __('Direct SSH'),
             'help' => $sshHelp,
@@ -39,15 +45,19 @@
         ],
     ];
     $selectedDenials = is_array($selectedDenials ?? null) ? $selectedDenials : [];
-    $connectorGroup = match ($connectorType ?? null) {
+    // Keep the connector-specific permission categories in sync with the
+    // registered Target types. Other connectors' existing denials must be
+    // retained as hidden values, never rendered as editable checkboxes here.
+    $connectorPermissionGroups = [
         'wp_ai_bridge' => 'wordpress',
         'ssh_direct' => 'ssh',
-        default => null,
-    };
+        'arvancloud' => 'arvancloud',
+    ];
+    $connectorGroup = $connectorPermissionGroups[$connectorType ?? ''] ?? null;
     $visiblePermissions = collect($permissions);
     $preservedOtherDenials = [];
     if ($connectorGroup !== null) {
-        $otherConnectorPermission = static fn ($permission): bool => in_array($permission->adminGroup(), ['wordpress', 'ssh'], true)
+        $otherConnectorPermission = static fn ($permission): bool => in_array($permission->adminGroup(), $connectorPermissionGroups, true)
             && $permission->adminGroup() !== $connectorGroup;
         $preservedOtherDenials = $visiblePermissions->filter(static fn ($permission): bool => $otherConnectorPermission($permission)
             && in_array($permission->value, $selectedDenials, true))->values()->all();
