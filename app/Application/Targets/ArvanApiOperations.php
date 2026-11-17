@@ -283,10 +283,117 @@ final readonly class ArvanApiOperations
 
     private function redactCredentialEcho(string $text, string $key): string
     {
-        // Provider IDs and remote response bodies are opaque. When any
-        // reversible representation is present, dropping this untrusted
-        // field is safer than guessing its token boundaries.
-        return $this->containsCredentialEcho($text, $key) ? '[REDACTED]' : $text;
+        // Provider IDs and response bodies are opaque. URL decoding alone
+        // misses normal JSON string escapes (e.g. \/ and \u006d), which
+        // become the original key on JSON decoding. Check both forms before
+        // returning provider data or recording a persistent error excerpt.
+        // Only this affected field is dropped; HTTP status, safe request ID,
+        // method, path fingerprint and outcome evidence remain intact.
+        return $this->containsCredentialEcho($text, $key)
+            || $this->jsonContainsCredentialEcho($text, $key)
+                ? '[REDACTED]' : $text;
+    }
+
+    /**
+     * Inspect JSON documents and also escaped JSON-string content in opaque
+     * provider headers. Recursive handling covers JSON embedded as a string
+     * inside another JSON response, including encoded keys as well as values.
+     * Fail closed if nested decoding cannot be safely exhausted.
+     */
+    private function jsonContainsCredentialEcho(string $text, string $key, int $depth = 0): bool
+    {
+        if ($depth >= 64) {
+            return true;
+        }
+
+        // The entire provider field might itself have been URL-encoded.
+        // Inspect JSON before and after each bounded URL decoding layer;
+        // decoded JSON keys/values are checked for URL encodings in turn.
+        foreach ([false, true] as $formEncoding) {
+            $candidate = $text;
+            for ($pass = 0; $pass < self::DIAGNOSTIC_URL_DECODE_PASSES; $pass++) {
+                if ($this->jsonCandidateContainsCredentialEcho($candidate, $key, $depth)) {
+                    return true;
+                }
+                $next = $formEncoding ? urldecode($candidate) : rawurldecode($candidate);
+                if ($next === $candidate) {
+                    break;
+                }
+                $candidate = $next;
+            }
+        }
+
+        return false;
+    }
+
+    private function jsonCandidateContainsCredentialEcho(string $text, string $key, int $depth): bool
+    {
+        // Inspect every serialized JSON string token before normalizing to
+        // a PHP array. Associative decoding can coerce numeric property names
+        // to integer keys and discard earlier duplicate properties even
+        // though their original escaped content remains in the raw body.
+        if (str_contains($text, '\\')) {
+            $count = preg_match_all('/"(?:\\\\.|[^"\\\\])*"/s', $text, $tokens);
+            if ($count === false) {
+                return true;
+            }
+            foreach ($tokens[0] as $token) {
+                $string = json_decode($token, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_string($string)) {
+                    if ($this->containsCredentialEcho($string, $key)
+                        || $this->jsonContainsCredentialEcho($string, $key, $depth + 1)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        $decoded = json_decode($text, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $this->jsonValueContainsCredentialEcho($decoded, $key, $depth + 1);
+        }
+
+        // A request ID is not necessarily a JSON document, but can contain
+        // JSON string escapes. Decode its contents as a quoted JSON string
+        // without changing the actual upstream response or request URL.
+        if (! str_contains($text, '\\')) {
+            return false;
+        }
+        $unescaped = json_decode('"'.$text.'"', true);
+        if (json_last_error() === JSON_ERROR_NONE && is_string($unescaped)) {
+            return $unescaped !== $text
+                && ($this->containsCredentialEcho($unescaped, $key)
+                    || $this->jsonContainsCredentialEcho($unescaped, $key, $depth + 1));
+        }
+
+        // Malformed/too-deep JSON or an invalid opaque string containing
+        // recognizable JSON escape syntax cannot be safely inspected.
+        return preg_match('/\\\\(?:u[0-9a-f]{4}|["\\\\\/bfnrt])/i', $text) === 1;
+    }
+
+    private function jsonValueContainsCredentialEcho(mixed $value, string $key, int $depth): bool
+    {
+        if ($depth >= 64) {
+            return true;
+        }
+        if (is_array($value)) {
+            foreach ($value as $name => $part) {
+                if (is_string($name)
+                    && ($this->containsCredentialEcho($name, $key)
+                        || $this->jsonContainsCredentialEcho($name, $key, $depth + 1))) {
+                    return true;
+                }
+                if ($this->jsonValueContainsCredentialEcho($part, $key, $depth + 1)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return is_string($value)
+            && ($this->containsCredentialEcho($value, $key)
+                || $this->jsonContainsCredentialEcho($value, $key, $depth + 1));
     }
 
     private function target(User $user, string $targetId, GatewayPermission $permission): ?Target

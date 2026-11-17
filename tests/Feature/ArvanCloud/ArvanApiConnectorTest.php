@@ -601,6 +601,134 @@ YAML, 200);
         Http::assertSentCount(1);
     }
 
+    public function test_json_escaped_provider_credentials_are_redacted_before_success_and_error_diagnostics(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $config = ArvanApiTargetConfig::query()->sole();
+        $credential = TargetCredential::query()->sole();
+        $key = 'machine+secret/seg';
+        $credential->forceFill([
+            'encrypted_payload' => app(ArvanApiTargetVault::class)->seal($target, $config, $key),
+        ])->save();
+
+        $cases = [
+            ['PATCH', 503, json_encode(['message' => 'echo '.$key], JSON_THROW_ON_ERROR), 'provider-http-503', true],
+            ['GET', 200, '{"message":"\u006dachine+secret\u002fseg"}', 'provider-ok', true],
+            ['GET', 200, '{"machine+secret\/seg":"safe data"}', 'provider-ok', true],
+            ['GET', 200, json_encode(['nested' => json_encode(['echo' => $key], JSON_THROW_ON_ERROR)], JSON_THROW_ON_ERROR), 'provider-ok', true],
+            ['GET', 200, json_encode(['echo' => '%6dachine%2Bsecret%2fseg'], JSON_THROW_ON_ERROR), 'provider-ok', true],
+            ['GET', 200, '{"message":"ordinary response","detail":"safe"}', 'provider-safe', false],
+            ['PATCH', 422, '{"message":"ordinary provider error","detail":"safe"}',
+                'req-'.str_replace('/', '\/', $key), false],
+            ['PATCH', 422, '{"message":"ordinary provider error","detail":"safe"}',
+                'req-'.str_replace('m', '\u006d', $key), false],
+            ['GET', 200, rawurlencode(json_encode(['message' => $key], JSON_THROW_ON_ERROR)),
+                'provider-url-encoded-json', true],
+            ['PATCH', 503, rawurlencode(rawurlencode(json_encode(['message' => $key], JSON_THROW_ON_ERROR))),
+                'provider-double-url-json', true],
+            ['PATCH', 503, '{"message":"machine+secret\/seg","message":"safe duplicate"}',
+                'provider-duplicate-field', true],
+        ];
+
+        $outbound = [];
+        Http::fake(function (Request $request) use (&$outbound, $cases, $key) {
+            $case = $cases[count($outbound)];
+            self::assertSame('Apikey '.$key, $request->header('Authorization')[0]);
+            $outbound[] = [$request->method(), $request->url()];
+
+            return Http::response($case[2], $case[1], ['X-Request-ID' => $case[3]]);
+        });
+
+        $operation = app(ArvanApiOperations::class);
+        $reader = app(OperationDiagnosticsMcpToolHandlers::class);
+        foreach ($cases as $index => [$method, $status, $body, $requestId, $unsafeBody]) {
+            $result = $operation->execute($owner, $target->target_id, $method, '/domains/safe-resource');
+            self::assertSame([$method, 'https://api.example.test/cdn/4.0/domains/safe-resource'], $outbound[$index]);
+            self::assertSame($status >= 200 && $status < 300, $result['ok']);
+            if ($status === 200) {
+                if ($unsafeBody) {
+                    self::assertSame('[REDACTED]', $result['data']);
+                } else {
+                    self::assertSame(['message' => 'ordinary response', 'detail' => 'safe'], $result['data']);
+                }
+            } else {
+                self::assertSame('outcome_unknown', $result['error']['code']);
+            }
+
+            $event = DB::table('activity_events')->where('operation', 'arvan-api-request')
+                ->orderByDesc('id')->first();
+            self::assertNotNull($event);
+            $context = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+            self::assertSame($method, $context['api_operation']['method']);
+            self::assertSame('/domains/safe-resource', $context['api_operation']['relative_path']);
+            self::assertSame(hash('sha256', '/domains/safe-resource'), $context['api_operation']['path_sha256']);
+            self::assertSame($status, $context['remote_http_status']);
+            self::assertSame(
+                in_array($index, [6, 7], true) ? '[REDACTED]' : $requestId,
+                $context['api_operation']['provider_request_id'],
+            );
+            if ($status !== 200) {
+                self::assertSame('unknown', $event->outcome);
+                self::assertFalse($context['retry_safe']);
+                self::assertTrue($context['effect_unconfirmed']);
+                self::assertSame(
+                    $unsafeBody ? '[REDACTED]' : $body,
+                    $context['source_error_details']['response_excerpt'],
+                );
+            } else {
+                self::assertSame('success', $event->outcome);
+            }
+
+            $lookup = $reader->read($owner, (string) $event->correlation_id);
+            self::assertTrue($lookup['ok']);
+            self::assertSame($context, $lookup['events'][0]['diagnostics']);
+            $admin = $this->actingAs($owner)->get('/admin/activity?diagnostic_reference='.$event->correlation_id)
+                ->assertOk();
+            foreach ([(string) $event->diagnostic_context,
+                json_encode($lookup, JSON_THROW_ON_ERROR),
+                $admin->getContent()] as $serialized) {
+                // A JSON decoder, unlike a plain substring check, reconstructs
+                // standard slash and Unicode escapes inside provider evidence.
+                $decoded = $serialized;
+                for ($pass = 0; $pass < 4; $pass++) {
+                    self::assertStringNotContainsString($key, $decoded);
+                    $decoded = rawurldecode($decoded);
+                }
+            }
+        }
+
+        Http::assertSentCount(count($cases));
+    }
+
+    public function test_json_escaped_numeric_key_is_detected_before_assoc_key_coercion(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $config = ArvanApiTargetConfig::query()->sole();
+        $credential = TargetCredential::query()->sole();
+        $key = '123456789';
+        $credential->forceFill([
+            'encrypted_payload' => app(ArvanApiTargetVault::class)->seal($target, $config, $key),
+        ])->save();
+
+        // PHP associative JSON decoding changes a numeric object property
+        // into an integer key. Inspect the raw JSON string tokens as well.
+        $body = '{"\u0031\u0032\u0033\u0034\u0035\u0036\u0037\u0038\u0039":"not confidential"}';
+        Http::fake(fn (Request $request) => Http::response($body, 200, [
+            'X-Request-ID' => 'provider-numeric-key',
+        ]));
+        $result = app(ArvanApiOperations::class)->execute(
+            $owner, $target->target_id, 'GET', '/domains/safe-resource',
+        );
+        self::assertTrue($result['ok']);
+        self::assertSame('[REDACTED]', $result['data']);
+        $event = DB::table('activity_events')->where('operation', 'arvan-api-request')->sole();
+        $context = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('GET', $context['api_operation']['method']);
+        self::assertSame('provider-numeric-key', $context['api_operation']['provider_request_id']);
+        self::assertStringNotContainsString($key, (string) $event->diagnostic_context);
+        Http::assertSentCount(1);
+    }
+
     public function test_authentication_probe_is_real_readonly_get_and_disconnect_only_erases_local_credential(): void
     {
         [$target] = $this->fixture();
