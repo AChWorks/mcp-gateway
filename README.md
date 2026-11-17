@@ -26,7 +26,7 @@ Targets can be **paused** without deleting their configuration or disconnecting 
 ## Requirements
 
 - Linux web hosting with **PHP 8.5 recommended** (PHP 8.4.1+ remains the Composer minimum) and the `curl`, `mbstring`, `openssl`, `pdo_mysql` and `sodium` extensions; cURL must support `CURLOPT_RESOLVE`.
-- **MariaDB** (10.11 recommended) or **MySQL**, with a dedicated database and user.
+- **MariaDB 12.3** for the primary CI-validated profile (MariaDB 10.11 and MySQL remain supported), with a dedicated database and user.
 - A stable **HTTPS** domain and a web server that can serve the application's `public/` directory.
 - For **WordPress**, a compatible WP AI Bridge installation; for **SSH**, an accessible host and authorized credentials; for **ArvanCloud**, a scoped Machine User API key and the correct product/region HTTPS API root. Only configure the providers you intend to use.
 
@@ -95,7 +95,7 @@ See the [Relay operator guide](docs/CONNECTION-RELAYS.md), [active test issue #2
 
 1. From **Admin → Connection**, copy the Gateway MCP endpoint, normally **`https://gateway.example.com/mcp`**.
 2. Register it as a compatible MCP connection in your client and complete **Gateway OAuth** sign-in and consent with an authorized Gateway user/client profile.
-3. Use `targets-list` and `target-context` to select an authorized `target_id`, then call the WordPress or SSH tools available to that user and client.
+3. Use `targets-list` and `target-context` to select an authorized `target_id`, then call the permitted WordPress, SSH or ArvanCloud tools available to that user and client.
 
 Manage client profiles and grants under **Admin → AI clients** (`/admin/oauth-clients`). After an upgrade, refresh/reconnect the MCP connection if your client still displays an outdated Tool catalog.
 
