@@ -144,6 +144,8 @@
                             'roleChoiceAllowed' => ! $roleAwareUser || $isRestrictable($permission),
                             'roleChoiceAllowedRoles' => $roleAwareUser ? $rolesAllowingRestriction($permission) : '',
                             'roleChoiceIsSsh' => $roleAwareUser && $group === 'ssh',
+                            'targetRoleUnavailable' => ($targetUserRole ?? null) instanceof \App\Domain\Access\GatewayRole
+                                && ! $targetUserRole->allows($permission),
                         ])
                     @endforeach
                 </div>

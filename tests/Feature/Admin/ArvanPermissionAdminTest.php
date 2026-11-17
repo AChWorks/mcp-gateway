@@ -215,6 +215,315 @@ final class ArvanPermissionAdminTest extends TestCase
         ]);
     }
 
+    public function test_role_downgrade_cannot_erase_historical_arvan_and_cross_connector_target_denials(): void
+    {
+        $owner = $this->owner();
+        $user = $this->operator();
+        $user->forceFill(['role' => GatewayRole::Administrator->value])->save();
+        $target = $this->target('arvancloud', 'arvan-historical-denials');
+        $manager = app(UserAccessManager::class);
+        $denials = [
+            GatewayPermission::ArvanApiDestructive->value,
+            GatewayPermission::ArvanApiUnclassified->value,
+            GatewayPermission::WordpressAbilitiesExecuteDestructive->value,
+            GatewayPermission::SshCommandRun->value,
+        ];
+
+        $manager->updateTargetRule(
+            $user, $target, 'allow', [
+                GatewayPermission::ArvanApiDestructive->value,
+                GatewayPermission::ArvanApiUnclassified->value,
+            ], false, $manager->targetRuleRevision($user, $target),
+        );
+        // Historical foreign-connector records may be present from an
+        // earlier release or import, but cannot be introduced anew here.
+        foreach ([
+            GatewayPermission::WordpressAbilitiesExecuteDestructive,
+            GatewayPermission::SshCommandRun,
+        ] as $foreign) {
+            DB::table('user_target_permission_denials')->insert([
+                'user_id' => $user->id,
+                'target_record_id' => $target->id,
+                'permission' => $foreign->value,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+        $this->actingAs($owner);
+        $this->put('/admin/users/'.$user->id, [
+            'name' => $user->name, 'email' => $user->email,
+            'role' => 'viewer', 'target_scope_mode' => 'selected',
+            'access_enabled' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        self::assertSame(GatewayRole::Viewer, $user->fresh()->role);
+        $viewerForm = (string) $this->get('/admin/users/'.$user->id.'/targets/'.$target->target_id.'/edit')
+            ->assertOk()->getContent();
+        foreach ([GatewayPermission::ArvanApiDestructive, GatewayPermission::ArvanApiUnclassified] as $denied) {
+            $input = $this->targetPermissionInput($viewerForm, $denied);
+            self::assertStringContainsString('checked', $input);
+            self::assertStringContainsString('disabled', $input);
+        }
+
+        // A reduced-role form omitting the now-unavailable, old checkboxes
+        // must not turn those preserved restrictions into implicit grants.
+        $url = '/admin/users/'.$user->id.'/targets/'.$target->target_id;
+        $this->put($url, [
+            'access_rule' => 'allow', 'denied_permissions' => [],
+            'target_revision' => $manager->targetRuleRevision($user->fresh(), $target),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        foreach ($denials as $denial) {
+            $this->assertDatabaseHas('user_target_permission_denials', [
+                'user_id' => $user->id, 'target_record_id' => $target->id,
+                'permission' => $denial,
+            ]);
+        }
+
+        $this->put('/admin/users/'.$user->id, [
+            'name' => $user->name, 'email' => $user->email,
+            'role' => 'administrator', 'target_scope_mode' => 'selected',
+            'access_enabled' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        $access = app(AccessControl::class);
+        self::assertSame(GatewayRole::Administrator, $user->fresh()->role);
+        $adminForm = (string) $this->get('/admin/users/'.$user->id.'/targets/'.$target->target_id.'/edit')
+            ->assertOk()->getContent();
+        foreach ([GatewayPermission::ArvanApiDestructive, GatewayPermission::ArvanApiUnclassified] as $denied) {
+            $input = $this->targetPermissionInput($adminForm, $denied);
+            self::assertStringContainsString('checked', $input);
+            self::assertStringNotContainsString('disabled', $input);
+        }
+        self::assertTrue($access->allows($user->fresh(), GatewayPermission::ArvanApiRead, $target));
+        self::assertFalse($access->allows($user->fresh(), GatewayPermission::ArvanApiDestructive, $target));
+        self::assertFalse($access->allows($user->fresh(), GatewayPermission::ArvanApiUnclassified, $target));
+        foreach ($denials as $denial) {
+            $this->assertDatabaseHas('user_target_permission_denials', [
+                'user_id' => $user->id, 'target_record_id' => $target->id,
+                'permission' => $denial,
+            ]);
+        }
+    }
+
+    public function test_role_promotion_invalidates_older_viewer_form_before_it_can_clear_newly_eligible_deny(): void
+    {
+        $owner = $this->owner();
+        $user = $this->operator();
+        $user->forceFill(['role' => GatewayRole::Administrator->value])->save();
+        $target = $this->target('arvancloud', 'arvan-role-race');
+        $manager = app(UserAccessManager::class);
+        $url = '/admin/users/'.$user->id.'/targets/'.$target->target_id;
+
+        $manager->updateTargetRule(
+            $user, $target, 'allow', [GatewayPermission::ArvanApiDestructive->value],
+            false, $manager->targetRuleRevision($user, $target),
+        );
+        $this->actingAs($owner)->put('/admin/users/'.$user->id, [
+            'name' => $user->name, 'email' => $user->email,
+            'role' => 'viewer', 'target_scope_mode' => 'selected',
+            'access_enabled' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+
+        $oldViewerRevision = $manager->targetRuleRevision($user->fresh(), $target);
+        $view = (string) $this->get($url.'/edit')->assertOk()->getContent();
+        self::assertStringContainsString('disabled',
+            $this->targetPermissionInput($view, GatewayPermission::ArvanApiDestructive));
+
+        // The Deny rows did not change, but the Role now makes those Denies
+        // editable. Any pre-promotion form revision must become stale.
+        $this->put('/admin/users/'.$user->id, [
+            'name' => $user->name, 'email' => $user->email,
+            'role' => 'administrator', 'target_scope_mode' => 'selected',
+            'access_enabled' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+
+        $newRevision = $manager->targetRuleRevision($user->fresh(), $target);
+        self::assertNotSame($oldViewerRevision, $newRevision);
+        $this->put($url, [
+            'access_rule' => 'allow', 'denied_permissions' => [],
+            'target_revision' => $oldViewerRevision,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('target_revision');
+        $this->assertDatabaseHas('user_target_permission_denials', [
+            'user_id' => $user->id, 'target_record_id' => $target->id,
+            'permission' => GatewayPermission::ArvanApiDestructive->value,
+        ]);
+        self::assertFalse(app(AccessControl::class)->allows(
+            $user->fresh(), GatewayPermission::ArvanApiDestructive, $target,
+        ));
+        $this->put($url, [
+            'access_rule' => 'allow',
+            'denied_permissions' => [GatewayPermission::ArvanApiDestructive->value],
+            'target_revision' => $newRevision,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+    }
+
+    public function test_new_role_excluded_target_denial_is_rejected_instead_of_appearing_saved(): void
+    {
+        $owner = $this->owner();
+        $user = $this->operator();
+        $user->forceFill(['role' => GatewayRole::Viewer->value])->save();
+        $target = $this->target('arvancloud', 'arvan-outside-role');
+        $manager = app(UserAccessManager::class);
+        $this->actingAs($owner);
+        $viewerForm = (string) $this->get('/admin/users/'.$user->id.'/targets/'.$target->target_id.'/edit')
+            ->assertOk()->getContent();
+        $input = $this->targetPermissionInput($viewerForm, GatewayPermission::ArvanApiDestructive);
+        self::assertStringContainsString('disabled', $input);
+        $this->put('/admin/users/'.$user->id.'/targets/'.$target->target_id, [
+            'access_rule' => 'allow',
+            'denied_permissions' => [GatewayPermission::ArvanApiDestructive->value],
+            'target_revision' => $manager->targetRuleRevision($user, $target),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('denied_permissions');
+        $this->assertDatabaseMissing('user_target_access', [
+            'user_id' => $user->id, 'target_record_id' => $target->id,
+        ]);
+        $this->assertDatabaseMissing('user_target_permission_denials', [
+            'user_id' => $user->id, 'target_record_id' => $target->id,
+            'permission' => GatewayPermission::ArvanApiDestructive->value,
+        ]);
+
+        // Also reject a new restriction for another connector, even when
+        // the Role would otherwise include that permission.
+        $user->forceFill(['role' => GatewayRole::Administrator->value])->save();
+        $this->put('/admin/users/'.$user->id.'/targets/'.$target->target_id, [
+            'access_rule' => 'allow',
+            'denied_permissions' => [GatewayPermission::WordpressAbilitiesInspect->value],
+            'target_revision' => $manager->targetRuleRevision($user, $target),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('denied_permissions');
+        $this->assertDatabaseMissing('user_target_access', [
+            'user_id' => $user->id, 'target_record_id' => $target->id,
+        ]);
+    }
+
+    public function test_stale_arvan_wordpress_and_ssh_target_forms_cannot_replace_newer_denials_or_scope(): void
+    {
+        $owner = $this->owner();
+        $user = $this->operator();
+        $manager = app(UserAccessManager::class);
+        $this->actingAs($owner);
+
+        foreach ([
+            ['arvancloud', GatewayPermission::ArvanApiRead, false],
+            ['wp_ai_bridge', GatewayPermission::WordpressAbilitiesInspect, false],
+            ['ssh_direct', GatewayPermission::SshFileWrite, true],
+        ] as [$connector, $denial, $ssh]) {
+            $target = $this->target($connector, 'stale-'.str_replace('_', '-', $connector));
+            $url = '/admin/users/'.$user->id.'/targets/'.$target->target_id;
+            $oldRevision = $manager->targetRuleRevision($user, $target);
+            $this->get($url.'/edit')->assertOk()->assertSee($oldRevision);
+
+            $manager->updateTargetRule(
+                $user, $target, 'allow', [$denial->value],
+                $ssh, $oldRevision,
+            );
+            $newRevision = $manager->targetRuleRevision($user, $target);
+            self::assertNotSame($oldRevision, $newRevision);
+            $operation = 'user-target-access-update:'.$user->id.':'.$target->target_id;
+            $auditCount = DB::table('activity_events')->where('operation', $operation)->count();
+
+            $this->put($url, [
+                'access_rule' => 'deny', 'denied_permissions' => [],
+                'target_revision' => $oldRevision,
+                'confirm_ssh_target_changes' => $ssh ? '1' : '0',
+                'current_password' => 'CorrectHorse!234',
+            ])->assertSessionHasErrors('target_revision');
+            $this->assertDatabaseHas('user_target_access', [
+                'user_id' => $user->id, 'target_record_id' => $target->id,
+                'allowed' => 1,
+            ]);
+            $this->assertDatabaseHas('user_target_permission_denials', [
+                'user_id' => $user->id, 'target_record_id' => $target->id,
+                'permission' => $denial->value,
+            ]);
+            self::assertSame($auditCount, DB::table('activity_events')
+                ->where('operation', $operation)->count());
+            $this->get($url.'/edit')->assertOk()->assertSee($newRevision);
+            $this->put($url, [
+                'access_rule' => 'inherit', 'denied_permissions' => [$denial->value],
+                'target_revision' => $newRevision,
+                'confirm_ssh_target_changes' => $ssh ? '1' : '0',
+                'current_password' => 'CorrectHorse!234',
+            ])->assertAdminRedirect()->assertSessionHasNoErrors();
+            $this->assertDatabaseMissing('user_target_access', [
+                'user_id' => $user->id, 'target_record_id' => $target->id,
+            ]);
+            $this->assertDatabaseHas('user_target_permission_denials', [
+                'user_id' => $user->id, 'target_record_id' => $target->id,
+                'permission' => $denial->value,
+            ]);
+
+            // Missing revisions are not a bypass even when the new payload
+            // would otherwise be valid.
+            $this->put($url, [
+                'access_rule' => 'deny', 'denied_permissions' => [$denial->value],
+                'confirm_ssh_target_changes' => '1',
+                'current_password' => 'CorrectHorse!234',
+            ])->assertSessionHasErrors('target_revision');
+        }
+    }
+
+    public function test_ssh_target_preserves_ineligible_denials_and_never_skips_owner_review(): void
+    {
+        $owner = $this->owner();
+        $user = $this->operator();
+        $user->forceFill(['role' => GatewayRole::Administrator->value])->save();
+        $ssh = $this->target('ssh_direct', 'historical-ssh-denies');
+        $manager = app(UserAccessManager::class);
+        $url = '/admin/users/'.$user->id.'/targets/'.$ssh->target_id;
+        $this->actingAs($owner);
+
+        $manager->updateTargetRule(
+            $user, $ssh, 'allow', [
+                GatewayPermission::SshCommandRun->value,
+                GatewayPermission::SshFileWrite->value,
+            ], true, $manager->targetRuleRevision($user, $ssh),
+        );
+        $this->actingAs($owner)->put('/admin/users/'.$user->id, [
+            'name' => $user->name, 'email' => $user->email,
+            'role' => 'viewer', 'target_scope_mode' => 'selected',
+            'access_enabled' => '1', 'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+
+        $form = (string) $this->get($url.'/edit')->assertOk()->getContent();
+        self::assertStringContainsString('disabled',
+            $this->targetPermissionInput($form, GatewayPermission::SshCommandRun));
+        $this->put($url, [
+            'access_rule' => 'allow', 'denied_permissions' => [],
+            'target_revision' => $manager->targetRuleRevision($user->fresh(), $ssh),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+
+        foreach ([GatewayPermission::SshCommandRun, GatewayPermission::SshFileWrite] as $denied) {
+            $this->assertDatabaseHas('user_target_permission_denials', [
+                'user_id' => $user->id, 'target_record_id' => $ssh->id,
+                'permission' => $denied->value,
+            ]);
+        }
+        $this->put($url, [
+            'access_rule' => 'deny', 'denied_permissions' => [],
+            'target_revision' => $manager->targetRuleRevision($user, $ssh),
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('confirm_ssh_target_changes');
+        $this->assertDatabaseHas('user_target_access', [
+            'user_id' => $user->id, 'target_record_id' => $ssh->id,
+            'allowed' => 1,
+        ]);
+        self::assertFalse(app(AccessControl::class)->allows(
+            $user->fresh(), GatewayPermission::SshCommandRun, $ssh,
+        ));
+    }
+
+    private function targetPermissionInput(string $html, GatewayPermission $permission): string
+    {
+        $pattern = '/<input[^>]*name="denied_permissions\[\]"[^>]*value="'
+            .preg_quote($permission->value, '/').'"[^>]*>/s';
+        self::assertSame(1, preg_match($pattern, $html, $matches));
+
+        return $matches[0];
+    }
+
     /** @return list<GatewayPermission> */
     private function arvanPermissions(): array
     {

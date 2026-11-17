@@ -82,7 +82,8 @@ final class TargetAuthorizationFoundationTest extends TestCase
         ]);
 
         $manager->updateTargetRule($operator, $wp, 'allow',
-            [GatewayPermission::WordpressAbilitiesInspect->value]);
+            [GatewayPermission::WordpressAbilitiesInspect->value], false,
+            $manager->targetRuleRevision($operator, $wp));
         self::assertContains('unrecognized.extension.command.run', $manager->targetRule($operator, $wp)['denied_permissions']);
         self::assertContains(GatewayPermission::WordpressAbilitiesInspect->value,
             $manager->targetRule($operator, $wp)['denied_permissions']);

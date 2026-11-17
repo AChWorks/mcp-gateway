@@ -36,8 +36,9 @@ final class UserTargetAccessController extends Controller
             'managedUser' => $user,
             'target' => $target,
             'targetRule' => $targetRule,
-            'targetRevision' => AuthorizationRevision::targetRule($targetRule),
+            'targetRevision' => AuthorizationRevision::userTargetRule($targetRule, $this->role($user)),
             'targetPermissions' => $access->targetPermissions(),
+            'targetUserRole' => $this->role($user),
             'isOwner' => $this->role($user) === GatewayRole::Owner,
         ]);
     }
@@ -60,8 +61,8 @@ final class UserTargetAccessController extends Controller
             'target_revision' => ['nullable', 'string', 'regex:/\\A[a-f0-9]{64}\\z/D'],
         ]);
 
-        // SSH confirmation and optimistic state must be enforced inside the
-        // User-row transaction, not against a pre-lock edit snapshot.
+        // All connector revisions and SSH confirmation are enforced against
+        // the locked User-row authorization snapshot, never a stale form.
         try {
             $access->updateTargetRule(
                 $user,
@@ -75,6 +76,11 @@ final class UserTargetAccessController extends Controller
             if ($exception->getMessage() === 'ssh_target_confirmation_required') {
                 throw ValidationException::withMessages([
                     'confirm_ssh_target_changes' => __('Explicitly confirm changed SSH Target reachability and command/SFTP restrictions as Owner.'),
+                ]);
+            }
+            if ($exception->getMessage() === 'target_denial_unavailable') {
+                throw ValidationException::withMessages([
+                    'denied_permissions' => __('A newly selected Target restriction is outside this user’s current Role or this Target’s connector capabilities. No changes were saved; review the available permissions.'),
                 ]);
             }
             if ($exception->getMessage() === 'target_rule_revision_stale') {
