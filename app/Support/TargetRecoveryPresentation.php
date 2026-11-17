@@ -28,11 +28,11 @@ final class TargetRecoveryPresentation
 
             return [
                 'title' => $verified ? __('ArvanCloud API last verified') : __('ArvanCloud API needs verification'),
-                'description' => __('Authenticated read-only probe is historical evidence; it is not a live connection. Deleting the local credential does not revoke the remote Machine User key.'),
+                'description' => __('ArvanCloud connection state records only successful authenticated GET verification. A disconnected state after changing the API root, key or probe does not prove other authorized API calls fail. A separate HTTPS HEAD check uses no key and never changes authentication state.'),
                 'reachability' => $target->last_tested_at === null
-                    ? __('No authenticated probe has been recorded.')
-                    : __('Most recent recorded probe: :time', ['time' => (string) $target->last_tested_at]),
-                'authorization' => __('Bound encrypted Machine User API key; API scopes remain provider-controlled.'),
+                    ? __('No authenticated GET verification has been recorded for this Target.')
+                    : __('Recorded GET probe time (may predate the current API settings): :time', ['time' => (string) $target->last_tested_at]),
+                'authorization' => __('Machine User key presence is shown below; authenticated requests require a saved key and appropriate provider-side API scopes.'),
                 'operation' => __('API requests use this exact registered Target. Target Pause prevents new requests.'),
                 'history' => $target->last_error_code === null ? null
                     : __('Recorded diagnostic: :code', ['code' => $target->last_error_code]),

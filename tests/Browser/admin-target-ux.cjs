@@ -330,6 +330,68 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     assert.equal(denied.status(),403);
     await other.close();
     pass('non-Owner cannot select Managed Reverse through direct URL');
+
+    // Real Laravel Target details, with each state prepared on a disposable
+    // loopback-only fixture. Intercept test POSTs: no provider is contacted.
+    await page.setViewportSize({width:1440,height:950});
+    for (const state of ['probe','no-probe','paused','no-key']) {
+      await page.goto(base+'/__browser__/arvan-checks/'+state);
+      const panel=page.locator('[aria-labelledby="arvan-connection-check-title"]');
+      const endpoint=panel.getByRole('button',{name:'Check HTTPS endpoint (no API key)'});
+      const authenticated=panel.getByRole('button',{name:'Verify API key (read-only GET)'});
+      assert.equal(await endpoint.count(),1,state+' must show its independent reachability action');
+      assert.equal(await authenticated.count(),state==='probe'||state==='paused'?1:0);
+      assert.equal(await endpoint.isDisabled(),state==='paused');
+      if(state==='paused') assert.equal(await authenticated.isDisabled(),true);
+      assert.equal(await panel.locator('input[name="arvan_check"][value="endpoint"]').count(),1);
+      assert.equal(await panel.locator('input[name="arvan_check"][value="authenticated"]').count(),
+        state==='probe'||state==='paused'?1:0);
+      assert.ok(!(await page.content()).includes('synthetic-browser-key-never-provider'));
+      for(const width of [360,390,768,1440]){
+        for(const dark of [false,true]){
+          await page.setViewportSize({width,height:950});
+          await page.emulateMedia({colorScheme:dark?'dark':'light',reducedMotion:'reduce'});
+          for(const rtl of [false,true]){
+            await page.evaluate(dir=>document.documentElement.dir=dir,rtl?'rtl':'ltr');
+            const bounds=await page.evaluate(()=>{
+              const content=document.querySelector('[aria-labelledby="arvan-connection-check-title"]');
+              const getGap=(a,b)=>Math.round((b.getBoundingClientRect().top-
+                a.getBoundingClientRect().bottom)*10)/10;
+              const help=content.querySelector('.field-help');
+              const actions=content.querySelector('.filter-actions');
+              return {
+                overflow:document.documentElement.scrollWidth-document.documentElement.clientWidth,
+                helpActionGap:getGap(help,actions),
+                width:content.getBoundingClientRect().width,
+              };
+            });
+            assert.ok(bounds.overflow<=2,JSON.stringify({state,width,dark,rtl,bounds}));
+            assert.ok(bounds.helpActionGap>=4,JSON.stringify({state,width,dark,rtl,bounds}));
+          }
+        }
+      }
+    }
+
+    // Test the actual native form payload, including CSRF and explicit modes.
+    // The response is intercepted before any network/backend dispatch; PHP
+    // feature tests cover the real controller + safe HTTP semantics.
+    await page.goto(base+'/__browser__/arvan-checks/probe');
+    const observed=[];
+    await page.route('**/admin/targets/ui-arvan-checks/test',async route=>{
+      const body=new URLSearchParams(route.request().postData()||'');
+      observed.push({method:route.request().method(),mode:body.get('arvan_check'),
+        csrf:typeof body.get('_token')==='string' && body.get('_token').length>0});
+      await route.fulfill({status:204,body:''});
+    });
+    for(const name of ['Check HTTPS endpoint (no API key)','Verify API key (read-only GET)']){
+      await page.getByRole('button',{name,exact:true}).click();
+    }
+    assert.deepEqual(observed,[
+      {method:'POST',mode:'endpoint',csrf:true},
+      {method:'POST',mode:'authenticated',csrf:true},
+    ]);
+    await page.unroute('**/admin/targets/ui-arvan-checks/test');
+    pass('Arvan details: optional probe, separate HEAD/GET controls, Pause, no key, mobile/RTL, CSRF and no network egress');
     assert.deepEqual(jsErrors,[]);
     await context.close();
   } finally {await browser.close();}

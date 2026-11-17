@@ -177,7 +177,8 @@ final class AdminUiPresentationTest extends TestCase
         }
 
         $html = $this->get('/admin/targets/qa-arvan-layout')->assertOk()
-            ->assertSee('Test ArvanCloud API key (read-only GET)')
+            ->assertSee('Verify API key (read-only GET)')
+            ->assertSee('Check HTTPS endpoint (no API key)')
             ->assertSee('Remove stored API key (advanced)')
             ->getContent();
         $document = new \DOMDocument;
@@ -186,8 +187,10 @@ final class AdminUiPresentationTest extends TestCase
 
         $identity = '//section[@aria-labelledby="target-info-title"]';
         self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/details[1]/following-sibling::p[contains(concat(" ",normalize-space(@class)," ")," field-help ")][1])'));
-        self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/p[contains(concat(" ",normalize-space(@class)," ")," field-help ")]/following-sibling::div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")][1])'));
-        self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/following-sibling::details[contains(concat(" ",normalize-space(@class)," ")," target-help-details ")][1])'));
+        $checks = $identity.'/div[contains(concat(" ",normalize-space(@class)," ")," target-subsection ")][@aria-labelledby="arvan-connection-check-title"]';
+        self::assertSame(1, (int) $xpath->evaluate('count('.$checks.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/form[input[@name="arvan_check"][@value="endpoint"]])'));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$checks.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/form[input[@name="arvan_check"][@value="authenticated"]])'));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$checks.'/following-sibling::details[contains(concat(" ",normalize-space(@class)," ")," target-help-details ")][1])'));
         self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/details[summary[contains(.,"Remove stored API key")]]/p[contains(concat(" ",normalize-space(@class)," ")," field-help ")]/following-sibling::form[1])'));
 
         $arvan->forceFill(['operations_paused' => true])->save();
@@ -196,10 +199,9 @@ final class AdminUiPresentationTest extends TestCase
         $document = new \DOMDocument;
         $document->loadHTML($pausedHtml, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
         $pausedXPath = new \DOMXPath($document);
-        self::assertSame(0, (int) $pausedXPath->evaluate('count('.$identity.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")])'),
-            'A paused Target must not render a blank action region where the GET probe button would have appeared.');
-        self::assertSame(2, (int) $pausedXPath->evaluate('count('.$identity.'/p[contains(concat(" ",normalize-space(@class)," ")," field-help ")])'),
-            'Stored-key context and next-step guidance must remain visible even while paused.');
+        self::assertSame(2, (int) $pausedXPath->evaluate('count('.$checks.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/form/button[@disabled])'),
+            'A paused Target must show both checks as disabled, with no actionable test dispatch.');
+        self::assertSame(1, (int) $pausedXPath->evaluate('count('.$checks.'/p[@role="status"][contains(.,"Both actions are disabled while paused.")])'));
     }
 
     public function test_all_admin_owner_reauthentication_fields_share_the_explicit_intent_guard(): void

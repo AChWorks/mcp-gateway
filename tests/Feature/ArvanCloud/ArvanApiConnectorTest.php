@@ -91,7 +91,8 @@ final class ArvanApiConnectorTest extends TestCase
         [$target, $owner] = $this->fixture();
         $this->actingAs($owner);
         $this->get('/admin/targets/arvan-cdn')->assertOk()
-            ->assertSee('Test ArvanCloud API key (read-only GET)')
+            ->assertSee('Verify API key (read-only GET)')
+            ->assertSee('Check HTTPS endpoint (no API key)')
             ->assertSee('Remove stored API key (advanced)')
             ->assertSee('Delete Gateway API key')
             ->assertSee('revoke that key separately')
@@ -100,18 +101,25 @@ final class ArvanApiConnectorTest extends TestCase
 
         $target->forceFill(['operations_paused' => true])->save();
         $this->get('/admin/targets/arvan-cdn')->assertOk()
-            ->assertDontSee('action="'.route('admin.targets.test', ['target' => 'arvan-cdn']).'"', false)
-            ->assertSee('Resume Target operations above');
+            ->assertSee('Check HTTPS endpoint (no API key)')
+            ->assertSee('Verify API key (read-only GET)')
+            ->assertSee('Both actions are disabled while paused.')
+            ->assertSee('type="submit" disabled', false);
         $target->forceFill(['operations_paused' => false])->save();
 
         ArvanApiTargetConfig::query()->sole()->forceFill(['probe_path' => null])->save();
         $this->get('/admin/targets/arvan-cdn')->assertOk()
-            ->assertDontSee('action="'.route('admin.targets.test', ['target' => 'arvan-cdn']).'"', false)
-            ->assertSee('Connection testing needs a known read-only GET probe path')
+            ->assertSee('Check HTTPS endpoint (no API key)')
+            ->assertDontSee('Verify API key (read-only GET)')
+            ->assertSee('authenticated GET probe is optional and not configured')
             ->assertSee('Set a GET probe in advanced connection settings');
         TargetCredential::query()->delete();
         $this->get('/admin/targets/arvan-cdn')->assertOk()
             ->assertSee('No Machine User key is stored')
+            ->assertSee('Machine User key presence is shown below')
+            ->assertDontSee('Bound encrypted Machine User API key')
+            ->assertSee('Check HTTPS endpoint (no API key)')
+            ->assertDontSee('Verify API key (read-only GET)')
             ->assertSee('Open advanced connection settings to add a key')
             ->assertDontSee('Delete Gateway API key');
         Http::assertNothingSent();
@@ -131,7 +139,8 @@ final class ArvanApiConnectorTest extends TestCase
         // permission grants the Owner-only connector configuration editor.
         $this->actingAs($administrator)
             ->get('/admin/targets/arvan-cdn')->assertOk()
-            ->assertSee('Test ArvanCloud API key (read-only GET)')
+            ->assertSee('Verify API key (read-only GET)')
+            ->assertSee('Check HTTPS endpoint (no API key)')
             ->assertSee('Delete Gateway API key')
             ->assertSee('A Gateway Owner must add a new key before this Target can be used again.')
             ->assertDontSee('To use this Target again, enter a new key in its connection settings.');
@@ -147,7 +156,8 @@ final class ArvanApiConnectorTest extends TestCase
             ->assertSee('Delete Gateway API key')
             ->assertDontSee('Set a GET probe in advanced connection settings')
             ->assertDontSee('section=api-connection')
-            ->assertDontSee('Test ArvanCloud API key (read-only GET)');
+            ->assertSee('Check HTTPS endpoint (no API key)')
+            ->assertDontSee('Verify API key (read-only GET)');
 
         $this->actingAs($owner)
             ->get('/admin/targets/arvan-cdn')->assertOk()
@@ -173,6 +183,229 @@ final class ArvanApiConnectorTest extends TestCase
             ->assertSee('Open advanced connection settings to add a key')
             ->assertDontSee('Ask a Gateway Owner to add a Machine User API key');
         Http::assertNothingSent();
+    }
+
+    public function test_optional_probe_keeps_a_real_readonly_https_check_without_key_or_state_mutation(): void
+    {
+        [$target, $owner] = $this->fixture();
+        ArvanApiTargetConfig::query()->sole()->forceFill(['probe_path' => null])->save();
+        Http::fake(static fn (Request $request) => Http::response('', 405));
+
+        // The submitted URL, method and key are ignored: only the registered
+        // Target origin can be contacted, once, with an unauthenticated HEAD.
+        $this->actingAs($owner)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+            'api_base_url' => 'https://unregistered.example.test/private',
+            'method' => 'DELETE',
+            'path' => '/dangerous-action',
+            'api_key' => 'SYNTHETIC-CALLER-INJECTION-NEVER-USED',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')
+            ->assertSessionHas('status', static fn (string $message): bool => str_contains($message, 'HTTP 405')
+                && str_contains($message, 'API key was NOT tested')
+                && str_contains($message, 'NOT changed'));
+        Http::assertSentCount(1);
+        Http::assertSent(static fn (Request $request): bool => $request->method() === 'HEAD'
+            && $request->url() === 'https://api.example.test/cdn/4.0/'
+            && ! $request->hasHeader('Authorization')
+            && ! str_contains($request->url(), 'unregistered.example.test'));
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertNull($target->fresh()->last_tested_at);
+        self::assertSame(1, TargetCredential::query()->count());
+
+        // Direct/stale clients cannot silently turn a no-probe test into
+        // authenticated success or dispatch a guessed GET path.
+        $this->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'authenticated',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')->assertSessionHasErrors('target');
+        Http::assertSentCount(1);
+
+        // Endpoint reachability is independently useful after local key
+        // removal; it never consumes or recreates credential material.
+        TargetCredential::query()->delete();
+        $this->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')->assertSessionHas('status');
+        Http::assertSentCount(2);
+        self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+    }
+
+    public function test_root_rotation_and_successful_regular_api_get_do_not_falsely_prove_key_without_optional_probe(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $adapter->updateConfiguration($target, [
+            'configuration_revision' => $adapter->configurationRevision($target),
+            'api_base_url' => 'https://second.example.test/cdn/4.0',
+            'api_spec_url' => '',
+            'api_probe_path' => '',
+            'api_key' => 'rotated-synthetic-machine-user-key',
+        ]);
+
+        self::assertNull(ArvanApiTargetConfig::query()->sole()->probe_path);
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+        Http::fake(static fn (Request $request) => Http::response(['items' => ['ok']], 200));
+
+        // An explicitly requested real API GET can succeed with the rotated
+        // Machine User key, while Target verification remains distinct.
+        $result = app(ArvanApiOperations::class)->execute($owner, $target->target_id, 'GET', '/domains');
+        self::assertTrue($result['ok']);
+        Http::assertSent(static fn (Request $request): bool => $request->method() === 'GET'
+            && $request->url() === 'https://second.example.test/cdn/4.0/domains'
+            && $request->hasHeader('Authorization', 'Apikey rotated-synthetic-machine-user-key'));
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+
+        $this->actingAs($owner)->get('/admin/targets/arvan-cdn')
+            ->assertOk()->assertSee('Check HTTPS endpoint (no API key)')
+            ->assertDontSee('Verify API key (read-only GET)')
+            ->assertSee('API requests may still succeed');
+        $this->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')->assertSessionHas('status');
+        Http::assertSentCount(2);
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+    }
+
+    public function test_authenticated_verification_uses_only_saved_get_path_and_failure_does_not_claim_success(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $authenticatedChecks = 0;
+        Http::fake(static function (Request $request) use (&$authenticatedChecks) {
+            if ($request->method() === 'HEAD') {
+                return Http::response('', 404);
+            }
+
+            $authenticatedChecks++;
+
+            return $authenticatedChecks === 1
+                ? Http::response(['ok' => true], 200)
+                : Http::response(['error' => 'forbidden'], 403);
+        });
+        $this->actingAs($owner)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'authenticated',
+            'api_probe_path' => '/delete-everything',
+            'method' => 'POST',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')
+            ->assertSessionHas('status', static fn (string $message): bool => str_contains($message, 'Authenticated ArvanCloud GET probe succeeded.'));
+        Http::assertSentCount(1);
+        Http::assertSent(static fn (Request $request): bool => $request->method() === 'GET'
+            && $request->url() === 'https://api.example.test/cdn/4.0/domains'
+            && $request->hasHeader('Authorization', 'Apikey '.self::KEY));
+        self::assertSame('connected', $target->fresh()->getRawOriginal('connection_state'));
+        $verifiedAt = (string) $target->fresh()->last_tested_at;
+
+        $this->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')->assertSessionHas('status');
+        Http::assertSentCount(2);
+        self::assertSame('connected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertSame($verifiedAt, (string) $target->fresh()->last_tested_at);
+
+        // A failing authenticated GET must show the distinct provider
+        // failure and never forge a new verification timestamp.
+        $this->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'authenticated',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'upstream_http_error');
+        self::assertSame($verifiedAt, (string) $target->fresh()->last_tested_at);
+    }
+
+    public function test_endpoint_reachability_obeys_pause_permission_mode_validation_and_revision_fences(): void
+    {
+        [$target, $owner] = $this->fixture();
+        Http::fake(static fn (Request $request) => Http::response('', 200));
+        $viewer = $this->user('viewer');
+        $this->actingAs($viewer)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ])->assertForbidden();
+        Http::assertNothingSent();
+
+        $this->actingAs($owner)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'DELETE',
+        ])->assertSessionHasErrors('arvan_check');
+        Http::assertNothingSent();
+
+        $target->forceFill(['operations_paused' => true])->save();
+        $this->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')->assertSessionHasErrors('target');
+        Http::assertNothingSent();
+
+        $target->forceFill(['operations_paused' => false])->save();
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $revision = $adapter->configurationRevision($target);
+        Http::fake(function (Request $request) use ($target, $adapter, $revision) {
+            $adapter->updateConfiguration($target, [
+                'configuration_revision' => $revision,
+                'api_base_url' => 'https://second.example.test/cdn/4.0',
+                'api_spec_url' => '',
+                'api_probe_path' => '',
+                'api_key' => 'another-synthetic-rotated-key',
+            ]);
+
+            return Http::response('', 200);
+        });
+        $this->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'endpoint_check_stale');
+        Http::assertSentCount(1);
+        self::assertSame('https://second.example.test/cdn/4.0', ArvanApiTargetConfig::query()->sole()->base_url);
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+    }
+
+    public function test_endpoint_transport_failure_has_specific_diagnostics_and_never_leaks_exception_or_key(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $sentMethod = null;
+        $hasAuthorization = null;
+        Http::fake(static function (Request $request) use (&$sentMethod, &$hasAuthorization): never {
+            $sentMethod = $request->method();
+            $hasAuthorization = $request->hasHeader('Authorization');
+            throw new ConnectionException('cURL error 60: certificate rejected; SENSITIVE_FAKE_DIAGNOSTIC_VALUE');
+        });
+
+        $response = $this->actingAs($owner)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ]);
+        $response->assertAdminRedirect('/admin/targets/arvan-cdn')
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'tls_failure')
+            ->assertSessionHas('diagnostic_reference');
+        self::assertSame('HEAD', $sentMethod);
+        self::assertFalse($hasAuthorization);
+        // Laravel does not record a fake request when its response callback
+        // throws before the HTTP client receives a response.
+        Http::assertNothingSent();
+
+        // Native Admin feedback is bound to the redirect's one-use nonce,
+        // not visible on an unrelated GET without that token.
+        $this->get((string) $response->headers->get('Location'))->assertOk()
+            ->assertSee('HTTPS HEAD check')
+            ->assertSee('tls_failure')
+            ->assertSee('Check DNS, TLS')
+            ->assertDontSee('SENSITIVE_FAKE_DIAGNOSTIC_VALUE')
+            ->assertDontSee(self::KEY);
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+    }
+
+    public function test_pause_during_no_key_head_check_invalidates_the_observation(): void
+    {
+        [$target, $owner] = $this->fixture();
+        Http::fake(function (Request $request) use ($target) {
+            $target->forceFill(['operations_paused' => true])->save();
+
+            return Http::response('', 200);
+        });
+
+        $this->actingAs($owner)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'endpoint_check_stale');
+        Http::assertSentCount(1);
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertTrue((bool) $target->fresh()->operations_paused);
     }
 
     public function test_arvan_configuration_errors_identify_correct_fields_and_probe_changes_clear_old_verification(): void
