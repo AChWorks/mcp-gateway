@@ -37,7 +37,7 @@ Changing one timer does not implicitly extend any of the others. Do not assume e
 1. Verify the **installed release** and its release-specific runbook first. Do not edit during an active installer, browser upgrade or recovery; resolve the current operation first.
 2. Create a restricted backup of the existing `.env` and preserve your separate database backup and both signing-key pairs when performing an upgrade. Do not send the backup to chat, logs or public storage. Avoid printing secrets in terminals captured by a support session.
 3. Edit only the intended key in the **installed application's private** `.env`; keep production `APP_ENV=production`, `APP_DEBUG=false` and canonical HTTPS `APP_URL`. Preserve the file's ownership and restricted permissions.
-4. If Laravel config is cached, the edit will **not** take effect until that cache is invalidated/rebuilt. From the application root use the matching PHP 8.4 CLI **as the same unprivileged account used for PHP/LSAPI**, not as root:
+4. If Laravel config is cached, the edit will **not** take effect until that cache is invalidated/rebuilt. From the application root use the CLI matching the **actually installed website PHP runtime** (PHP 8.5 in the primary tested stack; PHP 8.4.1+ remains supported), **as the same unprivileged account used for PHP/LSAPI**, not as root:
 
    ```bash
    php artisan config:clear

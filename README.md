@@ -28,7 +28,7 @@ Targets can be **paused** without deleting their configuration or disconnecting 
 - Linux web hosting with **PHP 8.5 recommended** (PHP 8.4.1+ remains the Composer minimum) and the `curl`, `mbstring`, `openssl`, `pdo_mysql` and `sodium` extensions; cURL must support `CURLOPT_RESOLVE`.
 - **MariaDB** (10.11 recommended) or **MySQL**, with a dedicated database and user.
 - A stable **HTTPS** domain and a web server that can serve the application's `public/` directory.
-- A compatible **WP AI Bridge** installation for WordPress Targets, or an accessible SSH host and authorized credentials for Direct SSH Targets.
+- For **WordPress**, a compatible WP AI Bridge installation; for **SSH**, an accessible host and authorized credentials; for **ArvanCloud**, a scoped Machine User API key and the correct product/region HTTPS API root. Only configure the providers you intend to use.
 
 The official installation ZIP includes PHP dependencies: **Git and Composer are not needed on the hosting server**. Normal operation needs no Docker, Redis, Node.js, queue worker or separate MCP daemon.
 
@@ -41,7 +41,7 @@ The official installation ZIP includes PHP dependencies: **Git and Composer are 
 5. Sign in at **`/admin/login`**, then check **`/up`** and the Admin dashboard.
 6. Configure **one cron job every minute** to execute Laravel `schedule:run` using the site's matching PHP CLI **as the site worker, not root**. Confirm that the cron log shows it actually runs.
 
-**No control panel?** A regular Linux VPS works too: install Nginx, PHP-FPM 8.4, MariaDB and HTTPS, then use the same ZIP/web installer. Follow the [step-by-step panel-free Linux installation guide](docs/DEPLOYMENT.md#panel-free-linux-vps-nginx-php-fpm-and-mariadb), including Nginx rules for the standalone installer, temporary updater and OAuth endpoints.
+**No control panel?** A regular Linux VPS works too: install Nginx, PHP-FPM 8.5 (or another supported PHP 8.4.1+ runtime), MariaDB and HTTPS, then use the same ZIP/web installer. Follow the [step-by-step panel-free Linux installation guide](docs/DEPLOYMENT.md#panel-free-linux-vps-nginx-php-fpm-and-mariadb), including Nginx rules for the standalone installer, temporary updater and OAuth endpoints.
 
 The web installer is for **first installation only**; use the [update instructions](#update-an-existing-installation) for existing deployments. aaPanel/OpenLiteSpeed and CLI/source installation details, cron examples and recovery procedures are in [Deployment](docs/DEPLOYMENT.md).
 

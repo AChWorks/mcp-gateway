@@ -10,6 +10,8 @@ This index helps contributors and operators find the **appropriate maintained re
 | Actual code layers, request paths, trust boundaries and extension seams | [Architecture](ARCHITECTURE.md) |
 | Stable Target identity, connector registry/lifecycle and authorization rules | [Target and connector foundation](TARGET-CONNECTOR-FOUNDATION.md) |
 | New provider/Target adapter integration and conformance | [Connector integration guide](CONNECTOR-INTEGRATION-GUIDE.md) |
+| Registered ArvanCloud Machine User REST/OpenAPI Targets, authorization and request limits | [ArvanCloud API connector](ARVANCLOUD-API-CONNECTOR.md) |
+| Reviewed, bounded downstream MCP-over-HTTPS wire primitive (not a generic Target) | [Outbound MCP transport](OUTBOUND-MCP-TRANSPORT.md) |
 | Result completeness, independently typed limits, file integrity and outcome uncertainty | [Remote I/O contract](REMOTE-IO-CONTRACT.md) |
 | SSH trust, OS execution, Jobs and SFTP | [Direct SSH connector](DIRECT-SSH-CONNECTOR.md) |
 | Optional shared OpenSSH intermediary for SSH/SFTP and WordPress | [Connection Relays](CONNECTION-RELAYS.md) |
@@ -17,6 +19,7 @@ This index helps contributors and operators find the **appropriate maintained re
 | Existing manually operator-managed reverse forwarding | [Manual Reverse SSH](REVERSE-SSH-OPERATOR.md) |
 | Authenticated SSH whole-file binary protocol and safety | [Whole-file exchange](WHOLE-FILE-EXCHANGE.md) |
 | OAuth client-profile identity and recovery | [Client-profile runbook](CLIENT-PROFILE-RUNBOOK.md) |
+| ChatGPT CIMD, opt-in DCR client registration and safe OAuth recovery | [OAuth client registration](OAUTH-CLIENT-REGISTRATION.md) |
 
 ## Running and maintaining Gateway
 
@@ -27,6 +30,7 @@ This index helps contributors and operators find the **appropriate maintained re
 | Local development, tests and release-quality validation | [Development](DEVELOPMENT.md) |
 | Reproducible disposable, installed WordPress/SSH integration tests | [Installed mixed acceptance runner](INSTALLED-MIXED-WP-SSH-ACCEPTANCE.md) |
 | Shared Admin accessibility and visual rules | [Admin UI quality](ADMIN-UI-QUALITY.md) |
+| Owner-managed users, groups, Target access and bulk selection/review | [Admin access workflows](ADMIN-ACCESS-WORKFLOWS.md) |
 | Recover WordPress connection/revocation uncertainty | [Target disconnect recovery](TARGET-DISCONNECT-RECOVERY.md) |
 | Owner-authorized local removal of an unreachable Target | [Offline Target removal](OFFLINE-TARGET-REMOVAL.md) |
 | Upgrade an actual legacy Site-era installation with an explicit data reset | [Legacy Target transition runbook](TARGET-TRANSITION-RUNBOOK.md) |

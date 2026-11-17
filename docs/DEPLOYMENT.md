@@ -84,7 +84,7 @@ For the new cross-IP Admin login quota, validate the installed MariaDB/MySQL `us
 Before placing application code on the server, prepare:
 
 1. An aaPanel/shared-hosting site **or** a self-managed Nginx/PHP-FPM host for the intended Gateway hostname or subdomain.
-2. PHP 8.4 for the website. The runtime must provide `curl`, `mbstring`, `openssl`, `pdo_mysql`, and `sodium`, and cURL must expose `CURLOPT_RESOLVE`.
+2. PHP 8.5 is the current preferred website runtime; PHP 8.4.1+ remains accepted. The runtime must provide `curl`, `mbstring`, `openssl`, `pdo_mysql`, and `sodium`, and cURL must expose `CURLOPT_RESOLVE`.
 3. A dedicated **empty** MariaDB (recommended) or MySQL database and user scoped to the Gateway database. The account must be able to create/alter/drop application tables and indexes as well as perform normal application reads/writes. Do not use a global database administrator account for normal application runtime.
 4. DNS resolving the Gateway hostname to the intended server before final HTTPS/OAuth verification.
 5. A valid HTTPS certificate for the exact hostname. Production OAuth identity is derived from `APP_URL`, so the hostname must be stable before installation.
@@ -130,25 +130,25 @@ The example below is for a **fresh, single-application Debian/Ubuntu-style serve
 
 ### 1. Prepare packages, DNS and a database
 
-Point the Gateway hostname's DNS A/AAAA records to the server, ensure incoming TCP **80 and 443** can reach it, and use an operating-system repository that genuinely supplies **PHP >= 8.4.1**. Before installing, check package availability:
+Point the Gateway hostname's DNS A/AAAA records to the server, ensure incoming TCP **80 and 443** can reach it, and prefer maintained packages for **PHP 8.5** (primary CI runtime), while **PHP 8.4.1+** remains the supported minimum. Check availability rather than assuming a distribution ships the preferred version. Before installing, check package availability:
 
 ```bash
 sudo apt-get update
-apt-cache policy php8.4-fpm php8.4-cli
+apt-cache policy php8.5-fpm php8.5-cli php8.4-fpm php8.4-cli
 ```
 
-If there is no usable PHP 8.4 candidate (for example, an older distribution's default packages provide PHP 8.3), provision a supported PHP 8.4 repository for **that exact distribution** using its maintained vendor instructions; **do not silently install an older PHP or add an unreviewed PPA**. With those packages available:
+If PHP 8.5 is unavailable, use a maintained, distribution-compatible PHP **8.4.1+** package set instead, replacing every PHP package, FPM service/socket and CLI path in the example below with that **same installed minor version**. If neither supported version exists, provision a reviewed supported repository for that exact OS; do not silently install PHP 8.3 or add an unreviewed PPA. The command block below uses PHP 8.5 and must not be run before its packages are verified available:
 
 ```bash
 sudo apt-get install -y nginx mariadb-server cron unzip curl ca-certificates \
-  php8.4-fpm php8.4-cli php8.4-curl php8.4-mbstring php8.4-mysql \
-  php8.4-xml php8.4-zip certbot python3-certbot-nginx
-sudo systemctl enable --now nginx php8.4-fpm mariadb cron
-php8.4 -r 'foreach (["curl","mbstring","openssl","pdo_mysql","sodium"] as $e) { if (!extension_loaded($e)) { fwrite(STDERR, "$e missing\n"); exit(1); } } if (!defined("CURLOPT_RESOLVE")) { exit(1); } echo "PHP requirements OK\n";'
-ls -l /run/php/php8.4-fpm.sock
+  php8.5-fpm php8.5-cli php8.5-curl php8.5-mbstring php8.5-mysql \
+  php8.5-xml php8.5-zip certbot python3-certbot-nginx
+sudo systemctl enable --now nginx php8.5-fpm mariadb cron
+php8.5 -r 'foreach (["curl","mbstring","openssl","pdo_mysql","sodium"] as $e) { if (!extension_loaded($e)) { fwrite(STDERR, "$e missing\n"); exit(1); } } if (!defined("CURLOPT_RESOLVE")) { exit(1); } echo "PHP requirements OK\n";'
+ls -l /run/php/php8.5-fpm.sock
 ```
 
-PHP's `sodium` and `openssl` extensions may be supplied by the distribution's PHP common packages rather than separate module packages; the check above must succeed. Verify PHP-FPM uses the expected PHP 8.4 configuration, not only the CLI.
+PHP's `sodium` and `openssl` extensions may be supplied by the distribution's PHP common packages rather than separate module packages; the check above must succeed. Verify PHP-FPM uses the expected PHP 8.5 configuration, not only the CLI.
 
 Create a **new empty** database and a database-scoped user, for example with `sudo mariadb` and the following interactive SQL (substitute a unique, strong password and do not publish it):
 
@@ -165,7 +165,7 @@ For the web installer, use database host `127.0.0.1`, port `3306`, name `mcp_gat
 Choose a **published stable tag** from [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases); the tag below is an **example**, not a permanently pinned latest version.
 
 ```bash
-RELEASE_TAG=v2.3.8    # Example: verify this tag is published before using it.
+RELEASE_TAG=v2.7.0    # Example for this documentation revision; verify the currently intended published tag.
 cd "$(mktemp -d)"
 curl --fail --location --output "mcp-gateway-$RELEASE_TAG.zip" \
   "https://github.com/AChWorks/mcp-gateway/releases/download/$RELEASE_TAG/mcp-gateway-$RELEASE_TAG.zip"
@@ -208,7 +208,7 @@ server {
         fastcgi_param HTTPS $https if_not_empty;
         fastcgi_param HTTP_AUTHORIZATION $http_authorization;
         fastcgi_param HTTP_X_XSRF_TOKEN $http_x_xsrf_token;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_pass unix:/run/php/php8.5-fpm.sock;
     }
 
     location = /install.php {
@@ -217,7 +217,7 @@ server {
         fastcgi_param HTTPS $https if_not_empty;
         fastcgi_param HTTP_AUTHORIZATION $http_authorization;
         fastcgi_param HTTP_X_XSRF_TOKEN $http_x_xsrf_token;
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_pass unix:/run/php/php8.5-fpm.sock;
     }
 
     location = /update/index.php {
@@ -228,7 +228,7 @@ server {
         fastcgi_param HTTP_AUTHORIZATION $http_authorization;
         fastcgi_param HTTP_X_XSRF_TOKEN $http_x_xsrf_token;
         fastcgi_read_timeout 300s;  # Bounded example; verify upgrade budgets.
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+        fastcgi_pass unix:/run/php/php8.5-fpm.sock;
     }
 
     # Never execute arbitrary PHP or expose hidden files. OAuth discovery
@@ -259,7 +259,7 @@ sudo nginx -t
 sudo certbot renew --dry-run
 ```
 
-Select the HTTPS redirect when offered, and verify the installed vhost really terminates TLS on port **443**. Do not enter passwords in the installer until HTTPS works; do not rely on arbitrary forwarded-proto headers. Confirm `php8.4-fpm`, Nginx and MariaDB services are running. If SSH/browser whole-file transfer is enabled, reconcile `client_max_body_size`, PHP-FPM `upload_max_filesize`/`post_max_size`, disk space, worker/request timeouts and the configured Gateway transfer limits; the values above are **examples, not proof of end-to-end capacity**.
+Select the HTTPS redirect when offered, and verify the installed vhost really terminates TLS on port **443**. Do not enter passwords in the installer until HTTPS works; do not rely on arbitrary forwarded-proto headers. Confirm `php8.5-fpm`, Nginx and MariaDB services are running. If SSH/browser whole-file transfer is enabled, reconcile `client_max_body_size`, PHP-FPM `upload_max_filesize`/`post_max_size`, disk space, worker/request timeouts and the configured Gateway transfer limits; the values above are **examples, not proof of end-to-end capacity**.
 
 ### 4. Finish installation, schedule maintenance and verify
 
@@ -268,14 +268,14 @@ Select the HTTPS redirect when offered, and verify the installed vhost really te
 3. From the application root, verify the **actual site worker** can run the built-in environment and scheduler checks:
 
    ```bash
-   sudo -u www-data sh -c 'cd /srv/mcp-gateway && /usr/bin/php8.4 artisan gateway:check'
-   sudo -u www-data sh -c 'cd /srv/mcp-gateway && /usr/bin/php8.4 artisan schedule:list'
+   sudo -u www-data sh -c 'cd /srv/mcp-gateway && /usr/bin/php8.5 artisan gateway:check'
+   sudo -u www-data sh -c 'cd /srv/mcp-gateway && /usr/bin/php8.5 artisan schedule:list'
    ```
 
 4. Add **one** system cron entry with `sudo crontab -u www-data -e` (for the same PHP-FPM account):
 
    ```cron
-   * * * * * cd /srv/mcp-gateway && /usr/bin/php8.4 artisan schedule:run --no-ansi >> /dev/null 2>&1
+   * * * * * cd /srv/mcp-gateway && /usr/bin/php8.5 artisan schedule:run --no-ansi >> /dev/null 2>&1
    ```
 
    Check the cron service and a **real dispatch**, not only `schedule:list`. It maintains idle WordPress OAuth credentials, Activity retention and applicable SSH Job cleanup. Do not run the application's scheduler as root.
@@ -284,7 +284,7 @@ Select the HTTPS redirect when offered, and verify the installed vhost really te
 
 **No-panel updates:** Download the *matching* official `mcp-gateway-update-vX.Y.Z.zip` and checksum over SSH/SFTP, verify SHA-256, and **extract the update ZIP into the existing application root**. This stages temporary `update/` and `public/update/` files without replacing the running application's managed code yet. Ensure both staged paths are accessible to the site PHP worker; do not make them world-writable. Keep a separately tested database backup and private `.env`/keys/`storage/`; then use the authenticated **`https://gateway.example.com/update/`** browser flow. Do **not** unzip the *fresh-install* ZIP over a running installation, call migrations manually as a substitute, or blindly retry an uncertain browser update. The detailed updater/recovery contract below is the same with or without a hosting panel.
 
-For Apache-based panel-free hosts, the supplied `public/.htaccess` covers the application's rewrite contract when `mod_rewrite` and the required per-directory override policy are correctly enabled; the same private app-root, PHP 8.4, TLS, DB, worker ownership, installer and cron requirements still apply.
+For Apache-based panel-free hosts, the supplied `public/.htaccess` covers the application's rewrite contract when `mod_rewrite` and the required per-directory override policy are correctly enabled; the same private app-root, PHP 8.5, TLS, DB, worker ownership, installer and cron requirements still apply.
 
 ## 3. Deployment user and filesystem ownership
 
@@ -576,21 +576,21 @@ Configure the host's cron/scheduled-task facility to run Laravel's scheduler onc
 * * * * * cd <APP_ROOT> && php artisan schedule:run >> /dev/null 2>&1
 ```
 
-Use the PHP 8.4 CLI that belongs to the deployed site when `php` is not that binary. Run the scheduler **as the unprivileged site PHP worker**, not as root: executing Artisan as root can create unreadable Laravel cache files on aaPanel/OpenLiteSpeed. Configure **one** every-minute scheduler task rather than separate jobs for each Laravel scheduled command. For example, if the application root is `/www/acdomains/gateway.example.com` and the aaPanel task's **Execute user** is `www`:
+Use the matching CLI for the **actual installed PHP-FPM/LSAPI version** (PHP 8.5 is primary; PHP 8.4.1+ remains supported) when `php` is not that binary. Run the scheduler **as the unprivileged site PHP worker**, not as root: executing Artisan as root can create unreadable Laravel cache files on aaPanel/OpenLiteSpeed. Configure **one** every-minute scheduler task rather than separate jobs for each Laravel scheduled command. For example, if the application root is `/www/acdomains/gateway.example.com` and the aaPanel task's **Execute user** is `www`:
 
 ```bash
 cd /www/acdomains/gateway.example.com || exit 1
-/www/server/php/84/bin/php artisan schedule:run --no-ansi
+/www/server/php/85/bin/php artisan schedule:run --no-ansi
 ```
 
 If the aaPanel task itself must run as `root`, the PHP process must still drop to `www`:
 
 ```bash
 cd /www/acdomains/gateway.example.com || exit 1
-runuser -u www -- /www/server/php/84/bin/php artisan schedule:run --no-ansi
+runuser -u www -- /www/server/php/85/bin/php artisan schedule:run --no-ansi
 ```
 
-Use the actual installed path, PHP version and PHP worker account. Check the **aaPanel Cron task log** after at least one real dispatch: `artisan schedule:list` only proves Laravel registered tasks, not that host cron executes them. The v2.2.1 application schedules `activity:prune` once per day and `gateway:wordpress-credentials-maintain` every minute, both with overlap protection. An installed v2.3.0 additionally schedules `gateway:ssh-jobs-prune` hourly, limited to safely reconciled terminal SSH Jobs with verified private remote spool directories; it does not start or stop Jobs. This command and its guarded new `ssh_command_jobs` migration are **not part of installed v2.2.1**. Migration rollback refuses to drop the table while *any* durable job record remains. Unknown or active remote work requires explicit reconciliation; do not manually erase the no-replay journal. Actual credential rotation occurs only when due; a successful cron run alone does not prove a token was renewed. Without scheduled pruning the configured age/row targets are not enforced, and without regular maintenance idle WordPress refresh grants may expire.
+The aaPanel `/www/server/php/85/bin/php` path above is only a PHP 8.5 example; substitute the exact **installed** PHP CLI version, site path and PHP worker account. Do not change a running host merely to match this example. Check the **aaPanel Cron task log** after at least one real dispatch: `artisan schedule:list` only proves Laravel registered tasks, not that host cron executes them. The v2.2.1 application schedules `activity:prune` once per day and `gateway:wordpress-credentials-maintain` every minute, both with overlap protection. An installed v2.3.0 additionally schedules `gateway:ssh-jobs-prune` hourly, limited to safely reconciled terminal SSH Jobs with verified private remote spool directories; it does not start or stop Jobs. This command and its guarded new `ssh_command_jobs` migration are **not part of installed v2.2.1**. Migration rollback refuses to drop the table while *any* durable job record remains. Unknown or active remote work requires explicit reconciliation; do not manually erase the no-replay journal. Actual credential rotation occurs only when due; a successful cron run alone does not prove a token was renewed. Without scheduled pruning the configured age/row targets are not enforced, and without regular maintenance idle WordPress refresh grants may expire.
 
 Operators may also apply the configured policy on demand:
 
