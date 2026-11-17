@@ -142,4 +142,4 @@ The `arvancloud` adapter owns its Machine User credential format, connection ver
 
 Feature validation requires: unit/catalog tests; registered Target/credential/permission/URL transport tests with no real provider writes; Admin form/visibility tests; WordPress/SSH regression tests; exact-head CI; independent review. A real Arvan account and API key are **not** present in CI. Only a production-target Owner with an appropriately scoped Machine User can do a final live *read-only* authentication acceptance, followed by explicitly authorized writes.
 
-Source issue: [#310](https://github.com/AChWorks/mcp-gateway/issues/310).
+Source issue (Owner-closed): [#310](https://github.com/AChWorks/mcp-gateway/issues/310). Real installed v2.7.2 provider acceptance: [#321](https://github.com/AChWorks/mcp-gateway/issues/321).

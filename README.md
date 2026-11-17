@@ -63,7 +63,7 @@ A Gateway “Connected” status is not a guarantee that a remotely revoked or e
 5. If you also configured a *known safe* GET path and stored key, select **Verify API key (read-only GET)** for a separate authenticated check. An empty probe must not hide the endpoint check, and the Gateway must not invent a potentially effectful GET endpoint. The v2.7.1 connection-check improvement is **not included in the published v2.7.0 ZIP**.
 6. After the appropriate grants, use `arvan-api-catalog` for an optional public API description and `arvan-api-request` for compatible Target-bound REST operations. Gateway limits the destination and operation class; the Machine User's real ArvanCloud permissions still apply. Do **not** make a mutating provider call just to check connectivity.
 
-ArvanCloud **S3 signing**, TUS resumable uploads and large binary streaming are **not** part of this REST connector. For API-root examples, request bodies, diagnostics and credential recovery, use the [ArvanCloud connector guide](docs/ARVANCLOUD-API-CONNECTOR.md). Real provider acceptance is separately tracked in [Issue #310](https://github.com/AChWorks/mcp-gateway/issues/310).
+ArvanCloud **S3 signing**, TUS resumable uploads and large binary streaming are **not** part of this REST connector. For API-root examples, request bodies, diagnostics and credential recovery, use the [ArvanCloud connector guide](docs/ARVANCLOUD-API-CONNECTOR.md). The original connector source work is recorded in [Issue #310](https://github.com/AChWorks/mcp-gateway/issues/310) (closed by the Owner); separate real installed v2.7.2 acceptance is tracked in [Issue #321](https://github.com/AChWorks/mcp-gateway/issues/321).
 
 ## Connect Direct SSH
 
