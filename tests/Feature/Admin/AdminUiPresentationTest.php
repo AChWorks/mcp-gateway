@@ -133,7 +133,9 @@ final class AdminUiPresentationTest extends TestCase
             '/\.target-help-details\[open\] > :not\(summary\),\s*\.operations-guidance\[open\] > :not\(summary\)\s*\{\s*margin-block-start: var\(--ui-context-gap\);/s',
             $css,
         );
-        self::assertStringContainsString('details.panel[open] > :not(summary)', $css);
+        self::assertStringContainsString(':where(details.panel)[open] > :not(summary)', $css);
+        self::assertStringNotContainsString('details.panel[open] > :not(summary)', str_replace(':where(details.panel)[open]', '', $css));
+        self::assertStringContainsString('.admin-collapsible-panel[open] > :not(summary)', $css);
         self::assertStringNotContainsString('.target-help-details[open] > .form-stack,', $css);
         self::assertStringContainsString('.panel > .field-help + :is(.field-help, .filter-actions, form:not(.form-stack))', $css);
 
@@ -190,6 +192,9 @@ final class AdminUiPresentationTest extends TestCase
         $checks = $identity.'/div[contains(concat(" ",normalize-space(@class)," ")," target-subsection ")][@aria-labelledby="arvan-connection-check-title"]';
         self::assertSame(1, (int) $xpath->evaluate('count('.$checks.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/form[input[@name="arvan_check"][@value="endpoint"]])'));
         self::assertSame(1, (int) $xpath->evaluate('count('.$checks.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/form[input[@name="arvan_check"][@value="authenticated"]])'));
+        self::assertSame('arvan-verified-check-help', $xpath->evaluate('string('.$checks.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/form[input[@name="arvan_check"][@value="authenticated"]]/@aria-describedby)'));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$checks.'/p[@id="arvan-verified-check-help"])'),
+            'Authenticated GET form must reference help present in the normal state.');
         self::assertSame(1, (int) $xpath->evaluate('count('.$checks.'/following-sibling::details[contains(concat(" ",normalize-space(@class)," ")," target-help-details ")][1])'));
         self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/details[summary[contains(.,"Remove stored API key")]]/p[contains(concat(" ",normalize-space(@class)," ")," field-help ")]/following-sibling::form[1])'));
 
@@ -202,6 +207,26 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(2, (int) $pausedXPath->evaluate('count('.$checks.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/form/button[@disabled])'),
             'A paused Target must show both checks as disabled, with no actionable test dispatch.');
         self::assertSame(1, (int) $pausedXPath->evaluate('count('.$checks.'/p[@role="status"][contains(.,"Both actions are disabled while paused.")])'));
+        self::assertSame('arvan-paused-check-help', $pausedXPath->evaluate('string('.$checks.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/form[input[@name="arvan_check"][@value="authenticated"]]/@aria-describedby)'));
+        self::assertSame(1, (int) $pausedXPath->evaluate('count('.$checks.'/p[@id="arvan-paused-check-help"])'),
+            'The disabled authenticated form must refer to a rendered, visible paused-state explanation.');
+    }
+
+    public function test_arvan_operator_docs_match_both_optional_post_release_checks(): void
+    {
+        $readme = (string) file_get_contents(base_path('README.md'));
+        $contract = (string) file_get_contents(base_path('docs/ADMIN-UI-QUALITY.md'));
+        $guide = (string) file_get_contents(base_path('docs/ARVANCLOUD-API-CONNECTOR.md'));
+        foreach ([$readme, $contract, $guide] as $document) {
+            self::assertStringContainsString('Check HTTPS endpoint (no API key)', $document);
+            self::assertStringContainsString('Verify API key (read-only GET)', $document);
+        }
+        self::assertStringContainsString('**Four distinct outcomes:**', $contract);
+        self::assertStringNotContainsString('**Three distinct outcomes:**', $contract);
+        self::assertStringContainsString('optional', strtolower($readme));
+        self::assertStringContainsString('not included in the published v2.7.0 ZIP', $readme);
+        self::assertStringContainsString('HEAD', $contract);
+        self::assertStringContainsString('GET', $contract);
     }
 
     public function test_all_admin_owner_reauthentication_fields_share_the_explicit_intent_guard(): void

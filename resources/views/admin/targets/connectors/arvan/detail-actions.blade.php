@@ -39,7 +39,7 @@
                     <button class="button button-secondary" type="submit" @disabled($target->operations_paused)>{{ __('Check HTTPS endpoint (no API key)') }}</button>
                 </form>
                 @if ($arvanHasCredential && $arvanConfig->probe_path !== null)
-                    <form method="post" action="{{ route('admin.targets.test', ['target' => $target->target_id]) }}" aria-describedby="arvan-verified-check-help">
+                    <form method="post" action="{{ route('admin.targets.test', ['target' => $target->target_id]) }}" aria-describedby="{{ $target->operations_paused ? 'arvan-paused-check-help' : 'arvan-verified-check-help' }}">
                         @csrf
                         <input type="hidden" name="arvan_check" value="authenticated">
                         <button class="button button-primary" type="submit" @disabled($target->operations_paused)>{{ __('Verify API key (read-only GET)') }}</button>
@@ -47,7 +47,7 @@
                 @endif
             </div>
             @if ($target->operations_paused)
-                <p class="field-help" role="status">{{ __('Resume Target operations above before running either connection check. Both actions are disabled while paused.') }}</p>
+                <p class="field-help" id="arvan-paused-check-help" role="status">{{ __('Resume Target operations above before running either connection check. Both actions are disabled while paused.') }}</p>
             @elseif ($arvanHasCredential && $arvanConfig->probe_path !== null)
                 <p class="field-help" id="arvan-verified-check-help">{{ __('The second action makes only one authenticated GET to the configured read-only probe. Its success verifies that request and stored key at test time; it does not grant permissions for other API operations.') }}</p>
             @endif

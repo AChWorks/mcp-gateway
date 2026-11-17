@@ -346,6 +346,13 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
       assert.equal(await panel.locator('input[name="arvan_check"][value="endpoint"]').count(),1);
       assert.equal(await panel.locator('input[name="arvan_check"][value="authenticated"]').count(),
         state==='probe'||state==='paused'?1:0);
+      if (state==='probe'||state==='paused') {
+        const form=panel.locator('form:has(input[name="arvan_check"][value="authenticated"])');
+        const description=await form.getAttribute('aria-describedby');
+        assert.equal(description,state==='paused'?'arvan-paused-check-help':'arvan-verified-check-help');
+        assert.equal(await panel.locator('#'+description).isVisible(),true,
+          state+' authenticated test must reference existing and visible help');
+      }
       assert.ok(!(await page.content()).includes('synthetic-browser-key-never-provider'));
       for(const width of [360,390,768,1440]){
         for(const dark of [false,true]){
@@ -392,6 +399,69 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     ]);
     await page.unroute('**/admin/targets/ui-arvan-checks/test');
     pass('Arvan details: optional probe, separate HEAD/GET controls, Pause, no key, mobile/RTL, CSRF and no network egress');
+
+    // Reviewer F1: computed margins, not source substring or document overflow.
+    // Actual advanced forms exist on Target show/edit and SSH file handling.
+    // A temporary plain details.panel is a CSS-fallback control only.
+    const disclosurePages=[
+      '/admin/targets/ui-arvan-checks',
+      '/admin/targets/ui-arvan-checks/edit?section=api-connection',
+      '/admin/targets/ui-ssh-connected',
+    ];
+    for(const url of disclosurePages){
+      await page.goto(base+url);
+      const advanced=page.locator('details.panel.admin-collapsible-panel').first();
+      assert.equal(await advanced.count(),1,url+' must have an actual advanced disclosure');
+      await advanced.evaluate(el=>{el.open=true;});
+      // Native keyboard toggle/focus must not be disturbed by CSS specificity.
+      const trigger=advanced.locator('summary');
+      await trigger.focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await advanced.evaluate(el=>el.open),false);
+      await page.keyboard.press('Enter');
+      assert.equal(await advanced.evaluate(el=>el.open),true);
+      for(const width of [360,1440]){
+        await page.setViewportSize({width,height:960});
+        for(const rtl of [false,true]){
+          await page.evaluate(dir=>document.documentElement.dir=dir,rtl?'rtl':'ltr');
+          for(const dark of [false,true]){
+            await page.emulateMedia({colorScheme:dark?'dark':'light'});
+            const m=await advanced.evaluate(node=>{
+              const getTokenPx=name=>{
+                const el=document.createElement('div');
+                el.style.marginBlockStart='var('+name+')';
+                document.body.appendChild(el);
+                const result=parseFloat(getComputedStyle(el).marginBlockStart);
+                el.remove();
+                return result;
+              };
+              const first=[...node.children].find(e=>e.tagName!=='SUMMARY');
+              const ordinary=document.createElement('details');
+              ordinary.className='panel';
+              ordinary.innerHTML='<summary>Spacing contract fixture</summary><p>Sample</p>';
+              ordinary.open=true;
+              document.querySelector('main').appendChild(ordinary);
+              const result={
+                context:getTokenPx('--ui-context-gap'),
+                large:getTokenPx('--ui-panel-stack-gap'),
+                advanced:parseFloat(getComputedStyle(first).marginBlockStart),
+                ordinary:parseFloat(getComputedStyle(ordinary.querySelector('p')).marginBlockStart),
+                overflow:document.documentElement.scrollWidth-document.documentElement.clientWidth,
+              };
+              ordinary.remove();
+              return result;
+            });
+            assert.ok(Math.abs(m.advanced-m.large)<0.6,
+              JSON.stringify({url,width,rtl,dark,m,problem:'advanced gap overridden'}));
+            assert.ok(Math.abs(m.ordinary-m.context)<0.6,
+              JSON.stringify({url,width,rtl,dark,m,problem:'generic gap incorrect'}));
+            assert.ok(m.advanced>m.ordinary+2,JSON.stringify({url,width,rtl,dark,m}));
+            assert.ok(m.overflow<=2,JSON.stringify({url,width,rtl,dark,m}));
+          }
+        }
+      }
+    }
+    pass('shared disclosure CSS computed: advanced larger than plain, Target removal/edit and SSH, keyboard, phone/desktop, RTL/LTR and both themes');
     assert.deepEqual(jsErrors,[]);
     await context.close();
   } finally {await browser.close();}

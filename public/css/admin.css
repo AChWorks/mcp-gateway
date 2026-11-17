@@ -604,9 +604,10 @@ code {
     margin-block-start: var(--ui-field-action-gap);
 }
 
-/* Native details with panel styling also need internal flow spacing;
-   collapsible destructive panels retain their larger existing gap. */
-details.panel[open] > :not(summary) {
+/* Native details panels need internal flow spacing. Keep this fallback
+   lower-specificity than .admin-collapsible-panel[open] so advanced and
+   destructive disclosures preserve their larger panel-stack gap. */
+:where(details.panel)[open] > :not(summary) {
     margin-block-start: var(--ui-context-gap);
 }
 
