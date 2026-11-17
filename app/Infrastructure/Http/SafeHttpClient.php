@@ -105,6 +105,39 @@ final class SafeHttpClient
             query: $query);
     }
 
+    /**
+     * Authenticated, fixed-destination REST transport for connector-owned
+     * requests with provider-defined content types. No request header or
+     * destination here comes from an MCP caller without connector validation.
+     *
+     * @param  array<string,string>  $headers
+     * @param  array<string,mixed>  $query
+     * @param  array<string,scalar|list<scalar>>|null  $formFields
+     * @param  list<array{name:string,contents:string,filename?:string,headers?:array<string,string>}>|null  $multipartParts
+     */
+    public function requestApi(
+        string $method, string $url, array $headers = [], array $query = [],
+        ?string $rawBody = null, ?string $contentType = null,
+        ?array $formFields = null, ?array $multipartParts = null,
+    ): SafeHttpResponse {
+        if (preg_match('/^[A-Z][A-Z0-9-]*$/D', $method) !== 1 || in_array($method, ['CONNECT', 'TRACE'], true)) {
+            throw new OutboundRequestException('invalid_input', 'Unsupported outbound HTTP method.', [], true);
+        }
+        $variants = (int) ($rawBody !== null) + (int) ($formFields !== null) + (int) ($multipartParts !== null);
+        if ($variants > 1 || ($contentType !== null && $rawBody === null)
+            || ($rawBody !== null && ($contentType === null || trim($contentType) === ''))) {
+            throw new OutboundRequestException('invalid_input', 'API request body format is invalid.', [], true);
+        }
+
+        $format = $multipartParts !== null ? 'multipart'
+            : ($formFields !== null ? 'form' : ($rawBody !== null ? 'raw_body' : 'none'));
+        $payload = $multipartParts ?? $formFields ?? $rawBody ?? [];
+
+        return $this->send($method, $url, $headers, $payload, $format,
+            responseLimitBytes: min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, (int) config('bridge.http.api_response_max_bytes', 1048576))),
+            query: $query, rawContentType: $contentType);
+    }
+
     /** @param array<string, string> $headers */
     public function delete(string $url, array $headers = [], ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
@@ -114,10 +147,10 @@ final class SafeHttpClient
     /**
      * @param  array<string, string>  $headers
      * @param  array<string, mixed>|string  $payload
-     * @param  'none'|'form'|'json'|'raw_json'  $format
+     * @param  'none'|'form'|'json'|'raw_json'|'raw_body'|'multipart'  $format
      * @param  array<string,mixed>  $query
      */
-    private function send(string $method, string $url, array $headers, array|string $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null, ?LocalSocks5Route $relay = null, array $query = []): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array|string $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null, ?LocalSocks5Route $relay = null, array $query = [], ?string $rawContentType = null): SafeHttpResponse
     {
         $network = $this->settings->httpTimeoutsSeconds();
         $connectTimeout = $network['connect'];
@@ -197,22 +230,31 @@ final class SafeHttpClient
             $httpStarted = $timing?->stamp() ?? 0;
             $timing?->outboundCall();
             try {
-                $response = match ($method) {
-                    'POST' => match ($format) {
-                        'json' => $request->asJson()->post($target->url, $payload),
-                        'raw_json' => $request->withBody((string) $payload, 'application/json')->send('POST', $target->url),
-                        default => $request->asForm()->post($target->url, $payload),
-                    },
-                    'DELETE' => $format === 'none'
-                        ? $request->delete($target->url)
-                        : $request->withBody((string) $payload, 'application/json')->send($method, $target->url),
-                    'GET' => $format === 'raw_json'
-                        ? $request->withBody((string) $payload, 'application/json')->send('GET', $target->url)
-                        : $request->get($target->url),
-                    default => $format === 'raw_json'
-                        ? $request->withBody((string) $payload, 'application/json')->send($method, $target->url)
-                        : $request->send($method, $target->url),
-                };
+                if ($format === 'raw_body') {
+                    $response = $request->withBody((string) $payload, $rawContentType ?? 'application/octet-stream')
+                        ->send($method, $target->url);
+                } elseif ($format === 'multipart') {
+                    $response = $request->asMultipart()->send($method, $target->url, ['multipart' => $payload]);
+                } elseif ($format === 'form' && $method !== 'POST') {
+                    $response = $request->asForm()->send($method, $target->url, ['form_params' => $payload]);
+                } else {
+                    $response = match ($method) {
+                        'POST' => match ($format) {
+                            'json' => $request->asJson()->post($target->url, $payload),
+                            'raw_json' => $request->withBody((string) $payload, 'application/json')->send('POST', $target->url),
+                            default => $request->asForm()->post($target->url, $payload),
+                        },
+                        'DELETE' => $format === 'none'
+                            ? $request->delete($target->url)
+                            : $request->withBody((string) $payload, 'application/json')->send($method, $target->url),
+                        'GET' => $format === 'raw_json'
+                            ? $request->withBody((string) $payload, 'application/json')->send('GET', $target->url)
+                            : $request->get($target->url),
+                        default => $format === 'raw_json'
+                            ? $request->withBody((string) $payload, 'application/json')->send($method, $target->url)
+                            : $request->send($method, $target->url),
+                    };
+                }
             } catch (ConnectionException|RequestException $exception) {
                 if ($responseBody->limitExceeded()) {
                     throw $this->oversize($maxBytes, $responseBody->limitPhase() ?? 'decoded_body', $responseBody->observedBytes());

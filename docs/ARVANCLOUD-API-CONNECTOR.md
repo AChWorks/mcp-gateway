@@ -7,11 +7,11 @@ The built-in `arvancloud` connector attaches **one Owner-registered HTTPS API ro
 The stable MCP operation surface is:
 
 - `arvan-api-catalog`: read an **optional** public OpenAPI 3.x JSON/YAML description from the configured URL and page/filter path, method, parameters and requestBody. A description is explanatory, not executable authority.
-- `arvan-api-request`: call the selected Target's **registered** API origin/base path with a relative path, HTTP method, optional structured query and optional JSON request body. It works with newly released compatible HTTP endpoints **even if OpenAPI metadata has not yet been updated or provided**.
+- `arvan-api-request`: call the selected Target's **registered** API origin/base path with a relative path, HTTP method, optional structured query, JSON or provider-defined text content types, URL-encoded form fields, and multipart form/file parts. It works with newly released compatible HTTP endpoints **even if OpenAPI metadata has not yet been updated or provided**.
 
-An Arvan REST API change to paths, query arguments, JSON schemas or HTTP methods should not require a Gateway release. A different *origin* or API version/base path is a Target configuration change and may require a different key. Completely different protocols, transport authentication, multipart/file streaming or provider-side signing (such as S3 AWS Signature V4) require additional adapter capabilities; they cannot be safely promised by arbitrary read/write alone.
+An Arvan REST API change to paths, query arguments, JSON schemas, compatible request content types or HTTP methods should not require a Gateway release. A different *origin* or API version/base path is a Target configuration change and may require a different key. Different authentication protocols, provider-side signing (such as S3 AWS Signature V4), resumable uploads, or large-file streaming require additional adapter capabilities; they cannot be safely promised by arbitrary REST read/write alone. Ordinary multipart form requests with inline file parts are supported.
 
-Current authenticated request profile: `Authorization: Apikey <key>` over HTTPS, JSON request/response and fixed selected Target. The selected Machine User's real Arvan-side API scopes remain authoritative. Header name/prefix are deliberately connector-owned and do not come from MCP arguments; a different authentication contract needs an explicitly reviewed provider adapter change.
+Current authenticated request profile: `Authorization: Apikey <key>` over HTTPS, JSON/text/form/multipart requests and fixed selected Target. Ordinary responses are held in a bounded in-memory buffer; binary downloads and very large uploads require a separate streaming/file contract. The selected Machine User's real Arvan-side API scopes remain authoritative. Header name/prefix are deliberately connector-owned and do not come from MCP arguments; a different authentication contract needs an explicitly reviewed provider adapter change.
 
 ## Enroll from Gateway
 
@@ -45,6 +45,34 @@ A JSON mutation (shown as a **shape example**, not authorization to execute it):
 {"target_id":"arvan-cdn","method":"PATCH","path":"/domains/EXAMPLE-ID/config","body_json":"{\"enabled\":true}"}
 ```
 
+Additional provider-defined request bodies:
+
+Kubernetes YAML apply patch (the caller must have `arvan.api.write` and select the appropriate CaaS Target root):
+
+```json
+{"target_id":"arvan-caas","method":"PATCH","path":"/apis/apps/v1/namespaces/demo/deployments/sample","content_type":"application/apply-patch+yaml","body_text":"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: sample\n"}
+```
+
+A JSON Patch body can use `body_json` together with `content_type: "application/json-patch+json"`. Other valid provider media types are supported for text bodies without an endpoint-specific allowlist.
+
+URL-encoded form fields for an older Swagger 2 endpoint:
+
+```json
+{"target_id":"arvan-vod","method":"POST","path":"/tags","form_fields":{"title":"example"}}
+```
+
+Multipart form upload for a modest public text/BIND file (base64 here is a placeholder for the actual bytes):
+
+```json
+{"target_id":"arvan-cdn","method":"POST","path":"/domains/example.test/dns-records/import","content_type":"multipart/form-data","form_fields":{"overwrite":"true"},"form_files":[{"name":"f_zone_file","filename":"records.txt","content_type":"text/plain","content_base64":"BASE64_OF_FILE_BYTES"}]}
+```
+
+An optional `accept` media type (such as `text/plain`) changes only the standard response `Accept` header; it never changes the Target origin, credential or Authorization header. Response bytes returned by this tool must fit the configured in-memory API response budget.
+
+Choose exactly **one** body representation: `body_json`, `body_text` (requires `content_type`), or `form_fields` / `form_files`. File parts are inline base64 only, not filesystem paths, fetch URLs or remote file handles. When file parts exist, the Gateway generates the multipart boundary. `content_type: "multipart/form-data"` also allows multipart without files. The API request parameters never select credentials or the destination host. Base64-in-JSON is **not** a practical large-object transfer or a private-key exchange mechanism: use a separately reviewed private staging/streaming workflow for large or sensitive files.
+
+Swagger 2 `body` / `formData` and OpenAPI 3 `requestBody` descriptions expose method, path, parameter, media-type and file-field hints. They are **descriptive only**; the Gateway does not infer an authorization grant from a document.
+
 Never put the API key, `Authorization` header or a full URL in tool arguments. Method and relative path are caller inputs; **destination host, key and transport policy are not**. The registered API base path cannot be escaped with `..`, encoded slash/backslash or `//` authority replacement.
 
 ## Permissions, effects and safety
@@ -72,6 +100,35 @@ Server-configurable memory budgets (bounded further by SafeHttpClient's existing
 - Existing Gateway HTTP connect/request timeouts and host memory/server request limits still apply
 
 These are bounded *response buffers*, not arbitrary API version restrictions. Large binary/object transfers need a separately designed streaming/transfer interface rather than returning an unbounded object in one MCP tool result.
+
+## Documented product/API coverage and remaining protocol boundaries
+
+A 2026-11-17 read-only audit fetched the public ArvanCloud OpenAPI documents for CDN 4.0, IaaS 3 and 1, Object Storage management, Edge, CaaS 1.25, VOD 2, Live 2 and Video Ads 2 directly from `https://www.arvancloud.ir/api-docs/`. Together those specific snapshots describe 969 operations; this is **not** an authenticated interoperability claim or a timeless inventory. It is not a hardcoded endpoint allowlist.
+
+- Compatible machine-user `Apikey` REST/JSON and provider-defined textual requests work through one fixed registered Target origin each, including region/version-specific roots configured by the Owner.
+- `multipart/form-data` fields and inline file bytes cover the documented small multipart request *shape* (CDN DNS import, custom pages and certificates, Live watermarks, VOD thumbnail/subtitle/audio track). Actual service acceptance and sufficiently large-file transfer are unverified; sensitive key/certificate uploads require a separate approved private-file path.
+- CaaS/Kubernetes content types such as `application/apply-patch+yaml`, `application/json-patch+json`, `application/merge-patch+json`, and `application/strategic-merge-patch+json` can be sent without special endpoint branches.
+- Published Swagger 2 descriptions for IaaS v1 and VOD also include TUS resumable-upload endpoints requiring `tus-resumable`, `upload-length`, `upload-offset`, and other protocol headers and binary/chunked transfers. These **are not fully supported** by the generic single-request API tool. Do not relax credential/header ownership or redirect restrictions to simulate TUS; use an explicit reviewed upload workflow when implementing it.
+- S3 object operations remain **outside** the machine-user REST connector: S3 requires a separate Access Key/Secret Key, canonical SigV4 signing and a file/stream transport. Do not reuse an Arvan Machine User key for S3 or claim S3 CRUD, multipart S3 upload, object download or presigning is covered.
+- Some provider upload workflows return another destination origin or require resumable/binary streaming. They remain unverified and must not bypass registered-origin, secret, ACL or redirect policies. A new protocol/authentication boundary merits a reviewed connector rather than a hidden unrestricted proxy.
+
+### API root and relative path composition
+
+The configured API base must be the **exact base URL** for the chosen product/region/version, without duplicating the path prefix already contained in each operation. These are **examples derived from published spec servers**, not an allowlist or a live authentication guarantee:
+
+| Published API document | Example Target API base | Example request path |
+| --- | --- | --- |
+| CDN 4.0 | `https://napi.arvancloud.ir/cdn/4.0` | `/domains` |
+| IaaS 3.0 (region-specific) | `https://ecc.REGION.arvanapis.ir/v3` (replace REGION with an actual published/approved region host) | `/availability-zones` |
+| IaaS 1.0 | `https://napi.arvancloud.ir/ecc/v1` | `/dedicated-servers/available-servers` |
+| Object Storage management 1.0 | `https://storage.arvanapis.ir` | `/v1/access-points` |
+| Edge Computing 1.0 | `https://napi.arvancloud.ir/ec/v1` | `/edge-computes` |
+| CaaS 1.25 (zone-specific) | `https://napi.arvancloud.ir/caas/v2/zones/ir-tbz-sh1` | `/api/v1/namespaces/example/configmaps` |
+| VOD 2.0 | `https://napi.arvancloud.ir/vod/2.0` | `/analytics/play-count` |
+| Live 2.0 | `https://napi.arvancloud.ir/live/2.0` | `/analytics/play-count` |
+| Video Ads 2.0 | `https://napi.arvancloud.ir/vads/2.0` | `/campaigns/{campaign}/ads` |
+
+For example, Object Storage management describes endpoints beginning `/v1` beneath `https://storage.arvanapis.ir`; entering `https://storage.arvanapis.ir/v1` as the base and then sending `/v1/access-points` would incorrectly duplicate `/v1/v1`. A provider spec may advertise alternate environments; **the Gateway never automatically follows spec-advertised servers, switches regions or sends credentials to a new origin**.
 
 ## Reuse in later connectors
 

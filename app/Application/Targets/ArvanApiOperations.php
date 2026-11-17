@@ -99,11 +99,15 @@ final readonly class ArvanApiOperations
      * from the client. Caller-selected methods are classified by effect.
      *
      * @param  array<string, mixed>  $query
+     * @param  array<string, mixed>  $formFields
+     * @param  list<array<string,mixed>>  $formFiles
      * @return array<string, mixed>
      */
     public function execute(
         User $user, string $targetId, string $method, string $path,
         array $query = [], ?string $bodyJson = null,
+        ?string $bodyText = null, ?string $contentType = null,
+        array $formFields = [], array $formFiles = [], ?string $accept = null,
     ): array {
         $operation = 'arvan-api-request';
         $method = strtoupper(trim($method));
@@ -161,6 +165,7 @@ final readonly class ArvanApiOperations
             $response = $this->transport->request(
                 $config->base_url, $method, $path, $query, $bodyJson,
                 ['Authorization' => 'Apikey '.$key, 'Accept' => 'application/json'],
+                $bodyText, $contentType, $formFields, $formFiles, $accept,
             );
         } catch (OutboundRequestException $exception) {
             $unknown = $permission !== GatewayPermission::ArvanApiRead && ! $exception->preDispatch;

@@ -128,6 +128,88 @@ YAML, 200);
         self::assertSame('PATCH', $calls[2]->method());
     }
 
+    public function test_existing_json_and_new_patch_form_and_multipart_bodies_preserve_origin_auth_and_reconciliation(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $calls = [];
+        Http::fake(function (Request $request) use (&$calls) {
+            $calls[] = $request;
+            if ($request->hasHeader('Accept', 'text/plain')) {
+                return Http::response('ready', 200, [
+                    'X-Request-ID' => 'body-mode-test', 'Content-Type' => 'text/plain',
+                ]);
+            }
+
+            return Http::response(['ok' => true], 200, ['X-Request-ID' => 'body-mode-test']);
+        });
+
+        $api = app(ArvanApiOperations::class);
+        $patch = $api->execute($owner, $target->target_id,
+            'PATCH', '/api/v1/namespaces/demo/configmaps/one', [], null,
+            "apiVersion: v1\nkind: ConfigMap\n", 'application/apply-patch+yaml');
+        self::assertTrue($patch['ok'], json_encode($patch));
+        self::assertSame('PATCH', $calls[0]->method());
+        self::assertSame('application/apply-patch+yaml', $calls[0]->header('Content-Type')[0]);
+        self::assertStringContainsString('kind: ConfigMap', $calls[0]->body());
+
+        $jsonPatch = $api->execute($owner, $target->target_id,
+            'PATCH', '/api/v1/namespaces/demo/configmaps/one', [],
+            '[{"op":"replace","path":"/data/flag","value":"1"}]', null, 'application/json-patch+json');
+        self::assertTrue($jsonPatch['ok']);
+        self::assertSame('application/json-patch+json', $calls[1]->header('Content-Type')[0]);
+        self::assertStringContainsString('"op":"replace"', $calls[1]->body());
+
+        $form = $api->execute($owner, $target->target_id,
+            'POST', '/tags', [], null, null, 'application/x-www-form-urlencoded',
+            ['title' => 'example tag']);
+        self::assertTrue($form['ok'], json_encode($form));
+        self::assertSame('application/x-www-form-urlencoded', $calls[2]->header('Content-Type')[0]);
+        self::assertSame('title=example+tag', $calls[2]->body());
+
+        $upload = $api->execute($owner, $target->target_id,
+            'POST', '/domains/example.test/dns-records/import', [], null, null, 'multipart/form-data',
+            ['overwrite' => 'true'], [[
+                'name' => 'f_zone_file',
+                'filename' => 'dns-records.txt',
+                'content_base64' => base64_encode('$ORIGIN example.test.'."\n"),
+                'content_type' => 'text/plain',
+            ]]);
+        self::assertTrue($upload['ok'], json_encode($upload));
+        self::assertStringStartsWith('multipart/form-data; boundary=', $calls[3]->header('Content-Type')[0]);
+        self::assertStringContainsString('dns-records.txt', $calls[3]->body());
+        self::assertStringContainsString('$ORIGIN example.test.', $calls[3]->body());
+        self::assertStringContainsString('name="overwrite"', $calls[3]->body());
+
+        $plain = $api->execute($owner, $target->target_id,
+            'GET', '/plain', [], null, null, null, [], [], 'text/plain');
+        self::assertTrue($plain['ok']);
+        self::assertSame('ready', $plain['data']);
+        self::assertTrue($calls[4]->hasHeader('Accept', 'text/plain'));
+
+        foreach ($calls as $request) {
+            self::assertStringStartsWith('https://api.example.test/cdn/4.0/', $request->url());
+            self::assertTrue($request->hasHeader('Authorization', 'Apikey '.self::KEY));
+        }
+        foreach ([
+            ['body_text' => 'yaml', 'content_type' => 'application/yaml\r\nInjected: yes'],
+            ['body_text' => null, 'content_type' => 'text/plain'],
+            ['form_fields' => ['title' => 'a'], 'form_files' => [['name' => 'file', 'filename' => '../bad', 'content_base64' => 'Zm9v']]],
+            ['form_files' => [['name' => 'file', 'filename' => 'good.txt', 'content_base64' => '***']]],
+            ['accept' => "text/plain\r\nX-Fake: injected"],
+        ] as $invalid) {
+            $result = $api->execute($owner, $target->target_id, 'POST', '/domains',
+                [], null, $invalid['body_text'] ?? null, $invalid['content_type'] ?? null,
+                $invalid['form_fields'] ?? [], $invalid['form_files'] ?? [],
+                $invalid['accept'] ?? null);
+            self::assertSame('invalid_input', $result['error']['code'], json_encode($result));
+        }
+        Http::assertSentCount(5);
+        $activity = (string) json_encode(DB::table('activity_events')->get());
+        self::assertStringNotContainsString(self::KEY, $activity);
+        self::assertStringNotContainsString('$ORIGIN', $activity);
+        self::assertStringNotContainsString('kind: ConfigMap', $activity);
+    }
+
     public function test_permissions_pause_origin_traversal_and_key_lifecycle_prevent_unauthorized_effects(): void
     {
         [$target, $owner] = $this->fixture();
