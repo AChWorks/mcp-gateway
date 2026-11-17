@@ -464,6 +464,143 @@ YAML, 200);
         }
     }
 
+    public function test_url_encoded_key_echoes_are_never_persisted_in_api_identity_or_provider_diagnostics(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $partial = '%65x%61'.substr(self::KEY, 3);
+        $mixed = '%65xa%6D'.substr(self::KEY, 4);
+        $nested = rawurlencode($partial);
+        $doubleNested = rawurlencode($nested);
+        $deep = $partial;
+        for ($i = 0; $i < 12; $i++) {
+            $deep = rawurlencode($deep);
+        }
+        $cases = [
+            ['GET', '/domains/'.self::KEY, 'success'],
+            ['PATCH', '/domains/'.$partial, 'unknown'],
+            ['DELETE', '/domains/'.$mixed, 'unknown'],
+            ['GET', '/domains/'.$nested, 'success'],
+            ['GET', '/domains/'.$doubleNested, 'success'],
+            ['GET', '/domains/%6Eonsecret', 'success'],
+            ['GET', '/domains/'.$deep, 'success'],
+        ];
+        $sent = [];
+        Http::fake(function (Request $request) use (&$sent, $nested, $doubleNested, $mixed) {
+            $index = count($sent);
+            $sent[] = [$request->method(), $request->url()];
+            if ($index === 2) {
+                throw new ConnectionException('Connection closed after request dispatch.');
+            }
+            if ($index === 1) {
+                return Http::response(['message' => 'provider echo: '.$nested], 503, [
+                    'X-Request-ID' => 'trace-'.$mixed,
+                ]);
+            }
+
+            return Http::response($index === 4 ? ['echo' => $nested] : ['ok' => true], 200, [
+                'X-Request-ID' => $index === 3 ? 'trace-'.$doubleNested
+                    : ($index === 5 ? 'provider-%64iagnostic' : 'provider-safe'),
+            ]);
+        });
+
+        $api = app(ArvanApiOperations::class);
+        $reader = app(OperationDiagnosticsMcpToolHandlers::class);
+        foreach ($cases as $index => [$method, $path, $outcome]) {
+            $result = $api->execute($owner, $target->target_id, $method, $path,
+                ['page' => 8], $method === 'PATCH' ? '{"value":"private body must stay out of Activity"}' : null);
+            self::assertSame([$method, 'https://api.example.test/cdn/4.0'.$path.'?page=8'], $sent[$index]);
+            self::assertSame($outcome === 'success', $result['ok']);
+            if ($index === 4) {
+                self::assertSame('[REDACTED]', $result['data']);
+            }
+            $event = DB::table('activity_events')->where('operation', 'arvan-api-request')
+                ->orderByDesc('created_at')->orderByDesc('id')->first();
+            self::assertNotNull($event);
+            self::assertSame($outcome, $event->outcome);
+            $details = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+            self::assertSame($method, $details['api_operation']['method']);
+            self::assertSame(hash('sha256', $path), $details['api_operation']['path_sha256']);
+            self::assertSame($index === 5 ? $path : '/domains/[REDACTED]',
+                $details['api_operation']['relative_path']);
+
+            if ($index === 1) {
+                self::assertSame(503, $details['remote_http_status']);
+                self::assertSame('[REDACTED]', $details['api_operation']['provider_request_id']);
+                self::assertSame('[REDACTED]', $details['source_error_details']['response_excerpt']);
+            } elseif ($index === 2) {
+                self::assertTrue($details['effect_unconfirmed']);
+                self::assertFalse($details['retry_safe']);
+            } else {
+                self::assertSame(200, $details['remote_http_status']);
+                self::assertSame($index === 3 ? '[REDACTED]'
+                    : ($index === 5 ? 'provider-%64iagnostic' : 'provider-safe'),
+                    $details['api_operation']['provider_request_id']);
+            }
+
+            $stored = (string) $event->diagnostic_context;
+            self::assertStringNotContainsString('private body must stay out of Activity', $stored);
+            $lookup = $reader->read($owner, (string) $event->correlation_id);
+            self::assertTrue($lookup['ok']);
+            self::assertSame($details, $lookup['events'][0]['diagnostics']);
+            $admin = $this->actingAs($owner)->get('/admin/activity?diagnostic_reference='.$event->correlation_id)
+                ->assertOk();
+            if ($outcome !== 'success') {
+                $admin->assertSee($details['api_operation']['relative_path']);
+            }
+            foreach ([$stored, json_encode($lookup, JSON_THROW_ON_ERROR), $admin->getContent()] as $serialized) {
+                foreach ([false, true] as $formEncoding) {
+                    $decoded = $serialized;
+                    while (true) {
+                        self::assertStringNotContainsString(self::KEY, $decoded);
+                        $next = $formEncoding ? urldecode($decoded) : rawurldecode($decoded);
+                        if ($next === $decoded) {
+                            break;
+                        }
+                        $decoded = $next;
+                    }
+                }
+            }
+        }
+        self::assertCount(count($cases), $sent);
+    }
+
+    public function test_encoded_plus_and_cross_segment_key_echo_redact_only_diagnostics(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $credential = TargetCredential::query()->sole();
+        $key = 'machine+secret/seg';
+        $config = ArvanApiTargetConfig::query()->sole();
+        $credential->forceFill([
+            'encrypted_payload' => app(ArvanApiTargetVault::class)->seal($target, $config, $key),
+        ])->save();
+        $path = '/domains/machine%2Bsecret/seg';
+        Http::fake(function (Request $request) use ($key, $path) {
+            self::assertSame('https://api.example.test/cdn/4.0'.$path, $request->url());
+            self::assertTrue($request->hasHeader('Authorization', 'Apikey '.$key));
+
+            return Http::response(['ok' => true], 200, ['X-Request-ID' => 'trace-'.urlencode($key)]);
+        });
+
+        $result = app(ArvanApiOperations::class)->execute($owner, $target->target_id, 'GET', $path);
+        self::assertTrue($result['ok']);
+        self::assertSame('[REDACTED]', $result['upstream_request_id']);
+        $event = DB::table('activity_events')->where('operation', 'arvan-api-request')->sole();
+        $details = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('/[REDACTED]', $details['api_operation']['relative_path']);
+        self::assertSame(hash('sha256', $path), $details['api_operation']['path_sha256']);
+        self::assertSame('[REDACTED]', $details['api_operation']['provider_request_id']);
+        $lookup = app(OperationDiagnosticsMcpToolHandlers::class)
+            ->read($owner, (string) $event->correlation_id);
+        self::assertTrue($lookup['ok']);
+        foreach ([(string) $event->diagnostic_context, json_encode($lookup, JSON_THROW_ON_ERROR)] as $raw) {
+            for ($i = 0; $i < 4; $i++) {
+                self::assertStringNotContainsString($key, $raw);
+                $raw = urldecode($raw);
+            }
+        }
+        Http::assertSentCount(1);
+    }
+
     public function test_authentication_probe_is_real_readonly_get_and_disconnect_only_erases_local_credential(): void
     {
         [$target] = $this->fixture();

@@ -28,6 +28,10 @@ use Throwable;
  */
 final readonly class ArvanApiOperations
 {
+    // Bound the diagnostic-only decoder; if further decoding is possible,
+    // redact the opaque evidence rather than spend unbounded CPU or guess.
+    private const DIAGNOSTIC_URL_DECODE_PASSES = 8;
+
     public function __construct(
         private AccessControl $access,
         private McpDispatchAdmission $admission,
@@ -184,10 +188,12 @@ final readonly class ArvanApiOperations
         if ($requestId !== null) {
             // Provider response headers are untrusted, too. Do not echo a
             // credential (or embedded control chars) as a diagnostic ID.
-            $requestId = preg_replace('/[\x00-\x1f\x7f]/', '', str_replace($key, '[REDACTED]', $requestId));
-            $requestId = mb_strcut((string) $requestId, 0, 256, 'UTF-8');
+            $requestId = preg_replace('/[\x00-\x1f\x7f]/', '', $requestId) ?? '';
+            $requestId = mb_strcut($this->redactCredentialEcho($requestId, $key), 0, 256, 'UTF-8');
         }
-        $body = str_replace($key, '[REDACTED]', $response->body);
+        // The provider may echo the credential in reversible URL encodings.
+        // Redact before either returning a response or persisting an excerpt.
+        $body = $this->redactCredentialEcho($response->body, $key);
         $decoded = json_decode($body, true);
         $payload = json_last_error() === JSON_ERROR_NONE ? $decoded : $body;
         if ($status < 200 || $status >= 300) {
@@ -224,14 +230,63 @@ final readonly class ArvanApiOperations
      */
     private function apiIdentity(string $method, string $path, string $key): array
     {
-        $encoded = [rawurlencode($key), urlencode($key), $key];
-        $redacted = str_replace($encoded, '[REDACTED]', $path);
+        // URL paths are diagnostic data only. Never persist a segment that
+        // can be URL-decoded (even repeatedly or partially) into this key.
+        // Preserve unrelated path segments for reconciliation.
+        $redacted = implode('/', array_map(
+            fn (string $segment): string => $this->containsCredentialEcho($segment, $key)
+                ? '[REDACTED]' : $segment,
+            explode('/', $path),
+        ));
+        // A credential can itself contain a literal slash and span segments;
+        // retain only the fingerprint if segment-level masking cannot cover it.
+        if ($this->containsCredentialEcho($redacted, $key)) {
+            $redacted = '/[REDACTED]';
+        }
 
         return [
             'method' => $method,
             'relative_path' => $redacted,
             'path_sha256' => hash('sha256', $path),
         ];
+    }
+
+    /**
+     * A URL-encoded echo might encode only one character, mix uppercase and
+     * lowercase hex digits, encode '+' as space, or nest %25 several times.
+     * URL decoding converges: each valid %XX reduces length, and '+' becomes
+     * space at most once. Compare before each step to retain both meanings.
+     */
+    private function containsCredentialEcho(string $text, string $key): bool
+    {
+        foreach ([false, true] as $formEncoding) {
+            $candidate = $text;
+            for ($pass = 0; $pass < self::DIAGNOSTIC_URL_DECODE_PASSES; $pass++) {
+                if (str_contains($candidate, $key)) {
+                    return true;
+                }
+                $next = $formEncoding ? urldecode($candidate) : rawurldecode($candidate);
+                if ($next === $candidate) {
+                    continue 2;
+                }
+                $candidate = $next;
+            }
+            // Deeply nested encodings are not reliably diagnosable. Mask the
+            // field if another percent decoding could still change it.
+            if (str_contains($candidate, $key) || preg_match('/%[0-9a-f]{2}/i', $candidate) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function redactCredentialEcho(string $text, string $key): string
+    {
+        // Provider IDs and remote response bodies are opaque. When any
+        // reversible representation is present, dropping this untrusted
+        // field is safer than guessing its token boundaries.
+        return $this->containsCredentialEcho($text, $key) ? '[REDACTED]' : $text;
     }
 
     private function target(User $user, string $targetId, GatewayPermission $permission): ?Target
