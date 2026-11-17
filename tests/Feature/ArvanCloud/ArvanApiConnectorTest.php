@@ -117,6 +117,64 @@ final class ArvanApiConnectorTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_arvan_recovery_respects_effective_configuration_permission_without_removing_admin_test_or_disconnect(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $administrator = $this->user('administrator');
+        DB::table('user_target_access')->insert([
+            'user_id' => $administrator->getKey(),
+            'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
+
+        // An in-scope Administrator can still test and disconnect; neither
+        // permission grants the Owner-only connector configuration editor.
+        $this->actingAs($administrator)
+            ->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Test ArvanCloud API key (read-only GET)')
+            ->assertSee('Delete Gateway API key')
+            ->assertSee('A Gateway Owner must add a new key before this Target can be used again.')
+            ->assertDontSee('To use this Target again, enter a new key in its connection settings.');
+        $this->get('/admin/targets/arvan-cdn/edit?section=api-connection')->assertOk()
+            ->assertDontSee('id="target-connection-settings"', false);
+
+        // Removing a probe is an Owner configuration task. The Admin must
+        // see a next step, but not a link to a form they cannot access.
+        $config = ArvanApiTargetConfig::query()->sole();
+        $config->forceFill(['probe_path' => null])->save();
+        $this->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Ask a Gateway Owner to configure a read-only GET probe for this Target.')
+            ->assertSee('Delete Gateway API key')
+            ->assertDontSee('Set a GET probe in advanced connection settings')
+            ->assertDontSee('section=api-connection')
+            ->assertDontSee('Test ArvanCloud API key (read-only GET)');
+
+        $this->actingAs($owner)
+            ->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Set a GET probe in advanced connection settings')
+            ->assertSee('To use this Target again, enter a new key in its connection settings.')
+            ->assertDontSee('Ask a Gateway Owner to configure a read-only GET probe');
+        $this->get('/admin/targets/arvan-cdn/edit?section=api-connection')->assertOk()
+            ->assertSee('id="target-connection-settings"', false)
+            ->assertSee('Advanced connector connection settings');
+
+        // After deletion, the same authority distinction applies to the
+        // missing credential rather than advertising a dead recovery route.
+        $this->actingAs($administrator)
+            ->post(route('admin.targets.disconnect', ['target' => $target->target_id]))
+            ->assertAdminRedirect('/admin/targets/arvan-cdn');
+        self::assertSame(0, TargetCredential::query()->count());
+        $this->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Ask a Gateway Owner to add a Machine User API key')
+            ->assertDontSee('Open advanced connection settings to add a key')
+            ->assertDontSee('section=api-connection');
+        $this->actingAs($owner)
+            ->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('Open advanced connection settings to add a key')
+            ->assertDontSee('Ask a Gateway Owner to add a Machine User API key');
+        Http::assertNothingSent();
+    }
+
     public function test_arvan_configuration_errors_identify_correct_fields_and_probe_changes_clear_old_verification(): void
     {
         [$target] = $this->fixture();
