@@ -8,6 +8,8 @@ use App\Domain\Access\TargetScopeMode;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
 use App\Models\User;
 use DOMDocument;
 use DOMElement;
@@ -71,6 +73,85 @@ final class TargetFieldAccessibilityTest extends TestCase
         $this->assertDescription($xpath, 'ssh_edit_host_key', 'ssh-edit-host-key-help');
         $this->assertDescription($xpath, 'ssh-reconfiguration', 'ssh-configuration-revision-error');
         self::assertSame('1.1.1.1', DB::table('ssh_direct_target_configs')->value('host'));
+        Http::assertNothingSent();
+    }
+
+    public function test_arvan_create_errors_are_linked_to_each_control_with_guidance_and_no_secret_replay(): void
+    {
+        Http::preventStrayRequests();
+        $this->actingAs($this->owner());
+        $response = $this->from('/admin/targets/create?connector_type=arvancloud')
+            ->post('/admin/targets', [
+                'connector_type' => 'arvancloud', 'target_id' => '',
+                'display_name' => '', 'api_base_url' => '',
+                'api_spec_url' => 'not-https', 'api_probe_path' => 'not/relative',
+                'api_key' => '', 'current_password' => '',
+            ])->assertAdminRedirect('/admin/targets/create?connector_type=arvancloud')
+            ->assertSessionHasErrors(['api_base_url', 'api_spec_url', 'api_probe_path', 'api_key']);
+
+        $html = (string) $this->withCookie(session()->getName(), session()->getId())
+            ->get((string) $response->headers->get('Location'))->assertOk()->getContent();
+        $xpath = $this->document($html);
+        foreach ([
+            'arvan-api-base-url' => 'arvan-api-base-url-help',
+            'arvan-api-spec-url' => 'arvan-api-spec-url-help',
+            'arvan-api-probe-path' => 'arvan-api-probe-path-help',
+            'arvan-api-key' => 'arvan-api-key-help',
+        ] as $id => $help) {
+            $this->assertFieldError($xpath, $id);
+            $this->assertDescription($xpath, $id, $help);
+        }
+        self::assertStringContainsString('Test connection', $html);
+        self::assertStringContainsString('not an S3 Access Key', $html);
+        self::assertStringContainsString('The read-only GET probe path must begin with /, such as /domains.', $html);
+        self::assertSame(0, Target::query()->count());
+        Http::assertNothingSent();
+    }
+
+    public function test_arvan_configuration_failure_reveals_advanced_form_and_links_field_errors(): void
+    {
+        Http::preventStrayRequests();
+        $this->actingAs($this->owner());
+        $target = Target::query()->create([
+            'target_id' => 'arvan-form', 'display_name' => 'Arvan form',
+            'connector_type' => 'arvancloud',
+        ]);
+        $config = ArvanApiTargetConfig::query()->create([
+            'target_record_id' => $target->getKey(),
+            'base_url' => 'https://api.example.test/cdn/4.0',
+            'spec_url' => null, 'probe_path' => '/domains',
+        ]);
+        TargetCredential::query()->create([
+            'target_record_id' => $target->getKey(), 'connector_type' => 'arvancloud',
+            'purpose' => ArvanApiTargetVault::PURPOSE,
+            'encrypted_payload' => app(ArvanApiTargetVault::class)->seal($target, $config, 'encrypted-only-test-key'),
+        ]);
+        $response = $this->from('/admin/targets/arvan-form/edit')
+            ->put('/admin/targets/arvan-form/configuration', [
+                'configuration_revision' => '', 'api_base_url' => '',
+                'api_spec_url' => 'not-https', 'api_probe_path' => 'invalid/path',
+                'api_key' => 'never-flash-this-secret', 'current_password' => '',
+            ])->assertAdminRedirect('/admin/targets/arvan-form/edit')
+            ->assertSessionHasErrors(['configuration_revision', 'api_base_url', 'api_spec_url', 'api_probe_path']);
+
+        self::assertNotContains('never-flash-this-secret', (array) session()->getOldInput());
+        $html = (string) $this->withCookie(session()->getName(), session()->getId())
+            ->get((string) $response->headers->get('Location'))->assertOk()->getContent();
+        $xpath = $this->document($html);
+        self::assertSame(1, (int) $xpath->evaluate(
+            'count(//details[contains(@class,"admin-collapsible-panel")][@open]//form//input[@id="arvan-edit-api-base-url"])',
+        ));
+        foreach ([
+            'arvan-edit-api-base-url' => 'arvan-edit-api-base-url-help',
+            'arvan-edit-api-spec-url' => 'arvan-edit-api-spec-url-help',
+            'arvan-edit-api-probe-path' => 'arvan-edit-api-probe-path-help',
+        ] as $id => $help) {
+            $this->assertFieldError($xpath, $id);
+            $this->assertDescription($xpath, $id, $help);
+        }
+        $this->assertDescription($xpath, 'arvan-edit-api-key', 'arvan-edit-api-key-help');
+        self::assertStringNotContainsString('never-flash-this-secret', $html);
+        self::assertStringNotContainsString('encrypted-only-test-key', $html);
         Http::assertNothingSent();
     }
 

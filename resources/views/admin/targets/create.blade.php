@@ -49,7 +49,10 @@
                     <option value="{{ $type }}" @selected($selected === $type)>{{ $label }}</option>
                 @endforeach
             </select>
-            <p id="connector_type_help" class="field-help">{{ __('The next fields change with your selection. Only implemented connectors can be enrolled.') }}</p>
+            <p id="connector_type_help" class="field-help">{{ __('The next fields change with your selection. Only implemented connectors you can enroll are listed.') }}</p>
+            @if (auth()->user()?->getRawOriginal('role') !== 'owner')
+                <p class="field-help">{{ __('ArvanCloud API key enrollment requires a Gateway Owner. Ask an Owner to register the Target and assign your access.') }}</p>
+            @endif
             @error('connector_type')<p class="field-error" role="alert" id="connector_type-error">{{ $message }}</p>@enderror
             <noscript>
                 <p class="field-help">{{ __('JavaScript is disabled. Choose a connector below to open its server-rendered form:') }}</p>

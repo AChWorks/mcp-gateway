@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Admin\ArvanApiTargetFormCopy;
 use App\Application\Admin\TargetConnectorAdmin;
 use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\SshManagedReverseHostReadiness;
@@ -89,6 +90,11 @@ final class TargetController extends Controller
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
         $options = $connectorAdmin->options();
+        // Arvan key enrollment is Owner-only at POST. Do not invite other
+        // Target creators to enter a privileged key into a form they cannot submit.
+        if ($request->user()?->getRawOriginal('role') !== GatewayRole::Owner->value) {
+            unset($options['arvancloud']);
+        }
         $definitions = [];
         foreach (array_keys($options) as $type) {
             $definitions[] = $connectorAdmin->forType($type)?->definition();
@@ -151,7 +157,11 @@ final class TargetController extends Controller
                     'connector_type' => __('This connector does not support endpoint preflight.'),
                 ]);
             }
-            $validated = $request->validate($adapter->preflightRules());
+            $validated = $request->validate(
+                $adapter->preflightRules(),
+                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::messages() : [],
+                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::attributes() : [],
+            );
             $selectedRelay = $validated['connection_relay_id'] ?? null;
             if (is_string($selectedRelay) && $selectedRelay !== '') {
                 Gate::authorize(GatewayPermission::SecurityManage->value);
@@ -254,7 +264,10 @@ final class TargetController extends Controller
                 'ai_guidance' => ['nullable', 'string', 'max:'.Target::AI_GUIDANCE_MAX_LENGTH,
                     'not_regex:/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/'],
                 ...$adapter->registrationRules(),
-            ]);
+            ],
+                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::messages() : [],
+                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::attributes() : [],
+            );
             if (($validated['connection_relay_id'] ?? null) !== null
                 && ($validated['connection_relay_id'] ?? '') !== '') {
                 Gate::authorize(GatewayPermission::SecurityManage->value);

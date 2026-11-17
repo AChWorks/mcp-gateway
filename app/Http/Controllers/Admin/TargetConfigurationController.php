@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Admin\ArvanApiTargetFormCopy;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
@@ -36,7 +37,11 @@ final class TargetConfigurationController extends Controller
         abort_unless($adapter instanceof TargetConnectorAdapter, 404);
 
         try {
-            $validated = $request->validate($adapter->configurationRules($target));
+            $validated = $request->validate(
+                $adapter->configurationRules($target),
+                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::messages() : [],
+                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::attributes() : [],
+            );
             $confirmation->confirm($request);
             $result = $adapter->updateConfiguration($target, $validated);
         } catch (ValidationException $exception) {
@@ -44,7 +49,9 @@ final class TargetConfigurationController extends Controller
                 throw $exception;
             }
 
-            return back()->withErrors($exception->errors())->withInput($this->safeInput($request, $adapter->safeOldInputFields()));
+            return back()->withErrors($exception->errors())
+                ->withInput($this->safeInput($request, $adapter->safeOldInputFields()))
+                ->with('target_configuration_failed', true);
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'configuration_rejected';
             $reference = OperationDiagnostics::failure('target-configuration-update', $code, $target, $exception->diagnostics);
@@ -54,7 +61,8 @@ final class TargetConfigurationController extends Controller
                 ->withInput($this->safeInput($request, $adapter->safeOldInputFields()))
                 ->with('diagnostic_code', $code)
                 ->with('diagnostic_context', OperationDiagnostics::safeContext($exception->diagnostics))
-                ->with('diagnostic_reference', $reference);
+                ->with('diagnostic_reference', $reference)
+                ->with('target_configuration_failed', true);
         }
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
