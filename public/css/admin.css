@@ -590,9 +590,23 @@ code {
     margin-block-start: var(--ui-panel-stack-gap);
 }
 
-/* An introductory status and its technical disclosure are one section,
-   with a deliberate pause before the bordered diagnostics. */
-.panel > .field-help + .target-help-details {
+/* Spacing belongs to the relationship, not to an individual Admin page.
+   Distinct disclosures, alerts and nested subsections separate from the
+   preceding context; a short action/help pair stays closer together.
+   Heading-to-first-control rhythm remains owned by the heading rules. */
+.panel > :not(h2, .section-heading, summary) + :is(.target-help-details, .target-subsection, .alert),
+.panel > .target-help-details + .field-help {
+    margin-block-start: var(--ui-context-gap);
+}
+
+.panel > .field-help + :is(.field-help, .filter-actions, form:not(.form-stack)),
+.panel > :is(.filter-actions, form:not(.form-stack)) + .field-help {
+    margin-block-start: var(--ui-field-action-gap);
+}
+
+/* Native details with panel styling also need internal flow spacing;
+   collapsible destructive panels retain their larger existing gap. */
+details.panel[open] > :not(summary) {
     margin-block-start: var(--ui-context-gap);
 }
 
@@ -1608,10 +1622,17 @@ td input[type="checkbox"] {
     font-weight: 650;
 }
 
+/* Native <details> has a UA-managed content box: CSS grid gap on details
+   separates summary from its entire contents, NOT p/form/code siblings inside.
+   Keep native block flow and space each visible content child explicitly. */
 .target-help-details[open],
 .operations-guidance[open] {
-    display: grid;
-    gap: 0.7rem;
+    display: block;
+}
+
+.target-help-details[open] > :not(summary),
+.operations-guidance[open] > :not(summary) {
+    margin-block-start: var(--ui-context-gap);
 }
 
 /* Explicit command snippets stay block-level; inline code in labels,
@@ -1626,8 +1647,8 @@ td input[type="checkbox"] {
     overflow-wrap: anywhere;
 }
 
-/* Avoid accumulating form/action margins on top of a parent grid gap. */
-.target-help-details[open] > .form-stack,
+/* Subsections are real grids; their gap already owns the spacing.
+   Native details are block flow, so keep their content child margins. */
 .target-subsection > .form-stack,
 .target-subsection > .action-row {
     margin-block-start: 0;

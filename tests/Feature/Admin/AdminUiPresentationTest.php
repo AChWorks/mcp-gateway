@@ -9,6 +9,8 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Models\User;
@@ -107,6 +109,97 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringNotContainsString('.target-help-details code {', $css);
         self::assertStringContainsString('.admin-collapsible-panel > summary', $css);
         self::assertSame(0, substr_count($reverseSource, "<dt>{{ __('Host readiness') }}</dt>"));
+    }
+
+    public function test_shared_admin_action_help_and_native_disclosure_spacing_covers_all_target_connectors(): void
+    {
+        $css = (string) file_get_contents(public_path('css/admin.css'));
+
+        // Panel/context and action/help relationships use inherited semantic tokens,
+        // rather than a per-Target, per-connector or inline spacing exception.
+        self::assertMatchesRegularExpression(
+            '/\.panel > :not\(h2, \.section-heading, summary\) \+ :is\(\.target-help-details, \.target-subsection, \.alert\)[^{]*\{[^}]*margin-block-start: var\(--ui-context-gap\);/s',
+            $css,
+        );
+        self::assertMatchesRegularExpression(
+            '/\.panel > \.field-help \+ :is\(\.field-help, \.filter-actions, form:not\(\.form-stack\)\)[^{]*\{[^}]*margin-block-start: var\(--ui-field-action-gap\);/s',
+            $css,
+        );
+        self::assertMatchesRegularExpression(
+            '/\.target-help-details\[open\],\s*\.operations-guidance\[open\]\s*\{\s*display: block;/s',
+            $css,
+        );
+        self::assertMatchesRegularExpression(
+            '/\.target-help-details\[open\] > :not\(summary\),\s*\.operations-guidance\[open\] > :not\(summary\)\s*\{\s*margin-block-start: var\(--ui-context-gap\);/s',
+            $css,
+        );
+        self::assertStringContainsString('details.panel[open] > :not(summary)', $css);
+        self::assertStringNotContainsString('.target-help-details[open] > .form-stack,', $css);
+        self::assertStringContainsString('.panel > .field-help + :is(.field-help, .filter-actions, form:not(.form-stack))', $css);
+
+        $owner = $this->owner();
+        $arvan = Target::query()->create([
+            'target_id' => 'qa-arvan-layout',
+            'display_name' => 'Arvan layout test',
+            'connector_type' => 'arvancloud',
+            'ai_guidance' => 'Confirm with an Owner before making changes.',
+        ]);
+        $config = ArvanApiTargetConfig::query()->create([
+            'target_record_id' => $arvan->getKey(),
+            'base_url' => 'https://api.example.test/cdn/4.0',
+            'probe_path' => '/domains',
+            'spec_url' => null,
+        ]);
+        $vault = app(ArvanApiTargetVault::class);
+        TargetCredential::query()->create([
+            'target_record_id' => $arvan->getKey(),
+            'connector_type' => 'arvancloud',
+            'purpose' => ArvanApiTargetVault::PURPOSE,
+            'encrypted_payload' => $vault->seal($arvan, $config, 'synthetic-layout-key-not-live'),
+        ]);
+
+        $this->actingAs($owner);
+        foreach ([$arvan, Target::query()->create([
+            'target_id' => 'qa-ssh-layout',
+            'display_name' => 'SSH layout test',
+            'connector_type' => 'ssh_direct',
+            'ai_guidance' => 'Keep the remote identity and credentials separate.',
+        ])] as $target) {
+            $html = $this->get(route('admin.targets.show', ['target' => $target->target_id]))
+                ->assertOk()->getContent();
+            $document = new \DOMDocument;
+            $document->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+            $xpath = new \DOMXPath($document);
+
+            $operations = '//section[@aria-labelledby="target-operations-title"]';
+            self::assertSame(1, (int) $xpath->evaluate('count('.$operations.'/form/following-sibling::p[contains(concat(" ",normalize-space(@class)," ")," field-help ")][1])'));
+            self::assertSame(1, (int) $xpath->evaluate('count('.$operations.'/p[contains(concat(" ",normalize-space(@class)," ")," field-help ")]/following-sibling::div[contains(concat(" ",normalize-space(@class)," ")," target-subsection ")][1])'));
+        }
+
+        $html = $this->get('/admin/targets/qa-arvan-layout')->assertOk()
+            ->assertSee('Test ArvanCloud API key (read-only GET)')
+            ->assertSee('Remove stored API key (advanced)')
+            ->getContent();
+        $document = new \DOMDocument;
+        $document->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($document);
+
+        $identity = '//section[@aria-labelledby="target-info-title"]';
+        self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/details[1]/following-sibling::p[contains(concat(" ",normalize-space(@class)," ")," field-help ")][1])'));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/p[contains(concat(" ",normalize-space(@class)," ")," field-help ")]/following-sibling::div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")][1])'));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")]/following-sibling::details[contains(concat(" ",normalize-space(@class)," ")," target-help-details ")][1])'));
+        self::assertSame(1, (int) $xpath->evaluate('count('.$identity.'/details[summary[contains(.,"Remove stored API key")]]/p[contains(concat(" ",normalize-space(@class)," ")," field-help ")]/following-sibling::form[1])'));
+
+        $arvan->forceFill(['operations_paused' => true])->save();
+        $pausedHtml = $this->get('/admin/targets/qa-arvan-layout')->assertOk()
+            ->assertSee('Resume Target operations above')->getContent();
+        $document = new \DOMDocument;
+        $document->loadHTML($pausedHtml, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $pausedXPath = new \DOMXPath($document);
+        self::assertSame(0, (int) $pausedXPath->evaluate('count('.$identity.'/div[contains(concat(" ",normalize-space(@class)," ")," filter-actions ")])'),
+            'A paused Target must not render a blank action region where the GET probe button would have appeared.');
+        self::assertSame(2, (int) $pausedXPath->evaluate('count('.$identity.'/p[contains(concat(" ",normalize-space(@class)," ")," field-help ")])'),
+            'Stored-key context and next-step guidance must remain visible even while paused.');
     }
 
     public function test_all_admin_owner_reauthentication_fields_share_the_explicit_intent_guard(): void

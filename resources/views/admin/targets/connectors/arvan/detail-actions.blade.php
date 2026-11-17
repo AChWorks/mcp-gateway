@@ -19,16 +19,16 @@
             <p class="field-help">{{ __('Resume Target operations above before running a new authenticated connection test.') }}</p>
         @endif
 
-        <div class="filter-actions">
-            @if (! $target->operations_paused && $arvanConfig->probe_path !== null)
-                @can('targets.test', $target)
+        @if (! $target->operations_paused && $arvanConfig->probe_path !== null)
+            @can('targets.test', $target)
+                <div class="filter-actions">
                     <form method="post" action="{{ route('admin.targets.test', ['target' => $target->target_id]) }}">
                         @csrf
                         <button class="button button-primary" type="submit">{{ __('Test ArvanCloud API key (read-only GET)') }}</button>
                     </form>
-                @endcan
-            @endif
-        </div>
+                </div>
+            @endcan
+        @endif
         @can('targets.disconnect', $target)
             <details class="target-help-details">
                 <summary>{{ __('Remove stored API key (advanced)') }}</summary>
