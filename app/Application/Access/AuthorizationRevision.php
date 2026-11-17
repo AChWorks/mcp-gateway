@@ -2,6 +2,8 @@
 
 namespace App\Application\Access;
 
+use App\Domain\Access\GatewayRole;
+
 /**
  * Canonical optimistic authorization snapshot. A revision is not a grant,
  * authentication secret or CSRF token; Owner authorization remains mandatory.
@@ -22,6 +24,23 @@ final class AuthorizationRevision
         return self::digest([
             'access_rule' => $rule['access_rule'],
             'denied_permissions' => self::sorted($rule['denied_permissions']),
+        ]);
+    }
+
+    /**
+     * Per-User Target editor revision. The user's Role changes which Denies
+     * can be edited, even when the stored Target rule remains identical.
+     * Bind the Role so an old Viewer form cannot clear an Administrator Deny
+     * after promotion. Batch reachability review retains targetRule()'s
+     * separate rule-only contract and live role/SSH guards.
+     *
+     * @param  array{access_rule:string,denied_permissions:list<string>}  $rule
+     */
+    public static function userTargetRule(array $rule, GatewayRole $role): string
+    {
+        return self::digest([
+            'target_rule' => self::targetRule($rule),
+            'user_role' => $role->value,
         ]);
     }
 

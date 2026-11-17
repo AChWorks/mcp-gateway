@@ -521,6 +521,7 @@ final class UserAccessManagementTest extends TestCase
                     GatewayPermission::WordpressAbilitiesInspect->value,
                     GatewayPermission::WordpressAbilitiesExecuteReadonly->value,
                 ],
+                'target_revision' => app(UserAccessManager::class)->targetRuleRevision($operator, $site),
                 'current_password' => 'CorrectHorse!234',
             ])
             ->assertAdminRedirect();
@@ -565,9 +566,10 @@ final class UserAccessManagementTest extends TestCase
                 'target' => $beta->target_id,
             ], false), [
                 'access_rule' => 'deny',
+                'target_revision' => app(UserAccessManager::class)->targetRuleRevision($administrator, $beta),
                 'current_password' => 'CorrectHorse!234',
             ])
-            ->assertAdminRedirect();
+            ->assertAdminRedirect()->assertSessionHasNoErrors();
 
         $access = app(AccessControl::class);
         self::assertTrue($access->allows($administrator, GatewayPermission::TargetsView, $alpha));

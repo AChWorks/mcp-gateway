@@ -12,7 +12,7 @@
         aria-label="{{ __('Deny :permission', ['permission' => $permission->title()]) }}"
         aria-describedby="{{ $permissionId }}-scope {{ $permissionId }}-key {{ $permissionId }}-help{{ ($displayChoiceStatus ?? false) ? ' '.$permissionId.'-choice' : '' }}"
         @checked($checked)
-        @disabled(($roleAwareUser ?? false) && ! $roleChoiceAllowed)
+        @disabled((($roleAwareUser ?? false) && ! $roleChoiceAllowed) || ($targetRoleUnavailable ?? false))
     >
     <span class="permission-copy">
         <span class="permission-heading">
@@ -21,6 +21,9 @@
         </span>
         <code class="permission-key" id="{{ $permissionId }}-key" dir="ltr">{{ $permission->value }}</code>
         <span class="permission-help" id="{{ $permissionId }}-help">{{ $permission->description() }}</span>
+        @if ($targetRoleUnavailable ?? false)
+            <span class="permission-help">{{ __('Unavailable in this user’s current Role. Existing Deny restrictions remain saved and cannot be changed here until the Role permits this capability.') }}</span>
+        @endif
         @if ($displayChoiceStatus ?? false)
             <span class="permission-help permission-choice" id="{{ $permissionId }}-choice">
                 <span data-global-deny-choice="denied">{{ __('Current form choice: Deny globally — save to apply changes') }}</span>

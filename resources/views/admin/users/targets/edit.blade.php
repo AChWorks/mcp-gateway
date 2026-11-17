@@ -38,7 +38,7 @@
             @endphp
             <input type="hidden" name="target_revision" value="{{ $targetRevision }}">
             @if ($staleTargetForm)
-                <div class="alert alert-error" role="alert">{{ __('Target access changed since you opened this form or its revision is missing. Current saved restrictions are displayed. Review them and confirm SSH changes again.') }}</div>
+                <div class="alert alert-error" role="alert">{{ __('Target access changed since you opened this form or its revision is missing. Current saved restrictions are displayed. Review them again; SSH changes still require separate Owner confirmation.') }}</div>
             @endif
             @error('target_revision')<div class="alert alert-error" role="alert">{{ $message }}</div>@enderror
 
@@ -55,11 +55,12 @@
 
             <fieldset class="permission-fieldset">
                 <legend>{{ __('Capability restrictions on this target') }}</legend>
-                <p class="field-help">{{ __('Only this Target’s connector capabilities are shown. Checked permissions deny operations on this Target; role ceilings and global/group restrictions still apply.') }}</p>
+                <p class="field-help">{{ __('Only this Target’s connector capabilities are shown. Checked permissions deny operations on this Target; role ceilings and global/group restrictions still apply. Saved restrictions for operations outside the user’s current Role are retained across edits and remain effective if that Role is later expanded.') }}</p>
                 @include('admin.partials.permission-groups', [
                     'permissions' => $targetPermissions,
                     'selectedDenials' => $selectedDenials,
                     'connectorType' => $target->connector_type,
+                    'targetUserRole' => $targetUserRole,
                     'sshPermissionsEditable' => $target->connector_type === 'ssh_direct',
                     'sshPermissionContext' => 'target',
                 ])

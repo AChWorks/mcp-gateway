@@ -390,7 +390,11 @@ final readonly class AccessControl
             ->exists();
     }
 
-    private function permissionMatchesTarget(GatewayPermission $permission, Target $target): bool
+    /**
+     * Connector applicability, not authorization. Reused by Target Deny
+     * persistence to keep historical foreign-connector restrictions inert.
+     */
+    public function permissionMatchesTarget(GatewayPermission $permission, Target $target): bool
     {
         $connector = $this->connectorForPermission($permission);
 

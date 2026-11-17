@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Gate;
 
 final readonly class UserAccessManager
 {
-    public function __construct(private ActivityRecorder $activity) {}
+    public function __construct(private ActivityRecorder $activity, private AccessControl $access) {}
 
     /**
      * @param  array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool,ai_access_enabled?:bool}  $attributes
@@ -175,35 +175,54 @@ final readonly class UserAccessManager
                 throw new DomainException('owner_unrestricted');
             }
 
-            // All writers of this user's Target rules serialize through the
-            // locked User row. Check fresh persisted permissions after lock;
-            // an old form must not erase a newer SSH-specific denial.
+            // Every writer compares the same fresh locked User/Target-rule
+            // snapshot. Role changes may make old Denies temporarily inert,
+            // but must not erase them; another connector's historical Denies
+            // also remain intact, even if omitted by the filtered UI.
             $existing = $this->targetRule($lockedUser, $target);
-            $permissions = $this->normalizedDenials(
-                $this->role($lockedUser), $deniedPermissions, true,
-            );
-            $requestedDenials = [
-                ...array_map(static fn (GatewayPermission $permission): string => $permission->value, $permissions),
-                // Keep historical, unrecognized permission IDs in the revision
-                // and database without admitting them into current policy.
-                ...array_values(array_filter($existing['denied_permissions'],
-                    static fn (string $value): bool => GatewayPermission::tryFrom($value) === null)),
-            ];
-            $existingRevision = AuthorizationRevision::targetRule($existing);
-            $requestedRevision = AuthorizationRevision::targetRule([
+            $role = $this->role($lockedUser);
+            $activeSubmitted = [];
+            foreach (array_unique($deniedPermissions) as $value) {
+                $permission = GatewayPermission::tryFrom($value);
+                $stored = in_array($value, $existing['denied_permissions'], true);
+                $editable = $permission !== null
+                    && $permission->isTargetScoped()
+                    && $role->allows($permission)
+                    && $this->access->permissionMatchesTarget($permission, $target);
+
+                if (! $editable && ! $stored) {
+                    throw new DomainException('target_denial_unavailable');
+                }
+                if ($editable) {
+                    $activeSubmitted[] = $value;
+                }
+            }
+            $preserved = array_values(array_filter(
+                $existing['denied_permissions'],
+                fn (string $value): bool => ($permission = GatewayPermission::tryFrom($value)) === null
+                    || ! $permission->isTargetScoped()
+                    || ! $role->allows($permission)
+                    || ! $this->access->permissionMatchesTarget($permission, $target),
+            ));
+            $requestedDenials = array_values(array_unique([...$activeSubmitted, ...$preserved]));
+            $permissions = array_values(array_filter(array_map(
+                static fn (string $value): ?GatewayPermission => GatewayPermission::tryFrom($value),
+                $requestedDenials,
+            )));
+            $existingRevision = AuthorizationRevision::userTargetRule($existing, $role);
+            $requestedRevision = AuthorizationRevision::userTargetRule([
                 'access_rule' => $accessRule, 'denied_permissions' => $requestedDenials,
-            ]);
+            ], $role);
             $sshTarget = $target->connector_type === 'ssh_direct';
             if ($sshTarget && $existingRevision !== $requestedRevision) {
                 Gate::authorize(GatewayPermission::SecurityManage->value);
                 if (! $sshReviewed) {
                     throw new DomainException('ssh_target_confirmation_required');
                 }
-                if ($expectedRevision === null || ! hash_equals($existingRevision, $expectedRevision)) {
-                    throw new DomainException('target_rule_revision_stale');
-                }
             }
-            if ($sshTarget && $expectedRevision !== null && ! hash_equals($existingRevision, $expectedRevision)) {
+            // Every connector must reject stale or missing revisions before
+            // writing reachability, Denies, or an audit-success record.
+            if ($expectedRevision === null || ! hash_equals($existingRevision, $expectedRevision)) {
                 throw new DomainException('target_rule_revision_stale');
             }
 
@@ -373,7 +392,9 @@ final readonly class UserAccessManager
 
     public function targetRuleRevision(User $user, Target $target): string
     {
-        return AuthorizationRevision::targetRule($this->targetRule($user, $target));
+        return AuthorizationRevision::userTargetRule(
+            $this->targetRule($user, $target), $this->role($user),
+        );
     }
 
     /**
