@@ -93,6 +93,8 @@ final class ArvanApiConnectorTest extends TestCase
         $this->get('/admin/targets/arvan-cdn')->assertOk()
             ->assertSee('Verify API key (read-only GET)')
             ->assertSee('Check HTTPS endpoint (no API key)')
+            ->assertSee('Target details and diagnostic history')
+            ->assertDontSee('Registered SSH/connector details and diagnostic history')
             ->assertSee('Remove stored API key (advanced)')
             ->assertSee('Delete Gateway API key')
             ->assertSee('revoke that key separately')
@@ -227,6 +229,79 @@ final class ArvanApiConnectorTest extends TestCase
         ])->assertAdminRedirect('/admin/targets/arvan-cdn')->assertSessionHas('status');
         Http::assertSentCount(2);
         self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+    }
+
+    public function test_redirecting_api_root_is_reachable_without_following_redirect_or_changing_authentication(): void
+    {
+        [$target, $owner] = $this->fixture();
+        // A server may return a 3xx (even to itself) for its registered
+        // HTTPS root. That is a real peer response, not proof of usable API
+        // routing, valid credentials or permission to follow Location.
+        ArvanApiTargetConfig::query()->sole()->forceFill(['probe_path' => null])->save();
+        Http::fake(static fn (Request $request) => Http::response('untrusted redirect body', 302, [
+            'Location' => 'https://other.example.test/private?token=MUST_NOT_LEAK',
+        ]));
+
+        $this->actingAs($owner)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+            'method' => 'DELETE',
+            'api_key' => 'INJECTED_KEY_MUST_NOT_BE_USED',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')
+            ->assertSessionHas('status', static fn (string $message): bool => str_contains($message, 'HTTP 302')
+                && str_contains($message, 'redirect was NOT followed')
+                && str_contains($message, 'No API key was sent')
+                && str_contains($message, 'NOT changed')
+                && ! str_contains($message, 'other.example.test')
+                && ! str_contains($message, 'MUST_NOT_LEAK'));
+
+        Http::assertSentCount(1);
+        Http::assertSent(static fn (Request $request): bool => $request->method() === 'HEAD'
+            && $request->url() === 'https://api.example.test/cdn/4.0/'
+            && ! $request->hasHeader('Authorization'));
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertNull($target->fresh()->last_tested_at);
+        self::assertSame(1, TargetCredential::query()->count());
+    }
+
+    public function test_authenticated_get_still_rejects_redirect_and_never_verifies_key(): void
+    {
+        [$target, $owner] = $this->fixture();
+        Http::fake(static fn (Request $request) => Http::response('', 307, [
+            'Location' => 'https://other.example.test/credential-replay',
+        ]));
+
+        $this->actingAs($owner)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'authenticated',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'unsafe_redirect')
+            ->assertSessionHas('diagnostic_context', static fn (array $context): bool => ($context['remote_http_status'] ?? null) === 307);
+
+        Http::assertSentCount(1);
+        Http::assertSent(static fn (Request $request): bool => $request->method() === 'GET'
+            && $request->url() === 'https://api.example.test/cdn/4.0/domains'
+            && $request->hasHeader('Authorization', 'Apikey '.self::KEY));
+        self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertNull($target->fresh()->last_tested_at);
+    }
+
+    public function test_redirect_reachability_result_is_stale_after_concurrent_target_pause(): void
+    {
+        [$target, $owner] = $this->fixture();
+        Http::fake(function (Request $request) use ($target) {
+            $target->forceFill(['operations_paused' => true])->save();
+
+            return Http::response('', 308, ['Location' => '/']);
+        });
+
+        $this->actingAs($owner)->post(route('admin.targets.test', ['target' => $target->target_id]), [
+            'arvan_check' => 'endpoint',
+        ])->assertAdminRedirect('/admin/targets/arvan-cdn')
+            ->assertSessionHasErrors('target')
+            ->assertSessionHas('diagnostic_code', 'endpoint_check_stale');
+        Http::assertSentCount(1);
+        self::assertTrue((bool) $target->fresh()->operations_paused);
         self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
     }
 
