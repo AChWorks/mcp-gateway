@@ -298,7 +298,13 @@ final class SafeHttpClient
 
             $status = $response->status();
             if ($status >= 300 && $status < 400) {
-                throw new OutboundRequestException('unsafe_redirect', 'Remote endpoint attempted an unsupported redirect.');
+                // A no-follow 3xx is still a genuine HTTP response from the
+                // TLS-verified pinned peer. Only expose the numeric status:
+                // never the untrusted Location header, body or original URL.
+                // Consumers must continue to reject redirects by default.
+                throw new OutboundRequestException('unsafe_redirect', 'Remote endpoint attempted an unsupported redirect.', [
+                    'http_status' => $status,
+                ]);
             }
 
             $psrResponse = $response->toPsrResponse();

@@ -246,13 +246,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
 
             // A concurrent Pause, removal or API-root replacement invalidates
             // even this read-only observation before it can be displayed.
-            if (TargetOperationGate::isPaused($target)
-                || ! hash_equals($base, $this->config($target)->base_url)) {
-                throw new TargetConnectorFailure(
-                    __('The API endpoint changed or the Target was paused during the reachability check. Reload and check the current Target.'),
-                    null, 'endpoint_check_stale',
-                );
-            }
+            $this->assertReachabilityStillCurrent($target, $base);
 
             return new TargetConnectorResult(statusMessage: __(
                 'The HTTPS server for the registered API root responded to an unauthenticated HEAD request (HTTP :status). This confirms HTTPS reachability only, not API path availability; the API key was NOT tested and the authenticated connection state was NOT changed. An HTTP error may mean the base path does not accept HEAD.',
@@ -266,11 +260,38 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 null, 'unsafe_target',
             );
         } catch (OutboundRequestException $exception) {
+            $status = $exception->details['http_status'] ?? null;
+            if ($exception->reason === 'unsafe_redirect'
+                && is_int($status) && $status >= 300 && $status < 400) {
+                // The pinned HTTPS peer already answered. For this one
+                // credential-free HEAD observation, a 3xx means reachable,
+                // NOT an authenticated connection or an approved redirect.
+                // The shared transport still rejects 3xx for every actual
+                // authenticated API operation and never follows Location.
+                $this->assertReachabilityStillCurrent($target, $base);
+
+                return new TargetConnectorResult(statusMessage: __(
+                    'The registered HTTPS API root responded to an unauthenticated HEAD request with HTTP :status (redirect). HTTPS reachability was observed, but the redirect was NOT followed. Check that the API root points to the intended product API path. No API key was sent, authentication was NOT tested, and the connection state was NOT changed.',
+                    ['status' => $status],
+                ));
+            }
+
             throw new TargetConnectorFailure(
                 __('The Gateway could not complete an HTTPS HEAD check of the registered API base (:reason). Check DNS, TLS, network access and the API root. No API key was sent and authentication was not tested.', [
                     'reason' => $exception->reason,
                 ]),
                 null, $exception->reason, $exception->details,
+            );
+        }
+    }
+
+    private function assertReachabilityStillCurrent(Target $target, string $base): void
+    {
+        if (TargetOperationGate::isPaused($target)
+            || ! hash_equals($base, $this->config($target)->base_url)) {
+            throw new TargetConnectorFailure(
+                __('The API endpoint changed or the Target was paused during the reachability check. Reload and check the current Target.'),
+                null, 'endpoint_check_stale',
             );
         }
     }

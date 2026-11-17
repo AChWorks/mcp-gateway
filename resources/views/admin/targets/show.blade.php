@@ -73,7 +73,7 @@
 <section class="panel panel-wide" aria-labelledby="target-info-title">
     <h2 id="target-info-title">{{ __('Target connection and identity') }}</h2>
     <details class="target-help-details">
-        <summary>{{ __('Registered SSH/connector details and diagnostic history') }}</summary>
+        <summary>{{ __('Target details and diagnostic history') }}</summary>
         <dl class="detail-list">
         <dt>{{ __('Target ID') }}</dt><dd><code>{{ $target->target_id }}</code></dd>
         <dt>{{ __('Connector') }}</dt><dd>{{ $connectorUi?->label ?? __('Unsupported connector') }} <code class="small-code">{{ $target->connector_type }}</code></dd>

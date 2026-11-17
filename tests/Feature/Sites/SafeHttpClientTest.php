@@ -228,6 +228,7 @@ final class SafeHttpClientTest extends TestCase
             self::fail('Redirect was followed or accepted.');
         } catch (OutboundRequestException $exception) {
             self::assertSame('unsafe_redirect', $exception->reason);
+            self::assertSame(['http_status' => 302], $exception->details);
         }
 
         Http::assertSentCount(1);
