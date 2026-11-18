@@ -76,6 +76,7 @@ required_entries=(
   "$package/database/migrations/"
   "$package/public/"
   "$package/public/.htaccess"
+  "$package/public/favicon.ico"
   "$package/public/index.php"
   "$package/public/install.php"
   "$package/resources/"

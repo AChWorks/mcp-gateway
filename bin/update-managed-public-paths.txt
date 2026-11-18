@@ -1,5 +1,6 @@
 .htaccess
 css/admin.css
+favicon.ico
 index.php
 install.php
 js/admin-forms.js
