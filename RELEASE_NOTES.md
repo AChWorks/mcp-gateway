@@ -1,3 +1,20 @@
+# MCP Gateway v3.0.0-rc.1
+
+**Source candidate `3.0.0-rc.1` — NOT PUBLISHED.**
+
+This is a **development milestone, not a complete or deployable v3 release**. GitHub Issue [#330](https://github.com/AChWorks/mcp-gateway/issues/330) remains the implementation authority. Production continues on the independently restorable v2 release; this source candidate does not authorize a cutover.
+
+- Introduces a fresh v3 application database baseline: one reviewed DDL migration with packaged MariaDB/MySQL and SQLite-test schema snapshots, no historical v2 Migration chain and no v2 data adoption.
+- Restores the current connector, Target, OAuth, SSH Job, admin-policy, and activity schema in a new empty database. Retains the existing live authorization, SSH/WordPress/Arvan code while the v3 shared operations and Batch packages are being built.
+- Explicitly rejects pre-existing application tables, v2 databases and destructive baseline rollback. Back up and independently preserve the v2 code, complete database, configuration, and cryptographic keys before any separately authorized transition. A fresh v3 installation starts with empty Target and consent state; deliberate manual re-enrollment remains an accepted option.
+- Splits MCP Tool registration into focused Target, WordPress, ArvanCloud, SSH, file and Batch registrars without changing the existing connector transports or verified principal path.
+- Introduces source-only v3 durable Target Batch Core: exact authorized Target selection/preview HMAC, idempotent admission, encrypted arguments/results, per-Target journals, concurrent or rolling worker claims, cancel-before-effect, grant/route/consent rechecks, truthful unknown outcomes and no blind replay. Separate trusted session/CSRF Admin JSON and authenticated MCP entry adapters share the same Application logic. The only enabled Batch operations are `ssh.command.run` and fixed read-only `wordpress.bridge.info`, not general WordPress publication.
+- Adds `gateway:batch-work` CLI/Scheduler with configurable active-worker capacity. CLI processes can be run independently; the default single scheduled worker does not by itself prove concurrent remote execution. Validated an isolated loopback OpenSSH fixture, WordPress mocked transport and two independent MariaDB worker processes; no real Production Target or remote-provider fleet test is claimed.
+- Uses scoped, batched Target permission/credential/connector selection for Preview rather than per-Target N+1 database calls. A synthetic 1,000-Target selection on isolated MariaDB required 17 SQL queries and ~711 ms versus 3,000 queries and ~3,070 ms for the row-wise comparison (local metadata only, no live remote hosts; machine-specific, not an SLA).
+- Refreshes schema preservation tests and runtime packaging to ship the v3 SQL snapshots. The **remaining** accepted v3 SSH diagnose/log/file-patch/verify/config package, OAuth idle continuity, full resource benchmarks, v3-to-v3 updater, operational Web UI and external acceptance are **outstanding**. This is not a complete v3 release.
+
+**Release and deployment status:** no official v3 Release, no Production deployment, and no authorization to update v2 in place. The legacy stable release workflow explicitly refuses a v3 publication; a separate v3-specific, reviewed release path is required. Never use this prerelease candidate as an in-place updater against any v2 installation.
+
 # MCP Gateway v2.7.3
 
 **Stable v2.7.3 — ArvanCloud permission management in shared Admin ACL and reliable Target restriction persistence.**

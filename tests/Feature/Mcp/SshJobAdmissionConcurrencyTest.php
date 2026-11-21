@@ -4,6 +4,7 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Models\User;
 use Illuminate\Support\Facades\Artisan;
@@ -138,11 +139,10 @@ final class SshJobAdmissionConcurrencyTest extends TestCase
         }
     }
 
-    public function test_older_populated_journal_migrates_on_mariadb_without_rebinding_original_host(): void
+    public function test_v3_mariadb_journal_preserves_exact_original_identity_and_uncertain_lease(): void
     {
         $user = User::query()->create([
-            'name' => 'SSH Job migration',
-            'email' => 'ssh-job-migration@example.test',
+            'name' => 'SSH v3 Job', 'email' => 'ssh-v3-job@example.test',
             'password' => 'CorrectHorse!234',
             'role' => 'owner', 'target_scope_mode' => 'all', 'access_enabled' => true,
         ]);
@@ -150,67 +150,48 @@ final class SshJobAdmissionConcurrencyTest extends TestCase
             pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat("\x52", 32),
         );
         $target = app(SshTargetRegistration::class)->register(
-            'ssh-job-migrate-rc1', 'Old prerelease Journal',
+            'ssh-job-v3-origin', 'Original SSH identity',
             'original.example.test', 22, 'original-user', $hostKey,
             'password', 'test-only-password', null,
         );
-        $config = SshTargetConfig::query()
-            ->where('target_record_id', $target->getKey())->firstOrFail();
-        $binding = hash('sha256', implode("\0", [
-            (string) $target->getKey(), (string) $target->target_id,
-            (string) $config->host, (string) $config->port,
-            (string) $config->username, (string) $config->auth_method,
-            (string) $config->pinned_host_key,
-        ]));
-        $lifecycle = require database_path('migrations/2026_10_15_020000_add_ssh_job_lifecycle_policy.php');
-        $snapshot = require database_path('migrations/2026_10_15_030000_snapshot_ssh_job_admission_policy.php');
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->firstOrFail();
+        $binding = SshTargetBinding::hash($target, $config);
+        self::assertTrue(Schema::hasColumn('ssh_command_jobs', 'original_host'));
+        self::assertTrue(Schema::hasColumn('ssh_command_jobs', 'admission_expires_at'));
+        self::assertTrue(Schema::hasColumn('ssh_command_jobs', 'reconcile_grace_seconds'));
+        self::assertTrue(Schema::hasColumn('ssh_command_jobs', 'preparing_expires_at'));
 
-        // On a *disposable test database*, first re-create an unpublished
-        // RC1-era Job schema, populate a matching and a rebound identity,
-        // and migrate both forwards across real MariaDB DDL.
-        $snapshot->down();
-        $lifecycle->down();
-        self::assertTrue(Schema::hasIndex('ssh_command_jobs', 'ssh_jobs_user_fk_recovery'));
-        $oldLease = now()->subMinutes(10)->toDateTimeString();
+        // Fresh v3 deliberately does not infer historical identities for an
+        // unknown launch; only an exact verified snapshot is a cleanup grant.
         $ids = [(string) Str::ulid(), (string) Str::ulid()];
+        $future = now()->addDay()->toDateTimeString();
         foreach ($ids as $i => $id) {
             DB::table('ssh_command_jobs')->insert([
-                'id' => $id,
-                'target_record_id' => $target->getKey(),
-                'user_id' => $user->getKey(),
-                'client_identity_hash' => hash('sha256', 'rc1-client-'.$i),
-                'request_id' => (string) Str::uuid(),
-                'script_digest' => hash('sha256', 'rc1-script-'.$i),
-                'target_binding_hash' => $i === 0 ? $binding : hash('sha256', 'pre-rotation-binding'),
-                'unit_mode' => 'user',
-                'status' => 'launch_unknown',
-                'runtime_seconds' => 300,
-                'expires_at' => now()->addHour(),
-                'created_at' => now()->subHour(),
-                'updated_at' => now()->subHour(),
+                'id' => $id, 'target_record_id' => $target->getKey(),
+                'user_id' => $user->getKey(), 'client_identity_hash' => hash('sha256', 'v3-client-'.$i),
+                'request_id' => (string) Str::uuid(), 'script_digest' => hash('sha256', 'v3-script-'.$i),
+                'target_binding_hash' => $i === 0 ? $binding : hash('sha256', 'unverified-binding'),
+                'unit_mode' => 'user', 'status' => 'launch_unknown', 'runtime_seconds' => 300,
+                'original_host' => $i === 0 ? 'original.example.test' : null,
+                'original_os_username' => $i === 0 ? 'original-user' : null,
+                'reconcile_grace_seconds' => 3600, 'preparing_expires_at' => now()->addHour(),
+                'admission_expires_at' => $future, 'expires_at' => now()->addDays(2),
+                'created_at' => now(), 'updated_at' => now(),
             ]);
         }
-        $lifecycle->up();
-        // Existing RC2 lease can never be reduced by a later policy backfill.
-        DB::table('ssh_command_jobs')->where('id', $ids[0])
-            ->update(['admission_expires_at' => now()->addDay()]);
-        $futureLease = (string) DB::table('ssh_command_jobs')
-            ->where('id', $ids[0])->value('admission_expires_at');
-        $snapshot->up();
 
         $matched = DB::table('ssh_command_jobs')->where('id', $ids[0])->first();
-        $rebound = DB::table('ssh_command_jobs')->where('id', $ids[1])->first();
+        $unknown = DB::table('ssh_command_jobs')->where('id', $ids[1])->first();
         self::assertSame('original.example.test', $matched->original_host);
         self::assertSame('original-user', $matched->original_os_username);
-        self::assertNull($rebound->original_host);
-        self::assertNull($rebound->original_os_username);
+        self::assertNull($unknown->original_host);
+        self::assertNull($unknown->original_os_username);
         self::assertSame(3600, (int) $matched->reconcile_grace_seconds);
-        self::assertSame(3600, (int) $rebound->reconcile_grace_seconds);
+        self::assertSame(3600, (int) $unknown->reconcile_grace_seconds);
         self::assertNotNull($matched->preparing_expires_at);
-        self::assertNotNull($rebound->preparing_expires_at);
-        self::assertSame($futureLease, $matched->admission_expires_at);
-        self::assertGreaterThan($oldLease, $rebound->admission_expires_at);
-        self::assertSame('launch_unknown', $rebound->status);
+        self::assertNotNull($unknown->preparing_expires_at);
+        self::assertSame($future, $matched->admission_expires_at);
+        self::assertSame('launch_unknown', $unknown->status);
         self::assertSame('launch_unknown', $matched->status);
     }
 

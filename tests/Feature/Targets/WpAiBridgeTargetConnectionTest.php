@@ -1464,12 +1464,12 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         }
         self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
         self::assertNotNull(DB::table('wp_ai_bridge_refresh_intents')->value('request_timeout_seconds'));
-        $migration = require database_path('migrations/2026_10_12_000000_snapshot_wordpress_refresh_http_timeout.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         try {
             $migration->down();
             self::fail('Schema rollback must not discard an unresolved possibly sent refresh timeout fence.');
         } catch (\RuntimeException $exception) {
-            self::assertStringContainsString('snapshotted refresh intents remain unresolved', $exception->getMessage());
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
         self::assertTrue(Schema::hasColumn('wp_ai_bridge_refresh_intents', 'request_timeout_seconds'));
         self::assertTrue(Schema::hasColumn('operational_settings', 'wp_request_timeout_seconds'));
@@ -2751,12 +2751,12 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             'id' => (string) Str::ulid(), 'target_record_id' => $target->getKey(),
             'kind' => 'disconnect', 'created_at' => now(), 'updated_at' => now(),
         ]);
-        $migration = require database_path('migrations/2026_10_13_000000_fence_wordpress_disconnect_recovery.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         try {
             $migration->down();
             self::fail('Unsafe schema downgrade passed an unresolved intent.');
         } catch (\RuntimeException $exception) {
-            self::assertStringContainsString('Cannot roll back', $exception->getMessage());
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
         self::assertTrue(Schema::hasColumn('wp_ai_bridge_revocation_intents', 'phase'));
     }

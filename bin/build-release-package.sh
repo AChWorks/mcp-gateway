@@ -56,8 +56,9 @@ cp -a \
 mkdir -p "$destination/bootstrap/cache"
 cp -a "$repo_root/bootstrap/app.php" "$repo_root/bootstrap/providers.php" "$destination/bootstrap/"
 
-mkdir -p "$destination/database/migrations"
+mkdir -p "$destination/database/migrations" "$destination/database/schema"
 cp -a "$repo_root/database/migrations/." "$destination/database/migrations/"
+cp -a "$repo_root/database/schema/." "$destination/database/schema/"
 
 mkdir -p \
   "$destination/storage/app/private" \

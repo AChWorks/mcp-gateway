@@ -604,12 +604,12 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         self::assertTrue($started['enrollment']->fresh()->publication_pending);
         self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
 
-        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         try {
             $migration->down();
             self::fail('Rollback discarded a pending host-key revocation.');
         } catch (RuntimeException $exception) {
-            self::assertStringContainsString('Reconcile pending', $exception->getMessage());
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
         self::assertTrue(Schema::hasTable('ssh_reverse_managed_enrollments'));
         self::assertTrue(Schema::hasTable('ssh_reverse_gateway_settings'));
@@ -619,12 +619,12 @@ final class SshManagedReverseEnrollmentTest extends TestCase
     {
         $this->gateway();
         file_put_contents($this->keyFile, '');
-        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         try {
             $migration->down();
             self::fail('Enabled Gateway configuration was discarded.');
         } catch (RuntimeException $exception) {
-            self::assertStringContainsString('Disable and reconcile', $exception->getMessage());
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
 
         SshManagedReverseGateway::query()->whereKey(1)->update(['enabled' => false]);
@@ -633,7 +633,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
             $migration->down();
             self::fail('A mismatched authorized_keys reader was discarded.');
         } catch (RuntimeException $exception) {
-            self::assertStringContainsString('reader is empty and reconciled', $exception->getMessage());
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
         self::assertTrue(Schema::hasTable('ssh_reverse_managed_enrollments'));
     }
@@ -645,31 +645,25 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         DB::table('ssh_reverse_managed_retired_ports')->insert([
             'listener_port' => 42001, 'target_id' => 'retired-target', 'retired_at' => now(),
         ]);
-        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         try {
             $migration->down();
             self::fail('Rollback discarded retired listener quarantine.');
         } catch (RuntimeException $exception) {
-            self::assertStringContainsString('retired Reverse SSH listener', $exception->getMessage());
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
         self::assertTrue(Schema::hasTable('ssh_reverse_managed_retired_ports'));
     }
 
-    public function test_migration_rollback_allows_fresh_unconfigured_installation(): void
+    public function test_v3_fresh_unconfigured_installation_keeps_reverse_schema_on_rejected_rollback(): void
     {
-        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Do not roll back the Gateway v3 baseline');
         $migration->down();
-        try {
-            self::assertFalse(Schema::hasTable('ssh_reverse_managed_enrollments'));
-            self::assertFalse(Schema::hasTable('ssh_reverse_gateway_settings'));
-            self::assertFalse(Schema::hasTable('ssh_reverse_managed_retired_ports'));
-        } finally {
-            $migration->up();
-        }
-        self::assertTrue(Schema::hasTable('ssh_reverse_managed_enrollments'));
     }
 
-    public function test_migration_rollback_accepts_fully_reconciled_revocation_after_disable(): void
+    public function test_v3_rollback_refuses_even_after_reconciled_revocation_and_disable(): void
     {
         $this->gateway();
         file_put_contents($this->keyFile, '');
@@ -685,15 +679,15 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         self::assertTrue(app(SshManagedReverseAuthorizedKeys::class)->isReconciled());
         self::assertFalse($started['enrollment']->fresh()->publication_pending);
 
-        $migration = require database_path('migrations/2026_11_02_010000_create_managed_reverse_ssh_state.php');
-        $migration->down();
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         try {
-            self::assertFalse(Schema::hasTable('ssh_reverse_managed_enrollments'));
-            self::assertFalse(Schema::hasTable('ssh_reverse_gateway_settings'));
-            self::assertTrue(Schema::hasTable('targets'), 'Rollback must not destroy unrelated Target records.');
-        } finally {
-            $migration->up();
+            $migration->down();
+            self::fail('Gateway v3 baseline rollback must never drop shared SSH schema.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
         self::assertTrue(Schema::hasTable('ssh_reverse_managed_enrollments'));
+        self::assertTrue(Schema::hasTable('targets'));
+        self::assertSame('revoked', $started['enrollment']->fresh()->state);
     }
 }

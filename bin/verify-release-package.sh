@@ -74,6 +74,9 @@ required_entries=(
   "$package/bootstrap/cache/services.php"
   "$package/config/"
   "$package/database/migrations/"
+  "$package/database/schema/"
+  "$package/database/schema/v3-mysql.sql"
+  "$package/database/schema/v3-sqlite.sql"
   "$package/public/"
   "$package/public/.htaccess"
   "$package/public/favicon.ico"
@@ -173,8 +176,8 @@ if find "$root/bootstrap/cache" -mindepth 1 -maxdepth 1 -type d -print | grep . 
 fi
 
 mapfile -t database_top < <(find "$root/database" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
-if [[ ${#database_top[@]} -ne 1 || "${database_top[0]}" != 'migrations' ]]; then
-  echo "Deployment database directory may contain migrations only." >&2
+if [[ ${#database_top[@]} -ne 2 || "${database_top[0]}" != 'migrations' || "${database_top[1]}" != 'schema' ]]; then
+  echo "Deployment database directory must contain v3 migrations and schema only." >&2
   printf '  %s\n' "${database_top[@]}" >&2
   exit 1
 fi
@@ -184,6 +187,11 @@ if ! find "$root/database/migrations" -maxdepth 1 -type f -name '*.php' -print -
 fi
 if find "$root/database/migrations" -type f ! -name '*.php' -print | grep . >/dev/null; then
   echo "Deployment migration directory contains a non-PHP artifact." >&2
+  exit 1
+fi
+mapfile -t schema_files < <(find "$root/database/schema" -mindepth 1 -printf '%f\n' | sort)
+if [[ ${#schema_files[@]} -ne 2 || "${schema_files[0]}" != 'v3-mysql.sql' || "${schema_files[1]}" != 'v3-sqlite.sql' ]]; then
+  echo "Deployment v3 schema directory has missing or unexpected files." >&2
   exit 1
 fi
 

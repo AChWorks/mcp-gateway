@@ -12,6 +12,7 @@ use App\Http\Controllers\Admin\SshBrowserFileController;
 use App\Http\Controllers\Admin\SshManagedReverseController;
 use App\Http\Controllers\Admin\SshManagedReverseRevocationController;
 use App\Http\Controllers\Admin\SshManagedReverseTargetController;
+use App\Http\Controllers\Admin\TargetBatchController;
 use App\Http\Controllers\Admin\TargetConfigurationController;
 use App\Http\Controllers\Admin\TargetConnectionController;
 use App\Http\Controllers\Admin\TargetConnectionRelayController;
@@ -38,6 +39,17 @@ Route::post('/admin/login', [AuthenticatedSessionController::class, 'store'])
 Route::middleware(['auth', EnsureLocalUserAccessEnabled::class, 'throttle:admin-mutation', CorrelatedAdminFeedback::class])->prefix('admin')->name('admin.')->group(function (): void {
     Route::get('/', DashboardController::class)->name('dashboard');
     Route::get('/access', AdministrationAccessController::class)->name('access');
+
+    // Trusted Human/Web Batch adapter: session+CSRF and the same shared
+    // per-Target authorization/core as MCP. No arbitrary tools/URL execution.
+    Route::get('/target-batches', [TargetBatchController::class, 'index'])->name('target-batches.index');
+    Route::post('/target-batches/preview', [TargetBatchController::class, 'preview'])
+        ->name('target-batches.preview');
+    Route::post('/target-batches', [TargetBatchController::class, 'create'])->name('target-batches.create');
+    Route::get('/target-batches/{batch}', [TargetBatchController::class, 'show'])
+        ->where('batch', '[0-9A-HJKMNP-TV-Z]{26}')->name('target-batches.show');
+    Route::post('/target-batches/{batch}/cancel', [TargetBatchController::class, 'cancel'])
+        ->where('batch', '[0-9A-HJKMNP-TV-Z]{26}')->name('target-batches.cancel');
 
     Route::get('/targets', [TargetController::class, 'index'])->name('targets.index');
     Route::get('/targets/create', [TargetController::class, 'create'])->name('targets.create');

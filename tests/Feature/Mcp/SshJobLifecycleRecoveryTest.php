@@ -601,29 +601,21 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
     }
 
-    public function test_guarded_schema_rollback_succeeds_only_after_safe_operator_retirement_and_pruning(): void
+    public function test_v3_baseline_refuses_rollback_even_after_safe_job_retirement_and_pruning(): void
     {
         [$user, $target, $client] = $this->fixture();
         $id = app(SshJobMcpToolHandlers::class)->start(
             $user, $target->target_id, $client, (string) Str::uuid(), 'echo maybe')['result']['job_id'];
         $job = DB::table('ssh_command_jobs')->where('id', $id)->first();
-        $lifecycle = require database_path('migrations/2026_10_15_020000_add_ssh_job_lifecycle_policy.php');
-        $snapshot = require database_path('migrations/2026_10_15_030000_snapshot_ssh_job_admission_policy.php');
-        $original = require database_path('migrations/2026_10_15_010000_create_ssh_command_jobs.php');
+        $baseline = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
 
         try {
-            $snapshot->down();
-            self::fail('Rollback must keep immutable Owner policy with unresolved Journal rows');
+            $baseline->down();
+            self::fail('Uncertain Job must not allow a destructive baseline rollback.');
         } catch (\RuntimeException $exception) {
-            self::assertStringContainsString('Reconcile and prune', $exception->getMessage());
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
-
-        try {
-            $lifecycle->down();
-            self::fail('Rollback must not erase an unresolved no-replay identity');
-        } catch (\RuntimeException $exception) {
-            self::assertStringContainsString('Reconcile and prune', $exception->getMessage());
-        }
+        self::assertSame(1, DB::table('ssh_command_jobs')->where('id', $id)->count());
 
         DB::table('ssh_command_jobs')->where('id', $id)->update([
             'status' => 'launch_unknown', 'admission_expires_at' => now()->subDay(),
@@ -634,20 +626,18 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         );
         DB::table('ssh_command_jobs')->where('id', $id)->update(['expires_at' => now()->subDay()]);
         self::assertSame(1, app(SshJobCoordinator::class)->prune());
+        self::assertSame(0, DB::table('ssh_command_jobs')->count());
 
-        // Exercise real down/up migration operations, not a mocked guard.
-        $snapshot->down();
-        $lifecycle->down();
-        $original->down();
-        self::assertFalse(Schema::hasTable('ssh_command_jobs'));
-        // Restore test fixture schema inside this same isolated DB transaction.
-        $original->up();
-        $lifecycle->up();
-        $snapshot->up();
-        self::assertTrue(Schema::hasColumn(
-            'ssh_command_jobs', 'admission_expires_at'));
-        self::assertTrue(Schema::hasColumn(
-            'ssh_command_jobs', 'preparing_expires_at'));
+        // Even an empty journal cannot authorize deleting v3 core identity,
+        // credential, authorization or connector schema in place.
+        try {
+            $baseline->down();
+            self::fail('A clean journal must not make the baseline rollback destructive.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
+        }
+        self::assertTrue(Schema::hasColumn('ssh_command_jobs', 'admission_expires_at'));
+        self::assertTrue(Schema::hasColumn('ssh_command_jobs', 'preparing_expires_at'));
     }
 
     public function test_pause_after_simulated_job_staging_fences_later_sftp_and_systemd_launch_without_replay(): void

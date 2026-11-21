@@ -15,6 +15,39 @@ The current bootstrap is intentionally a conventional PHP application:
 
 Common application tests may use in-memory SQLite when tests do not depend on MariaDB/MySQL semantics. The path-filtered MariaDB concurrency gate and real update/release integration now run on PHP 8.5 + MariaDB 12.3; the explicit MySQL and older MariaDB/PHP compatibility contracts are preserved but not exhaustively rerun on every small edit. GitHub-hosted Ubuntu tests **do not prove** an installed Debian 13 + NGINX/PHP-FPM runtime, aaPanel host, or older stack. Verify those separately when an actual migration, release, or host-side change can invalidate their behavior.
 
+## V3 clean-database development boundary
+
+The v3 source branch installs a **new database**, never migrates an existing v2 installation in place. `database/migrations/0001_01_01_000001_create_gateway_v3_schema.php` uses the committed `database/schema/v3-mysql.sql` for MariaDB/MySQL and `database/schema/v3-sqlite.sql` for isolated SQLite tests. The migration refuses any pre-existing tables or a populated migrations ledger, seeds only essential operational singletons, and refuses destructive baseline rollback. A failed partial install requires inspection and a new clean database; do not blindly rerun DDL. The schema SQL is **runtime code** and must ship with every release artifact.
+
+The two v3 schema snapshots are the inspected effective post-Package-A schema of the v2 `main@ce7d6c37`, without the historical v2 migrations. A change to the v3 baseline requires a corresponding intentional schema and test update; do not regenerate it from production data. Subsequent additive v3 schema changes use new v3-only migrations and preserve existing v3 data.
+
+Test the fresh path without a running database using the default SQLite test config:
+
+```bash
+php artisan test tests/Feature/Migration/GatewayV3FreshSchemaTest.php
+```
+
+For transactional correctness, use **only an isolated test MariaDB** (never installed Gateway data), set `APP_ENV=testing`, `DB_CONNECTION=mariadb`, a distinct `*_test` database and its credentials/socket, then execute `php artisan migrate:fresh --force`, selected test groups and schema comparison. These test cases may destroy test fixtures. GitHub CI uses MariaDB concurrency tests separately; SQLite success is not a claim about concurrency correctness. Verify `php artisan migrate:status`, the fresh operational singleton state and the packaged `database/schema/` files before promotion.
+
+### V3 Batch developer validation (source candidate only)
+
+The shared Batch Core is currently staged for non-production testing. Its two public capabilities are exact registered `ssh.command.run` and **only** read-only `wordpress.bridge.info`. The `target-batches` Admin JSON routes require normal authenticated browser Session/CSRF; the matching MCP tools derive their User, Client and Consent from middleware-verified OAuth attributes. Never accept caller-supplied User IDs, client hashes, Target addresses, arbitrary WordPress Ability names or PHP handler classes. The service's returned `batch_id` is a retained journal identity, **not evidence remote work has completed**. Poll `target-batch-status`/Admin `GET /admin/target-batches/{id}` and read per-Target outcomes; `outcome_unknown` is not automatically retryable.
+
+In the isolated application:
+
+```bash
+php artisan test tests/Feature/Batch --exclude-group=database-concurrency
+php artisan gateway:batch-work --once
+php artisan schedule:list
+```
+
+For true row-lock and concurrent-claim tests, run `php artisan test --group=database-concurrency` **only** with `APP_ENV=testing` and a deliberately disposable `*_test` MariaDB database. The concurrency tests call `migrate:fresh` on that DB and fork independent worker processes. The loopback real-SSH test is opt-in, requires an isolated disposable `sshd` with separately created test key files, and is skipped without `V3_BATCH_SSH_FIXTURE_ENABLED=1`; its successful local run is not a multi-host capacity benchmark. The read-only WordPress cross-connector proof uses an HTTP fake and is **not** a live WordPress acceptance claim.
+A separate nonproduction scale observation (1,000 isolated, registered SSH fixture Target records, no remote SSH dispatch) compared direct per-record authorization+binding checks against the new batched Preview path: 10 Targets 30→6 SQL queries, 100 Targets 300→5, and 1,000 Targets 3,000→17. At 1,000 the measured wall time changed from 3.070s to 0.711s and peak PHP heap was 38 MiB after the Preview. These are single local MariaDB Unix-socket measurements, not fleet capacity or network/CPU benchmarks. The exact fixture script and run log remain in the isolated Dev workspace under `storage/framework/testing/v3-preview-benchmark.php` and `v3-preview-benchmark-results.json` for review; the source-controlled `TargetBatchCoreTest::test_preview_batches_credential_and_config_io_instead_of_n_plus_one_target_queries` guards the Query shape.
+
+Operators can adjust `BATCH_MAX_PARALLELISM`, `BATCH_GLOBAL_ACTIVE`, `BATCH_USER_ACTIVE`, `BATCH_LEASE_MARGIN_SECONDS`, `BATCH_WORKER_MAX_CHILDREN`, `BATCH_WORKER_MAX_SECONDS` and `BATCH_SCHEDULER_LOCK_MINUTES` after measuring host capacity. Distinguish fleet registration size, selected Batch size and actual active worker count. One default scheduled CLI worker may execute children serially; launch independent CLI workers explicitly to enable real concurrent effects. No separate daemon, per-Target Agent or Redis broker is required. Do not run this source candidate against Production.
+
+Do not build/distribute a v3-to-v2 or v2-to-v3 update package. A major cutover requires a separate Owner-approved, backup-verified restoration/re-enrollment runbook. V3-to-v3 updates and full-v3 functionality are under active development in Issue #330, not accepted merely because the database initializes.
+
 ## Install a development checkout
 
 From the repository root:

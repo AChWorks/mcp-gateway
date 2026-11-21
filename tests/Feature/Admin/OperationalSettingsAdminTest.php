@@ -621,9 +621,9 @@ final class OperationalSettingsAdminTest extends TestCase
             ->assertSee('3600');
     }
 
-    public function test_synchronous_deadline_migration_refuses_downgrades_with_extended_values(): void
+    public function test_v3_schema_rollback_refuses_to_erase_extended_synchronous_deadlines(): void
     {
-        $migration = require base_path('database/migrations/2026_10_20_030000_expand_ssh_synchronous_transfer_timeout.php');
+        $migration = require base_path('database/migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         DB::table('operational_settings')->where('id', 1)->update([
             'ssh_transfer_max_seconds' => 3600, 'ssh_command_timeout_seconds' => 600,
         ]);
@@ -631,7 +631,7 @@ final class OperationalSettingsAdminTest extends TestCase
             $migration->down();
             self::fail('A rollback must not truncate or invalidate an active Owner deadline.');
         } catch (\RuntimeException $exception) {
-            self::assertStringContainsString('Reset extended SSH synchronous deadlines', $exception->getMessage());
+            self::assertStringContainsString('Do not roll back the Gateway v3 baseline', $exception->getMessage());
         }
         self::assertSame(3600, (int) DB::table('operational_settings')->value('ssh_transfer_max_seconds'));
         self::assertSame(600, (int) DB::table('operational_settings')->value('ssh_command_timeout_seconds'));
@@ -853,21 +853,21 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
     }
 
-    public function test_expanded_setting_migration_refuses_lossy_rollback(): void
+    public function test_v3_schema_rollback_refuses_lossy_setting_rollback(): void
     {
-        $migration = require base_path('database/migrations/2026_10_19_010000_expand_ssh_resource_limits.php');
+        $migration = require base_path('database/migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         DB::table('operational_settings')->where('id', 1)->update(['ssh_command_timeout_seconds' => 360]);
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Refusing lossy rollback');
+        $this->expectExceptionMessage('Do not roll back the Gateway v3 baseline');
         $migration->down();
     }
 
-    public function test_expanded_setting_migration_refuses_dropping_a_configured_new_field(): void
+    public function test_v3_schema_rollback_refuses_dropping_configured_fields(): void
     {
-        $migration = require base_path('database/migrations/2026_10_19_010000_expand_ssh_resource_limits.php');
+        $migration = require base_path('database/migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         DB::table('operational_settings')->where('id', 1)->update(['ssh_command_stdout_kib' => 512]);
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Reset newly configured SSH budgets');
+        $this->expectExceptionMessage('Do not roll back the Gateway v3 baseline');
         $migration->down();
     }
 

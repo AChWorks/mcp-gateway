@@ -21,34 +21,21 @@ final class SshReverseRouteRollbackTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const MIGRATION = 'migrations/2026_11_02_000000_add_approved_reverse_routes_to_ssh_target_configs.php';
+    private const MIGRATION = 'migrations/0001_01_01_000001_create_gateway_v3_schema.php';
 
     private const SECRET = 'rollback-secret-fixture';
 
-    public function test_untouched_legacy_direct_target_can_downgrade_without_stranding_credentials(): void
+    public function test_v3_untouched_direct_target_cannot_downgrade_and_strand_credentials(): void
     {
-        $target = $this->register('legacy-direct');
+        $target = $this->register('fresh-v3-direct');
         $config = SshTargetConfig::query()->sole();
-        $credential = TargetCredential::query()->sole();
-        $ciphertext = $credential->encrypted_payload;
+        $ciphertext = TargetCredential::query()->sole()->encrypted_payload;
         self::assertSame(0, $config->binding_revision);
         self::assertSame(self::SECRET, $this->secret($target));
 
-        $migration = $this->migration();
-        $migration->down();
+        $this->assertRefusedWithoutMutation($target);
 
-        try {
-            self::assertFalse(Schema::hasColumn('ssh_direct_target_configs', 'binding_revision'));
-            self::assertFalse(Schema::hasColumn('ssh_direct_target_configs', 'route_mode'));
-            self::assertSame($ciphertext, TargetCredential::query()->sole()->encrypted_payload);
-            self::assertSame(self::SECRET, $this->secret($target),
-                'Untouched legacy Direct credentials remain valid after dropping route columns.');
-        } finally {
-            // Restore the test connection's schema to avoid affecting other
-            // tests sharing the in-memory SQLite migrated database.
-            $migration->up();
-        }
-
+        self::assertSame($ciphertext, TargetCredential::query()->sole()->encrypted_payload);
         self::assertSame(0, SshTargetConfig::query()->sole()->binding_revision);
         self::assertSame(self::SECRET, $this->secret($target));
     }
@@ -133,9 +120,9 @@ final class SshReverseRouteRollbackTest extends TestCase
             $this->migration()->down();
         } catch (RuntimeException $exception) {
             $refused = true;
-            self::assertStringContainsString('binding revision', strtolower($exception->getMessage()));
+            self::assertStringContainsString('do not roll back the gateway v3 baseline', strtolower($exception->getMessage()));
         }
-        self::assertTrue($refused, 'Unsafe SSH schema rollback must refuse before dropping binding columns.');
+        self::assertTrue($refused, 'Gateway v3 baseline rollback must always refuse before dropping binding columns.');
 
         foreach (['route_mode', 'reverse_listener_port', 'reverse_tunnel_identity', 'binding_revision'] as $column) {
             self::assertTrue(Schema::hasColumn('ssh_direct_target_configs', $column), $column);

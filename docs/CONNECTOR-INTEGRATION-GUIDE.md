@@ -120,3 +120,9 @@ Do not create one required SDK or conformance fixture that all connectors must i
 - [ ] Security-sensitive change receives independent exact-diff review, required exact-candidate CI and separate owner merge/release gates.
 
 This is the implemented-connector guide, not permission to register unimplemented protocol services or promise mathematically permanent authorization without a renewable trust contract.
+
+## V3 Target Batch capability providers — source candidate only
+
+Batch is **not** a generic remote Tool runner. `TargetBatchProviderRegistry` intentionally registers only reviewed and implemented `TargetBatchOperationProvider` instances. Each provider declares an immutable capability key, fixed connector type, effective `GatewayPermission`, effect classification and bounded argument schema, and executes via the existing **native authenticated Target operation runtime**. The shared `TargetBatchCoordinator` owns exact Target selection, credentials/binding snapshot, authorized User/Client provenance, idempotent journal, cancellation, results and Activity. `TargetBatchWorker` revalidates the same access and underlying connector binding before every *new* remote effect. New providers may not bypass these checks or turn one-time preview into blanket fleet authority.
+
+Current supported providers in **unreleased** v3 source: SSH command via `SshCommandRuntime`, and WordPress **read-only** `wp-ai-bridge/bridge-info` via `WordpressTargetOperations`. Other WordPress Abilities, bulk publishing, ArvanCloud Batch and a universal operation executor are **not** authorized by this candidate. For a future connector, first prove a valid read-only operation and its explicit Target permission, then test authorization/revocation, identity drift, uncertain responses, reset/restart, native transport and bounded resources. Do not publish a general operation mapping based only on dynamic Tool schema descriptions or owner-side UI flags.

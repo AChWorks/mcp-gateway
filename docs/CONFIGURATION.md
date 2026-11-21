@@ -198,6 +198,20 @@ Remote timeout/response settings are **budgets**, not guarantees of response spe
 | `SSH_VERIFY_LEASE_SECONDS` | `30` seconds | SSH verification admission lease |
 | `SSH_REVERSE_APPROVED_ROUTES` | empty (Reverse disabled) | Strict operator-managed JSON map from stable Target ID to unique NL loopback port and tunnel identity. Each selected Reverse route requires independent Owner/password approval; no general private-IP access or arbitrary loopback sockets. See [Reverse SSH runbook](REVERSE-SSH-OPERATOR.md). |
 
+### V3 Target Batch resource policy (unreleased source candidate only)
+
+These seven keys are deliberately **commented** in the source `.env.example`, are not installed in v2.7.3, and do not impose limits on the number of registered Targets or the total explicitly selected Batch items. The worker uses shared MariaDB admission locks and exact per-Target authorization; real effective concurrency depends on separately running CLI workers and measured CPU, RAM, DB, network and remote capacity. A default single scheduled worker is sequential.
+
+| Key | Sample default | Effect / operator note |
+| --- | --- | --- |
+| `BATCH_MAX_PARALLELISM` | `4` concurrent children | Largest Owner-selectable concurrency value for an individual admitted Batch; no cap on selected Target count |
+| `BATCH_GLOBAL_ACTIVE` | `4` concurrent children | Gateway-wide per-Target dispatch pool across all workers and batches |
+| `BATCH_USER_ACTIVE` | `2` concurrent children | Per-User dispatch capacity across all retained Batch records |
+| `BATCH_LEASE_MARGIN_SECONDS` | `90` seconds | Safety margin added to an operation's native timeout before an unconfirmed dispatch becomes `outcome_unknown`; must cover slow transport cleanup |
+| `BATCH_WORKER_MAX_CHILDREN` | `16` children per invocation | Default CLI work budget; zero-length queues finish early; `--once` claims at most one |
+| `BATCH_WORKER_MAX_SECONDS` | `50` seconds | CLI invocation wall budget **between** children; an already-running native operation may exceed it and is not force-killed |
+| `BATCH_SCHEDULER_LOCK_MINUTES` | `10` minutes | Expires stale Laravel scheduled-worker overlap locks instead of its default 24-hour retention; tune to actual maximum worker duration |
+
 ## Advanced settings (commented examples in the same complete template)
 
 All keys below are present **commented** in `.env.example`; they are not active settings unless the operator deliberately selects and validates them. A comment's illustrative value is not evidence that a driver is ready on the installed host. Installed PHP extensions, storage tables, network permissions and user/client/Target access gates still apply. **No extra queue worker, Redis/Memcached daemon, external mail provider or non-MySQL database is required or promised by the supported basic Gateway profile.** The first-party source/configuration-consumer coverage guard prevents quietly losing a supported key, and records excluded unsupported adapter/template entries explicitly.

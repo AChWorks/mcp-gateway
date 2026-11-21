@@ -631,7 +631,7 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(0, DB::table('ssh_command_jobs')->count());
     }
 
-    public function test_migration_rollback_refuses_to_discard_even_terminal_no_replay_handles(): void
+    public function test_v3_schema_rollback_refuses_to_discard_even_terminal_no_replay_handles(): void
     {
         $owner = $this->user('owner');
         $target = $this->target();
@@ -641,9 +641,9 @@ final class SshJobMcpTest extends TestCase
         )['result']['job_id'];
         DB::table('ssh_command_jobs')->where('id', $id)->update(['status' => 'completed']);
 
-        $migration = require database_path('migrations/2026_10_15_010000_create_ssh_command_jobs.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Reconcile and prune every SSH Job');
+        $this->expectExceptionMessage('Do not roll back the Gateway v3 baseline');
         $migration->down();
     }
 
