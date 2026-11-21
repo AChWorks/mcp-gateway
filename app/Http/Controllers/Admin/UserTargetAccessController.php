@@ -36,7 +36,10 @@ final class UserTargetAccessController extends Controller
             'managedUser' => $user,
             'target' => $target,
             'targetRule' => $targetRule,
-            'targetRevision' => AuthorizationRevision::userTargetRule($targetRule, $this->role($user)),
+            'targetRevision' => AuthorizationRevision::userTargetRule(
+                $targetRule, $this->role($user), (bool) $user->self_created_target_access,
+                $target->created_by_user_id === null ? null : (int) $target->created_by_user_id,
+            ),
             'targetPermissions' => $access->targetPermissions(),
             'targetUserRole' => $this->role($user),
             'isOwner' => $this->role($user) === GatewayRole::Owner,

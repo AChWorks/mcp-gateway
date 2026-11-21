@@ -70,7 +70,7 @@ final class OperationalSettingsAdminTest extends TestCase
         libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($dom);
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@class,"operations-form")])'));
-        self::assertSame(6, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
+        self::assertSame(8, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
@@ -79,6 +79,67 @@ final class OperationalSettingsAdminTest extends TestCase
         foreach (array_keys(OperationalSettings::allowed()) as $key) {
             self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="values['.$key.']"])'));
         }
+    }
+
+    public function test_new_capacity_settings_are_independent_audited_and_preserved_by_older_open_forms(): void
+    {
+        $owner = $this->account('owner');
+        $this->actingAs($owner);
+        $settings = new OperationalSettings;
+        self::assertSame(1024 * 1024, $settings->wpAbilityInputBytes());
+        self::assertSame(1024, $settings->dcrRegistrationCapacity());
+
+        $values = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
+        $values['wp_ability_input_kib'] = '2048';
+        $values['dcr_registration_capacity'] = '1536';
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $values,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        self::assertSame(2048 * 1024, (new OperationalSettings)->wpAbilityInputBytes());
+        self::assertSame(1536, (new OperationalSettings)->dcrRegistrationCapacity());
+        self::assertEqualsCanonicalizing(['wp_ability_input_kib', 'dcr_registration_capacity'],
+            DB::table('operational_setting_changes')->pluck('setting_key')->all());
+
+        // Last released full (20-field) form must not clear either new setting.
+        $olderForm = array_fill_keys(array_slice(array_keys(OperationalSettings::allowed()), 0, 20), '');
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => $olderForm,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        self::assertSame(2048 * 1024, (new OperationalSettings)->wpAbilityInputBytes());
+        self::assertSame(1536, (new OperationalSettings)->dcrRegistrationCapacity());
+        self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
+
+        $values['wp_ability_input_kib'] = '';
+        $values['dcr_registration_capacity'] = '';
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => $values,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        self::assertSame(1024 * 1024, (new OperationalSettings)->wpAbilityInputBytes());
+        self::assertSame(1024, (new OperationalSettings)->dcrRegistrationCapacity());
+    }
+
+    public function test_capacity_settings_reject_out_of_range_and_incomplete_new_forms(): void
+    {
+        $this->actingAs($this->account('owner'));
+        $values = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
+        $values['wp_ability_input_kib'] = '4097';
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('values.wp_ability_input_kib');
+        $values['wp_ability_input_kib'] = '';
+        $values['dcr_registration_capacity'] = '65537';
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('values.dcr_registration_capacity');
+        $values['dcr_registration_capacity'] = '';
+        unset($values['wp_ability_input_kib']);
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('values');
+        self::assertSame(0, (int) DB::table('operational_settings')->value('version'));
     }
 
     public function test_owner_can_set_both_finite_response_budgets_and_reset_them_without_redeploy(): void

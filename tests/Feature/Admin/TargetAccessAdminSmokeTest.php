@@ -121,6 +121,45 @@ final class TargetAccessAdminSmokeTest extends TestCase
         $this->actingAs($owner)->get('/admin/target-groups')->assertOk();
     }
 
+    public function test_changed_self_created_scope_invalidates_an_open_target_rule_form(): void
+    {
+        $this->actingAs($this->owner());
+        $manager = app(UserAccessManager::class);
+        $user = $manager->create([
+            'name' => 'Scoped author',
+            'email' => 'scope-revision@example.test',
+            'password' => 'DifferentHorse!234',
+            'role' => 'administrator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => true,
+        ], []);
+        $target = Target::query()->forceCreate([
+            'target_id' => 'revision-wp', 'display_name' => 'Revision WP',
+            'connector_type' => 'wp_ai_bridge',
+            'created_by_user_id' => $user->getKey(),
+        ]);
+        $oldRevision = $manager->targetRuleRevision($user, $target);
+        $this->get('/admin/users/'.$user->getKey().'/targets/revision-wp/edit')
+            ->assertOk()->assertSee('name="target_revision" value="'.$oldRevision.'"', false);
+        DB::table('users')->where('id', $user->getKey())
+            ->update(['self_created_target_access' => true]);
+        $currentRevision = $manager->targetRuleRevision($user->fresh(), $target);
+        self::assertNotSame($oldRevision, $currentRevision);
+        $this->put('/admin/users/'.$user->getKey().'/targets/revision-wp', [
+            'access_rule' => 'allow',
+            'target_revision' => $oldRevision,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('target_revision');
+        $this->assertDatabaseMissing('user_target_access', [
+            'user_id' => $user->getKey(), 'target_record_id' => $target->getKey(),
+        ]);
+        $this->put('/admin/users/'.$user->getKey().'/targets/revision-wp', [
+            'access_rule' => 'allow',
+            'target_revision' => $currentRevision,
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+    }
+
     public function test_stale_ssh_target_rule_form_cannot_remove_newer_denial_even_with_old_confirmation(): void
     {
         $owner = $this->owner();

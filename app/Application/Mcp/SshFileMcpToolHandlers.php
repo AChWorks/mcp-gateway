@@ -32,10 +32,10 @@ final readonly class SshFileMcpToolHandlers
     }
 
     /** @return array<string,mixed> */
-    public function list(User $user, string $target_id, string $path, int $limit = 100): array
+    public function list(User $user, string $target_id, string $path, int $limit = 100, ?string $cursor = null): array
     {
         return $this->dispatch($user, $target_id, 'ssh-file-list', GatewayPermission::SshFileRead,
-            fn (Target $target): array => $this->runtime->list($user, $target, $path, $limit));
+            fn (Target $target): array => $this->runtime->list($user, $target, $path, $limit, $cursor));
     }
 
     /** @return array<string,mixed> */

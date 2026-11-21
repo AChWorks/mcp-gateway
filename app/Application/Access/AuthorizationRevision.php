@@ -31,16 +31,21 @@ final class AuthorizationRevision
      * Per-User Target editor revision. The user's Role changes which Denies
      * can be edited, even when the stored Target rule remains identical.
      * Bind the Role so an old Viewer form cannot clear an Administrator Deny
-     * after promotion. Batch reachability review retains targetRule()'s
-     * separate rule-only contract and live role/SSH guards.
+     * after promotion. The separate opt-in self-created scope and immutable
+     * creator identity also affect effective inherited reachability; old
+     * forms must never silently inherit a changed scope. Batch reachability
+     * review retains targetRule()'s separate rule-only contract and live guards.
      *
      * @param  array{access_rule:string,denied_permissions:list<string>}  $rule
      */
-    public static function userTargetRule(array $rule, GatewayRole $role): string
-    {
+    public static function userTargetRule(
+        array $rule, GatewayRole $role, bool $selfCreatedScope, ?int $creatorUserId,
+    ): string {
         return self::digest([
             'target_rule' => self::targetRule($rule),
             'user_role' => $role->value,
+            'self_created_target_access' => $selfCreatedScope,
+            'created_by_user_id' => $creatorUserId,
         ]);
     }
 

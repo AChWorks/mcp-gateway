@@ -29,6 +29,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
 final class WpAiBridgeTargetConnectionTest extends TestCase
@@ -1585,6 +1586,50 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         }
         self::assertSame(2, $this->refreshCalls);
         self::assertSame(1, DB::table('target_credentials')->count());
+    }
+
+    #[Group('database-concurrency')]
+    public function test_wordpress_maintenance_cursor_advances_past_more_than_200_persistently_unusable_due_targets(): void
+    {
+        $healthy = $this->target('healthy');
+        $this->pair($healthy);
+        $credential = $this->credential($healthy);
+        $original = (array) DB::table('target_credentials')->where('id', $credential->getKey())->first();
+        $metadata = (array) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())->first();
+        DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credential->getKey())
+            ->update(['refresh_due_at' => now()->subDay()]);
+
+        // Intentionally orphaned connector config: no usable endpoint, and the
+        // encrypted payload stays bound to the original healthy Target.
+        for ($i = 0; $i < 220; $i++) {
+            $name = sprintf('unusable-%03d', $i);
+            $target = Target::query()->create([
+                'target_id' => $name,
+                'display_name' => $name,
+                'connector_type' => 'wp_ai_bridge',
+                'connection_state' => TargetConnectionState::Connected,
+            ]);
+            $credId = (string) Str::ulid();
+            DB::table('target_credentials')->insert([
+                ...$original, 'id' => $credId, 'target_record_id' => $target->getKey(),
+            ]);
+            DB::table('wp_ai_bridge_credential_metadata')->insert([
+                ...$metadata, 'credential_id' => $credId,
+                'refresh_due_at' => now()->subDays(3),
+            ]);
+        }
+        self::assertSame(221, DB::table('wp_ai_bridge_credential_metadata')->count());
+        for ($run = 0; $run < 5; $run++) {
+            Artisan::call('gateway:wordpress-credentials-maintain', ['--limit' => '50']);
+            self::assertSame(0, $this->refreshCalls - ($run === 4 ? 1 : 0),
+                'Unusable earlier credentials must not dispatch a remote refresh.');
+        }
+        self::assertSame(1, $this->refreshCalls, 'Healthy later Target must get a turn.');
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')
+            ->where('credential_id', $credential->getKey())->value('generation'));
+        self::assertNotNull(DB::table('wp_credential_maintenance_progress')->where('id', 1)
+            ->value('last_target_id'));
     }
 
     public function test_due_idle_maintenance_rotates_only_selected_wordpress_target_before_expiry(): void

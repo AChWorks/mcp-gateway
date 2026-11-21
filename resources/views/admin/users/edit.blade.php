@@ -97,7 +97,7 @@
                         <option value="{{ $mode->value }}" @selected(old('target_scope_mode', $managedUser->target_scope_mode->value) === $mode->value)>{{ $mode->title() }}</option>
                     @endforeach
                 </select>
-                <p class="field-help" id="target_scope_mode-help">{{ __('Target scope controls which Targets this user may reach, not the connector type or granted capabilities. All targets includes the fleet except direct denies; Selected uses direct allows and assigned groups. Owners always reach all Targets.') }}</p>
+                <p class="field-help" id="target_scope_mode-help">{{ __('Target scope controls which Targets this user may reach, not the connector type or granted capabilities. All targets includes the fleet except direct denies; Selected uses direct allows, assigned groups and optional self-created Targets. Owners always reach all Targets.') }}</p>
                 @error('target_scope_mode')<p class="field-error" id="target_scope_mode-error" role="alert">{{ $message }}</p>@enderror
             </div>
         </div>
@@ -108,6 +108,17 @@
             <span>{{ __('Access enabled') }}</span>
         </label>
         @error('access_enabled')<p class="field-error" id="access_enabled-error" role="alert">{{ $message }}</p>@enderror
+
+        <fieldset class="permission-fieldset">
+            <legend>{{ __('Self-created Targets') }}</legend>
+            <input type="hidden" name="self_created_target_access" value="0">
+            <label class="checkbox-option" for="self_created_target_access">
+                <input id="self_created_target_access" type="checkbox" name="self_created_target_access" value="1" @checked((bool) old('self_created_target_access', $managedUser->self_created_target_access)) @error('self_created_target_access') aria-invalid="true" aria-describedby="self_created_target_access-error" @enderror>
+                <span>{{ __('Access self-created Targets') }}</span>
+            </label>
+            @error('self_created_target_access')<p class="field-error" id="self_created_target_access-error" role="alert">{{ $message }}</p>@enderror
+            <p class="field-help">{{ __('For Selected Target scope, automatically include Targets registered by this user. No Target Group or direct grant is created. Role, operation permissions, global/group/Target denies, and SSH restrictions still apply. Disable this option to revoke only this source of reachability. All-target/Owner scope is unchanged.') }}</p>
+        </fieldset>
 
         <fieldset class="permission-fieldset">
             <legend>{{ __('AI / MCP connection') }}</legend>

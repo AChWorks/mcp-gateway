@@ -98,7 +98,7 @@ final class SshManagedReverseTargetController extends Controller
             $started = $enroll->begin(
                 $fields['target_id'], $fields['display_name'], $fields['ssh_host'],
                 (int) $fields['ssh_port'], $fields['ssh_username'],
-                $fields['ssh_host_key'], $fields['ai_guidance'] ?? null,
+                $fields['ssh_host_key'], $fields['ai_guidance'] ?? null, $request->user(),
             );
         } catch (InvalidArgumentException) {
             throw ValidationException::withMessages([

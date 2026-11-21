@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\OAuth;
 
+use App\Application\Operations\OperationalSettings;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\DcrClientRegistration;
 use App\Infrastructure\OAuth\DcrRegistrationRateLimited;
@@ -24,6 +25,25 @@ final class DcrRegistrationAbuseTest extends TestCase
         parent::setUp();
 
         config()->set('oauth.dcr.registration_enabled', true);
+        // This fixture exercises reclaim pressure at the historical 512 setting;
+        // a separate test below proves the independent 1024 default boundary.
+        DB::table('operational_settings')->where('id', 1)->update(['dcr_registration_capacity' => 512]);
+    }
+
+    public function test_new_default_registration_capacity_exact_boundary_and_override(): void
+    {
+        DB::table('operational_settings')->where('id', 1)->update(['dcr_registration_capacity' => null]);
+        self::assertSame(1024, app(OperationalSettings::class)->dcrRegistrationCapacity());
+        $this->seedRegisteredClients(1023);
+        app(DcrClientRegistration::class)->register($this->registrationMetadata());
+        self::assertSame(1024, DB::table('oauth_dcr_clients')->whereNull('retired_at')->count());
+        try {
+            app(DcrClientRegistration::class)->register($this->registrationMetadata());
+            self::fail('A 1025th active DCR registration must be rejected.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('capacity is unavailable', $exception->getMessage());
+        }
+        self::assertSame(1024, DB::table('oauth_dcr_clients')->whereNull('retired_at')->count());
     }
 
     public function test_global_success_budget_blocks_distributed_registrations_without_spending_on_invalid_metadata(): void

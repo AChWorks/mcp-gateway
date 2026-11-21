@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-#[Fillable(['name', 'email', 'password', 'role', 'target_scope_mode', 'access_enabled', 'ai_access_enabled'])]
+#[Fillable(['name', 'email', 'password', 'role', 'target_scope_mode', 'access_enabled', 'ai_access_enabled', 'self_created_target_access'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -21,6 +21,7 @@ class User extends Authenticatable
         'target_scope_mode' => 'selected',
         'access_enabled' => true,
         'ai_access_enabled' => false,
+        'self_created_target_access' => false,
     ];
 
     /**
@@ -37,6 +38,7 @@ class User extends Authenticatable
             'target_scope_mode' => TargetScopeMode::class,
             'access_enabled' => 'boolean',
             'ai_access_enabled' => 'boolean',
+            'self_created_target_access' => 'boolean',
         ];
     }
 }

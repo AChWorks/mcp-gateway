@@ -16,6 +16,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
+use App\Models\User;
 use App\Support\OperationDiagnostics;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Validation\Rule;
@@ -148,7 +149,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
         }
     }
 
-    public function register(array $input): Target
+    public function register(array $input, ?User $creator = null): Target
     {
         $method = (string) $input['ssh_auth_method'];
 
@@ -168,9 +169,10 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
                 isset($input['ssh_reverse_port']) ? (int) $input['ssh_reverse_port'] : null,
                 $input['ssh_tunnel_identity'] ?? null,
                 $input['connection_relay_id'] ?? null,
+                $creator,
             );
         } catch (ConnectionRelayUnavailable) {
-            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists. Select an enabled Relay in System.'), 'connection_relay_id', 'relay_unavailable');
+            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists. Select an enabled Relay in Connectivity.'), 'connection_relay_id', 'relay_unavailable');
         } catch (SshTargetConnectionException $exception) {
             throw new TargetConnectorFailure(
                 $exception->reason === 'relay_reverse_conflict'

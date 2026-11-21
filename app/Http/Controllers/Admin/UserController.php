@@ -59,6 +59,10 @@ final class UserController extends Controller
         if ($request->has('ai_access_enabled')) {
             $validated['ai_access_enabled'] = $request->boolean('ai_access_enabled');
         }
+        if ($request->has('self_created_target_access')) {
+            $validated['self_created_target_access'] = $request->boolean('self_created_target_access');
+        }
+        $this->guardCreatorScopeSelection($validated);
         $this->guardSshUserChanges($request, $validated);
 
         $user = $access->create(
@@ -103,6 +107,10 @@ final class UserController extends Controller
         if ($request->has('ai_access_enabled')) {
             $validated['ai_access_enabled'] = $request->boolean('ai_access_enabled');
         }
+        if ($request->has('self_created_target_access')) {
+            $validated['self_created_target_access'] = $request->boolean('self_created_target_access');
+        }
+        $this->guardCreatorScopeSelection($validated);
         $this->guardSshUserChanges($request, $validated, $user, $access);
         $revokesSshByScope = $user->getAttribute('target_scope_mode') === TargetScopeMode::Selected
             && $validated['target_scope_mode'] === TargetScopeMode::All->value
@@ -128,7 +136,7 @@ final class UserController extends Controller
                 return back()
                     ->withInput($request->only([
                         'name', 'email', 'role', 'target_scope_mode',
-                        'access_enabled', 'ai_access_enabled', 'denied_permissions',
+                        'access_enabled', 'ai_access_enabled', 'self_created_target_access', 'denied_permissions',
                         'ssh_permissions_reviewed', 'confirm_ssh_permission_changes',
                     ]))
                     ->withErrors([
@@ -167,11 +175,23 @@ final class UserController extends Controller
             'target_scope_mode' => ['required', Rule::enum(TargetScopeMode::class)],
             'access_enabled' => ['nullable', 'boolean'],
             'ai_access_enabled' => ['nullable', 'boolean'],
+            'self_created_target_access' => ['nullable', 'boolean'],
             'denied_permissions' => ['nullable', 'array'],
             'denied_permissions.*' => ['string', Rule::enum(GatewayPermission::class)],
             'confirm_ssh_permission_changes' => ['nullable', 'boolean'],
             'ssh_permissions_reviewed' => ['nullable', 'in:1'],
         ]);
+    }
+
+    /** @param array<string,mixed> $values */
+    private function guardCreatorScopeSelection(array $values): void
+    {
+        if (($values['role'] ?? null) === GatewayRole::Owner->value
+            && (bool) ($values['self_created_target_access'] ?? false)) {
+            throw ValidationException::withMessages([
+                'self_created_target_access' => __('Owner accounts already reach every Target. Leave the optional self-created Target access setting disabled.'),
+            ]);
+        }
     }
 
     /**

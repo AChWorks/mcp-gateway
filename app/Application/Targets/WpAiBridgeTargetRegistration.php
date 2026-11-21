@@ -7,6 +7,7 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
+use App\Models\User;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -24,7 +25,7 @@ final readonly class WpAiBridgeTargetRegistration
         private ConnectionRelayTargetBinding $bindings,
     ) {}
 
-    public function register(string $targetId, string $displayName, string $baseUrl, ?string $aiGuidance = null, ?string $relayId = null): Target
+    public function register(string $targetId, string $displayName, string $baseUrl, ?string $aiGuidance = null, ?string $relayId = null, ?User $creator = null): Target
     {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -44,7 +45,7 @@ final readonly class WpAiBridgeTargetRegistration
         $hash = hash('sha256', $metadata->baseUrl);
 
         try {
-            return DB::transaction(function () use ($targetId, $displayName, $aiGuidance, $metadata, $hash, $relayId): Target {
+            return DB::transaction(function () use ($targetId, $displayName, $aiGuidance, $metadata, $hash, $relayId, $creator): Target {
                 // Connector-scoped reservation prevents same-endpoint registration
                 // racing against future reassignment, but never blocks SSH/Agent
                 // Targets at the same host.
@@ -57,7 +58,8 @@ final readonly class WpAiBridgeTargetRegistration
                     'updated_at' => now(),
                 ]);
 
-                $target = Target::query()->create([
+                $target = Target::query()->forceCreate([
+                    'created_by_user_id' => $creator?->getKey(),
                     'target_id' => $targetId,
                     'display_name' => $displayName,
                     'ai_guidance' => $aiGuidance === null || trim($aiGuidance) === '' ? null : trim($aiGuidance),

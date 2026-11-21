@@ -112,7 +112,8 @@ final readonly class AccessControl
             ->where('target_group_users.user_id', $user->getKey())
             ->where('target_group_targets.target_record_id', $target->getKey())
             ->pluck('target_group_users.target_group_id')->all();
-        if ($scope === TargetScopeMode::Selected && $direct === null && $groups === []) {
+        if ($scope === TargetScopeMode::Selected && $direct === null && $groups === []
+            && ! $this->createdTargetScope($user, $target)) {
             return $decisions;
         }
 
@@ -228,7 +229,8 @@ final readonly class AccessControl
                         )
                         ->where('target_group_users.user_id', $user->getKey())
                         ->whereColumn('target_group_targets.target_record_id', 'targets.id');
-                });
+                })
+                ->when((bool) $user->self_created_target_access, static fn (Builder $q) => $q->orWhere('created_by_user_id', $user->getKey()));
         });
     }
 
@@ -357,7 +359,7 @@ final readonly class AccessControl
             return true;
         }
 
-        return DB::table('target_group_users')
+        return $this->createdTargetScope($user, $target) || DB::table('target_group_users')
             ->join(
                 'target_group_targets',
                 'target_group_targets.target_group_id',
@@ -367,6 +369,14 @@ final readonly class AccessControl
             ->where('target_group_users.user_id', $user->getKey())
             ->where('target_group_targets.target_record_id', $target->getKey())
             ->exists();
+    }
+
+    /** Ownership adds reachability only, never permission or a group grant. */
+    private function createdTargetScope(User $user, Target $target): bool
+    {
+        return (bool) $user->self_created_target_access
+            && $target->getAttribute('created_by_user_id') !== null
+            && (string) $target->created_by_user_id === (string) $user->getKey();
     }
 
     private function groupDenies(User $user, Target $target, GatewayPermission $permission): bool
