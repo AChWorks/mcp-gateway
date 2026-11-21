@@ -215,10 +215,14 @@ final readonly class UserAccessManager
                 static fn (string $value): ?GatewayPermission => GatewayPermission::tryFrom($value),
                 $requestedDenials,
             )));
-            $existingRevision = AuthorizationRevision::userTargetRule($existing, $role);
+            $creatorId = $target->created_by_user_id === null ? null : (int) $target->created_by_user_id;
+            $creatorScope = (bool) $lockedUser->self_created_target_access;
+            $existingRevision = AuthorizationRevision::userTargetRule(
+                $existing, $role, $creatorScope, $creatorId,
+            );
             $requestedRevision = AuthorizationRevision::userTargetRule([
                 'access_rule' => $accessRule, 'denied_permissions' => $requestedDenials,
-            ], $role);
+            ], $role, $creatorScope, $creatorId);
             $sshTarget = $target->connector_type === 'ssh_direct';
             if ($sshTarget && $existingRevision !== $requestedRevision) {
                 Gate::authorize(GatewayPermission::SecurityManage->value);
@@ -400,6 +404,8 @@ final readonly class UserAccessManager
     {
         return AuthorizationRevision::userTargetRule(
             $this->targetRule($user, $target), $this->role($user),
+            (bool) $user->self_created_target_access,
+            $target->created_by_user_id === null ? null : (int) $target->created_by_user_id,
         );
     }
 

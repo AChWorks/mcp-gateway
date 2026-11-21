@@ -187,6 +187,27 @@ final class AccessBatchWorkflowTest extends TestCase
         $this->assertDatabaseMissing('user_target_access', ['user_id' => $user->id, 'target_record_id' => $wp->id]);
     }
 
+    public function test_bulk_direct_review_fails_stale_when_self_created_scope_changes_after_review(): void
+    {
+        $user = $this->user();
+        $target = $this->target();
+        $review = $this->workflow->review(
+            $this->owner, 'user-targets', (string) $user->getKey(), 'allow', [$target->getKey()],
+        );
+        $user->forceFill(['self_created_target_access' => true])->save();
+        $this->fails('batch_review_stale', fn () => $this->workflow->apply(
+            $this->owner, 'user-targets', (string) $user->getKey(), $review['token'],
+        ));
+        self::assertSame(0, DB::table('user_target_access')->count());
+        $refreshed = $this->workflow->review(
+            $this->owner, 'user-targets', (string) $user->getKey(), 'allow', [$target->getKey()],
+        );
+        $result = $this->workflow->apply(
+            $this->owner, 'user-targets', (string) $user->getKey(), $refreshed['token'],
+        );
+        self::assertSame(1, $result['changed_count']);
+    }
+
     public function test_review_rejects_changed_edges_denials_and_subject_role_without_any_writes(): void
     {
         $group = $this->group();

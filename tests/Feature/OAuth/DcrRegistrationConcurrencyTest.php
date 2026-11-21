@@ -29,6 +29,11 @@ final class DcrRegistrationConcurrencyTest extends TestCase
         }
 
         Artisan::call('migrate:fresh', ['--force' => true]);
+        // Exercise the historical 512-slot *Owner override* under two real
+        // MariaDB sessions. Default-capacity 1024 boundaries are covered
+        // independently, without weakening this last-slot concurrency race.
+        DB::table('operational_settings')->where('id', 1)
+            ->update(['dcr_registration_capacity' => 512]);
         config()->set('oauth.dcr.registration_enabled', true);
     }
 
