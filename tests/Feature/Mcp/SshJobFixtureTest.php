@@ -295,8 +295,34 @@ SH;
             self::assertTrue($output['result']['truncated']);
         }
 
+        $directory = '/var/tmp/.mcp-gateway-job-'.$id;
+        $unexpected = $directory.'/.unexpected-retention-witness';
+        $injected = app(SshCommandRuntime::class)->run(
+            $owner, $target,
+            'test "$(cat -- '.escapeshellarg($directory.'/exit-code').')" = 0'
+                .' && printf "retain" > '.escapeshellarg($unexpected),
+        );
+        self::assertSame(0, $injected['exit_code'], json_encode($injected));
+
         DB::table('ssh_command_jobs')->where('id', $id)->update(['expires_at' => now()->subMinute()]);
-        self::assertSame(1, app(SshJobCoordinator::class)->prune());
+        self::assertSame(0, app(SshJobCoordinator::class)->prune(),
+            'An unexpected file must block cleanup before any stdout/stderr/exit-code unlink.');
+        self::assertSame(1, DB::table('ssh_command_jobs')->where('id', $id)->count());
+        $preserved = app(SshCommandRuntime::class)->run(
+            $owner, $target,
+            'test -s '.escapeshellarg($directory.'/stdout')
+                .' && test -s '.escapeshellarg($directory.'/stderr')
+                .' && test "$(cat -- '.escapeshellarg($directory.'/exit-code').')" = 0'
+                .' && test -f '.escapeshellarg($unexpected),
+        );
+        self::assertSame(0, $preserved['exit_code'], json_encode($preserved));
+
+        $removed = app(SshCommandRuntime::class)->run(
+            $owner, $target, 'rm -f -- '.escapeshellarg($unexpected),
+        );
+        self::assertSame(0, $removed['exit_code'], json_encode($removed));
+        self::assertSame(1, app(SshJobCoordinator::class)->prune(),
+            'The same Job must be safely prunable after the unexpected entry is removed.');
         self::assertSame(0, DB::table('ssh_command_jobs')->where('id', $id)->count());
     }
 

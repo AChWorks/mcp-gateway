@@ -125,7 +125,7 @@ final class SshManagedReverseAdminTest extends TestCase
         $managed = $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
             ->assertOk()->assertSee('option value="managed" selected', false)
             ->assertSee('Create Pending Setup and installer command')
-            ->assertSee('Open System Reverse SSH settings');
+            ->assertSee('Open Connectivity Reverse SSH settings');
         self::assertStringContainsString('action="'.route('admin.reverse-ssh.targets.store').'"',
             $managed->getContent());
         $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual')
@@ -241,7 +241,7 @@ final class SshManagedReverseAdminTest extends TestCase
         // Unconfigured and explicitly disabled do not create Pending state.
         $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')
             ->assertOk()->assertSee('data-managed-ready="false"', false)
-            ->assertSee('Open System Reverse SSH settings');
+            ->assertSee('Open Connectivity Reverse SSH settings');
         $this->post('/admin/targets/managed-reverse', $payload)->assertSessionHasErrors('site');
         $this->put('/admin/settings/reverse-ssh', $this->settings(false))->assertRedirect();
         $this->get('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed')

@@ -68,7 +68,7 @@
                 @if (! $managedReady)
                     <div class="alert alert-info" role="status">
                         {{ __('Managed Reverse SSH local host is not Ready (:state). Configure the Gateway, reconcile its restricted policy and verify the pinned local control SSHD before issuing an installer command.', ['state' => $managedReadinessState]) }}
-                        <a href="{{ route('admin.reverse-ssh.index') }}">{{ __('Open System Reverse SSH settings') }}</a>
+                        <a href="{{ route('admin.reverse-ssh.index') }}">{{ __('Open Connectivity Reverse SSH settings') }}</a>
                     </div>
                 @else
                     <p class="field-help">{{ __('After creating Pending Setup, copy the one-time verified installer command in the next step. The Target remains unconnected until explicit verification.') }}</p>

@@ -172,7 +172,7 @@ final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, T
                 $creator,
             );
         } catch (ConnectionRelayUnavailable) {
-            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists. Select an enabled Relay in System.'), 'connection_relay_id', 'relay_unavailable');
+            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists. Select an enabled Relay in Connectivity.'), 'connection_relay_id', 'relay_unavailable');
         } catch (SshTargetConnectionException $exception) {
             throw new TargetConnectorFailure(
                 $exception->reason === 'relay_reverse_conflict'

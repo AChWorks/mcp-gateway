@@ -146,7 +146,7 @@ final readonly class AccessBatchWorkflow
             throw new DomainException('batch_selection_unavailable');
         }
         $targets = Target::query()->whereIn('id', $context->itemsAreTargets() ? $ids : [])
-            ->orderBy('id')->lockForUpdate()->get(['id', 'target_id', 'display_name', 'connector_type'])->keyBy('id');
+            ->orderBy('id')->lockForUpdate()->get(['id', 'target_id', 'display_name', 'connector_type', 'created_by_user_id'])->keyBy('id');
         if ($context->itemsAreTargets() && $targets->count() !== count($ids)) {
             throw new DomainException('batch_selection_unavailable');
         }

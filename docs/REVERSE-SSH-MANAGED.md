@@ -58,7 +58,7 @@ restrictions independently. The resulting public control SSHD host key must
 be verified by a trusted channel. An HTTPS-only CDN proxy is NOT a TCP/SSH
 forwarder; the control port needs separate egress reachability from Target.
 
-In Admin > System > Reverse SSH, Owner configures the reachable control host,
+In Admin > Connectivity > Reverse SSH, Owner configures the reachable control host,
 port, dedicated control user and verified SSHD public host key, with password
 confirmation. The PHP configuration is bound to a root-owned manifest at
 /etc/mcp-gateway-reverse/manifest.json. Its Owner page distinguishes

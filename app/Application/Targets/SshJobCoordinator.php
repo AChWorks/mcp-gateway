@@ -793,31 +793,30 @@ final readonly class SshJobCoordinator
 
                     continue;
                 }
-                $directory = $this->directory((string) $row->id);
-                // Remove only known files from a private, non-symlinked
-                // directory owned by the authenticated original OS account.
-                $clean = 'if ! test -e '.escapeshellarg($directory).'; then exit 0; fi; '
-                    .'test -d '.escapeshellarg($directory)
-                    .' && test ! -L '.escapeshellarg($directory)
-                    .' && test "$(stat -c %a -- '.escapeshellarg($directory).')" = 700'
-                    .' && test "$(stat -c %u -- '.escapeshellarg($directory).')" = "$(id -u)"'
-                    // A collected unit is NOT itself a stop witness. When
-                    // the systemd unit is no longer inspectable, require
-                    // the independently journaled wrapper exit marker to
-                    // still match inside the verified original private dir.
-                    .($stopProof === 'exit_marker'
-                        ? ' && test "$(cat -- '.escapeshellarg($directory.'/exit-code').')" = '
-                            .escapeshellarg((string) (int) $row->exit_code)
-                        : '')
-                    .' && rm -f -- '.implode(' ', array_map(
-                        static fn (string $file): string => escapeshellarg($directory.'/'.$file),
-                        ['script.sh', 'wrapper.sh', 'stdout', 'stderr', 'exit-code',
-                            'stdout.pipe', 'stderr.pipe', 'stdout.truncated', 'stderr.truncated'],
-                    ))
-                    .' && rmdir -- '.escapeshellarg($directory);
+                $clean = $this->spoolCleanupCommand(
+                    $this->directory((string) $row->id),
+                    $stopProof === 'exit_marker' ? (int) $row->exit_code : null,
+                );
                 $result = $this->safeCommand($user, $target, $clean, 8, (string) $row->target_binding_hash);
                 if (! $this->successful($result)) {
-                    $stats['remote_unavailable']++;
+                    $stderr = ($result['stderr_encoding'] ?? null) === 'utf-8'
+                        ? (string) ($result['stderr'] ?? '') : '';
+                    $reason = match (true) {
+                        str_contains($stderr, 'ssh_job_spool_unexpected_entry') => 'unexpected_spool_entry',
+                        str_contains($stderr, 'ssh_job_spool_incompatible_entry') => 'incompatible_spool_entry',
+                        str_contains($stderr, 'ssh_job_spool_invalid_directory') => 'invalid_spool_directory',
+                        str_contains($stderr, 'ssh_job_spool_exit_marker_mismatch') => 'exit_marker_mismatch',
+                        default => 'remote_command_unavailable',
+                    };
+                    if ($reason === 'remote_command_unavailable') {
+                        $stats['remote_unavailable']++;
+                    } else {
+                        $stats['retained_by_policy']++;
+                    }
+                    Log::notice('SSH Job spool cleanup retained without deleting durable Job.', [
+                        'job_id' => $row->id, 'reason' => $reason,
+                        'remote_exit_code' => $result['exit_code'] ?? null,
+                    ]);
 
                     continue;
                 }
@@ -840,6 +839,46 @@ final readonly class SshJobCoordinator
         }
 
         return $stats;
+    }
+
+    /**
+     * Preflight the entire original private spool before unlinking ANY entry.
+     * Unknown files, directories, symlinks and mismatched exit witnesses must
+     * preserve all evidence; never substitute a recursive removal.
+     */
+    private function spoolCleanupCommand(string $directory, ?int $exitCode): string
+    {
+        $files = ['script.sh', 'wrapper.sh', 'stdout', 'stderr', 'exit-code',
+            'stdout.pipe', 'stderr.pipe', 'stdout.truncated', 'stderr.truncated'];
+        $quoted = escapeshellarg($directory);
+        $expected = implode('|', array_map(
+            static fn (string $file): string => escapeshellarg($directory.'/'.$file), $files,
+        ));
+        $preflight = 'for entry in '.$quoted.'/* '.$quoted.'/.[!.]* '.$quoted.'/..?*; do '
+            .'if test -e "$entry" || test -L "$entry"; then '
+            .'case "$entry" in '
+            .$expected.') '
+            .'if test -L "$entry" || { ! test -f "$entry" && ! test -p "$entry"; }; then '
+            .'printf "ssh_job_spool_incompatible_entry\n" >&2; exit 1; fi ;; '
+            .'*) printf "ssh_job_spool_unexpected_entry\n" >&2; exit 1 ;; '
+            .'esac; fi; done';
+
+        return 'if ! test -e '.$quoted.' && ! test -L '.$quoted.'; then exit 0; fi; '
+            .'if ! { test -d '.$quoted.' && test ! -L '.$quoted
+            .' && test "$(stat -c %a -- '.$quoted.')" = 700'
+            .' && test "$(stat -c %u -- '.$quoted.')" = "$(id -u)"; }; then '
+            .'printf "ssh_job_spool_invalid_directory\n" >&2; exit 1; fi; '
+            // Collected systemd units need a matching original wrapper exit
+            // marker in the very same validated cleanup command.
+            .($exitCode !== null
+                ? 'if ! test "$(cat -- '.escapeshellarg($directory.'/exit-code').')" = '
+                    .escapeshellarg((string) $exitCode).'; then '
+                    .'printf "ssh_job_spool_exit_marker_mismatch\n" >&2; exit 1; fi; '
+                : '')
+            .$preflight.' && rm -f -- '.implode(' ', array_map(
+                static fn (string $file): string => escapeshellarg($directory.'/'.$file), $files,
+            ))
+            .' && rmdir -- '.$quoted;
     }
 
     /**

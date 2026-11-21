@@ -208,6 +208,43 @@ final class AccessBatchWorkflowTest extends TestCase
         self::assertSame(1, $result['changed_count']);
     }
 
+    public function test_batch_review_rejects_changed_creator_attribution_without_any_acl_mutation(): void
+    {
+        $user = $this->user();
+        $formerCreator = $this->user();
+        $target = $this->target();
+        $user->forceFill(['self_created_target_access' => true])->save();
+        DB::table('targets')->where('id', $target->getKey())->update([
+            'created_by_user_id' => $formerCreator->getKey(),
+        ]);
+        $review = $this->workflow->review(
+            $this->owner, 'user-targets', (string) $user->getKey(), 'allow', [$target->getKey()],
+        );
+
+        // Represents a separately authorized legacy migration/reconciliation,
+        // not an ordinary mutable user-facing creator edit.
+        DB::table('targets')->where('id', $target->getKey())->update([
+            'created_by_user_id' => $user->getKey(),
+        ]);
+        $this->fails('batch_review_stale', fn () => $this->workflow->apply(
+            $this->owner, 'user-targets', (string) $user->getKey(), $review['token'],
+        ));
+        self::assertSame(0, DB::table('user_target_access')->count());
+        self::assertSame(0, DB::table('target_group_targets')->count());
+        self::assertSame(0, DB::table('target_group_users')->count());
+
+        $fresh = $this->workflow->review(
+            $this->owner, 'user-targets', (string) $user->getKey(), 'allow', [$target->getKey()],
+        );
+        $applied = $this->workflow->apply(
+            $this->owner, 'user-targets', (string) $user->getKey(), $fresh['token'],
+        );
+        self::assertSame(1, $applied['changed_count']);
+        $this->assertDatabaseHas('user_target_access', [
+            'user_id' => $user->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+    }
+
     public function test_review_rejects_changed_edges_denials_and_subject_role_without_any_writes(): void
     {
         $group = $this->group();

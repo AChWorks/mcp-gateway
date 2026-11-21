@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 final class SshJobLifecycleRecoveryTest extends TestCase
@@ -39,6 +40,82 @@ final class SshJobLifecycleRecoveryTest extends TestCase
                 throw new SshTargetConnectionException('egress_denied');
             }
         });
+    }
+
+    public function test_remote_spool_preflight_preserves_evidence_before_any_unlink_and_normal_cleanup_succeeds(): void
+    {
+        $directory = sys_get_temp_dir().'/ssh-job-spool-'.bin2hex(random_bytes(8));
+        self::assertTrue(mkdir($directory, 0700));
+        $witnesses = ['stdout' => 'job output', 'stderr' => 'job diagnostics', 'exit-code' => '0'];
+        foreach ($witnesses as $name => $contents) {
+            self::assertSame(strlen($contents), file_put_contents($directory.'/'.$name, $contents));
+        }
+
+        try {
+            // Execute the exact production remote shell command in an
+            // isolated local temp directory; no SSH network/dial is allowed.
+            $command = (new \ReflectionMethod(SshJobCoordinator::class, 'spoolCleanupCommand'))
+                ->invoke(app(SshJobCoordinator::class), $directory, 0);
+            $run = static function () use ($command): Process {
+                $process = new Process(['/bin/sh', '-c', $command]);
+                $process->run();
+
+                return $process;
+            };
+            $assertPreserved = static function () use ($directory, $witnesses): void {
+                self::assertDirectoryExists($directory);
+                foreach ($witnesses as $name => $contents) {
+                    self::assertSame($contents, file_get_contents($directory.'/'.$name));
+                }
+            };
+
+            foreach (['unexpected-entry', '.hidden-entry', "line\nbreak"] as $name) {
+                file_put_contents($directory.'/'.$name, 'unrecognized');
+                $result = $run();
+                self::assertFalse($result->isSuccessful());
+                self::assertStringContainsString('ssh_job_spool_unexpected_entry', $result->getErrorOutput());
+                $assertPreserved();
+                unlink($directory.'/'.$name);
+            }
+
+            symlink('stdout', $directory.'/wrapper.sh');
+            $result = $run();
+            self::assertFalse($result->isSuccessful());
+            self::assertStringContainsString('ssh_job_spool_incompatible_entry', $result->getErrorOutput());
+            $assertPreserved();
+            unlink($directory.'/wrapper.sh');
+
+            mkdir($directory.'/stderr.pipe', 0700);
+            $result = $run();
+            self::assertFalse($result->isSuccessful());
+            self::assertStringContainsString('ssh_job_spool_incompatible_entry', $result->getErrorOutput());
+            $assertPreserved();
+            rmdir($directory.'/stderr.pipe');
+
+            file_put_contents($directory.'/exit-code', '7');
+            $result = $run();
+            self::assertFalse($result->isSuccessful());
+            self::assertStringContainsString('ssh_job_spool_exit_marker_mismatch', $result->getErrorOutput());
+            self::assertSame('job output', file_get_contents($directory.'/stdout'));
+            self::assertSame('job diagnostics', file_get_contents($directory.'/stderr'));
+            file_put_contents($directory.'/exit-code', '0');
+
+            $result = $run();
+            self::assertTrue($result->isSuccessful(), $result->getErrorOutput());
+            self::assertDirectoryDoesNotExist($directory);
+        } finally {
+            if (is_dir($directory)) {
+                foreach (array_diff(scandir($directory) ?: [], ['.', '..']) as $name) {
+                    $path = $directory.'/'.$name;
+                    if (is_dir($path) && ! is_link($path)) {
+                        rmdir($path);
+                    } else {
+                        unlink($path);
+                    }
+                }
+                rmdir($directory);
+            }
+        }
     }
 
     public function test_missing_or_collected_systemd_unit_is_never_stopped_execution_proof(): void
