@@ -117,3 +117,21 @@ The public authenticated raw-HTTPS sidecar validates client/User/Target/operatio
 - **Additional data path:** use shared resource/integrity/authorization semantics with connector/native transport adapters and proven receiving-client support; never assume one generic Gateway storage/stream service makes every provider file-capable.
 
 Runtime implementation and acceptance should be checked in the selected Git revision, tests and the owning work item. This architecture describes responsible components and safe extension seams, not a release chronology or an alternative backlog.
+
+## Adjacent lifecycle and retention audit (Package A source review)
+
+This is a **source-level** inventory, not a claim about installed-host backlog. Only confirmed forward-progress defects were changed; unknown remote effects are never cleaned on age alone.
+
+| Resource | Creation / lifecycle owner | Expiry and cleanup path | Source assessment |
+| --- | --- | --- | --- |
+| SSH Jobs / original remote spool | `SshJobCoordinator`, retained original user/Target/systemd identity | Hourly persisted keyset prune + stale status reconciliation; stopped unit and private remote spool verified before delete, unresolved retained for operator | **Confirmed starvation fixed in candidate**; installed-host reconciliation still pending |
+| WP AI Bridge idle refresh | `WpAiBridgeTargetConnectionService`, credential metadata and one-shot intent | Minute scheduler uses persisted due-date + Target keyset progress, preserving unresolved refresh/revocation intents | **Confirmed due-head starvation fixed in candidate**; no automatic replay of ambiguous rotation |
+| OAuth DCR registrations | `DcrClientRegistration` | Serialized capacity pressure reclaims only positively never-authorized identities older than 24h | Healthy bounded admission; no unconditional deletion of revoked identity/history |
+| OAuth refresh recovery / assertion anti-replay | `RefreshTokenRecoveryStore`, `ClientAssertionReplayStore` | Expired recoveries and assertion tokens deleted on their relevant authenticated operations; recovery rows capped | Bounded/on-demand cleanup, no repeating blocked head |
+| OAuth authorization codes and bearer/refresh token history | OAuth repositories / grant revocation | Expiry is enforced on access; no universal scheduled historical-row deletion | **Retention-policy decision pending**: not safe to add arbitrary deletion of grant history without scope, consent and recovery audit |
+| MCP SDK session files | Official `mcp/sdk` `FileSessionStore` | SDK probability-based session GC; lock-aware expired file removal | Existing SDK path, not a confirmed blocked-head defect; high-volume scans should be measured |
+| ChatGPT temporary file admission | `ChatGptFileCapacity` with transactional lease | Expired leases cleared under admission lock; `php://temp` releases on PHP worker exit | No blocked-head dependency; actual host disk pressure remains environment-specific |
+| Activity events | `ActivityRetention` with persistent lock | Daily age/row-count prune in bounded forward batches | Existing scheduled drain has progress guard |
+| Browser installer/updater staging and code backups | Authenticated installer/updater state machine | Proven completed-phase cleanup; recovery-required state and private backups preserved | Must not erase unknown updater or diagnostic evidence based on age |
+
+The source-level inventory does not authorize a Production cleanup or a new OAuth credential-retention period. Review each stored authorization/grant class before a separate retention policy is approved.

@@ -516,9 +516,23 @@ final class SshManagedReverseAdminTest extends TestCase
         unlink($manifest);
         $this->get('/admin/settings/reverse-ssh')->assertOk()
             ->assertSee('Needs host setup')->assertSee('Trusted host manifest missing');
-        file_put_contents($manifest, $original);
-        $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
-        // No OpenSSH listener was started by a PHP feature test.
+        // The development server may legitimately have a real SSHD listener
+        // on the old test port 7770. Choose a fresh loopback port for this
+        // no-listener test, while keeping manifest and setting consistent.
+        $reservation = stream_socket_server('tcp://127.0.0.1:0');
+        self::assertIsResource($reservation);
+        $reservedAddress = stream_socket_get_name($reservation, false);
+        self::assertIsString($reservedAddress);
+        $port = (int) substr(strrchr($reservedAddress, ':'), 1);
+        self::assertGreaterThan(1023, $port);
+        fclose($reservation);
+        $storedManifest = json_decode($original, true, 8, JSON_THROW_ON_ERROR);
+        $storedManifest['control_port'] = $port;
+        file_put_contents($manifest, json_encode($storedManifest, JSON_THROW_ON_ERROR));
+        $settings = $this->settings(true);
+        $settings['control_port'] = $port;
+        $this->put('/admin/settings/reverse-ssh', $settings)->assertRedirect();
+        // No fixture listener was started on the reserved ephemeral port.
         $this->get('/admin/settings/reverse-ssh')->assertOk()
             ->assertSee('Degraded')->assertSee('Local control SSHD listener not reachable')
             ->assertSee('Remote Target reachability')

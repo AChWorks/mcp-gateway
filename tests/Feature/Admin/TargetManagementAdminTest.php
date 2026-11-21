@@ -79,6 +79,86 @@ final class TargetManagementAdminTest extends TestCase
             ->assertSee('Authorize this Target to connect WordPress securely');
     }
 
+    #[Group('database-access')]
+    public function test_selected_creator_can_manage_only_self_created_targets_when_owner_enables_scope_option(): void
+    {
+        $owner = $this->user('owner', 'all');
+        $other = $this->user('administrator', 'selected');
+        $this->actingAs($owner)->post('/admin/users', [
+            'name' => 'Scoped creator',
+            'email' => 'scoped-creator@example.test',
+            'password' => 'DifferentHorse!234',
+            'password_confirmation' => 'DifferentHorse!234',
+            'role' => 'administrator',
+            'target_scope_mode' => 'selected',
+            'access_enabled' => '1',
+            'self_created_target_access' => '1',
+            'current_password' => 'ThisIsATestSecret!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        $creator = User::query()->where('email', 'scoped-creator@example.test')->sole();
+        self::assertTrue($creator->self_created_target_access);
+        $outsider = $this->target('unrelated', 'wp_ai_bridge');
+        $access = app(AccessControl::class);
+        $this->actingAs($creator)->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'creator-wp', 'display_name' => 'My WordPress',
+            'base_url' => 'https://wordpress.example.test/',
+        ])->assertAdminRedirect('/admin/targets/creator-wp')->assertSessionHasNoErrors();
+        $created = Target::query()->where('target_id', 'creator-wp')->sole();
+        self::assertSame($creator->id, $created->created_by_user_id);
+        self::assertTrue($access->allows($creator, GatewayPermission::TargetsView, $created));
+        self::assertTrue($access->allows($creator, GatewayPermission::TargetsUpdate, $created));
+        self::assertFalse($access->allows($other, GatewayPermission::TargetsView, $created));
+        self::assertFalse($access->allows($creator, GatewayPermission::TargetsView, $outsider));
+        $this->assertDatabaseMissing('user_target_access', [
+            'user_id' => $creator->id, 'target_record_id' => $created->id,
+        ]);
+        $this->get('/admin/targets')->assertOk()->assertSee('creator-wp')->assertDontSee('unrelated');
+        $this->get('/admin/targets/creator-wp')->assertOk();
+        $this->get('/admin/targets/unrelated')->assertForbidden();
+
+        // Owner's access editor should list the effective self-created source
+        // in Current members, not incorrectly propose another direct grant.
+        $this->actingAs($owner)->get('/admin/users/'.$creator->getKey().'/targets?membership=members')
+            ->assertOk()->assertSee('creator-wp')->assertSee('Self-created Target access');
+        $this->get('/admin/users/'.$creator->getKey().'/targets?membership=available')
+            ->assertOk()->assertDontSee('creator-wp');
+        $this->actingAs($creator);
+
+        // Connector enrollment preserves creator identity for SSH as well.
+        $hostKey = 'ssh-ed25519 '.base64_encode(
+            pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat("\x44", 32),
+        );
+        $this->post('/admin/targets', [
+            'connector_type' => 'ssh_direct',
+            'target_id' => 'creator-ssh', 'display_name' => 'My SSH',
+            'ssh_host' => '1.1.1.1', 'ssh_port' => 22,
+            'ssh_username' => 'deploy', 'ssh_host_key' => $hostKey,
+            'ssh_auth_method' => 'password',
+            'ssh_password' => 'test-credential-not-real',
+            'ssh_trust_confirmed' => 'yes',
+        ])->assertAdminRedirect('/admin/targets/creator-ssh')->assertSessionHasNoErrors();
+        $ssh = Target::query()->where('target_id', 'creator-ssh')->sole();
+        self::assertSame($creator->id, $ssh->created_by_user_id);
+        self::assertTrue($access->allows($creator, GatewayPermission::TargetsView, $ssh));
+        self::assertFalse($access->allows($creator, GatewayPermission::SshCommandRun, $ssh),
+            'New Administrator still has the ordinary SSH default denial.');
+
+        // The checkbox is reversible; no materialized direct grant lingers.
+        $this->actingAs($owner)->put('/admin/users/'.$creator->getKey(), [
+            'name' => $creator->name, 'email' => $creator->email,
+            'role' => 'administrator', 'target_scope_mode' => 'selected',
+            'access_enabled' => '1', 'self_created_target_access' => '0',
+            'current_password' => 'ThisIsATestSecret!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        $creator->refresh();
+        self::assertFalse($creator->self_created_target_access);
+        self::assertFalse($access->allows($creator, GatewayPermission::TargetsView, $created));
+        self::assertFalse($access->allows($creator, GatewayPermission::TargetsView, $ssh));
+        self::assertTrue($access->allows($owner, GatewayPermission::TargetsView, $created));
+        $this->actingAs($creator)->get('/admin/targets/creator-wp')->assertForbidden();
+    }
+
     public function test_new_target_is_a_single_connector_first_form_with_server_rendered_no_js_fallback(): void
     {
         $this->actingAs($this->user('owner', 'all'));

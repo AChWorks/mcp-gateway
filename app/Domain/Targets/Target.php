@@ -63,7 +63,8 @@ final class Target extends Model
             // Connector/Target identity may not be silently rebound by normal model updates.
             if ($target->exists && ($target->isDirty('id') || $target->isDirty('target_id')
                 || $target->isDirty('connector_type') || $target->isDirty('relay_record_id')
-                || $target->isDirty('relay_binding_revision'))) {
+                || $target->isDirty('relay_binding_revision')
+                || $target->isDirty('created_by_user_id'))) {
                 throw new DomainException('Target identity and connector type are immutable; register a new Target.');
             }
 

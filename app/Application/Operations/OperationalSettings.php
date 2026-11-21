@@ -47,6 +47,10 @@ final class OperationalSettings
         'ssh_file_read_window_kib' => ['minimum' => 16, 'maximum' => 512],
         'ssh_file_write_window_kib' => ['minimum' => 16, 'maximum' => 512],
         'ssh_file_list_name_kib' => ['minimum' => 16, 'maximum' => 512],
+        // Appended to keep legacy open-form prefixes stable. The Bridge whole
+        // JSON-RPC request limit and the DCR admission-rate quota are separate.
+        'wp_ability_input_kib' => ['minimum' => 16, 'maximum' => 4096],
+        'dcr_registration_capacity' => ['minimum' => 16, 'maximum' => 65536],
     ];
 
     /** @var array<string, int>|null */
@@ -56,6 +60,37 @@ final class OperationalSettings
     public static function allowed(): array
     {
         return self::SETTING_RANGES;
+    }
+
+    /**
+     * Released form schemas are ordered prefixes. Preserve older browser tabs
+     * without admitting arbitrary missing fields or clearing new overrides.
+     *
+     * @param  list<string>  $names
+     */
+    public static function acceptsFormKeys(array $names): bool
+    {
+        $all = array_keys(self::SETTING_RANGES);
+        sort($names);
+        foreach ([2, 4, 6, 8, 13, 14, count($all) - 2, count($all)] as $size) {
+            $prefix = array_slice($all, 0, $size);
+            sort($prefix);
+            if ($names === $prefix) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function wpAbilityInputBytes(): int
+    {
+        return ($this->overrides()['wp_ability_input_kib'] ?? 1024) * 1024;
+    }
+
+    public function dcrRegistrationCapacity(): int
+    {
+        return $this->overrides()['dcr_registration_capacity'] ?? 1024;
     }
 
     public function responseLimitBytes(bool $readOnly): int
@@ -190,23 +225,15 @@ final class OperationalSettings
     public function save(User $actor, array $values, int $expectedVersion): void
     {
         $keys = array_keys($values);
-        $all = array_keys(self::SETTING_RANGES);
-        // A caller on an existing four-field source still needs a safe
-        // upgrade path. Preserve rather than erase the new SSH overrides.
-        if ($keys !== $all && $keys !== array_slice($all, 0, 4)
-            && $keys !== array_slice($all, 0, 6)
-            && $keys !== array_slice($all, 0, 8)
-            && $keys !== array_slice($all, 0, 13)
-            && $keys !== array_slice($all, 0, 14)) {
+        if (! self::acceptsFormKeys($keys)) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);
         }
-        if ($keys !== $all) {
+        $all = array_keys(self::SETTING_RANGES);
+        if (count($keys) !== count($all)) {
             $previous = $this->state()['overrides'];
-            foreach (array_slice($all, 4) as $key) {
-                // Preserve fields intentionally submitted by an older eight-
-                // key source. Only absent newer fields inherit saved values.
+            foreach ($all as $key) {
                 if (! array_key_exists($key, $values)) {
                     $values[$key] = $previous[$key] ?? null;
                 }
@@ -263,7 +290,9 @@ final class OperationalSettings
                 || ! property_exists($record, 'ssh_job_reconcile_grace_seconds')
                 || ! property_exists($record, 'ssh_job_max_script_kib')
                 || ! property_exists($record, 'ssh_command_stdout_kib')
-                || ! property_exists($record, 'ssh_file_list_name_kib')) {
+                || ! property_exists($record, 'ssh_file_list_name_kib')
+                || ! property_exists($record, 'wp_ability_input_kib')
+                || ! property_exists($record, 'dcr_registration_capacity')) {
                 throw new RuntimeException('Network settings migration is missing.');
             }
             $old = $this->combineOverrides($record);
@@ -297,6 +326,8 @@ final class OperationalSettings
                 'ssh_file_read_window_kib' => $next['ssh_file_read_window_kib'] ?? null,
                 'ssh_file_write_window_kib' => $next['ssh_file_write_window_kib'] ?? null,
                 'ssh_file_list_name_kib' => $next['ssh_file_list_name_kib'] ?? null,
+                'wp_ability_input_kib' => $next['wp_ability_input_kib'] ?? null,
+                'dcr_registration_capacity' => $next['dcr_registration_capacity'] ?? null,
                 'version' => $revision,
                 'changed_by' => $actor->getKey(),
                 'updated_at' => $now,
@@ -363,7 +394,8 @@ final class OperationalSettings
             'ssh_job_reconcile_grace_seconds', 'ssh_job_max_script_kib',
             'ssh_command_stdout_kib', 'ssh_command_stderr_kib',
             'ssh_job_output_window_kib', 'ssh_file_read_window_kib',
-            'ssh_file_write_window_kib', 'ssh_file_list_name_kib'] as $key) {
+            'ssh_file_write_window_kib', 'ssh_file_list_name_kib',
+            'wp_ability_input_kib', 'dcr_registration_capacity'] as $key) {
             $value = $record->{$key} ?? null;
             if ($value === null) {
                 continue;

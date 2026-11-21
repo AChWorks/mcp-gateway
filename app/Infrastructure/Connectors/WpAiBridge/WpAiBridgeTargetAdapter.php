@@ -18,6 +18,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
+use App\Models\User;
 use App\Support\OperationDiagnostics;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Eloquent\Builder;
@@ -80,7 +81,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, 
         }
     }
 
-    public function register(array $input): Target
+    public function register(array $input, ?User $creator = null): Target
     {
         try {
             return $this->container->make(WpAiBridgeTargetRegistration::class)->register(
@@ -89,6 +90,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, 
                 (string) $input['base_url'],
                 $input['ai_guidance'] ?? null,
                 $input['connection_relay_id'] ?? null,
+                $creator,
             );
         } catch (ConnectionRelayUnavailable) {
             throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists.'), 'connection_relay_id', 'relay_unavailable');

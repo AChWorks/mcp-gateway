@@ -19,6 +19,62 @@ final class AccessTargetGroupTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_self_created_scope_respects_direct_and_group_denials_and_permission_ceiling(): void
+    {
+        $creator = $this->user(GatewayRole::Administrator, TargetScopeMode::Selected);
+        $creator->forceFill(['self_created_target_access' => true])->save();
+        $target = Target::query()->forceCreate([
+            'target_id' => 'my-site', 'display_name' => 'My Site',
+            'connector_type' => 'wp_ai_bridge',
+            'created_by_user_id' => $creator->getKey(),
+        ]);
+        $other = $this->site('other');
+        $access = app(AccessControl::class);
+        self::assertTrue($access->allows($creator, GatewayPermission::TargetsView, $target));
+        self::assertTrue($access->allowsTargetPermissions($creator, $target, [
+            GatewayPermission::TargetsView,
+            GatewayPermission::WordpressAbilitiesExecuteMutating,
+        ])[GatewayPermission::WordpressAbilitiesExecuteMutating->value]);
+        self::assertSame(['my-site'], $access->scopeTargets(Target::query(), $creator)->pluck('target_id')->all());
+        self::assertFalse($access->allows($creator, GatewayPermission::TargetsView, $other));
+
+        $group = $this->group('Limits');
+        $this->assign($group, $creator);
+        $this->includeSite($group, $target);
+        $this->deny($group, GatewayPermission::WordpressAbilitiesExecuteMutating);
+        self::assertFalse($access->allows($creator, GatewayPermission::WordpressAbilitiesExecuteMutating, $target));
+        self::assertSame(0, $access->scopeTargets(
+            Target::query(), $creator, GatewayPermission::WordpressAbilitiesExecuteMutating,
+        )->count());
+        self::assertTrue($access->allows($creator, GatewayPermission::TargetsView, $target));
+
+        DB::table('user_target_access')->insert([
+            'user_id' => $creator->getKey(), 'target_record_id' => $target->getKey(),
+            'allowed' => false,
+        ]);
+        self::assertFalse($access->allows($creator, GatewayPermission::TargetsView, $target));
+        self::assertFalse($access->allowsTargetPermissions($creator, $target, [
+            GatewayPermission::TargetsView,
+        ])[GatewayPermission::TargetsView->value]);
+        self::assertSame(0, $access->scopeTargets(Target::query(), $creator)->count());
+        DB::table('user_target_access')->where('user_id', $creator->getKey())->delete();
+
+        $creator->forceFill(['self_created_target_access' => false])->save();
+        $creator->forceFill(['access_enabled' => false])->save();
+        self::assertFalse($access->allows($creator, GatewayPermission::TargetsView, $target));
+        $creator->forceFill(['access_enabled' => true])->save();
+        $creator->forceFill(['target_scope_mode' => TargetScopeMode::All])->save();
+        self::assertTrue($access->allows($creator, GatewayPermission::TargetsView, $other),
+            'All scope is independent of the optional creator source.');
+
+        try {
+            $target->forceFill(['created_by_user_id' => $creator->getKey() + 1])->save();
+            self::fail('Creator provenance must not be reassigned by a Target update.');
+        } catch (\DomainException $exception) {
+            self::assertStringContainsString('immutable', $exception->getMessage());
+        }
+    }
+
     public function test_group_membership_extends_selected_scope_but_direct_site_deny_remains_authoritative(): void
     {
         $operator = $this->user(GatewayRole::Operator, TargetScopeMode::Selected);

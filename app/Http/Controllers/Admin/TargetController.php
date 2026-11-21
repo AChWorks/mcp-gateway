@@ -308,7 +308,7 @@ final class TargetController extends Controller
         }
 
         try {
-            $target = $adapter->register($validated);
+            $target = $adapter->register($validated, $user);
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'registration_rejected';
             // An adapter can establish whether an outbound request happened;
@@ -329,9 +329,8 @@ final class TargetController extends Controller
                 ->with('diagnostic_reference', $reference);
         }
 
-        // Enrollment is not an authorization grant. Selected-scope creators
-        // cannot inspect or operate the new endpoint until the Owner explicitly
-        // assigns it through User -> Target access or an approved Target Group.
+        // Creator attribution is reachability only when the Owner explicitly
+        // enabled self-created scope; connector/role/deny ceilings remain intact.
         if (! $access->allows($user, GatewayPermission::TargetsView, $target)) {
             return redirect()->route('admin.targets.index')
                 ->with('status', $adapter->registrationStatus().' '.__(

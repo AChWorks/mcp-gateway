@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Domain\Targets\Target;
+use App\Models\User;
 
 interface TargetConnectorAdapter
 {
@@ -21,7 +22,7 @@ interface TargetConnectorAdapter
     public function safeOldInputFields(): array;
 
     /** @param array<string, mixed> $input */
-    public function register(array $input): Target;
+    public function register(array $input, ?User $creator = null): Target;
 
     public function registrationStatus(): string;
 

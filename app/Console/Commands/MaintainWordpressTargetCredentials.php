@@ -28,32 +28,55 @@ final class MaintainWordpressTargetCredentials extends Command
             return self::FAILURE;
         }
 
-        // The due index lets us bound work without decrypting or probing
-        // unrelated Targets. Intent-bearing credentials are never auto-replayed.
-        $due = DB::table('wp_ai_bridge_credential_metadata as metadata')
-            ->join('target_credentials as credentials', 'metadata.credential_id', '=', 'credentials.id')
-            ->join('targets', 'credentials.target_record_id', '=', 'targets.id')
-            ->where('targets.connector_type', 'wp_ai_bridge')
-            ->where('targets.connection_state', TargetConnectionState::Connected->value)
-            ->where('credentials.connector_type', 'wp_ai_bridge')
-            ->where('credentials.purpose', 'wordpress_oauth')
-            ->whereNotNull('metadata.refresh_due_at')
-            ->where('metadata.refresh_due_at', '<=', now())
-            ->whereNotExists(static function ($query): void {
-                $query->selectRaw('1')
-                    ->from('wp_ai_bridge_refresh_intents as intents')
-                    ->whereColumn('intents.target_record_id', 'targets.id');
-            })
-            ->orderBy('metadata.refresh_due_at')
-            ->limit((int) $option)
-            ->pluck('targets.id');
+        // A durable keyset lets each scheduler run advance even if hundreds of
+        // old Targets stay due because their credentials/endpoint are unusable.
+        // Intent-bearing credentials are never replayed by this cursor.
+        $cursor = DB::table('wp_credential_maintenance_progress')->where('id', 1)->first();
+        if ($cursor === null) {
+            throw new \RuntimeException('WordPress credential maintenance migration is missing.');
+        }
+        $query = static function (?object $after) use ($option) {
+            return DB::table('wp_ai_bridge_credential_metadata as metadata')
+                ->join('target_credentials as credentials', 'metadata.credential_id', '=', 'credentials.id')
+                ->join('targets', 'credentials.target_record_id', '=', 'targets.id')
+                ->where('targets.connector_type', 'wp_ai_bridge')
+                ->where('targets.connection_state', TargetConnectionState::Connected->value)
+                ->where('credentials.connector_type', 'wp_ai_bridge')
+                ->where('credentials.purpose', 'wordpress_oauth')
+                ->whereNotNull('metadata.refresh_due_at')
+                ->where('metadata.refresh_due_at', '<=', now())
+                ->whereNotExists(static function ($q): void {
+                    $q->selectRaw('1')->from('wp_ai_bridge_refresh_intents as intents')
+                        ->whereColumn('intents.target_record_id', 'targets.id');
+                })
+                ->when($after !== null && $after->last_due_at !== null && $after->last_target_id !== null,
+                    static fn ($q) => $q->where(static function ($position) use ($after): void {
+                        $position->where('metadata.refresh_due_at', '>', $after->last_due_at)
+                            ->orWhere(static function ($same) use ($after): void {
+                                $same->where('metadata.refresh_due_at', $after->last_due_at)
+                                    ->where('targets.id', '>', $after->last_target_id);
+                            });
+                    }))
+                ->orderBy('metadata.refresh_due_at')->orderBy('targets.id')
+                ->limit((int) $option)->get(['targets.id', 'metadata.refresh_due_at']);
+        };
+        $due = $query($cursor);
+        if ($due->isEmpty() && $cursor->last_target_id !== null) {
+            DB::table('wp_credential_maintenance_progress')->where('id', 1)->update([
+                'last_due_at' => null, 'last_target_id' => null, 'updated_at' => now(),
+            ]);
+            $due = $query(null);
+        }
 
         $success = 0;
         $failures = 0;
         $recovered = 0;
         /** @var list<array{record_id:string,target_id:string}> $recoveries */
         $recoveries = [];
-        foreach ($due as $id) {
+        $last = null;
+        foreach ($due as $selected) {
+            $last = $selected;
+            $id = (string) $selected->id;
             // Drain an older recovery before its 45-second Gateway window
             // closes; waiting happens only once for the tail of the batch.
             $this->recoverPending($recoveries, $connections, $success, $failures, $recovered, false);
@@ -93,8 +116,15 @@ final class MaintainWordpressTargetCredentials extends Command
         }
 
         $this->recoverPending($recoveries, $connections, $success, $failures, $recovered, true);
-        $this->info(sprintf('WordPress Target maintenance: renewed=%d recovered=%d failed=%d',
-            $success, $recovered, $failures));
+        if ($last !== null) {
+            DB::table('wp_credential_maintenance_progress')->where('id', 1)->update([
+                'last_due_at' => $last->refresh_due_at,
+                'last_target_id' => $last->id,
+                'updated_at' => now(),
+            ]);
+        }
+        $this->info(sprintf('WordPress Target maintenance: scanned=%d renewed=%d recovered=%d failed=%d',
+            $due->count(), $success, $recovered, $failures));
 
         return $failures === 0 ? self::SUCCESS : self::FAILURE;
     }

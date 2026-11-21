@@ -321,6 +321,44 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertSame([], $this->downstream);
     }
 
+    public function test_encoded_ability_input_accepts_exact_one_mib_and_rejects_one_byte_over_without_dispatch(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $tool = app(WordpressTargetMcpToolHandlers::class);
+        $limit = 1024 * 1024;
+        $overhead = strlen(json_encode(['payload' => ''], JSON_THROW_ON_ERROR));
+        $variants = [
+            'ascii' => ['payload' => str_repeat('a', $limit - $overhead)],
+            'persian' => ['payload' => str_repeat('ک', intdiv($limit - $overhead, 6))
+                .str_repeat('a', ($limit - $overhead) % 6)],
+        ];
+        foreach ($variants as $variant => $atLimit) {
+            self::assertSame($limit, strlen(json_encode($atLimit, JSON_THROW_ON_ERROR)), $variant);
+            $sent = count($this->downstream);
+            $ok = $tool->execute($owner, 'alpha', 'demo/read', $atLimit);
+            self::assertTrue($ok['ok'], $variant.': '.json_encode($ok));
+            self::assertGreaterThan($sent, count($this->downstream), 'Exact ceiling must pass admission.');
+            $sent = count($this->downstream);
+            $overLimit = $atLimit;
+            $overLimit['payload'] .= 'a';
+            $denied = $tool->execute($owner, 'alpha', 'demo/read', $overLimit);
+            self::assertSame('invalid_input', $denied['error']['code']);
+            self::assertSame($sent, count($this->downstream), 'Oversized input must be rejected before bridge dispatch.');
+        }
+
+        DB::table('operational_settings')->where('id', 1)->update(['wp_ability_input_kib' => 16]);
+        // Simulate a new FPM request (OperationalSettings is scoped).
+        app()->forgetScopedInstances();
+        $tool = app(WordpressTargetMcpToolHandlers::class);
+        $small = ['payload' => str_repeat('a', 16384 - $overhead)];
+        self::assertTrue($tool->execute($owner, 'alpha', 'demo/read', $small)['ok']);
+        $sent = count($this->downstream);
+        $small['payload'] .= 'a';
+        self::assertSame('invalid_input', $tool->execute($owner, 'alpha', 'demo/read', $small)['error']['code']);
+        self::assertSame($sent, count($this->downstream));
+    }
+
     public function test_target_scope_and_execution_class_denials_do_not_leak_or_send_unauthorized_requests(): void
     {
         $operator = $this->user('operator');
@@ -338,7 +376,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertSame('target_not_found', $handlers->execute($operator, 'beta', 'demo/read', [])['error']['code']);
         self::assertSame('target_not_found', $handlers->execute($operator, '../alpha', 'demo/read', [])['error']['code']);
         self::assertSame('invalid_input', $handlers->read($operator, 'alpha', per_page: 101)['error']['code']);
-        self::assertSame('invalid_input', $handlers->execute($operator, 'alpha', 'demo/read', ['large' => str_repeat('x', 262144)])['error']['code']);
+        self::assertSame('invalid_input', $handlers->execute($operator, 'alpha', 'demo/read', ['large' => str_repeat('x', 1048576)])['error']['code']);
         self::assertCount($baseline, $this->downstream);
 
         self::assertTrue($handlers->execute($operator, 'alpha', 'demo/read', [])['ok']);

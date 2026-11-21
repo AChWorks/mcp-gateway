@@ -11,6 +11,7 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
+use App\Infrastructure\Connectors\SshDirect\SftpDirectoryPaginator;
 use App\Infrastructure\Connectors\SshDirect\SshFileAdmission;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
@@ -79,42 +80,46 @@ final readonly class SshFileRuntime
     }
 
     /** @return array<string,mixed> */
-    public function list(User $user, Target $target, string $path, int $limit = 100): array
+    public function list(User $user, Target $target, string $path, int $limit = 100, ?string $cursor = null): array
     {
         $this->validatePath($path);
         if ($limit < 1 || $limit > self::MAX_LIST_ITEMS) {
             throw new SshTargetConnectionException('invalid_input');
         }
-
+        // Resolve one specific immutable SSH binding for this pagination run.
+        // Permission is checked before looking up the connector configuration;
+        // operate() independently rechecks and pins it before any remote dial.
+        if (! $this->access->allows($user, GatewayPermission::SshFileRead, $target)) {
+            throw new SshTargetConnectionException('target_not_found');
+        }
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
+        if (! $config instanceof SshTargetConfig) {
+            throw new SshTargetConnectionException('credential_unavailable');
+        }
+        $binding = SshTargetBinding::hash($target, $config);
+        $offset = 0;
+        if ($cursor !== null) {
+            if (! preg_match('/^([0-9]{1,15})\.([a-f0-9]{64})$/D', $cursor, $match)) {
+                throw new SshTargetConnectionException('invalid_input');
+            }
+            $offset = filter_var($match[1], FILTER_VALIDATE_INT);
+            if (! is_int($offset) || $offset < 1 || ! hash_equals(
+                $this->listCursorSignature($user, $target, $binding, $path, $limit, $offset), $match[2],
+            )) {
+                throw new SshTargetConnectionException('invalid_input');
+            }
+        }
         $nameLimit = $this->settings->sshFileLimits()['list_name_bytes'];
 
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config) use ($path, $limit, $nameLimit): array {
+            function (SFTP $sftp, string $ip, SshTargetConfig $config) use ($user, $target, $binding, $path, $limit, $nameLimit, $offset): array {
                 $sftp->disableStatCache();
-                $entries = [];
-                $nameBytes = 0;
-                $onFile = function (string $dir, string $name, array $attributes) use (
-                    &$entries, &$nameBytes, $limit, $nameLimit,
-                ): void {
-                    if ($name === '.' || $name === '..') {
-                        return;
-                    }
-                    $nameBytes += strlen($name);
-                    if (count($entries) >= $limit || $nameBytes > $nameLimit
-                        || ! mb_check_encoding($name, 'UTF-8')) {
-                        // rawlist's onFile fires per entry, before adding another
-                        // network batch. Fail as oversize; never fake pagination.
-                        throw new SshTargetConnectionException('listing_too_large');
-                    }
-                    $entries[] = ['name' => $name, ...$this->safeAttributes($attributes)];
-                };
-
                 try {
                     $attributes = $sftp->stat($path);
                     if (($attributes['type'] ?? null) !== FileType::DIRECTORY) {
                         throw new SshTargetConnectionException('not_directory');
                     }
-                    $sftp->rawlist($path, false, $onFile);
+                    $page = (new SftpDirectoryPaginator)->read($sftp, $path, $offset, $limit, $nameLimit);
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
                 } catch (FileSystemException $exception) {
@@ -123,17 +128,37 @@ final readonly class SshFileRuntime
                     throw $this->unexpectedSftpFailure($exception);
                 }
 
-                usort($entries, static fn (array $a, array $b): int => strcmp($a['name'], $b['name']));
+                $entries = array_map(fn (array $entry): array => [
+                    'name' => $entry['name'], ...$this->safeAttributes($entry['attributes']),
+                ], $page['items']);
+                $nextOffset = $offset + count($entries);
+                $hasMore = $page['has_more'];
 
                 return [
                     ...$this->context($ip, $config, $path),
                     'status' => 'completed',
                     'items' => $entries,
                     'count' => count($entries),
-                    'complete' => true,
-                    'continuation_available' => false,
+                    'complete' => ! $hasMore,
+                    'continuation_available' => $hasMore,
+                    'next_cursor' => $hasMore ? $nextOffset.'.'.$this->listCursorSignature(
+                        $user, $target, $binding, $path, $limit, $nextOffset,
+                    ) : null,
+                    // SFTP READDIR supplies no transactional directory snapshot.
+                    // Stable directory contents are necessary for reliable
+                    // positional continuation; concurrent changes may shift
+                    // entries and require restarting from the first page.
+                    'consistency' => 'stable_directory_best_effort',
                 ];
-            });
+            }, expectedTargetBinding: $binding);
+    }
+
+    private function listCursorSignature(User $user, Target $target, string $binding, string $path, int $limit, int $offset): string
+    {
+        return hash_hmac('sha256', implode("\0", [
+            (string) $user->getKey(), (string) $target->getKey(),
+            (string) $target->target_id, $binding, $path, (string) $limit, (string) $offset,
+        ]), (string) config('app.key'));
     }
 
     /** @return array<string,mixed> */

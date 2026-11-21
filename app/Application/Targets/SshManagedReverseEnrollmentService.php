@@ -12,6 +12,7 @@ use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
+use App\Models\User;
 use App\Support\CorrelationId;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -48,7 +49,7 @@ final readonly class SshManagedReverseEnrollmentService
     /** @return array{enrollment:SshManagedReverseEnrollment,token:string} */
     public function begin(
         string $targetId, string $displayName, string $host, int $port,
-        string $username, string $hostPublicKey, ?string $aiGuidance = null,
+        string $username, string $hostPublicKey, ?string $aiGuidance = null, ?User $creator = null,
     ): array {
         $endpoint = SshRegisteredEndpoint::fromInput($host, $port, $username);
         $pin = SshHostKeyPin::fromLine($hostPublicKey);
@@ -72,7 +73,7 @@ final readonly class SshManagedReverseEnrollmentService
         $token = bin2hex(random_bytes(32));
 
         $enrollment = DB::transaction(function () use (
-            $targetId, $displayName, $aiGuidance, $endpoint, $pin, $loginPrivate, $loginPublic, $token
+            $targetId, $displayName, $aiGuidance, $endpoint, $pin, $loginPrivate, $loginPublic, $token, $creator
         ): SshManagedReverseEnrollment {
             // Locks serialize port ownership even before a Target config exists.
             $gateway = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
@@ -85,7 +86,8 @@ final readonly class SshManagedReverseEnrollmentService
                 throw new InvalidArgumentException('The Target ID is already registered.');
             }
             $port = $this->allocatePort();
-            $target = Target::query()->create([
+            $target = Target::query()->forceCreate([
+                'created_by_user_id' => $creator?->getKey(),
                 'target_id' => $targetId,
                 'display_name' => $displayName,
                 'ai_guidance' => $aiGuidance,

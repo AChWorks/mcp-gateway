@@ -18,6 +18,7 @@ use App\Infrastructure\Http\Api\ApiHttpTransport;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
+use App\Models\User;
 use App\Support\CorrelationId;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
@@ -76,7 +77,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         }
     }
 
-    public function register(array $input): Target
+    public function register(array $input, ?User $creator = null): Target
     {
         try {
             $base = $this->canonical((string) $input['api_base_url']);
@@ -84,8 +85,9 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             $probe = $this->validatedProbe($input['api_probe_path'] ?? null);
             $key = (string) $input['api_key'];
 
-            return DB::transaction(function () use ($input, $base, $spec, $probe, $key): Target {
-                $target = Target::query()->create([
+            return DB::transaction(function () use ($input, $base, $spec, $probe, $key, $creator): Target {
+                $target = Target::query()->forceCreate([
+                    'created_by_user_id' => $creator?->getKey(),
                     'target_id' => (string) $input['target_id'],
                     'display_name' => (string) $input['display_name'],
                     'ai_guidance' => $input['ai_guidance'] ?? null,

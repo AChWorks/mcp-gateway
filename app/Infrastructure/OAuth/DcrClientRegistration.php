@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\OAuth;
 
+use App\Application\Operations\OperationalSettings;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
@@ -10,8 +11,6 @@ use RuntimeException;
 
 final class DcrClientRegistration
 {
-    private const REGISTRATION_LIMIT = 512;
-
     private const MAX_REDIRECT_URIS = 4;
 
     // Count successful admissions globally, not invalid or malformed requests.
@@ -25,6 +24,8 @@ final class DcrClientRegistration
     private const RECLAIM_BATCH_SIZE = 8;
 
     private const RECLAIM_SNAPSHOT_MAX_ATTEMPTS = 3;
+
+    public function __construct(private OperationalSettings $settings) {}
 
     /**
      * RFC 7591 public registration of an authenticated, PKCE-required client.
@@ -104,11 +105,12 @@ final class DcrClientRegistration
                     // The admission anchor serializes the check and subsequent hit.
                     $this->assertGlobalAdmissionAvailable();
 
-                    if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
+                    $capacity = $this->settings->dcrRegistrationCapacity();
+                    if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= $capacity) {
                         $this->reclaimExpiredNeverAuthorizedRegistrations();
                     }
 
-                    if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= self::REGISTRATION_LIMIT) {
+                    if (DB::table('oauth_dcr_clients')->whereNull('retired_at')->count() >= $capacity) {
                         throw new RuntimeException('OAuth client registration capacity is unavailable.');
                     }
 

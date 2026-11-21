@@ -88,7 +88,7 @@ final readonly class AccessBatchCatalog
             $rows = $query->orderBy('display_name')->orderBy('target_id')
                 ->offset(($page - 1) * AccessBatchContext::PAGE_SIZE)
                 ->limit(AccessBatchContext::PAGE_SIZE + 1)
-                ->get(['targets.id', 'targets.target_id', 'targets.display_name', 'targets.connector_type']);
+                ->get(['targets.id', 'targets.target_id', 'targets.display_name', 'targets.connector_type', 'targets.created_by_user_id']);
             $hasMore = $rows->count() > AccessBatchContext::PAGE_SIZE;
             $models = $rows->take(AccessBatchContext::PAGE_SIZE)->values()->all();
             $items = $this->targetRows($context, $subject, $models);
@@ -191,9 +191,16 @@ final readonly class AccessBatchCatalog
             if ($members) {
                 $q->whereExists(fn (QueryBuilder $sub) => $this->directScopeSubquery($sub, $subject))
                     ->orWhereExists(fn (QueryBuilder $sub) => $this->groupScopeSubquery($sub, $subject));
+                if ($subject->self_created_target_access) {
+                    $q->orWhere('targets.created_by_user_id', $subject->getKey());
+                }
             } else {
                 $q->whereNotExists(fn (QueryBuilder $sub) => $this->directScopeSubquery($sub, $subject)->where('allowed', true))
                     ->whereNotExists(fn (QueryBuilder $sub) => $this->groupScopeSubquery($sub, $subject));
+                if ($subject->self_created_target_access) {
+                    $q->where(static fn (Builder $q) => $q->whereNull('targets.created_by_user_id')
+                        ->orWhere('targets.created_by_user_id', '!=', $subject->getKey()));
+                }
             }
         });
     }
@@ -243,23 +250,27 @@ final readonly class AccessBatchCatalog
         $unrestricted = AccessBatchGuard::isOwner($subject);
         $all = $subject->getRawOriginal('target_scope_mode') === TargetScopeMode::All->value || $unrestricted;
 
-        return array_map(function (Target $target) use ($rules, $denials, $groups, $unrestricted, $all): array {
+        return array_map(function (Target $target) use ($rules, $denials, $groups, $subject, $unrestricted, $all): array {
             $id = (string) $target->getKey();
             $allowed = $rules->get($id);
             $rule = $allowed === null ? 'inherit' : ((bool) $allowed ? 'allow' : 'deny');
             $groupCount = (int) $groups->get($id, 0);
+            $creatorSource = (bool) $subject->self_created_target_access
+                && $target->created_by_user_id !== null
+                && (string) $target->created_by_user_id === (string) $subject->getKey();
             $path = match (true) {
                 $unrestricted => __('Owner recovery scope'),
                 $rule === 'deny' => __('Explicitly blocked'),
                 $all => __('All Targets scope'),
                 $rule === 'allow' => __('Direct rule'),
                 $groupCount > 0 => __('Group membership (:count)', ['count' => $groupCount]),
+                $creatorSource => __('Self-created Target access'),
                 default => __('Not assigned'),
             };
 
             return [
                 ...$this->memberRow($id, (string) $target->display_name, (string) $target->target_id,
-                    $rule !== 'inherit' || $all || $groupCount > 0, ! $unrestricted,
+                    $rule !== 'inherit' || $all || $groupCount > 0 || $creatorSource, ! $unrestricted,
                     $unrestricted ? __('Owners remain unrestricted.') : null),
                 'target_id' => (string) $target->target_id, 'connector_type' => (string) $target->connector_type,
                 'access_rule' => $rule, 'scope_path' => $path, 'restriction_count' => (int) $denials->get($id, 0),

@@ -501,9 +501,58 @@ final class SshFileFixtureTest extends TestCase
         self::assertTrue($read['result']['end_of_file']);
 
         $limited = $tools->list($owner, $target->target_id, $this->home(), 1);
-        self::assertFalse($limited['ok']);
-        self::assertSame('listing_too_large', $limited['error']['code']);
-        self::assertArrayNotHasKey('items', $limited);
+        self::assertTrue($limited['ok'], json_encode($limited));
+        self::assertCount(1, $limited['result']['items']);
+        self::assertTrue($limited['result']['continuation_available']);
+        self::assertFalse($limited['result']['complete']);
+        $continued = $tools->list($owner, $target->target_id, $this->home(), 1,
+            $limited['result']['next_cursor']);
+        self::assertTrue($continued['ok'], json_encode($continued));
+        self::assertNotSame($limited['result']['items'][0]['name'], $continued['result']['items'][0]['name']);
+    }
+
+    public function test_large_stable_sftp_directory_pages_without_duplicate_or_missing_entries(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        $directory = $this->home().'/sftp-paging-'.bin2hex(random_bytes(6));
+        $commands = app(SshCommandRuntime::class);
+        $prepare = $commands->run($owner, $target,
+            'mkdir -m 700 -- '.escapeshellarg($directory)
+            .' && i=1; while [ "$i" -le 235 ]; do touch -- '.escapeshellarg($directory)
+            .'/"$(printf "%04d" "$i")"; i=$((i+1)); done',
+        );
+        self::assertSame(0, $prepare['exit_code'], json_encode($prepare));
+        try {
+            $tools = app(SshFileMcpToolHandlers::class);
+            $names = [];
+            $cursor = null;
+            $pageCount = 0;
+            do {
+                $page = $tools->list($owner, $target->target_id, $directory, 80, $cursor);
+                self::assertTrue($page['ok'], json_encode($page));
+                self::assertLessThanOrEqual(80, $page['result']['count']);
+                self::assertSame('stable_directory_best_effort', $page['result']['consistency']);
+                $names = array_merge($names, array_column($page['result']['items'], 'name'));
+                $cursor = $page['result']['next_cursor'];
+                $pageCount++;
+                self::assertLessThan(6, $pageCount, 'Unexpected looping cursor.');
+            } while ($cursor !== null);
+            self::assertSame(3, $pageCount);
+            self::assertCount(235, $names);
+            self::assertCount(235, array_unique($names));
+            sort($names);
+            self::assertSame(array_map(static fn (int $n): string => sprintf('%04d', $n), range(1, 235)), $names);
+        } finally {
+            $cleanup = $commands->run($owner, $target, 'rm -f -- '.escapeshellarg($directory)
+                .'/* && rmdir -- '.escapeshellarg($directory));
+            // Shell globs may not be expanded when quoted. Inspect a failed
+            // cleanup in the disposable fixture rather than silently leaking.
+            if (($cleanup['exit_code'] ?? 1) !== 0) {
+                $commands->run($owner, $target, 'find '.escapeshellarg($directory)
+                    .' -mindepth 1 -maxdepth 1 -type f -delete && rmdir -- '.escapeshellarg($directory));
+            }
+        }
     }
 
     public function test_sftp_subsystem_is_required_and_library_shell_fallback_is_blocked(): void

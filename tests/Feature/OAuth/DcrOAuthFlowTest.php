@@ -511,6 +511,11 @@ final class DcrOAuthFlowTest extends TestCase
 
     public function test_dcr_retirement_restores_capacity_with_tombstones_retained(): void
     {
+        // This fixture intentionally exercises an Owner-lowered 512-client
+        // setting; the independent default-boundary test covers 1024 clients.
+        DB::table('operational_settings')->where('id', 1)->update([
+            'dcr_registration_capacity' => 512,
+        ]);
         // Seed 512 structurally valid dormant registered clients without using
         // the public HTTP throttle or any real Gateway credential.
         $profileRows = [];

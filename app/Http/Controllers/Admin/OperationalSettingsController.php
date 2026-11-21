@@ -48,6 +48,8 @@ final class OperationalSettingsController extends Controller
                 'ssh_file_read_window_kib' => 16,
                 'ssh_file_write_window_kib' => 16,
                 'ssh_file_list_name_kib' => 16,
+                'wp_ability_input_kib' => 1024,
+                'dcr_registration_capacity' => 1024,
             ],
         ]);
     }
@@ -74,26 +76,14 @@ final class OperationalSettingsController extends Controller
         $validated = $request->validate($rules);
         $submitted = $validated['values'];
         $names = array_keys((array) $request->input('values', []));
-        $all = array_keys($definitions);
-        $legacy = array_slice($all, 0, 2);
-        $preSsh = array_slice($all, 0, 4);
-        $preSshCommand = array_slice($all, 0, 6);
-        $preSshJobs = array_slice($all, 0, 8);
-        $preScriptBudget = array_slice($all, 0, 13);
-        $prePayloadBudgets = array_slice($all, 0, 14);
-        sort($names);
-        sort($all);
-        sort($legacy);
-        sort($preSsh);
-        sort($preSshCommand);
-        sort($preSshJobs);
-        sort($preScriptBudget);
-        sort($prePayloadBudgets);
-        if ($names !== $all && $names !== $legacy && $names !== $preSsh && $names !== $preSshCommand && $names !== $preSshJobs && $names !== $preScriptBudget && $names !== $prePayloadBudgets) {
+        if (! OperationalSettings::acceptsFormKeys($names)) {
             throw ValidationException::withMessages([
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);
         }
+        $all = array_keys($definitions);
+        sort($all);
+        sort($names);
 
         // Forms opened on the previous version still submit only the two
         // response budgets. Preserve both timeout overrides instead of

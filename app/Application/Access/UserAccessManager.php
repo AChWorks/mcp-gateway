@@ -18,7 +18,7 @@ final readonly class UserAccessManager
     public function __construct(private ActivityRecorder $activity, private AccessControl $access) {}
 
     /**
-     * @param  array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool,ai_access_enabled?:bool}  $attributes
+     * @param  array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool,ai_access_enabled?:bool,self_created_target_access?:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
     public function create(array $attributes, array $deniedPermissions, bool $allowSshPermissionChanges = false): User
@@ -47,6 +47,7 @@ final readonly class UserAccessManager
                 'target_scope_mode' => $scope->value,
                 'access_enabled' => (bool) $attributes['access_enabled'],
                 'ai_access_enabled' => (bool) ($attributes['ai_access_enabled'] ?? false),
+                'self_created_target_access' => (bool) ($attributes['self_created_target_access'] ?? false),
             ]);
 
             $this->replaceGlobalDenials($user, $role, [
@@ -63,7 +64,7 @@ final readonly class UserAccessManager
     }
 
     /**
-     * @param  array{name:string,email:string,password?:string|null,role:string,target_scope_mode:string,access_enabled:bool,ai_access_enabled?:bool}  $attributes
+     * @param  array{name:string,email:string,password?:string|null,role:string,target_scope_mode:string,access_enabled:bool,ai_access_enabled?:bool,self_created_target_access?:bool}  $attributes
      * @param  list<string>  $deniedPermissions
      */
     public function update(User $user, array $attributes, array $deniedPermissions, bool $allowSshPermissionChanges = false): User
@@ -109,6 +110,11 @@ final readonly class UserAccessManager
             $priorAiAccess = (bool) $lockedUser->ai_access_enabled;
             if (array_key_exists('ai_access_enabled', $attributes)) {
                 $values['ai_access_enabled'] = (bool) $attributes['ai_access_enabled'];
+            }
+            // Programmatic edits that omit the optional creator-scope choice
+            // must not silently revoke it. Browser forms submit 0 or 1.
+            if (array_key_exists('self_created_target_access', $attributes)) {
+                $values['self_created_target_access'] = (bool) $attributes['self_created_target_access'];
             }
             $lockedUser->fill($values)->save();
             if ($priorAiAccess && ! (bool) $lockedUser->ai_access_enabled) {
@@ -537,7 +543,11 @@ final readonly class UserAccessManager
             return;
         }
 
-        $user->forceFill(['target_scope_mode' => TargetScopeMode::All->value])->save();
+        // An unrestricted Owner never needs a dormant creator grant.
+        $user->forceFill([
+            'target_scope_mode' => TargetScopeMode::All->value,
+            'self_created_target_access' => false,
+        ])->save();
 
         $activePermissions = array_map(
             static fn (GatewayPermission $permission): string => $permission->value,
