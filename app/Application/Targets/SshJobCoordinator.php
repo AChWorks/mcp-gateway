@@ -783,7 +783,8 @@ final readonly class SshJobCoordinator
                 }
                 $stats['eligible']++;
                 $stats['processed']++;
-                if (! $this->remoteUnitStopped($user, $target, $row)) {
+                $stopProof = $this->remoteUnitStopProof($user, $target, $row);
+                if ($stopProof === null) {
                     $stats['retained_by_policy']++;
                     Log::notice('SSH Job spool retained: remote process stop was not proven.', [
                         'job_id' => $row->id,
@@ -800,6 +801,14 @@ final readonly class SshJobCoordinator
                     .' && test ! -L '.escapeshellarg($directory)
                     .' && test "$(stat -c %a -- '.escapeshellarg($directory).')" = 700'
                     .' && test "$(stat -c %u -- '.escapeshellarg($directory).')" = "$(id -u)"'
+                    // A collected unit is NOT itself a stop witness. When
+                    // the systemd unit is no longer inspectable, require
+                    // the independently journaled wrapper exit marker to
+                    // still match inside the verified original private dir.
+                    .($stopProof === 'exit_marker'
+                        ? ' && test "$(cat -- '.escapeshellarg($directory.'/exit-code').')" = '
+                            .escapeshellarg((string) (int) $row->exit_code)
+                        : '')
                     .' && rm -f -- '.implode(' ', array_map(
                         static fn (string $file): string => escapeshellarg($directory.'/'.$file),
                         ['script.sh', 'wrapper.sh', 'stdout', 'stderr', 'exit-code',
@@ -834,15 +843,19 @@ final readonly class SshJobCoordinator
     }
 
     /**
-     * Central terminal status alone is not proof that a surviving unit is
-     * stopped. Before touching a possibly live spool, query the ORIGINAL
-     * authenticated manager for both the active state and process identities.
-     * Unavailable managers or ambiguous replies keep the durable Job.
+     * The original authenticated systemd manager can prove a loaded unit is
+     * stopped. Collected units (LoadState=not-found) are different: systemctl
+     * exits zero and reports inactive/zero PIDs even for a NEVER-EXISTING Job.
+     * Permit cleanup only with another positive independent terminal witness:
+     * a prior verified cancel transition, or a previously recorded exit code
+     * whose exact remote private marker is rechecked during the cleanup CAS.
+     *
+     * @return 'loaded'|'canceled'|'exit_marker'|null
      */
-    private function remoteUnitStopped(User $user, Target $target, object $row): bool
+    private function remoteUnitStopProof(User $user, Target $target, object $row): ?string
     {
         if (! in_array($row->unit_mode, ['system', 'user'], true)) {
-            return false;
+            return null;
         }
         $mode = (string) $row->unit_mode;
         $result = $this->safeCommand($user, $target,
@@ -850,22 +863,59 @@ final readonly class SshJobCoordinator
             .'show '.escapeshellarg($this->unit((string) $row->id))
             .' --property=LoadState --property=ActiveState --property=MainPID --property=ControlPID --no-pager',
             8, (string) $row->target_binding_hash);
+        if (! $this->successful($result)) {
+            return null;
+        }
+        $state = (string) ($result['stdout'] ?? '');
+        if ($this->stoppedUnitEvidence($state)) {
+            return 'loaded';
+        }
+        if (! $this->collectedUnitEvidence($state)) {
+            return null;
+        }
 
-        return $this->successful($result) && $this->stoppedUnitEvidence((string) ($result['stdout'] ?? ''));
+        return $this->collectedTerminalProof($row);
+    }
+
+    /** @return 'canceled'|'exit_marker'|null */
+    private function collectedTerminalProof(object $row): ?string
+    {
+        // The only runtime transition to canceled required a successful
+        // systemctl stop AND a separate inactive/zero-PID verification.
+        if ($row->status === 'canceled' && $row->terminal_reason === 'canceled'
+            && $row->exit_code === null) {
+            return 'canceled';
+        }
+        // Never trust a stored terminal claim alone. A real wrapper may have
+        // completed after systemd's status was read and its unit collected;
+        // require a matching durable exit marker in the original private
+        // spool in the SAME cleanup command that unlinks the files.
+        if (in_array($row->status, ['completed', 'failed'], true)
+            && $row->exit_code !== null && (int) $row->exit_code >= 0
+            && (int) $row->exit_code <= 255
+            && $row->terminal_reason !== 'pre_dispatch_abandoned') {
+            return 'exit_marker';
+        }
+
+        return null;
     }
 
     private function stoppedUnitEvidence(string $response): bool
     {
         $state = trim($response);
 
-        // systemctl show returns EXIT CODE ZERO for an unknown unit, with
-        // ActiveState=inactive and both PIDs zero. That is NOT evidence that
-        // any previously dispatched script actually stopped. Only a loaded,
-        // retained original unit with independently observed zero live PIDs
-        // can authorize automated spool deletion. A collected unit requires
-        // explicit operator reconciliation, never guessed cleanup.
         return preg_match('/(?:^|\n)LoadState=loaded(?:\n|$)/D', $state) === 1
             && preg_match('/(?:^|\n)ActiveState=(?:inactive|failed)(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)MainPID=0(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)ControlPID=0(?:\n|$)/D', $state) === 1;
+    }
+
+    private function collectedUnitEvidence(string $response): bool
+    {
+        $state = trim($response);
+
+        return preg_match('/(?:^|\n)LoadState=not-found(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)ActiveState=inactive(?:\n|$)/D', $state) === 1
             && preg_match('/(?:^|\n)MainPID=0(?:\n|$)/D', $state) === 1
             && preg_match('/(?:^|\n)ControlPID=0(?:\n|$)/D', $state) === 1;
     }

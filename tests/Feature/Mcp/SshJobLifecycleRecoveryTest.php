@@ -59,6 +59,39 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             "LoadState=loaded\nActiveState=active\nMainPID=10\nControlPID=0\n"));
         self::assertFalse($probe->invoke($jobs,
             "LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlPID=90\n"));
+
+        $collected = new \ReflectionMethod(SshJobCoordinator::class, 'collectedUnitEvidence');
+        self::assertTrue($collected->invoke($jobs, $missing),
+            'Unit collection requires additional independent terminal proof.');
+        self::assertFalse($collected->invoke($jobs,
+            "LoadState=not-found\nActiveState=active\nMainPID=0\nControlPID=0\n"));
+        self::assertFalse($collected->invoke($jobs,
+            "LoadState=not-found\nActiveState=inactive\nMainPID=1\nControlPID=0\n"));
+        self::assertFalse($collected->invoke($jobs,
+            "LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlPID=0\n"));
+
+        $history = new \ReflectionMethod(SshJobCoordinator::class, 'collectedTerminalProof');
+        self::assertNull($history->invoke($jobs, (object) [
+            'status' => 'launch_unknown', 'terminal_reason' => null, 'exit_code' => null,
+        ]));
+        self::assertNull($history->invoke($jobs, (object) [
+            'status' => 'failed', 'terminal_reason' => 'systemd_exit-code', 'exit_code' => null,
+        ]));
+        self::assertNull($history->invoke($jobs, (object) [
+            'status' => 'canceled', 'terminal_reason' => 'outcome_unknown', 'exit_code' => null,
+        ]));
+        self::assertSame('canceled', $history->invoke($jobs, (object) [
+            'status' => 'canceled', 'terminal_reason' => 'canceled', 'exit_code' => null,
+        ]));
+        self::assertSame('exit_marker', $history->invoke($jobs, (object) [
+            'status' => 'failed', 'terminal_reason' => 'systemd_exit-code', 'exit_code' => 7,
+        ]));
+        self::assertSame('exit_marker', $history->invoke($jobs, (object) [
+            'status' => 'completed', 'terminal_reason' => 'script_exit', 'exit_code' => 0,
+        ]));
+        self::assertNull($history->invoke($jobs, (object) [
+            'status' => 'failed', 'terminal_reason' => 'pre_dispatch_abandoned', 'exit_code' => 0,
+        ]));
     }
 
     #[Group('database-concurrency')]
