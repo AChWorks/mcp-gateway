@@ -14,6 +14,18 @@
             'keys' => ['wp_response_kib', 'wp_readonly_response_kib'],
         ],
         [
+            'id' => 'wordpress-input',
+            'title' => __('WordPress Ability input'),
+            'description' => __('Limits the encoded JSON input for one Ability. The whole WP AI Bridge JSON-RPC request must independently fit its downstream setting and hosting limits.'),
+            'keys' => ['wp_ability_input_kib'],
+        ],
+        [
+            'id' => 'oauth-dcr',
+            'title' => __('OAuth client registration capacity'),
+            'description' => __('Maximum active unretired DCR clients. This does not change registration enablement, per-IP limits, or the 15-per-hour successful admission quota.'),
+            'keys' => ['dcr_registration_capacity'],
+        ],
+        [
             'id' => 'wordpress-deadlines',
             'title' => __('WordPress connection deadlines'),
             'description' => __('Bound connection establishment and total request time. The total deadline includes DNS lookup and response processing.'),
@@ -51,6 +63,8 @@
     $descriptions = [
         'wp_response_kib' => __('Ordinary, OAuth and mutating responses'),
         'wp_readonly_response_kib' => __('Confirmed read-only Ability responses'),
+        'wp_ability_input_kib' => __('Maximum encoded Ability input'),
+        'dcr_registration_capacity' => __('Active DCR client registrations'),
         'wp_connect_timeout_seconds' => __('Connection establishment'),
         'wp_request_timeout_seconds' => __('Total request deadline'),
         'ssh_transfer_max_kib' => __('Maximum whole-file size'),
@@ -149,13 +163,14 @@
                             $isTime = str_ends_with($key, '_seconds');
                             $unit = str_ends_with($key, '_hours') ? __('hours')
                                 : (str_ends_with($key, '_per_user') ? __('jobs')
-                                    : ($isTime ? __('seconds') : __('KiB')));
+                                    : ($key === 'dcr_registration_capacity' ? __('clients')
+                                        : ($isTime ? __('seconds') : __('KiB'))));
                             $fieldId = 'setting_'.$key;
                             $effective = $state['overrides'][$key] ?? $defaults[$key];
                             if ($key === 'wp_request_timeout_seconds') {
                                 $effective = max($effective, $state['overrides']['wp_connect_timeout_seconds'] ?? $defaults['wp_connect_timeout_seconds']);
                             }
-                            $isIntegerUnit = $isTime || str_ends_with($key, '_hours') || str_ends_with($key, '_per_user');
+                            $isIntegerUnit = $isTime || str_ends_with($key, '_hours') || str_ends_with($key, '_per_user') || $key === 'dcr_registration_capacity';
                             $formattedEffective = $isIntegerUnit ? $effective : number_format($effective, 2);
                             $formattedDefault = $isIntegerUnit ? $defaults[$key] : number_format($defaults[$key], 2);
                             $overridden = array_key_exists($key, $state['overrides']);

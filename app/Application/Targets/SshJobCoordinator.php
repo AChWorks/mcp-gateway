@@ -683,28 +683,86 @@ final readonly class SshJobCoordinator
     }
 
     /**
-     * Expired completed evidence may be safely purged only while the original
-     * user still has exact Target access and the remote job directory is
-     * independently verified as private to the authenticated OS user.
-     * Unknown or active jobs are NEVER purged automatically.
+     * Compatibility entry for existing callers. The installed scheduler uses
+     * maintain() for bounded, diagnostic prune AND remote-status recovery.
      */
     public function prune(): int
     {
-        // All users, bounded by one indexed status/time update. Preparing is
-        // the only state known to be free of remote side effects.
-        $this->recoverStalePreparing();
-        $done = 0;
-        $rows = DB::table('ssh_command_jobs')
-            ->where('expires_at', '<=', now())
-            ->whereIn('status', ['completed', 'failed', 'canceled', 'unsupported', 'retired'])
-            ->orderBy('expires_at')->limit(25)->get();
+        return $this->pruneDetailed()['cleaned'];
+    }
+
+    /** @return array<string,mixed> */
+    public function maintain(): array
+    {
+        $prune = $this->pruneDetailed();
+        $reconcile = $this->reconcileStaleJobs();
+        $report = [
+            'diagnostic_id' => (string) Str::ulid(),
+            'preparing_recovered' => $prune['preparing_recovered'],
+            'prune' => $prune,
+            'reconcile' => $reconcile,
+            'expired_terminal_backlog' => DB::table('ssh_command_jobs')
+                ->where('expires_at', '<=', now())
+                ->whereIn('status', ['completed', 'failed', 'canceled', 'unsupported', 'retired'])->count(),
+            'expired_unresolved_backlog' => DB::table('ssh_command_jobs')
+                ->where('expires_at', '<=', now())
+                ->whereIn('status', ['preparing', 'running', 'launch_unknown', 'cancel_requested'])->count(),
+        ];
+        Log::info('SSH Job maintenance progress.', $report);
+
+        return $report;
+    }
+
+    /**
+     * Keyset progress persists across scheduler invocations. Blocked oldest
+     * identities cannot starve later cleanable rows, even after a restart.
+     * Unknown or active Jobs remain durable; only verified private remote
+     * spools or known no-effect intents can be deleted.
+     *
+     * @return array<string,int>
+     */
+    private function pruneDetailed(): array
+    {
+        $stats = [
+            'preparing_recovered' => $this->recoverStalePreparing(),
+            'scanned' => 0, 'eligible' => 0, 'processed' => 0, 'cleaned' => 0,
+            'blocked_by_identity' => 0, 'retained_by_policy' => 0,
+            'remote_unavailable' => 0, 'error' => 0,
+        ];
+        $cursor = $this->maintenanceCursor('prune');
+        $query = function (?object $cursor) {
+            return DB::table('ssh_command_jobs')
+                ->where('expires_at', '<=', now())
+                ->whereIn('status', ['completed', 'failed', 'canceled', 'unsupported', 'retired'])
+                ->when($cursor !== null && $cursor->last_expires_at !== null && $cursor->last_id !== null,
+                    static fn ($q) => $q->where(static function ($after) use ($cursor): void {
+                        $after->where('expires_at', '>', $cursor->last_expires_at)
+                            ->orWhere(static function ($same) use ($cursor): void {
+                                $same->where('expires_at', $cursor->last_expires_at)
+                                    ->where('id', '>', $cursor->last_id);
+                            });
+                    }))
+                ->orderBy('expires_at')->orderBy('id')->limit(250)->get();
+        };
+        $rows = $query($cursor);
+        if ($rows->isEmpty() && $cursor->last_id !== null) {
+            // One bounded wrap; never loop through the same blocked head.
+            $this->advanceMaintenanceCursor('prune', null, null);
+            $rows = $query(null);
+        }
+
+        $last = null;
         foreach ($rows as $row) {
+            // Limit costly remote effects independently of cheap DB skips.
+            if ($stats['processed'] >= 25) {
+                break;
+            }
+            $last = $row;
+            $stats['scanned']++;
             if ($row->status === 'unsupported' || $row->status === 'retired'
                 || ($row->status === 'failed' && $row->terminal_reason === 'pre_dispatch_abandoned')) {
-                // No remote effects for unsupported/pre-dispatch; 'retired'
-                // requires an explicit operator attestation that the original
-                // remote unit AND spool have been independently cleaned.
-                $done += DB::table('ssh_command_jobs')->where('id', $row->id)
+                $stats['eligible']++;
+                $stats['cleaned'] += DB::table('ssh_command_jobs')->where('id', $row->id)
                     ->where('status', $row->status)->delete();
 
                 continue;
@@ -712,22 +770,45 @@ final readonly class SshJobCoordinator
             $target = Target::query()->whereKey($row->target_record_id)->first();
             $user = User::query()->whereKey($row->user_id)->first();
             if (! $target instanceof Target || ! $user instanceof User) {
+                $stats['blocked_by_identity']++;
+
                 continue;
             }
             try {
                 $this->authorized($user, $target->target_id, false);
                 if (! hash_equals((string) $row->target_binding_hash, $this->binding($target))) {
+                    $stats['blocked_by_identity']++;
+
+                    continue;
+                }
+                $stats['eligible']++;
+                $stats['processed']++;
+                $stopProof = $this->remoteUnitStopProof($user, $target, $row);
+                if ($stopProof === null) {
+                    $stats['retained_by_policy']++;
+                    Log::notice('SSH Job spool retained: remote process stop was not proven.', [
+                        'job_id' => $row->id,
+                        'unit_mode' => $row->unit_mode,
+                    ]);
+
                     continue;
                 }
                 $directory = $this->directory((string) $row->id);
-                // Remove only known files from our private, non-symlinked
-                // directory. Never perform recursive deletion as remote root.
-                // Unexpected artifacts prevent pruning and retain evidence.
+                // Remove only known files from a private, non-symlinked
+                // directory owned by the authenticated original OS account.
                 $clean = 'if ! test -e '.escapeshellarg($directory).'; then exit 0; fi; '
                     .'test -d '.escapeshellarg($directory)
                     .' && test ! -L '.escapeshellarg($directory)
                     .' && test "$(stat -c %a -- '.escapeshellarg($directory).')" = 700'
                     .' && test "$(stat -c %u -- '.escapeshellarg($directory).')" = "$(id -u)"'
+                    // A collected unit is NOT itself a stop witness. When
+                    // the systemd unit is no longer inspectable, require
+                    // the independently journaled wrapper exit marker to
+                    // still match inside the verified original private dir.
+                    .($stopProof === 'exit_marker'
+                        ? ' && test "$(cat -- '.escapeshellarg($directory.'/exit-code').')" = '
+                            .escapeshellarg((string) (int) $row->exit_code)
+                        : '')
                     .' && rm -f -- '.implode(' ', array_map(
                         static fn (string $file): string => escapeshellarg($directory.'/'.$file),
                         ['script.sh', 'wrapper.sh', 'stdout', 'stderr', 'exit-code',
@@ -736,17 +817,197 @@ final readonly class SshJobCoordinator
                     .' && rmdir -- '.escapeshellarg($directory);
                 $result = $this->safeCommand($user, $target, $clean, 8, (string) $row->target_binding_hash);
                 if (! $this->successful($result)) {
+                    $stats['remote_unavailable']++;
+
                     continue;
                 }
-                DB::table('ssh_command_jobs')->where('id', $row->id)
+                $stats['cleaned'] += DB::table('ssh_command_jobs')->where('id', $row->id)
                     ->where('status', $row->status)->delete();
-                $done++;
-            } catch (Throwable) {
-                // Keep the durable job record for later Owner reconciliation.
+            } catch (SshTargetConnectionException $exception) {
+                $stats['retained_by_policy']++;
+                Log::notice('SSH Job cleanup retained without authority.', [
+                    'job_id' => $row->id, 'reason' => $exception->reason,
+                ]);
+            } catch (Throwable $exception) {
+                $stats['error']++;
+                Log::warning('SSH Job cleanup failed without deleting durable evidence.', [
+                    'job_id' => $row->id, 'exception_class' => $exception::class,
+                ]);
             }
         }
+        if ($last !== null) {
+            $this->advanceMaintenanceCursor('prune', (string) $last->id, (string) $last->expires_at);
+        }
 
-        return $done;
+        return $stats;
+    }
+
+    /**
+     * The original authenticated systemd manager can prove a loaded unit is
+     * stopped. Collected units (LoadState=not-found) are different: systemctl
+     * exits zero and reports inactive/zero PIDs even for a NEVER-EXISTING Job.
+     * Permit cleanup only with another positive independent terminal witness:
+     * a prior verified cancel transition, or a previously recorded exit code
+     * whose exact remote private marker is rechecked during the cleanup CAS.
+     *
+     * @return 'loaded'|'canceled'|'exit_marker'|null
+     */
+    private function remoteUnitStopProof(User $user, Target $target, object $row): ?string
+    {
+        if (! in_array($row->unit_mode, ['system', 'user'], true)) {
+            return null;
+        }
+        $mode = (string) $row->unit_mode;
+        $result = $this->safeCommand($user, $target,
+            $this->managerEnvironment($mode).'systemctl '.($mode === 'user' ? '--user ' : '')
+            .'show '.escapeshellarg($this->unit((string) $row->id))
+            .' --property=LoadState --property=ActiveState --property=MainPID --property=ControlPID --no-pager',
+            8, (string) $row->target_binding_hash);
+        if (! $this->successful($result)) {
+            return null;
+        }
+        $state = (string) ($result['stdout'] ?? '');
+        if ($this->stoppedUnitEvidence($state)) {
+            return 'loaded';
+        }
+        if (! $this->collectedUnitEvidence($state)) {
+            return null;
+        }
+
+        return $this->collectedTerminalProof($row);
+    }
+
+    /** @return 'canceled'|'exit_marker'|null */
+    private function collectedTerminalProof(object $row): ?string
+    {
+        // The only runtime transition to canceled required a successful
+        // systemctl stop AND a separate inactive/zero-PID verification.
+        if ($row->status === 'canceled' && $row->terminal_reason === 'canceled'
+            && $row->exit_code === null) {
+            return 'canceled';
+        }
+        // Never trust a stored terminal claim alone. A real wrapper may have
+        // completed after systemd's status was read and its unit collected;
+        // require a matching durable exit marker in the original private
+        // spool in the SAME cleanup command that unlinks the files.
+        if (in_array($row->status, ['completed', 'failed'], true)
+            && $row->exit_code !== null && (int) $row->exit_code >= 0
+            && (int) $row->exit_code <= 255
+            && $row->terminal_reason !== 'pre_dispatch_abandoned') {
+            return 'exit_marker';
+        }
+
+        return null;
+    }
+
+    private function stoppedUnitEvidence(string $response): bool
+    {
+        $state = trim($response);
+
+        return preg_match('/(?:^|\n)LoadState=loaded(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)ActiveState=(?:inactive|failed)(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)MainPID=0(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)ControlPID=0(?:\n|$)/D', $state) === 1;
+    }
+
+    private function collectedUnitEvidence(string $response): bool
+    {
+        $state = trim($response);
+
+        return preg_match('/(?:^|\n)LoadState=not-found(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)ActiveState=inactive(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)MainPID=0(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)ControlPID=0(?:\n|$)/D', $state) === 1;
+    }
+
+    /**
+     * Read-only remote evidence probes for stale, previously launched Jobs.
+     * Runs as the genuinely scheduled CLI maintenance actor and reuses the
+     * original user/Target/client/binding checks in status(). No script replay.
+     *
+     * @return array<string,int>
+     */
+    private function reconcileStaleJobs(): array
+    {
+        $stats = [
+            'scanned' => 0, 'eligible' => 0, 'processed' => 0, 'terminal_reconciled' => 0,
+            'blocked_by_identity' => 0, 'retained_by_policy' => 0,
+            'remote_unavailable' => 0, 'unresolved' => 0, 'error' => 0,
+        ];
+        $cursor = $this->maintenanceCursor('reconcile');
+        $query = function (?object $cursor) {
+            return DB::table('ssh_command_jobs')
+                ->whereIn('status', ['running', 'launch_unknown', 'cancel_requested'])
+                ->where('updated_at', '<=', now()->subMinutes(5))
+                ->when($cursor?->last_id !== null,
+                    static fn ($q) => $q->where('id', '>', $cursor->last_id))
+                ->orderBy('id')->limit(100)->get();
+        };
+        $rows = $query($cursor);
+        if ($rows->isEmpty() && $cursor->last_id !== null) {
+            $this->advanceMaintenanceCursor('reconcile', null, null);
+            $rows = $query(null);
+        }
+        $last = null;
+        foreach ($rows as $row) {
+            if ($stats['processed'] >= 10) {
+                break;
+            }
+            $last = $row;
+            $stats['scanned']++;
+            $target = Target::query()->whereKey($row->target_record_id)->first();
+            $user = User::query()->whereKey($row->user_id)->first();
+            if (! $target instanceof Target || ! $user instanceof User) {
+                $stats['blocked_by_identity']++;
+
+                continue;
+            }
+            // status() rechecks original Target binding, OAuth-admitted actor's
+            // live role/Target permissions, Pause and read-only SSH identity.
+            try {
+                $stats['eligible']++;
+                $stats['processed']++;
+                $current = $this->status($user, $target->target_id,
+                    (string) $row->client_identity_hash, (string) $row->id);
+                if (in_array($current['status'], ['completed', 'failed', 'canceled'], true)) {
+                    $stats['terminal_reconciled']++;
+                } else {
+                    $stats['unresolved']++;
+                }
+            } catch (SshTargetConnectionException $exception) {
+                $stats['retained_by_policy']++;
+                Log::notice('SSH Job status reconciliation retained.', [
+                    'job_id' => $row->id, 'reason' => $exception->reason,
+                ]);
+            } catch (Throwable $exception) {
+                $stats['error']++;
+                Log::warning('SSH Job status reconciliation failed.', [
+                    'job_id' => $row->id, 'exception_class' => $exception::class,
+                ]);
+            }
+        }
+        if ($last !== null) {
+            $this->advanceMaintenanceCursor('reconcile', (string) $last->id, null);
+        }
+
+        return $stats;
+    }
+
+    private function maintenanceCursor(string $operation): object
+    {
+        $cursor = DB::table('ssh_job_maintenance_progress')->where('operation', $operation)->first();
+        if ($cursor === null) {
+            throw new \RuntimeException('SSH Job maintenance migration is missing.');
+        }
+
+        return $cursor;
+    }
+
+    private function advanceMaintenanceCursor(string $operation, ?string $id, ?string $expiresAt): void
+    {
+        DB::table('ssh_job_maintenance_progress')->where('operation', $operation)->update([
+            'last_id' => $id, 'last_expires_at' => $expiresAt, 'updated_at' => now(),
+        ]);
     }
 
     /**

@@ -11,6 +11,7 @@ use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
+use App\Models\User;
 use App\Support\CorrelationId;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
@@ -30,7 +31,7 @@ final readonly class SshTargetRegistration
         string $username, string $hostPublicKey, string $authMethod,
         string $secret, ?string $passphrase, ?string $aiGuidance = null,
         string $routeMode = 'direct', ?int $reversePort = null, ?string $tunnelIdentity = null,
-        ?string $connectionRelayId = null,
+        ?string $connectionRelayId = null, ?User $creator = null,
     ): Target {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -53,9 +54,10 @@ final readonly class SshTargetRegistration
         try {
             return DB::transaction(function () use (
                 $targetId, $displayName, $aiGuidance, $endpoint, $pin, $authMethod, $secret, $passphrase,
-                $approvedRoute, $connectionRelayId,
+                $approvedRoute, $connectionRelayId, $creator,
             ): Target {
-                $target = Target::query()->create([
+                $target = Target::query()->forceCreate([
+                    'created_by_user_id' => $creator?->getKey(),
                     'target_id' => $targetId,
                     'display_name' => $displayName,
                     'ai_guidance' => $aiGuidance === null || trim($aiGuidance) === '' ? null : trim($aiGuidance),

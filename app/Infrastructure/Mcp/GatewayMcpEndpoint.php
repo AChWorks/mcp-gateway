@@ -499,11 +499,11 @@ final readonly class GatewayMcpEndpoint
                 ],
             )
             ->addTool(
-                handler: fn (string $target_id, string $path, int $limit = 100): array => $this->sshFiles->list(
-                    $this->user($request), $target_id, $path, $limit,
+                handler: fn (string $target_id, string $path, int $limit = 100, ?string $cursor = null): array => $this->sshFiles->list(
+                    $this->user($request), $target_id, $path, $limit, $cursor,
                 ),
                 name: 'ssh-file-list',
-                description: 'List a bounded remote SFTP directory. Oversize listings fail; no fabricated continuation.',
+                description: 'Page a remote SFTP directory with bounded entries and a signed continuation cursor. Pass next_cursor with the same path/limit/Target. Stable directory contents are required: SFTP does not provide a transactional snapshot; concurrent mutations may shift entries. Pagination rescans skipped entries without retaining them in memory.',
                 annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -511,6 +511,7 @@ final readonly class GatewayMcpEndpoint
                         'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
                         'path' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024],
                         'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 100],
+                        'cursor' => ['type' => 'string', 'minLength' => 66, 'maxLength' => 80],
                     ],
                     'required' => ['target_id', 'path'],
                     'additionalProperties' => false,

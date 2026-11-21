@@ -4,6 +4,7 @@ namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
 use App\Application\Mcp\McpDispatchAdmission;
+use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -25,6 +26,7 @@ final readonly class WordpressTargetOperations
         private WpAiBridgeMcpClient $bridge,
         private ClientProfileRegistry $profiles,
         private McpDispatchAdmission $dispatchAdmission,
+        private OperationalSettings $settings,
     ) {}
 
     /** @return array<string, mixed> */
@@ -95,7 +97,7 @@ final readonly class WordpressTargetOperations
             return $this->failed($operation, $target, 'invalid_input', 'Invalid WordPress Ability name.');
         }
         try {
-            if (strlen(json_encode($input, JSON_THROW_ON_ERROR)) > 262144) {
+            if (strlen(json_encode($input, JSON_THROW_ON_ERROR)) > $this->settings->wpAbilityInputBytes()) {
                 return $this->failed($operation, $target, 'invalid_input', 'Ability input exceeds the bounded request limit.');
             }
         } catch (JsonException) {

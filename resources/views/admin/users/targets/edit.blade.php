@@ -19,6 +19,9 @@
     @if ($isOwner)
         <div class="alert alert-success" role="status">{{ __('Owners always retain unrestricted target access for recovery. Change the role first if this account should accept restrictions.') }}</div>
     @else
+        @if ($managedUser->self_created_target_access && $target->created_by_user_id !== null && (string) $target->created_by_user_id === (string) $managedUser->getKey())
+            <p class="alert alert-info">{{ __('This Target belongs to the user’s self-created scope. An inherited direct rule does not remove that scope. To revoke only this Target, select Deny; to disable this source for all their Targets, uncheck Access self-created Targets on the User Account page.') }}</p>
+        @endif
         <form class="form-stack" method="post" action="{{ route('admin.users.targets.update', ['user' => $managedUser->id, 'target' => $target->target_id]) }}">
             @csrf
             @method('PUT')
@@ -49,7 +52,7 @@
                         <option value="{{ $rule }}" @selected($selectedAccessRule === $rule)>{{ \Illuminate\Support\Str::headline($rule) }}</option>
                     @endforeach
                 </select>
-                <p class="field-help" id="access_rule-help">{{ __('Inherit follows the user scope and assigned groups. Allow adds this Target to the selected scope; deny blocks this Target. Role, global and group capability restrictions still apply.') }}</p>
+                <p class="field-help" id="access_rule-help">{{ __('Inherit follows All/Selected scope, assigned groups and enabled self-created Target access. Allow adds a direct rule; deny blocks this Target even when it was created by this user. Role, global and group restrictions still apply.') }}</p>
                 @error('access_rule')<p class="field-error" id="access_rule-error" role="alert">{{ $message }}</p>@enderror
             </div>
 

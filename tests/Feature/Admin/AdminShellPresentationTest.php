@@ -22,7 +22,9 @@ final class AdminShellPresentationTest extends TestCase
 
         self::assertSame(1, (int) $xpath->evaluate('count(//a[@class="skip-link"][@href="#main-content"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//main[@id="main-content"][@tabindex="-1"])'));
-        self::assertSame(3, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]/section)'));
+        self::assertSame(4, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]/section)'));
+        self::assertSame(2, (int) $xpath->evaluate('count(//section[@aria-labelledby="nav-system-title"]//a)'));
+        self::assertSame(2, (int) $xpath->evaluate('count(//section[@aria-labelledby="nav-connectivity-title"]//a)'));
         self::assertSame(10, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]//a)'));
         self::assertSame(1, (int) $xpath->evaluate('count(//nav//a[@href="'.route('admin.connection-relays.index').'"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//nav//a[@href="'.route('admin.reverse-ssh.index').'"])'));
@@ -40,6 +42,7 @@ final class AdminShellPresentationTest extends TestCase
         $xpath = $this->xpath($html);
 
         self::assertSame(0, (int) $xpath->evaluate('count(//section[@aria-labelledby="nav-access-title"])'));
+        self::assertSame(0, (int) $xpath->evaluate('count(//section[@aria-labelledby="nav-connectivity-title"])'));
         self::assertSame(0, (int) $xpath->evaluate('count(//nav//a[@href="'.route('admin.operations.index').'"])'));
         self::assertSame(0, (int) $xpath->evaluate('count(//nav//a[@href="'.route('admin.oauth-clients.index').'"])'));
         self::assertSame(4, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]//a)'));

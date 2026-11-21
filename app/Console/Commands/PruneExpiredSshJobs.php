@@ -13,8 +13,8 @@ final class PruneExpiredSshJobs extends Command
 
     public function handle(SshJobCoordinator $jobs): int
     {
-        $count = $jobs->prune();
-        $this->components->info('Safely pruned '.$count.' expired SSH Job(s).');
+        $report = $jobs->maintain();
+        $this->components->info('SSH Job maintenance '.json_encode($report, JSON_THROW_ON_ERROR));
 
         return self::SUCCESS;
     }

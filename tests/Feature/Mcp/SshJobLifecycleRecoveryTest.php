@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
 final class SshJobLifecycleRecoveryTest extends TestCase
@@ -38,6 +39,134 @@ final class SshJobLifecycleRecoveryTest extends TestCase
                 throw new SshTargetConnectionException('egress_denied');
             }
         });
+    }
+
+    public function test_missing_or_collected_systemd_unit_is_never_stopped_execution_proof(): void
+    {
+        $probe = new \ReflectionMethod(SshJobCoordinator::class, 'stoppedUnitEvidence');
+        $jobs = app(SshJobCoordinator::class);
+        // Captured shape from actual `systemctl show` on a nonexistent unit:
+        // the executable exits successfully despite no unit ever existing.
+        $missing = "MainPID=0\nControlPID=0\nLoadState=not-found\nActiveState=inactive\n";
+        self::assertFalse($probe->invoke($jobs, $missing));
+        self::assertFalse($probe->invoke($jobs, str_replace('not-found', 'masked', $missing)));
+        self::assertFalse($probe->invoke($jobs, "ActiveState=inactive\nMainPID=0\nControlPID=0\n"));
+        self::assertTrue($probe->invoke($jobs,
+            "LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlPID=0\n"));
+        self::assertTrue($probe->invoke($jobs,
+            "LoadState=loaded\nActiveState=failed\nMainPID=0\nControlPID=0\n"));
+        self::assertFalse($probe->invoke($jobs,
+            "LoadState=loaded\nActiveState=active\nMainPID=10\nControlPID=0\n"));
+        self::assertFalse($probe->invoke($jobs,
+            "LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlPID=90\n"));
+
+        $collected = new \ReflectionMethod(SshJobCoordinator::class, 'collectedUnitEvidence');
+        self::assertTrue($collected->invoke($jobs, $missing),
+            'Unit collection requires additional independent terminal proof.');
+        self::assertFalse($collected->invoke($jobs,
+            "LoadState=not-found\nActiveState=active\nMainPID=0\nControlPID=0\n"));
+        self::assertFalse($collected->invoke($jobs,
+            "LoadState=not-found\nActiveState=inactive\nMainPID=1\nControlPID=0\n"));
+        self::assertFalse($collected->invoke($jobs,
+            "LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlPID=0\n"));
+
+        $history = new \ReflectionMethod(SshJobCoordinator::class, 'collectedTerminalProof');
+        self::assertNull($history->invoke($jobs, (object) [
+            'status' => 'launch_unknown', 'terminal_reason' => null, 'exit_code' => null,
+        ]));
+        self::assertNull($history->invoke($jobs, (object) [
+            'status' => 'failed', 'terminal_reason' => 'systemd_exit-code', 'exit_code' => null,
+        ]));
+        self::assertNull($history->invoke($jobs, (object) [
+            'status' => 'canceled', 'terminal_reason' => 'outcome_unknown', 'exit_code' => null,
+        ]));
+        self::assertSame('canceled', $history->invoke($jobs, (object) [
+            'status' => 'canceled', 'terminal_reason' => 'canceled', 'exit_code' => null,
+        ]));
+        self::assertSame('exit_marker', $history->invoke($jobs, (object) [
+            'status' => 'failed', 'terminal_reason' => 'systemd_exit-code', 'exit_code' => 7,
+        ]));
+        self::assertSame('exit_marker', $history->invoke($jobs, (object) [
+            'status' => 'completed', 'terminal_reason' => 'script_exit', 'exit_code' => 0,
+        ]));
+        self::assertNull($history->invoke($jobs, (object) [
+            'status' => 'failed', 'terminal_reason' => 'pre_dispatch_abandoned', 'exit_code' => 0,
+        ]));
+    }
+
+    #[Group('database-concurrency')]
+    public function test_prune_persistent_cursor_advances_past_more_than_200_deleted_target_rows(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        $result = app(SshJobMcpToolHandlers::class)->start(
+            $user, $target->target_id, $client, (string) Str::uuid(), 'echo identity',
+        );
+        $source = (array) DB::table('ssh_command_jobs')
+            ->where('id', $result['result']['job_id'])->first();
+        DB::table('ssh_command_jobs')->where('id', $source['id'])->delete();
+
+        $blocked = [];
+        for ($i = 0; $i < 275; $i++) {
+            $blocked[] = [
+                ...$source,
+                'id' => (string) Str::ulid(),
+                'request_id' => (string) Str::uuid(),
+                'user_id' => null, 'target_record_id' => null,
+                'status' => 'completed', 'exit_code' => 0,
+                'terminal_reason' => 'script_exit',
+                'expires_at' => now()->subDays(2)->toDateTimeString(),
+                'created_at' => now()->subDays(3)->toDateTimeString(),
+                'updated_at' => now()->subDays(3)->toDateTimeString(),
+            ];
+        }
+        foreach (array_chunk($blocked, 50) as $chunk) {
+            DB::table('ssh_command_jobs')->insert($chunk);
+        }
+        DB::table('ssh_command_jobs')->insert([
+            ...$source,
+            'id' => (string) Str::ulid(),
+            'request_id' => (string) Str::uuid(),
+            'status' => 'unsupported',
+            'terminal_reason' => 'host_unsupported',
+            'expires_at' => now()->subDay()->toDateTimeString(),
+        ]);
+        self::assertSame(276, DB::table('ssh_command_jobs')->count());
+
+        $jobs = app(SshJobCoordinator::class);
+        self::assertSame(0, $jobs->prune(), 'First fixed-size scan sees only blocked older identities.');
+        $cursor = DB::table('ssh_job_maintenance_progress')->where('operation', 'prune')->first();
+        self::assertNotNull($cursor->last_id);
+        self::assertSame(1, $jobs->prune(), 'Later eligible records must not starve behind old rows.');
+        self::assertSame(275, DB::table('ssh_command_jobs')->count());
+        self::assertSame(275, DB::table('ssh_command_jobs')->whereNull('user_id')->count());
+        $report = $jobs->maintain();
+        self::assertSame(0, $report['prune']['cleaned']);
+        self::assertGreaterThanOrEqual(1, $report['prune']['blocked_by_identity']);
+        self::assertSame(275, $report['expired_terminal_backlog']);
+        self::assertNotEmpty($report['diagnostic_id']);
+    }
+
+    public function test_scheduled_maintenance_does_not_replay_uncertain_remote_job(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        $result = app(SshJobMcpToolHandlers::class)->start(
+            $user, $target->target_id, $client, (string) Str::uuid(), 'echo unknown',
+        );
+        $id = $result['result']['job_id'];
+        DB::table('ssh_command_jobs')->where('id', $id)->update([
+            'status' => 'launch_unknown', 'unit_mode' => 'user',
+            'updated_at' => now()->subHour(),
+            'admission_expires_at' => now()->subHour(),
+            'expires_at' => now()->subDay(),
+        ]);
+
+        self::assertSame(0, Artisan::call('gateway:ssh-jobs-prune'));
+        self::assertSame('launch_unknown',
+            DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+        self::assertSame(1, DB::table('ssh_command_jobs')->count());
+        $report = app(SshJobCoordinator::class)->maintain();
+        self::assertSame(1, $report['expired_unresolved_backlog']);
+        self::assertSame(0, $report['reconcile']['terminal_reconciled']);
     }
 
     public function test_crashed_preparing_recovers_and_late_probe_cannot_cross_launch_fence(): void

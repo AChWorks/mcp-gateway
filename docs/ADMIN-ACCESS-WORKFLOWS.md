@@ -30,7 +30,7 @@ If the browser cannot confirm completion, reopen the member list and inspect sav
 
 ## Read saved User account restrictions
 
-The User Account form loads the saved role, Target scope, human/AI access flags and global Deny checks. Its restriction summary distinguishes **Saved**, **Unsaved** and fresh-create **Defaults**, including zero checked controls; existing checked restrictions are visible when reopening the account. Counts describe the current rendered restriction controls, not hidden historical keys or effective permission grants.
+The User Account form loads the saved role, Target scope, human/AI access flags, the optional self-created Target scope toggle and global Deny checks. Its restriction summary distinguishes **Saved**, **Unsaved** and fresh-create **Defaults**, including zero checked controls; existing checked restrictions are visible when reopening the account. Counts describe the current rendered restriction controls, not hidden historical keys or effective permission grants.
 
 An unsuccessful User create/edit save displays a prominent **not saved** alert above the form with the actual errors; the checked choices below are a draft, not proof of persistence. On an existing account, newly checking a Deny key outside the selected role (or a new Deny for Owner) is rejected visibly rather than quietly discarded by role normalization. Uncheck impossible new Deny choices or adjust the role before saving; unchanged saved checks do not block a role downgrade or Owner promotion. A successful edit redirects to the saved account, whose saved checks are loaded afresh from the database.
 
@@ -43,6 +43,8 @@ JavaScript updates Role eligibility instantly and temporarily excludes incompati
 ## Interpret access correctly
 
 - Group membership can supply reachability for **Selected targets** users. It does not grant a capability missing from the role or global ceiling.
+- **Access self-created Targets** is an explicit Owner-controlled account toggle, default OFF. With **Selected targets** scope, a registered Target's immutable creating user can see/use their own Target **only under existing role and operation permissions**; no group or direct Allow is created. Other users, old Owner-attributed Targets and unrelated Targets are unaffected. Turning the toggle OFF removes this route immediately but preserves explicit/group grants. An open individual Target edit or batch review becomes stale if this account choice changes before applying it; reload and review the current effective scope.
+- On upgrade, all legacy Targets are attributed to the oldest existing Owner, whose unrestricted recovery access is unchanged. The migration does not guess any other historical creator or create redundant direct Allow rows. On every future authenticated connector registration, the creator is captured at the transactional registration boundary.
 - Group denials accumulate, and a direct Target deny still wins. Removing one group membership does not promise loss of access through another group or All targets scope.
 - **Allow direct reachability**, **Deny direct reachability** and **Use inherited reachability** preserve each Target's existing capability denials. Normal bulk Allow does not silently replace an existing direct Deny; use its individual advanced editor to review that exception.
 - A scope source is not a complete effective-capability simulation. Disabled accounts remain disabled; All/Selected scope, AI access and global SSH denials are not changed by membership selection. Owners retain unrestricted recovery access.

@@ -175,6 +175,7 @@ final readonly class AccessBatchWorkflow
                 'id' => (string) $user->getKey(), 'name' => (string) $user->name, 'email' => (string) $user->email,
                 'role' => (string) $user->getRawOriginal('role'), 'scope' => (string) $user->getRawOriginal('target_scope_mode'),
                 'enabled' => (bool) $user->access_enabled, 'ai_enabled' => (bool) $user->ai_access_enabled,
+                'self_created_target_access' => (bool) $user->self_created_target_access,
                 'denials' => $globalDenials->get($user->getKey(), collect())->pluck('permission')->all(),
             ];
         }
@@ -192,6 +193,7 @@ final readonly class AccessBatchWorkflow
             $targetProfiles[(string) $target->getKey()] = [
                 'id' => (string) $target->getKey(), 'label' => (string) $target->display_name,
                 'target_id' => (string) $target->target_id, 'connector_type' => (string) $target->connector_type,
+                'created_by_user_id' => $target->created_by_user_id === null ? null : (int) $target->created_by_user_id,
             ];
         }
         $edges = [];
@@ -308,7 +310,7 @@ final readonly class AccessBatchWorkflow
         } else {
             $warnings[] = __('Only the direct scope rule changes. Every existing per-Target restriction is preserved.');
             if ($intent === 'inherit') {
-                $warnings[] = __('Inherited reachability can come from groups or All Targets scope; this is not a guaranteed access revocation.');
+                $warnings[] = __('Inherited reachability can come from groups, All Targets scope or enabled self-created Target access; this is not a guaranteed access revocation.');
             }
         }
         if ($subject instanceof User && ! $subject->access_enabled) {
