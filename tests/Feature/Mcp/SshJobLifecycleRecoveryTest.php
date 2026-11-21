@@ -41,6 +41,26 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         });
     }
 
+    public function test_missing_or_collected_systemd_unit_is_never_stopped_execution_proof(): void
+    {
+        $probe = new \ReflectionMethod(SshJobCoordinator::class, 'stoppedUnitEvidence');
+        $jobs = app(SshJobCoordinator::class);
+        // Captured shape from actual `systemctl show` on a nonexistent unit:
+        // the executable exits successfully despite no unit ever existing.
+        $missing = "MainPID=0\nControlPID=0\nLoadState=not-found\nActiveState=inactive\n";
+        self::assertFalse($probe->invoke($jobs, $missing));
+        self::assertFalse($probe->invoke($jobs, str_replace('not-found', 'masked', $missing)));
+        self::assertFalse($probe->invoke($jobs, "ActiveState=inactive\nMainPID=0\nControlPID=0\n"));
+        self::assertTrue($probe->invoke($jobs,
+            "LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlPID=0\n"));
+        self::assertTrue($probe->invoke($jobs,
+            "LoadState=loaded\nActiveState=failed\nMainPID=0\nControlPID=0\n"));
+        self::assertFalse($probe->invoke($jobs,
+            "LoadState=loaded\nActiveState=active\nMainPID=10\nControlPID=0\n"));
+        self::assertFalse($probe->invoke($jobs,
+            "LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlPID=90\n"));
+    }
+
     #[Group('database-concurrency')]
     public function test_prune_persistent_cursor_advances_past_more_than_200_deleted_target_rows(): void
     {

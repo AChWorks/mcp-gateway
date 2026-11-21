@@ -848,11 +848,23 @@ final readonly class SshJobCoordinator
         $result = $this->safeCommand($user, $target,
             $this->managerEnvironment($mode).'systemctl '.($mode === 'user' ? '--user ' : '')
             .'show '.escapeshellarg($this->unit((string) $row->id))
-            .' --property=ActiveState --property=MainPID --property=ControlPID --no-pager',
+            .' --property=LoadState --property=ActiveState --property=MainPID --property=ControlPID --no-pager',
             8, (string) $row->target_binding_hash);
-        $state = trim((string) ($result['stdout'] ?? ''));
 
-        return $this->successful($result)
+        return $this->successful($result) && $this->stoppedUnitEvidence((string) ($result['stdout'] ?? ''));
+    }
+
+    private function stoppedUnitEvidence(string $response): bool
+    {
+        $state = trim($response);
+
+        // systemctl show returns EXIT CODE ZERO for an unknown unit, with
+        // ActiveState=inactive and both PIDs zero. That is NOT evidence that
+        // any previously dispatched script actually stopped. Only a loaded,
+        // retained original unit with independently observed zero live PIDs
+        // can authorize automated spool deletion. A collected unit requires
+        // explicit operator reconciliation, never guessed cleanup.
+        return preg_match('/(?:^|\n)LoadState=loaded(?:\n|$)/D', $state) === 1
             && preg_match('/(?:^|\n)ActiveState=(?:inactive|failed)(?:\n|$)/D', $state) === 1
             && preg_match('/(?:^|\n)MainPID=0(?:\n|$)/D', $state) === 1
             && preg_match('/(?:^|\n)ControlPID=0(?:\n|$)/D', $state) === 1;
