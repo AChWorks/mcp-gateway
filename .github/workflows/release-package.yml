@@ -61,6 +61,7 @@ jobs:
       - name: Validate release source
         run: |
           composer validate --strict
+          python3 bin/test_project_license.py
           composer audit --locked
           composer check
           python3 bin/test-released-baseline-parity.py
@@ -84,15 +85,16 @@ jobs:
           [[ "$current" == "$APPROVED_SHA" ]] || { echo 'main moved after approval; review again.' >&2; exit 1; }
           current_version="$(tr -d '[:space:]' < VERSION)"
           [[ "$current_version" == "$APPROVED_VERSION" ]] || { echo 'Approved release version differs from checked-out source.' >&2; exit 1; }
-          # This v2 workflow still publishes a browser-update ZIP and asserts
-          # release-baseline upgrades. A clean v3 source candidate has no such
-          # contract, even after a VERSION bump or merge to main. Fail before
-          # reserving a tag or publishing files until a separately reviewed
-          # v3 fresh-install/cutover release workflow is approved.
-          if [[ "$APPROVED_VERSION" == 3.* ]]; then
-            echo 'MCP Gateway v3 clean installation requires its own accepted release workflow; the legacy v2 browser-update publisher is disabled for v3.' >&2
+          # v2 publishes both install and update ZIPs. The first stable v3
+          # publishes only a fresh-install ZIP; it NEVER presents a v2->v3
+          # update path. Both versions retain the same Owner-approved SHA,
+          # immutable tag policy and byte-verification gates.
+          if [[ "$APPROVED_VERSION" != 2.* && "$APPROVED_VERSION" != '3.0.0' ]]; then
+            echo 'Only reviewed v2 updates or the first stable v3 fresh install are authorized by this workflow.' >&2
             exit 1
           fi
+          # Later v3 releases need a separately reviewed v3-to-v3 upgrade
+          # contract, or an explicit new Owner decision to remain fresh-only.
 
       - name: Resolve release identity
         id: release
@@ -105,6 +107,11 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "package=mcp-gateway-v$version" >> "$GITHUB_OUTPUT"
           echo "update_package=mcp-gateway-update-v$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == 3.* ]]; then
+            echo 'is_clean_v3=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'is_clean_v3=false' >> "$GITHUB_OUTPUT"
+          fi
 
       # An existing or partial Release never implies success.
       - name: Require new release/tag before packaging
@@ -124,18 +131,43 @@ jobs:
           PACKAGE: ${{ steps.release.outputs.package }}
         run: bash bin/verify-release-package.sh "dist/$PACKAGE.zip" "$PACKAGE"
 
+      - name: Verify clean v3 ZIP can initialize an isolated empty MariaDB database
+        if: steps.release.outputs.is_clean_v3 == 'true'
+        env:
+          PACKAGE: ${{ steps.release.outputs.package }}
+          V3_RELEASE_TEST_DB_HOST: 127.0.0.1
+          V3_RELEASE_TEST_DB_PORT: 3306
+          V3_RELEASE_TEST_DB_DATABASE: mcp_gateway_test
+          V3_RELEASE_TEST_DB_USERNAME: mcp_gateway
+          V3_RELEASE_TEST_DB_PASSWORD: test-password
+        run: bash bin/test-v3-fresh-install-package.sh "dist/$PACKAGE.zip" "$PACKAGE"
+
+      - name: Verify v3 clean release rejects v2 in-place upgrading
+        if: steps.release.outputs.is_clean_v3 == 'true'
+        env:
+          PACKAGE: ${{ steps.release.outputs.package }}
+        run: |
+          # Temporary test-only artifact. It is NEVER published by this workflow.
+          bash bin/build-update-package.sh mcp-gateway-v3-update-guard-only "dist/$PACKAGE"
+          bash bin/verify-update-package.sh dist/mcp-gateway-v3-update-guard-only.zip
+          bash bin/test-v3-major-upgrade-guard.sh \
+            "dist/$PACKAGE" dist/mcp-gateway-v3-update-guard-only.zip
+
       - name: Build browser update ZIP
+        if: steps.release.outputs.is_clean_v3 == 'false'
         env:
           PACKAGE: ${{ steps.release.outputs.package }}
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
         run: bash bin/build-update-package.sh "$UPDATE_PACKAGE" "dist/$PACKAGE"
 
       - name: Verify browser update ZIP
+        if: steps.release.outputs.is_clean_v3 == 'false'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
         run: bash bin/verify-update-package.sh "dist/$UPDATE_PACKAGE.zip"
 
       - name: Download released deployment baselines
+        if: steps.release.outputs.is_clean_v3 == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -153,6 +185,7 @@ jobs:
           done
 
       - name: Verify released-baseline browser updates
+        if: steps.release.outputs.is_clean_v3 == 'false'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
           UPDATE_TEST_DB_HOST: 127.0.0.1
@@ -171,6 +204,7 @@ jobs:
           done
 
       - name: Verify released-baseline backup integrity fail-safe
+        if: steps.release.outputs.is_clean_v3 == 'false'
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
           UPDATE_TEST_DB_HOST: 127.0.0.1
@@ -187,7 +221,8 @@ jobs:
               "dist/baseline/mcp-gateway-v$version.zip"
           done
 
-      - name: Publish GitHub release
+      - name: Publish legacy-v2 GitHub release
+        if: steps.release.outputs.is_clean_v3 == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
@@ -246,7 +281,61 @@ jobs:
             --title "MCP Gateway $TAG" \
             --notes-file dist/release-notes.md
 
-      # Independently download and compare the four published assets by byte.
+      - name: Publish clean-v3 fresh-install-only GitHub release
+        if: steps.release.outputs.is_clean_v3 == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PACKAGE: ${{ steps.release.outputs.package }}
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          APPROVED_VERSION: ${{ inputs.approved_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash bin/render-github-release-notes.sh "$VERSION" RELEASE_NOTES.md dist/release-notes.md
+          cat >> dist/release-notes.md <<'EOF_NOTES'
+
+          ## Fresh installation only — first stable v3
+
+          This Release contains exactly one verified deployment-ready archive
+          `mcp-gateway-v3.0.0.zip` and its `.sha256` companion. It is a **new installation**
+          using a **dedicated, empty database**, not an upgrade of any v2 install.
+          There is **NO v2-to-v3 or same-version browser-update ZIP** in this Release.
+
+          1. Verify the published ZIP checksum.
+          2. Take an independently restorable backup of the existing v2 code,
+             database, private `.env`, encryption and OAuth signing keys before
+             any separately authorized deployment/cutover. Publishing does not
+             change an installed host or revoke any existing credentials.
+          3. Extract `mcp-gateway-v3.0.0.zip` into a private application directory on
+             a compatible HTTPS PHP 8.5/MariaDB host. Point the site document
+             root **only** to `public/`; do not expose the application root.
+          4. Use `/install` with a **new empty database** to create keys,
+             schema and Owner. Confirm the post-install lock, `/up`, Owner
+             sign-in, scheduler and allowed Targets/Clients before accepting
+             new effects. Do not run the v2 `/update/` process for this cutover.
+
+          **A fresh v3 installation does not migrate historical v2 Users, Target
+          credentials, OAuth/Bridge grants or SSH Jobs.** Any manual re-enrollment,
+          DNS cutover or rollback to the independent v2 backup needs separate
+          Owner authorization and a documented reconciliation plan. Refer to
+          the v3 acceptance Issue #330 and docs/DEPLOYMENT.md for exact gates.
+
+          No production server is deployed or modified by publishing this Release.
+          EOF_NOTES
+          # Preserve the existing tag-once and partial-publication safeguards.
+          python3 bin/release_publication_guard.py reserve
+          gh release create "$TAG" \
+            "dist/$PACKAGE.zip" \
+            "dist/$PACKAGE.zip.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --target "$APPROVED_SHA" \
+            --title "MCP Gateway $TAG" \
+            --notes-file dist/release-notes.md
+
+      # Verify exact published bytes: v2 four assets, first-v3 two assets.
       - name: Verify published tag and exact release artifacts
         env:
           GH_TOKEN: ${{ github.token }}

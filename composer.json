@@ -9,7 +9,7 @@
         "laravel",
         "wordpress"
     ],
-    "license": "MIT",
+    "license": "AGPL-3.0-only",
     "require": {
         "php": "^8.4.1",
         "firebase/php-jwt": "^7.1",

@@ -1,0 +1,22 @@
+MCP Gateway — project copyright and licensing notice
+
+Copyright (c) 2026 ACh
+
+The original MCP Gateway project source in this version is offered under the
+GNU Affero General Public License, version 3 only (SPDX: AGPL-3.0-only).
+The complete, unmodified license text is in LICENSE.
+
+Source for the upstream project and its official release tags:
+https://github.com/AChWorks/mcp-gateway
+
+If you operate a modified version over a network, see section 13 of AGPLv3:
+remote users of that modified version must be prominently offered access to
+its Corresponding Source. A link to the upstream project alone is not a
+substitute for the source of changes made by the actual operator.
+
+Third-party packages remain under their own licenses, including the licenses
+and copyright/notice material retained in vendor/. They are not relicensed
+under AGPL-3.0-only by this project notice.
+
+Previously published versions distributed under MIT retain their historical
+MIT license grants. This new license does not retroactively withdraw them.

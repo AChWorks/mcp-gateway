@@ -313,11 +313,27 @@ def create_tag_once(tag: str, approved: str, token: str) -> None:
     )
 
 
-def local_assets(version: str) -> dict[str, tuple[Path, str, int]]:
+def published_package_names(version: str) -> tuple[str, ...]:
+    """Choose artifacts from the real major-version deployment contract.
+
+    v2 has an authenticated browser-upgrade ZIP. First stable v3 is a fresh
+    installation only, and must not imply a supported v2-to-v3 update.
+    Future major versions require an independently reviewed release policy.
+    """
+    major = int(version.split(".", 1)[0])
     base = f"mcp-gateway-v{version}.zip"
-    update = f"mcp-gateway-update-v{version}.zip"
+    if major == 2:
+        return (base, f"mcp-gateway-update-v{version}.zip")
+    # The first stable v3 is fresh-only. Do not silently extend that model
+    # to subsequent v3 versions once operators may hold valuable v3 state.
+    if version == "3.0.0":
+        return (base,)
+    raise PublicationStateError("Unsupported release version/upgrade contract; review the publisher.")
+
+
+def local_assets(version: str) -> dict[str, tuple[Path, str, int]]:
     files: dict[str, tuple[Path, str, int]] = {}
-    for name in (base, update):
+    for name in published_package_names(version):
         archive = ROOT / "dist" / name
         checksum_file = ROOT / "dist" / (name + ".sha256")
         require(archive.is_file() and checksum_file.is_file(), f"Missing verified local Release asset: {name}")
@@ -335,8 +351,10 @@ def verify_remote_assets(release: dict, tag: str, version: str, repo: str) -> No
     assets = release.get("assets")
     require(isinstance(assets, list), "Release assets missing.")
     names = [item.get("name") for item in assets if isinstance(item, dict)]
-    require(len(names) == 4 and len(set(names)) == 4 and set(names) == set(expected),
-            "Published Release must have exactly four expected package/checksum assets.")
+    quantity = {2: "two", 4: "four"}.get(len(expected), str(len(expected)))
+    require(len(names) == len(expected) and len(set(names)) == len(expected)
+            and set(names) == set(expected),
+            f"Published Release must have exactly {quantity} expected package/checksum assets.")
     for item in assets:
         name = item["name"]
         _, digest, size = expected[name]
@@ -349,7 +367,7 @@ def verify_remote_assets(release: dict, tag: str, version: str, repo: str) -> No
     with tempfile.TemporaryDirectory(prefix="gateway-published-release-") as destination:
         command("gh", "release", "download", tag, "--repo", repo, "--dir", destination)
         actual = {p.name for p in Path(destination).iterdir() if p.is_file()}
-        require(actual == set(expected), "Downloaded assets differ from exactly four approved files.")
+        require(actual == set(expected), "Downloaded assets differ from exactly the approved files.")
         for name, (path, digest, _) in expected.items():
             require(sha256(Path(destination) / name) == digest and sha256(path) == digest,
                     f"Published asset bytes differ from locally checked release output: {name}")
@@ -397,7 +415,7 @@ def execute(phase: str) -> None:
     require(release.get("immutable") is True,
             "Published Release assets are not GitHub-platform immutable; verify repository policy.")
     verify_remote_assets(release, tag, version, repo)
-    print(f"PASS: published {tag} resolves to approved source with four byte-verified official assets.")
+    print(f"PASS: published {tag} resolves to approved source with {len(local_assets(version))} byte-verified official assets.")
 
 
 def main() -> None:

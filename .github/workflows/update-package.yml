@@ -15,6 +15,10 @@ on:
       - 'config/ssh.php'
       - composer.json
       - composer.lock
+      - LICENSE
+      - NOTICE
+      - 'bin/test_project_license.py'
+      - 'bin/verify-release-package.sh'
       - 'bin/build-release-package.sh'
       - 'bin/build-update-package.sh'
       - 'bin/validate-version.sh'
@@ -53,6 +57,10 @@ on:
       - 'config/ssh.php'
       - composer.json
       - composer.lock
+      - LICENSE
+      - NOTICE
+      - 'bin/test_project_license.py'
+      - 'bin/verify-release-package.sh'
       - 'bin/build-release-package.sh'
       - 'bin/build-update-package.sh'
       - 'bin/validate-version.sh'
@@ -130,6 +138,7 @@ jobs:
           python3 bin/test-released-baseline-parity.py
           python3 bin/test_released_baseline_parity.py
           bash bin/test-github-release-notes.sh
+          python3 bin/test_project_license.py
           if [[ "$version" == 3.* ]]; then
             echo 'is_clean_v3=true' >> "$GITHUB_OUTPUT"
           else
@@ -174,6 +183,21 @@ jobs:
           bash bin/test-v3-major-upgrade-guard.sh \
             dist/mcp-gateway-update-test-runtime \
             dist/mcp-gateway-update-ci.zip
+
+      # PR candidate acceptance: use the production ZIP, a genuinely empty
+      # disposable MariaDB 12.3 schema and actual first-run installer. Never
+      # point this at a real Gateway database.
+      - name: Verify clean v3 packaged installer on isolated MariaDB
+        if: steps.version_policy.outputs.is_clean_v3 == 'true'
+        env:
+          V3_RELEASE_TEST_DB_HOST: 127.0.0.1
+          V3_RELEASE_TEST_DB_PORT: 3306
+          V3_RELEASE_TEST_DB_DATABASE: mcp_gateway_test
+          V3_RELEASE_TEST_DB_USERNAME: mcp_gateway
+          V3_RELEASE_TEST_DB_PASSWORD: test-password
+        run: |
+          bash bin/test-v3-fresh-install-package.sh \
+            dist/mcp-gateway-update-test-runtime.zip mcp-gateway-update-test-runtime
 
       - name: Download released deployment baselines
         if: steps.version_policy.outputs.is_clean_v3 != 'true'
