@@ -12,6 +12,8 @@ use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\OAuth\ClientProfileRegistry;
+use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Models\User;
 use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -229,6 +231,130 @@ final class TargetBatchCoreTest extends TestCase
         self::assertSame('completed', $details['late_provider_status']);
         self::assertTrue($details['late_response_after_lease']);
         self::assertSame((string) $events[0]->correlation_id, $worked['diagnostic_reference']);
+    }
+
+    public function test_historical_mcp_request_recovers_under_new_consent_and_profile_generation_without_dispatch(): void
+    {
+        $user = $this->owner();
+        $target = $this->targets(1)[0];
+        $clientId = (string) config('oauth.client.id');
+        $resource = (string) config('oauth.resource');
+        $store = app(OAuthAuthorizationStore::class);
+        $profiles = app(ClientProfileRegistry::class);
+        $originalAuthorization = $store->approve((int) $user->getKey(), $clientId, $resource, ['mcp']);
+
+        $origin = static fn (string $authorizationId, int $generation): array => [
+            'source_channel' => 'mcp',
+            'client_id' => $clientId,
+            'client_identity_hash' => hash('sha256', 'chatgpt'."\0".$clientId),
+            'client_profile_key' => 'chatgpt',
+            'client_profile_generation' => $generation,
+            'authorization_id' => $authorizationId,
+            'resource_hash' => hash('sha256', $resource),
+        ];
+        $firstOrigin = $origin($originalAuthorization, 1);
+        $core = app(TargetBatchCoordinator::class);
+        $ids = [$target->target_id];
+        $args = ['command' => 'uptime', 'timeout_seconds' => 10];
+        $requestId = (string) Str::uuid();
+        $preview = $core->preview($user, $firstOrigin, 'ssh.command.run', $ids, $args);
+        $created = $core->create($user, $firstOrigin, $requestId, 'ssh.command.run',
+            $ids, $args, $preview['preview_token']);
+        $batchId = $created['batch_id'];
+
+        DB::table('oauth_authorizations')->where('id', $originalAuthorization)
+            ->update(['revoked_at' => now()]);
+        try {
+            $core->create($user, $firstOrigin, $requestId, 'ssh.command.run',
+                $ids, $args, $preview['preview_token']);
+            self::fail('Revoked original OAuth consent must not grant current read access.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('not readable', $exception->getMessage());
+        }
+
+        $secondAuthorization = $store->approve((int) $user->getKey(), $clientId, $resource, ['mcp']);
+        self::assertNotSame($originalAuthorization, $secondAuthorization);
+        $secondOrigin = $origin($secondAuthorization, 1);
+        self::assertSame($batchId, $core->status($user, $secondOrigin, $batchId)['batch_id']);
+        self::assertSame($batchId, $core->list($user, $secondOrigin)['batches'][0]['batch_id']);
+        // A lost reply is recoverable with an obsolete Preview; recovering
+        // existing input must not revalidate original Dispatch authorization.
+        self::assertSame($batchId, $core->create($user, $secondOrigin, $requestId,
+            'ssh.command.run', $ids, $args, 'expired-original-preview')['batch_id']);
+        self::assertSame(1, DB::table('target_batches')->count());
+        self::assertSame($originalAuthorization, DB::table('target_batches')
+            ->where('id', $batchId)->value('authorization_id'));
+
+        // Rotating the Client profile is an explicit revoke+enable lifecycle.
+        // New generation's valid consent may READ old status but cannot
+        // authorize the still-queued effect admitted under the old generation.
+        $profiles->disable('chatgpt');
+        $profiles->enable('chatgpt');
+        $thirdAuthorization = $store->approve((int) $user->getKey(), $clientId, $resource, ['mcp']);
+        self::assertNotSame($secondAuthorization, $thirdAuthorization);
+        self::assertSame(2, $profiles->active($clientId)['generation']);
+        $current = $origin($thirdAuthorization, 2);
+        self::assertSame($batchId, $core->status($user, $current, $batchId)['batch_id']);
+        self::assertSame($batchId, $core->create($user, $current, $requestId,
+            'ssh.command.run', $ids, $args, 'expired-original-preview')['batch_id']);
+        self::assertSame(1, DB::table('target_batches')->count());
+        self::assertSame(1, (int) DB::table('target_batches')
+            ->where('id', $batchId)->value('client_profile_generation'));
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('blocked', $worked['status']);
+        self::assertSame('authorization_revoked', $worked['error_code']);
+        self::assertSame([], $this->fake->effects);
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+
+        // Current intent and read authority must remain exact. New Client,
+        // profile, User or resource context cannot read this historical Batch.
+        foreach ([
+            [...$current, 'client_id' => 'unrelated-client',
+                'client_identity_hash' => hash('sha256', 'chatgpt'."\0".'unrelated-client')],
+            [...$current, 'client_id' => 'forged-client-with-old-hash'],
+            [...$current, 'client_profile_key' => 'another-profile',
+                'client_identity_hash' => hash('sha256', 'another-profile'."\0".$clientId)],
+            [...$current, 'resource_hash' => str_repeat('0', 64)],
+        ] as $wrong) {
+            try {
+                $core->create($user, $wrong, $requestId, 'ssh.command.run',
+                    $ids, $args, 'expired-original-preview');
+                self::fail('Foreign or invalid current MCP origin must not recover Batch history.');
+            } catch (InvalidArgumentException $exception) {
+                self::assertNotEmpty($exception->getMessage());
+            }
+        }
+        $other = $this->owner();
+        try {
+            $core->status($other, $current, $batchId);
+            self::fail('Different User must not see historical Batch.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('not authorized', $exception->getMessage());
+        }
+        try {
+            $core->create($user, $current, $requestId, 'ssh.command.run',
+                $ids, ['command' => 'id', 'timeout_seconds' => 10], 'expired-original-preview');
+            self::fail('Same request ID cannot change original operation.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('different original Batch input', $exception->getMessage());
+        }
+        try {
+            $core->create($user, $current, (string) Str::uuid(), 'ssh.command.run',
+                $ids, $args, 'expired-original-preview');
+            self::fail('Historical recovery must never authorize a new Batch admission.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('preview', strtolower($exception->getMessage()));
+        }
+        self::assertSame(1, DB::table('target_batches')->count());
+        $user->forceFill(['ai_access_enabled' => false])->save();
+        try {
+            $core->create($user, $current, $requestId, 'ssh.command.run',
+                $ids, $args, 'expired-original-preview');
+            self::fail('Disabled AI access cannot read historical MCP Batch.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('not readable', $exception->getMessage());
+        }
+        self::assertSame([], $this->fake->effects);
     }
 
     public function test_deferred_nonowner_mcp_diagnostics_preserve_actor_and_client_without_cross_client_access(): void

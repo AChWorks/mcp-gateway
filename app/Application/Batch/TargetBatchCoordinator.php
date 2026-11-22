@@ -19,6 +19,7 @@ final readonly class TargetBatchCoordinator
 {
     public function __construct(
         private TargetBatchPlanner $planner,
+        private DeferredBatchAuthority $authority,
     ) {}
 
     /**
@@ -59,7 +60,7 @@ final readonly class TargetBatchCoordinator
         );
         $existing = $this->existingRequest($user, $origin, $requestId);
         if ($existing !== null) {
-            return $this->recoverExisting($existing, $user, $intent);
+            return $this->recoverExisting($existing, $user, $origin, $intent);
         }
 
         // Only a *new* Batch needs current Target eligibility and exact
@@ -130,7 +131,7 @@ final readonly class TargetBatchCoordinator
                 throw $exception;
             }
 
-            return $this->recoverExisting($existing, $user, $intent);
+            return $this->recoverExisting($existing, $user, $origin, $intent);
         }
 
         return $this->summary(DB::table('target_batches')->where('id', $id)->firstOrFail());
@@ -232,14 +233,25 @@ final readonly class TargetBatchCoordinator
             ->where('request_id', $requestId)->first();
     }
 
-    /** @return array<string,mixed> */
-    private function recoverExisting(object $batch, User $user, string $intent): array
+    /** @param array<string,mixed> $origin
+     * @return array<string,mixed>
+     */
+    private function recoverExisting(object $batch, User $user, array $origin, string $intent): array
     {
         if (! hash_equals((string) $batch->request_intent_hash, $intent)) {
             throw new InvalidArgumentException('request_id is already bound to different original Batch input.');
         }
+
+        // Existing-request recovery is READ-only. The entrypoint has already
+        // captured the *current* authenticated Web session or MCP token and
+        // Client. Validate that current origin rather than the original
+        // persisted consent, which may legitimately be revoked or replaced.
+        // The original consent/generation remain saved in the Batch and are
+        // still required by TargetBatchWorker before any new remote effect.
         $currentUser = User::query()->find($user->getKey());
-        if (! $currentUser instanceof User || ! app(DeferredBatchAuthority::class)->allows($batch, $currentUser)) {
+        if (! $currentUser instanceof User || ! $this->authority->allows(
+            (object) [...$origin, 'actor_user_id' => (int) $user->getKey()], $currentUser,
+        )) {
             throw new InvalidArgumentException('Original Batch is not readable under current User/Client authorization.');
         }
 

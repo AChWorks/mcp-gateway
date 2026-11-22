@@ -17,6 +17,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\OAuth\ChatGptClientMetadata;
+use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\ResponseTypes\RecoverableBearerTokenResponse;
 use App\Infrastructure\OAuth\RefreshTokenInspector;
 use App\Models\User;
@@ -150,7 +151,7 @@ final class ChatGptOAuthFlowTest extends TestCase
             'io.modelcontextprotocol/clientCapabilities' => (object) [],
             'io.modelcontextprotocol/clientInfo' => ['name' => 'batch-oauth-test', 'version' => '1.0.0'],
         ];
-        $call = function (string $name, array $arguments) use ($headers, $metadata): TestResponse {
+        $call = function (string $name, array $arguments) use (&$headers, $metadata): TestResponse {
             return $this->withHeaders([...$headers, 'Mcp-Name' => $name])->postJson('/mcp', [
                 'jsonrpc' => '2.0', 'id' => 131, 'method' => 'tools/call',
                 'params' => ['name' => $name, 'arguments' => $arguments, '_meta' => $metadata],
@@ -161,8 +162,9 @@ final class ChatGptOAuthFlowTest extends TestCase
         ])->assertOk()->assertJsonPath('result.structuredContent.eligible_count', 2);
         $token = $preview->json('result.structuredContent.preview_token');
         self::assertIsString($token);
+        $requestId = (string) Str::uuid();
         $queued = $call('ssh-batch-run', [
-            'request_id' => (string) Str::uuid(), 'target_ids' => $ids,
+            'request_id' => $requestId, 'target_ids' => $ids,
             'command' => 'witness', 'timeout_seconds' => 10,
             'preview_token' => $token,
         ])->assertOk()->assertJsonPath('result.structuredContent.status', 'queued');
@@ -184,11 +186,75 @@ final class ChatGptOAuthFlowTest extends TestCase
         // though the Batch was already queued under a previously valid token.
         DB::table('oauth_authorizations')->where('id', $parent->authorization_id)
             ->update(['revoked_at' => now()]);
+
+        // Reconnect the SAME actual OAuth User/Client under new consent B.
+        // Middleware verifies the fresh bearer and consent before these MCP
+        // calls. Recovery may read the historical Batch; it must not revive
+        // the original revoked A's authorization for queued remote effects.
+        [, $newBearer] = $this->issueRefreshableToken($user);
+        $newAuthorization = DB::table('oauth_access_tokens')
+            ->where('id', $this->accessTokenIdentifier($newBearer))->value('authorization_id');
+        self::assertNotSame($parent->authorization_id, $newAuthorization);
+        self::assertIsString($newAuthorization);
+        $headers['Authorization'] = 'Bearer '.$newBearer;
+        $call('target-batch-status', ['batch_id' => $batchId])
+            ->assertOk()->assertJsonPath('result.structuredContent.batch_id', $batchId);
+        $call('target-batches-list', [])
+            ->assertOk()->assertJsonPath('result.structuredContent.batches.0.batch_id', $batchId);
+        $expiredPreview = (time() - 3600).'.'.str_repeat('0', 64);
+        $call('ssh-batch-run', [
+            'request_id' => $requestId, 'target_ids' => $ids,
+            'command' => 'witness', 'timeout_seconds' => 10,
+            'preview_token' => $expiredPreview,
+        ])->assertOk()->assertJsonPath('result.structuredContent.batch_id', $batchId);
+        self::assertSame(1, DB::table('target_batches')->count());
+        self::assertSame($parent->authorization_id, DB::table('target_batches')
+            ->where('id', $batchId)->value('authorization_id'));
+        self::assertSame([$ids[0]], $effects->targetIds);
+
         $blocked = $worker->workOnce();
         self::assertSame('blocked', $blocked['status']);
         self::assertSame('authorization_revoked', $blocked['error_code']);
         self::assertSame([$ids[0]], $effects->targetIds);
         self::assertSame('partial', DB::table('target_batches')->where('id', $batchId)->value('status'));
+        $call('target-batch-status', ['batch_id' => $batchId])
+            ->assertOk()->assertJsonPath('result.structuredContent.status', 'partial');
+
+        // A deliberate profile disable + enable increments the generation
+        // and invalidates B's token. C is new middleware-authenticated consent
+        // for the unchanged User/Client identity, so historical read and
+        // idempotent request recovery must still agree.
+        app(ClientProfileRegistry::class)->disable('chatgpt');
+        app(ClientProfileRegistry::class)->enable('chatgpt');
+        self::assertSame(2, app(ClientProfileRegistry::class)->active(self::CLIENT_ID)['generation']);
+        $this->withHeaders($headers)->postJson('/mcp', [
+            'jsonrpc' => '2.0', 'id' => 134, 'method' => 'ping',
+        ])->assertUnauthorized();
+        [, $currentBearer] = $this->issueRefreshableToken($user);
+        self::assertNotSame($newBearer, $currentBearer);
+        $currentAuthorization = DB::table('oauth_access_tokens')
+            ->where('id', $this->accessTokenIdentifier($currentBearer))->value('authorization_id');
+        self::assertNotSame($newAuthorization, $currentAuthorization);
+        $headers['Authorization'] = 'Bearer '.$currentBearer;
+        $call('target-batch-status', ['batch_id' => $batchId])
+            ->assertOk()->assertJsonPath('result.structuredContent.batch_id', $batchId);
+        $call('ssh-batch-run', [
+            'request_id' => $requestId, 'target_ids' => $ids,
+            'command' => 'witness', 'timeout_seconds' => 10,
+            'preview_token' => $expiredPreview,
+        ])->assertOk()->assertJsonPath('result.structuredContent.batch_id', $batchId);
+        self::assertSame(1, (int) DB::table('target_batches')
+            ->where('id', $batchId)->value('client_profile_generation'));
+        self::assertSame(1, DB::table('target_batches')->count());
+        self::assertSame([$ids[0]], $effects->targetIds);
+        $headers['Authorization'] = 'Bearer invalid-current-token';
+        $this->withHeaders([...$headers, 'Mcp-Name' => 'target-batch-status'])->postJson('/mcp', [
+            'jsonrpc' => '2.0', 'id' => 133, 'method' => 'tools/call',
+            'params' => ['name' => 'target-batch-status',
+                'arguments' => ['batch_id' => $batchId], '_meta' => $metadata],
+        ])->assertUnauthorized();
+        self::assertNull($worker->workOnce());
+        self::assertSame(1, DB::table('target_batches')->count());
     }
 
     public function test_discovery_metadata_and_unauthenticated_mcp_challenge_are_resource_bound(): void

@@ -129,8 +129,10 @@ final readonly class TargetBatchPlanner
 
     /**
      * Immutable, caller-supplied intent for recovering an already accepted
-     * request_id. Target permissions, credentials and Preview expiry are
-     * deliberately NOT inputs: those can change after admission.
+     * request_id. Target permissions, credentials, Preview expiry and
+     * individual OAuth consent/profile generations are deliberately NOT
+     * inputs: those can change while the same User/Client remains entitled
+     * to read its original historical Batch.
      *
      * @param  array<string,mixed>  $origin
      * @param  array<mixed>  $targetIds
@@ -152,10 +154,8 @@ final readonly class TargetBatchPlanner
         }
 
         return hash('sha256', json_encode([
-            'batch_request_intent_v1', (string) $user->getKey(),
+            'batch_request_intent_v2', (string) $user->getKey(),
             $origin['source_channel'] ?? null, $origin['client_identity_hash'] ?? null,
-            $origin['authorization_id'] ?? null, $origin['client_profile_generation'] ?? null,
-            $origin['resource_hash'] ?? null,
             $capability, array_keys($ids), $arguments, $mode, $stopOnFailure, $parallelism,
         ], JSON_THROW_ON_ERROR));
     }
