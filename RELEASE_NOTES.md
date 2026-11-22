@@ -1,3 +1,12 @@
+# MCP Gateway v3.0.0-rc.8
+
+**Source candidate `3.0.0-rc.8` — NOT PUBLISHED.**
+
+- Supersedes immutable rc.7 because exact-head CI revealed one remaining test-only problem: five real OpenSSH filesystem-mode scenarios were sharing a single Target's legitimate 30-operations-per-minute SFTP admission budget. Existing SFTP/SSH regressions and all other CI checks passed.
+- The disposable OpenSSH mode fixture now registers a distinct Target for each mode (0644, 0755, setuid, setgid, sticky) and cleans each uniquely named test file. Each case exercises the real scoped SFTP Patch application independently, preserving all admission/permission/host-key controls without raising limits, disabling rate limiting, sleeping between attempts, or weakening production behavior.
+- No production behavior changed from rc.7. The F-01 through F-04 independent-review fixes, generic ssh-file-write compatibility and explicit unknown publication boundaries remain as documented in the preceding candidate notes.
+- No official v3 release, Production operations or Merge authorization. Exact-head CI and independent re-review must be freshly satisfied.
+
 # MCP Gateway v3.0.0-rc.7
 
 **Source candidate `3.0.0-rc.7` — NOT PUBLISHED.**

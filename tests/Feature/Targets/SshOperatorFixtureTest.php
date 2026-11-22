@@ -278,30 +278,30 @@ PY;
     public function test_real_patch_preserves_complete_original_mode_or_rejects_before_publication(): void
     {
         $owner = $this->owner();
-        $target = $this->target();
         $files = app(SshFileRuntime::class);
-        // Probe the actual bounded SFTP patch service directly for all
-        // filesystem modes; MCP-level rate admission is covered separately
-        // by the public Tool fixture and must not be disabled for a test.
         $patches = app(SshFilePatchService::class);
         $home = '/home/'.$this->env('SSH_FIXTURE_USER');
-        $path = $home.'/gw-op-modes-'.bin2hex(random_bytes(8));
         $successfulSpecialModes = 0;
 
-        try {
-            foreach ([0644, 0755, 04755, 02755, 01755] as $mode) {
+        // SFTP admission intentionally has a per-Target rate budget. Each
+        // filesystem mode is an independent acceptance scenario; give it an
+        // isolated disposable Target rather than disabling admission or
+        // exhausting one Target with an artificial burst of operations.
+        foreach ([0644, 0755, 04755, 02755, 01755] as $mode) {
+            $modeText = sprintf('%04o', $mode);
+            $target = $this->target(id: 'ssh-operator-mode-'.$modeText);
+            $path = $home.'/gw-op-mode-'.$modeText.'-'.bin2hex(random_bytes(8));
+
+            try {
                 $original = 'version=before';
-                $write = $files->write(
-                    $owner, $target, $path, base64_encode($original),
-                    overwrite: $mode !== 0644,
-                );
+                $write = $files->write($owner, $target, $path, base64_encode($original));
                 self::assertSame('completed', $write['status'], json_encode($write));
                 $setMode = $this->command($owner, $target,
-                    'chmod '.escapeshellarg(sprintf('%04o', $mode)).' -- '.escapeshellarg($path));
+                    'chmod '.escapeshellarg($modeText).' -- '.escapeshellarg($path));
                 self::assertSame(0, $setMode['exit_code'], json_encode($setMode));
 
                 $before = $files->readForPatch($owner, $target, $path);
-                self::assertSame(sprintf('%04o', $mode), $before['mode']);
+                self::assertSame($modeText, $before['mode']);
                 $preview = $patches->patch($owner, $target, $path, 'before', 'after');
                 self::assertSame('preview', $preview['status']);
                 $published = false;
@@ -324,13 +324,13 @@ PY;
                 self::assertSame($before['mode'], $after['mode']);
                 self::assertSame($before['uid'], $after['uid']);
                 self::assertSame($before['gid'], $after['gid']);
+            } finally {
+                $this->command($owner, $target, 'rm -f -- '.escapeshellarg($path));
             }
-
-            self::assertGreaterThan(0, $successfulSpecialModes,
-                'The disposable OpenSSH fixture should exercise at least one supported special mode.');
-        } finally {
-            $this->command($owner, $target, 'rm -f -- '.escapeshellarg($path));
         }
+
+        self::assertGreaterThan(0, $successfulSpecialModes,
+            'The disposable OpenSSH fixture should exercise at least one supported special mode.');
     }
 
     public function test_real_foreign_owner_is_rejected_before_publication_with_explicit_cleanup_evidence(): void
