@@ -1,3 +1,12 @@
+# MCP Gateway v3.0.0-rc.10
+
+**Source candidate `3.0.0-rc.10` — NOT PUBLISHED.**
+
+- Supersedes the immutable rc.9 owner-test candidate from [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333). Exact-head rc.9 GitHub workflows passed, including full CI, MariaDB concurrency, real disposable OpenSSH Batch, WordPress contract, Chromium, and Update Package. That evidence applies **only to rc.9 HEAD**, not this new candidate.
+- Corrects a v3 Batch crash-recovery lease mismatch: the WordPress read-only `bridge-info` provider previously budgeted a single HTTP request even though its native MCP session performs initialization, Ability classification, execution, cleanup and may perform a bounded OAuth refresh/recovery first. At high permitted request timeouts, a second worker could prematurely reconcile a still-running authorized operation as `outcome_unknown` and discard its eventual successful journal result.
+- The connector-owned deadline now covers the complete sequential WordPress execution and bounded OAuth recovery. The existing separately configured worker margin remains additional; no connector request timeout, permission, token policy, remote replay semantics, or user-facing operational limit is weakened. Added 5s/30s timeout budget tests without real remote effects.
+- No official v3 release, production installation, remote Target mutation or Merge authorization. New exact-head CI and independent review are required.
+
 # MCP Gateway v3.0.0-rc.9
 
 **Source candidate `3.0.0-rc.9` — NOT PUBLISHED.**
