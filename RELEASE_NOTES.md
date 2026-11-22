@@ -1,3 +1,11 @@
+# MCP Gateway v3.0.0-rc.5
+
+**Source candidate `3.0.0-rc.5` — NOT PUBLISHED.**
+
+- Supersedes the previously distributed, immutable `3.0.0-rc.4` owner-test candidate without reusing its version/source identity. The five independent SSH Tool contracts and native Batch integration remain as described below.
+- Remediates isolated real OpenSSH acceptance: `ssh-change-verify` now honors the exact optional HTTP `path` (default `/`) for service-specific health endpoint checks. This distinguishes an incorrect `404` at `/` from a true `200` at `/health`. Adds negative path validation and an explicit endpoint-aware real service test.
+- No v3 official release, Production migration, live Target mutation or Owner merge approval is implied. The prior `rc.4` candidate remains historically recorded as a test artifact; the exact-head CI and independent review gate apply to `rc.5`.
+
 # MCP Gateway v3.0.0-rc.4
 
 **Source candidate `3.0.0-rc.4` — NOT PUBLISHED.**
