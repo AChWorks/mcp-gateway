@@ -1,3 +1,12 @@
+# MCP Gateway v3.0.0-rc.12
+
+**Source candidate `3.0.0-rc.12` — NOT PUBLISHED.**
+
+- Resolves the independent re-review REQUIRED finding F-01-R1 from [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333): two PHP workers could select the same ordered parent before the serialized admission lock, allowing a stale snapshot of an older Batch to consume an independent newer Batch's next fair slot. Existing transactional budgets prevented double-dispatch but did not prove correct cross-parent fairness at claim time.
+- The Worker now verifies each selected parent's **current persisted turn under the original admission lock**. A stale turn triggers a fresh bounded keyset scan, never an operation claim or a remote replay. Optimistic contention rescans use the already-configured global active budget and leave normal free-slot progress intact; the original narrow transaction, authorization, connector binding, rolling child order, per-Target exclusion, uncertain-effect journal, and operational diagnostics are preserved. No additional broker, scheduler, lock, production setting or artificial fleet limit is introduced.
+- Adds a deterministic isolated MariaDB concurrency fixture in which both independent PHP processes capture the same pre-lock parent ranking, the first claim remains remote-in-flight, and the second must claim the newer independent Batch instead of the older Batch's next child. Fixture cleanup releases both simulated remote holds even after failed assertions. Existing same-Target and late-result tests remain required.
+- This is a distinct candidate from rc.11. Previous exact-HEAD CI evidence does **not** transfer to rc.12. All exact-HEAD CI and a new independent read-only focused remediation review are required before any Owner-authorized Merge. Other v3 real-host/OAuth/install/recovery acceptance is separately OPEN; no stable Release, Production deployment or live Target operation is authorized.
+
 # MCP Gateway v3.0.0-rc.11
 
 **Source candidate `3.0.0-rc.11` — NOT PUBLISHED.**
