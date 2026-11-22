@@ -1,6 +1,9 @@
-# MCP Gateway v3.0.0-rc.1
+# MCP Gateway v3.0.0-rc.2
 
-**Source candidate `3.0.0-rc.1` — NOT PUBLISHED.**
+**Source candidate `3.0.0-rc.2` — NOT PUBLISHED.**
+
+The candidate VERSION advanced from rc.1 because a GitHub operator-test artifact for that name already exists at an earlier PR HEAD. This follows the immutable candidate naming policy; it is not a stable release or approval.
+
 
 This is a **development milestone, not a complete or deployable v3 release**. GitHub Issue [#330](https://github.com/AChWorks/mcp-gateway/issues/330) remains the implementation authority. Production continues on the independently restorable v2 release; this source candidate does not authorize a cutover.
 
