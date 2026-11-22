@@ -2,6 +2,7 @@
 
 namespace App\Application\Batch;
 
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\WordpressTargetOperations;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -14,7 +15,10 @@ use Illuminate\Support\Str;
 /** Only this fixed read-only Bridge capability enters Batch; no publishing. */
 final readonly class WordpressBridgeInfoBatchProvider implements TargetBatchOperationProvider
 {
-    public function __construct(private WordpressTargetOperations $wordpress) {}
+    public function __construct(
+        private WordpressTargetOperations $wordpress,
+        private OperationalSettings $settings,
+    ) {}
 
     public function key(): string
     {
@@ -39,6 +43,11 @@ final readonly class WordpressBridgeInfoBatchProvider implements TargetBatchOper
     public function validArguments(array $arguments): bool
     {
         return $arguments === [];
+    }
+
+    public function remoteTimeoutSeconds(array $arguments): int
+    {
+        return max(30, $this->settings->httpTimeoutsSeconds()['request']);
     }
 
     public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array

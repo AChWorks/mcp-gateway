@@ -61,10 +61,18 @@ final class ActivityRecorder
                     'retry_safe' => $outcome === 'unknown' ? false : ($diagnostics['retry_safe'] ?? null),
                 ], $correlationId);
             }
-        } catch (Throwable) {
-            // Activity persistence must never change the authoritative outcome of a
-            // routed operation, especially after a remote mutation may have executed.
+        } catch (Throwable $exception) {
+            // A failed Activity insert must not undo or reclassify a remote
+            // effect. Log the actual storage failure category and the database
+            // driver's original message, not the QueryException's interpolated
+            // SQL/bindings (which may include sensitive request identifiers).
             try {
+                $cause = $exception->getPrevious();
+                $diagnostics = OperationDiagnostics::safeContext([
+                    'exception_class' => $exception::class,
+                    'source_error_code' => (string) $exception->getCode(),
+                    'gateway_error_message' => $cause?->getMessage(),
+                ]);
                 Log::warning('Gateway activity persistence failed.', [
                     'correlation_id' => $correlationId,
                     'operation' => $operation,
@@ -73,6 +81,8 @@ final class ActivityRecorder
                     'connector_type_snapshot' => $target?->connector_type,
                     'outcome' => $outcome,
                     'error_code' => $errorCode,
+                    'failure_stage' => 'activity_persist',
+                    ...$diagnostics,
                 ]);
             } catch (Throwable) {
                 // Diagnostics are best-effort and must not change the routed result.

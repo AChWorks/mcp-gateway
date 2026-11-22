@@ -31,120 +31,152 @@ final readonly class TargetBatchWorker
     /** @return array<string,mixed>|null A single durable child attempt, or idle */
     public function workOnce(): ?array
     {
-        // Cursor avoids materializing a fleet-sized Batch list. Another
-        // worker may advance state between cursor and transaction; row locks
-        // and exact status checks are authoritative.
-        $candidates = DB::table('target_batches')
-            ->whereIn('status', ['queued', 'running', 'cancel_requested'])
-            ->orderBy('created_at')->orderBy('id')->cursor();
-        foreach ($candidates as $candidate) {
-            $claimed = DB::transaction(function () use ($candidate): ?array {
-                // A shared singleton lock serializes global/user capacity
-                // admission across concurrent Laravel worker processes.
-                if (DB::table('operational_settings')->where('id', 1)->lockForUpdate()->first() === null) {
-                    throw new \RuntimeException(
-                        'Batch worker admission lock is unavailable: operational_settings row 1 is missing. No new remote effect was dispatched.',
-                    );
-                }
-                $batch = DB::table('target_batches')->where('id', $candidate->id)->lockForUpdate()->first();
-                if ($batch === null || $batch->finished_at !== null) {
-                    return null;
-                }
-                $now = now();
-                DB::table('target_batch_items')->where('batch_id', $batch->id)
-                    ->whereIn('status', ['dispatching', 'cancel_requested'])
-                    ->whereNotNull('lease_expires_at')
-                    ->where('lease_expires_at', '<=', $now)
-                    ->update([
-                        'status' => 'outcome_unknown', 'error_code' => 'dispatch_lease_expired',
-                        'finished_at' => $now, 'updated_at' => $now,
-                    ]);
-                if ($batch->cancel_requested_at !== null) {
+        // Bounded keyset pages: a PDO cursor left open while acquiring row
+        // locks/issuing nested queries can invalidate iteration on some DB
+        // drivers. Never materialize the fleet-sized active Batch backlog.
+        $afterCreatedAt = null;
+        $afterId = null;
+        do {
+            $query = DB::table('target_batches')
+                ->whereIn('status', ['queued', 'running', 'cancel_requested']);
+            if ($afterId !== null) {
+                $query->where(static function ($page) use ($afterCreatedAt, $afterId): void {
+                    $page->where('created_at', '>', $afterCreatedAt)
+                        ->orWhere(static function ($sameTime) use ($afterCreatedAt, $afterId): void {
+                            $sameTime->where('created_at', $afterCreatedAt)->where('id', '>', $afterId);
+                        });
+                });
+            }
+            $candidates = $query->orderBy('created_at')->orderBy('id')->limit(64)->get();
+            foreach ($candidates as $candidate) {
+                $afterCreatedAt = $candidate->created_at;
+                $afterId = $candidate->id;
+                $claimed = DB::transaction(function () use ($candidate): ?array {
+                    // A shared singleton lock serializes global/user capacity
+                    // admission across concurrent Laravel worker processes.
+                    if (DB::table('operational_settings')->where('id', 1)->lockForUpdate()->first() === null) {
+                        throw new \RuntimeException(
+                            'Batch worker admission lock is unavailable: operational_settings row 1 is missing. No new remote effect was dispatched.',
+                        );
+                    }
+                    $batch = DB::table('target_batches')->where('id', $candidate->id)->lockForUpdate()->first();
+                    if ($batch === null || $batch->finished_at !== null) {
+                        return null;
+                    }
+                    $now = now();
                     DB::table('target_batch_items')->where('batch_id', $batch->id)
-                        ->where('status', 'queued')->update([
-                            'status' => 'canceled', 'finished_at' => $now, 'updated_at' => $now,
-                        ]);
-                    $this->aggregate($batch->id);
-
-                    return null;
-                }
-                if ($batch->stop_on_failure && DB::table('target_batch_items')
-                    ->where('batch_id', $batch->id)
-                    ->whereIn('status', ['failed', 'blocked', 'outcome_unknown'])->exists()) {
-                    DB::table('target_batch_items')->where('batch_id', $batch->id)
-                        ->where('status', 'queued')->update([
-                            'status' => 'blocked', 'error_code' => 'stopped_after_failure',
+                        ->whereIn('status', ['dispatching', 'cancel_requested'])
+                        ->whereNotNull('lease_expires_at')
+                        ->where('lease_expires_at', '<=', $now)
+                        ->update([
+                            'status' => 'outcome_unknown', 'error_code' => 'dispatch_lease_expired',
                             'finished_at' => $now, 'updated_at' => $now,
                         ]);
-                    $this->aggregate($batch->id);
+                    if ($batch->cancel_requested_at !== null) {
+                        DB::table('target_batch_items')->where('batch_id', $batch->id)
+                            ->where('status', 'queued')->update([
+                                'status' => 'canceled', 'finished_at' => $now, 'updated_at' => $now,
+                            ]);
+                        $this->aggregate($batch->id);
 
-                    return null;
-                }
-                $activeBatch = DB::table('target_batch_items')->where('batch_id', $batch->id)
-                    ->whereIn('status', ['dispatching', 'cancel_requested'])->count();
-                if ($activeBatch >= ($batch->execution_mode === 'rolling' ? 1 : (int) $batch->parallelism)) {
-                    return null;
-                }
-                $globalActive = DB::table('target_batch_items')
-                    ->whereIn('status', ['dispatching', 'cancel_requested'])->count();
-                if ($globalActive >= max(1, (int) config('batch.global_active', 4))) {
-                    return null;
-                }
-                $userActive = DB::table('target_batch_items as items')
-                    ->join('target_batches as batches', 'batches.id', '=', 'items.batch_id')
-                    ->where('batches.actor_user_id', $batch->actor_user_id)
-                    ->whereIn('items.status', ['dispatching', 'cancel_requested'])->count();
-                if ($userActive >= max(1, (int) config('batch.user_active', 2))) {
-                    return null;
-                }
-                $item = DB::table('target_batch_items')->where('batch_id', $batch->id)
-                    ->where('status', 'queued')->orderBy('position')->lockForUpdate()->first();
-                if ($item === null) {
-                    $this->aggregate($batch->id);
+                        return null;
+                    }
+                    if ($batch->stop_on_failure && DB::table('target_batch_items')
+                        ->where('batch_id', $batch->id)
+                        ->whereIn('status', ['failed', 'blocked', 'outcome_unknown'])->exists()) {
+                        DB::table('target_batch_items')->where('batch_id', $batch->id)
+                            ->where('status', 'queued')->update([
+                                'status' => 'blocked', 'error_code' => 'stopped_after_failure',
+                                'finished_at' => $now, 'updated_at' => $now,
+                            ]);
+                        $this->aggregate($batch->id);
 
-                    return null;
-                }
-                if (DB::table('target_batch_items')->where('target_record_id', $item->target_record_id)
-                    ->whereIn('status', ['dispatching', 'cancel_requested'])->exists()) {
-                    return null;
-                }
-                $timeout = $batch->capability_key === 'ssh.command.run'
-                    ? $this->sshTimeoutFromEncryptedArguments($batch->arguments_ciphertext)
-                    : max(30, (int) config('bridge.http.request_timeout_seconds', 30));
-                $attemptId = (string) Str::uuid();
-                DB::table('target_batch_items')->where('id', $item->id)->where('status', 'queued')
-                    ->update([
-                        'status' => 'dispatching', 'dispatch_attempt_id' => $attemptId,
-                        'started_at' => $now,
-                        'lease_expires_at' => $now->copy()->addSeconds(
-                            $timeout + max(30, (int) config('batch.lease_margin_seconds', 90)),
-                        ),
-                        'updated_at' => $now,
+                        return null;
+                    }
+                    $activeBatch = DB::table('target_batch_items')->where('batch_id', $batch->id)
+                        ->whereIn('status', ['dispatching', 'cancel_requested'])->count();
+                    if ($activeBatch >= ($batch->execution_mode === 'rolling' ? 1 : (int) $batch->parallelism)) {
+                        return null;
+                    }
+                    $globalActive = DB::table('target_batch_items')
+                        ->whereIn('status', ['dispatching', 'cancel_requested'])->count();
+                    if ($globalActive >= max(1, (int) config('batch.global_active', 4))) {
+                        return null;
+                    }
+                    $userActive = DB::table('target_batch_items as items')
+                        ->join('target_batches as batches', 'batches.id', '=', 'items.batch_id')
+                        ->where('batches.actor_user_id', $batch->actor_user_id)
+                        ->whereIn('items.status', ['dispatching', 'cancel_requested'])->count();
+                    if ($userActive >= max(1, (int) config('batch.user_active', 2))) {
+                        return null;
+                    }
+                    // Concurrent Batches may bypass a busy child to use
+                    // independent available Targets. Rolling is different:
+                    // preserve the exact selected order and wait until the
+                    // first queued Target is free before continuing.
+                    $itemQuery = DB::table('target_batch_items as queued')
+                        ->where('queued.batch_id', $batch->id)
+                        ->where('queued.status', 'queued');
+                    if ($batch->execution_mode !== 'rolling') {
+                        $itemQuery->whereNotExists(static function ($query): void {
+                            $query->selectRaw('1')->from('target_batch_items as active')
+                                ->whereColumn('active.target_record_id', 'queued.target_record_id')
+                                ->whereIn('active.status', ['dispatching', 'cancel_requested']);
+                        });
+                    }
+                    $item = $itemQuery->orderBy('queued.position')->lockForUpdate()->first();
+                    if ($item !== null && $batch->execution_mode === 'rolling'
+                        && DB::table('target_batch_items')->where('target_record_id', $item->target_record_id)
+                            ->whereIn('status', ['dispatching', 'cancel_requested'])->exists()) {
+                        return null;
+                    }
+                    if ($item === null) {
+                        // This may be a genuinely finished Batch OR one with
+                        // queued work temporarily blocked by other active Batches.
+                        $this->aggregate($batch->id);
+
+                        return null;
+                    }
+                    $timeout = $this->remoteTimeoutSeconds($batch->capability_key, $batch->arguments_ciphertext);
+                    $attemptId = (string) Str::uuid();
+                    DB::table('target_batch_items')->where('id', $item->id)->where('status', 'queued')
+                        ->update([
+                            'status' => 'dispatching', 'dispatch_attempt_id' => $attemptId,
+                            'started_at' => $now,
+                            'lease_expires_at' => $now->copy()->addSeconds(
+                                $timeout + max(30, (int) config('batch.lease_margin_seconds', 90)),
+                            ),
+                            'updated_at' => $now,
+                        ]);
+                    DB::table('target_batches')->where('id', $batch->id)->update([
+                        'status' => 'running', 'updated_at' => $now,
                     ]);
-                DB::table('target_batches')->where('id', $batch->id)->update([
-                    'status' => 'running', 'updated_at' => $now,
-                ]);
 
-                return ['batch' => $batch, 'item' => $item, 'attempt' => $attemptId];
-            }, 3);
-            if ($claimed !== null) {
-                return $this->perform($claimed['batch'], $claimed['item'], $claimed['attempt']);
+                    return ['batch' => $batch, 'item' => $item, 'attempt' => $attemptId];
+                }, 3);
+                if ($claimed !== null) {
+                    return $this->perform($claimed['batch'], $claimed['item'], $claimed['attempt']);
+                }
             }
-        }
+        } while ($candidates->count() === 64);
 
         return null;
     }
 
-    private function sshTimeoutFromEncryptedArguments(string $encrypted): int
+    private function remoteTimeoutSeconds(string $capability, string $encrypted): int
     {
         try {
             $input = json_decode(Crypt::decryptString($encrypted), true, 512, JSON_THROW_ON_ERROR);
+            $provider = $this->providers->find($capability);
+            if ($provider === null || ! is_array($input) || ! $provider->validArguments($input)) {
+                return 30; // Invalid payload is blocked before any new remote effect.
+            }
 
-            return max(1, (int) ($input['timeout_seconds'] ?? 10));
+            return max(1, $provider->remoteTimeoutSeconds($input));
         } catch (Throwable) {
-            // Invalid encrypted input is reconciled as blocked before dispatch;
-            // this duration only bounds the crash recovery lease.
-            return 10;
+            // No optimistic replay when the sealed input/provider cannot be
+            // resolved. The post-claim execution gate will block it safely.
+            return 30;
         }
     }
 

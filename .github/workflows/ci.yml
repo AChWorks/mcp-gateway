@@ -93,6 +93,11 @@ jobs:
       - name: Run test suite
         run: composer test
 
+      - name: Prove real pinned SSH Batch on disposable OpenSSH (no skips)
+        run: |
+          test "${SSH_FIXTURE_ENABLED:-}" = 1
+          php artisan test --compact tests/Feature/Batch/TargetBatchOpenSshFixtureTest.php --fail-on-skipped
+
       - name: Generate ephemeral Gateway OAuth signing keys
         env:
           APP_ENV: testing

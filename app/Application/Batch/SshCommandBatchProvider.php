@@ -56,6 +56,11 @@ final readonly class SshCommandBatchProvider implements TargetBatchOperationProv
             && is_int($timeout) && $timeout >= 1 && $timeout <= $limits['max_seconds'];
     }
 
+    public function remoteTimeoutSeconds(array $arguments): int
+    {
+        return max(1, (int) ($arguments['timeout_seconds'] ?? 10));
+    }
+
     public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array
     {
         try {

@@ -56,6 +56,7 @@ return new class extends Migration
             $table->unique(['batch_id', 'position'], 'target_batch_position');
             $table->unique(['batch_id', 'target_id_snapshot'], 'target_batch_unique_target');
             $table->index(['batch_id', 'status', 'position'], 'target_batch_claim');
+            $table->index(['target_record_id', 'status'], 'target_batch_target_active');
             $table->index(['status', 'lease_expires_at'], 'target_batch_lease');
         });
     }

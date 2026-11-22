@@ -23,8 +23,8 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
 
     public function test_native_ssh_nonzero_exit_retains_original_failure_and_target_batch_correlation(): void
     {
-        if (getenv('V3_BATCH_SSH_FIXTURE_ENABLED') !== '1') {
-            $this->markTestSkipped('Requires a disposable isolated loopback OpenSSH fixture.');
+        if (getenv('SSH_FIXTURE_ENABLED') !== '1') {
+            $this->markTestSkipped('Requires the established CI disposable loopback OpenSSH fixture.');
         }
         $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
         {
@@ -33,9 +33,9 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
                 return ['127.0.0.1'];
             }
         });
-        $hostKey = preg_split('/\s+/', trim((string) file_get_contents((string) getenv('V3_BATCH_SSH_HOST_KEY'))));
+        $hostKey = preg_split('/\s+/', trim((string) file_get_contents((string) getenv('SSH_FIXTURE_ED25519_HOST_PUB'))));
         $pin = implode(' ', array_slice($hostKey, 0, 2));
-        $privateKey = (string) file_get_contents((string) getenv('V3_BATCH_SSH_LOGIN_KEY'));
+        $password = (string) getenv('SSH_FIXTURE_PASSWORD');
         $user = User::query()->create([
             'name' => 'SSH Failure Fixture', 'email' => 'v3-ssh-batch-failure@example.test',
             'password' => 'StrongPassword!234', 'role' => 'owner',
@@ -43,8 +43,8 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
         ]);
         $target = app(SshTargetRegistration::class)->register(
             'batch-real-ssh-failed', 'Disposable SSH failure', 'fixture.example.test',
-            (int) getenv('V3_BATCH_SSH_PORT'), (string) getenv('V3_BATCH_SSH_USER'),
-            $pin, 'private_key', $privateKey, null,
+            (int) getenv('SSH_FIXTURE_PORT_MODERN'), (string) getenv('SSH_FIXTURE_USER'),
+            $pin, 'password', $password, null,
         );
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         $request = Request::create('/admin/target-batches', 'POST');
@@ -76,8 +76,8 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
 
     public function test_real_pinned_openssh_batch_executes_on_two_explicit_targets_with_durable_results(): void
     {
-        if (getenv('V3_BATCH_SSH_FIXTURE_ENABLED') !== '1') {
-            $this->markTestSkipped('Run only with disposable loopback sshd and isolated test keys.');
+        if (getenv('SSH_FIXTURE_ENABLED') !== '1') {
+            $this->markTestSkipped('Requires the established CI disposable loopback OpenSSH fixture.');
         }
         $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
         {
@@ -86,9 +86,9 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
                 return ['127.0.0.1'];
             }
         });
-        $hostPub = preg_split('/\s+/', trim((string) file_get_contents((string) getenv('V3_BATCH_SSH_HOST_KEY'))));
+        $hostPub = preg_split('/\s+/', trim((string) file_get_contents((string) getenv('SSH_FIXTURE_ED25519_HOST_PUB'))));
         $pin = implode(' ', array_slice($hostPub, 0, 2));
-        $loginKey = (string) file_get_contents((string) getenv('V3_BATCH_SSH_LOGIN_KEY'));
+        $password = (string) getenv('SSH_FIXTURE_PASSWORD');
         $user = User::query()->create([
             'name' => 'Isolated Batch SSH', 'email' => 'v3-batch-ssh-fixture@example.test',
             'password' => 'StrongPassword!234', 'role' => 'owner',
@@ -101,8 +101,8 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
         for ($i = 0; $i < 2; $i++) {
             $target = app(SshTargetRegistration::class)->register(
                 'batch-real-ssh-'.$i, 'Disposable OpenSSH '.$i, 'fixture.example.test',
-                (int) getenv('V3_BATCH_SSH_PORT'), (string) getenv('V3_BATCH_SSH_USER'),
-                $pin, 'private_key', $loginKey, null,
+                (int) getenv('SSH_FIXTURE_PORT_MODERN'), (string) getenv('SSH_FIXTURE_USER'),
+                $pin, 'password', $password, null,
             );
             $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
             $targets[] = $target->target_id;

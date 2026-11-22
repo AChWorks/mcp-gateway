@@ -53,6 +53,11 @@ final class RaceTestBatchProvider implements TargetBatchOperationProvider
         return $arguments === ['command' => 'fixture-read', 'timeout_seconds' => 10];
     }
 
+    public function remoteTimeoutSeconds(array $arguments): int
+    {
+        return 10;
+    }
+
     public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array
     {
         if (! $beforeRemoteEffect()) {
