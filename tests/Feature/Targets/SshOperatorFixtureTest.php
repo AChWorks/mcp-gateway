@@ -12,6 +12,7 @@ use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /** Actual OpenSSH, bound to an isolated loopback fixture on the disposable CI runner. */
@@ -272,11 +273,117 @@ PY;
         return $result['result'];
     }
 
-    private function target(): Target
+    public function test_real_patch_preserves_complete_original_mode_or_rejects_before_publication(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target();
+        $files = app(SshFileRuntime::class);
+        $tools = app(SshOperatorMcpToolHandlers::class);
+        $home = '/home/'.$this->env('SSH_FIXTURE_USER');
+        $path = $home.'/gw-op-modes-'.bin2hex(random_bytes(8));
+        $successfulSpecialModes = 0;
+
+        try {
+            foreach ([0644, 0755, 04755, 02755, 01755] as $mode) {
+                $original = 'version=before';
+                $write = $files->write(
+                    $owner, $target, $path, base64_encode($original),
+                    overwrite: $mode !== 0644,
+                );
+                self::assertSame('completed', $write['status'], json_encode($write));
+                $setMode = $this->command($owner, $target,
+                    'chmod '.escapeshellarg(sprintf('%04o', $mode)).' -- '.escapeshellarg($path));
+                self::assertSame(0, $setMode['exit_code'], json_encode($setMode));
+
+                $before = $files->readForPatch($owner, $target, $path);
+                self::assertSame(sprintf('%04o', $mode), $before['mode']);
+                $preview = $tools->patch($owner, $target->target_id, $path, 'before', 'after');
+                self::assertTrue($preview['ok'], json_encode($preview));
+                $apply = $tools->patch($owner, $target->target_id, $path, 'before', 'after',
+                    apply: true, expectedSha256: $preview['result']['baseline_sha256']);
+                $after = $files->readForPatch($owner, $target, $path);
+
+                if (! $apply['ok']) {
+                    self::assertSame('mode_preservation_unsupported', $apply['error']['code'], json_encode($apply));
+                    self::assertFalse($apply['error']['publication_attempted']);
+                    self::assertSame($original, $after['content']);
+                } else {
+                    self::assertSame('completed', $apply['result']['status']);
+                    self::assertTrue($apply['result']['owner_and_mode_verified']);
+                    self::assertSame('version=after', $after['content']);
+                    if (($mode & 07000) !== 0) {
+                        $successfulSpecialModes++;
+                    }
+                }
+                self::assertSame($before['mode'], $after['mode']);
+                self::assertSame($before['uid'], $after['uid']);
+                self::assertSame($before['gid'], $after['gid']);
+            }
+
+            self::assertGreaterThan(0, $successfulSpecialModes,
+                'The disposable OpenSSH fixture should exercise at least one supported special mode.');
+        } finally {
+            $this->command($owner, $target, 'rm -f -- '.escapeshellarg($path));
+        }
+    }
+
+    public function test_real_foreign_owner_is_rejected_before_publication_with_explicit_cleanup_evidence(): void
+    {
+        $owner = $this->owner();
+        $normal = $this->target();
+        // This disposable fixture runs SFTP as root while authenticating as
+        // the fixture user. Its newly staged inode cannot match a user-owned
+        // file, so the patch must reject BEFORE a remote rename.
+        $elevated = $this->target(
+            (int) $this->env('SSH_FIXTURE_PORT_ELEVATED_SFTP'),
+            'ssh-operator-elevated',
+        );
+        $files = app(SshFileRuntime::class);
+        $tools = app(SshOperatorMcpToolHandlers::class);
+        $path = '/home/'.$this->env('SSH_FIXTURE_USER').'/gw-op-foreign-'.bin2hex(random_bytes(8));
+        $original = "identity=original\n";
+
+        try {
+            self::assertSame('completed', $files->write($owner, $normal, $path, base64_encode($original))['status']);
+            $before = $files->readForPatch($owner, $normal, $path);
+            $preview = $tools->patch($owner, $elevated->target_id, $path, 'original', 'changed');
+            self::assertTrue($preview['ok'], json_encode($preview));
+
+            $rejected = $tools->patch($owner, $elevated->target_id, $path, 'original', 'changed',
+                apply: true, expectedSha256: $preview['result']['baseline_sha256']);
+            self::assertFalse($rejected['ok'], json_encode($rejected));
+            self::assertSame('owner_preservation_unsupported', $rejected['error']['code']);
+            self::assertFalse($rejected['error']['publication_attempted']);
+            self::assertTrue($rejected['error']['temporary_cleanup_confirmed'],
+                'Disposable prepublication staging should be cleaned and reported separately.');
+
+            $after = $files->readForPatch($owner, $normal, $path);
+            self::assertSame($original, $after['content']);
+            self::assertSame($before['mode'], $after['mode']);
+            self::assertSame($before['uid'], $after['uid']);
+            self::assertSame($before['gid'], $after['gid']);
+
+            $activity = DB::table('activity_events')
+                ->where('operation', 'ssh-file-patch')->orderByDesc('id')->first();
+            self::assertNotNull($activity);
+            self::assertSame('failure', $activity->outcome);
+            self::assertSame('owner_preservation_unsupported', $activity->error_code);
+            self::assertSame($rejected['error']['diagnostic_reference'], $activity->correlation_id);
+            $context = json_decode((string) $activity->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+            self::assertSame('prepublication', $context['failure_stage']);
+            self::assertFalse($context['publication_attempted']);
+            self::assertTrue($context['temporary_cleanup_confirmed']);
+            self::assertFalse($context['effect_unconfirmed']);
+        } finally {
+            $this->command($owner, $normal, 'rm -f -- '.escapeshellarg($path));
+        }
+    }
+
+    private function target(?int $port = null, string $id = 'ssh-operator-fixture'): Target
     {
         $target = app(SshTargetRegistration::class)->register(
-            'ssh-operator-fixture', 'SSH operator fixture', 'fixture.example.test',
-            (int) $this->env('SSH_FIXTURE_PORT_MODERN'), $this->env('SSH_FIXTURE_USER'),
+            $id, 'SSH operator fixture', 'fixture.example.test',
+            $port ?? (int) $this->env('SSH_FIXTURE_PORT_MODERN'), $this->env('SSH_FIXTURE_USER'),
             trim((string) file_get_contents($this->env('SSH_FIXTURE_ED25519_HOST_PUB'))),
             'password', $this->env('SSH_FIXTURE_PASSWORD'), null,
         );

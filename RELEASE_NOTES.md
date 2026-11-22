@@ -1,3 +1,13 @@
+# MCP Gateway v3.0.0-rc.6
+
+**Source candidate `3.0.0-rc.6` — NOT PUBLISHED.**
+
+- Supersedes the immutable, previously distributed 3.0.0-rc.5 test candidate with a distinct version/source identity. This is source-only independent-review remediation of [PR #332](https://github.com/AChWorks/mcp-gateway/pull/332) for [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328).
+- SSH journald query failures and unsupported utilities now produce consistent Tool failure envelopes and correlated failure Activity, while truncated/incomplete observations remain explicitly unknown rather than falsely passed.
+- SSH localized patch publication verifies **all** original mode bits, including setuid, setgid and sticky bits, before publishing a replacement. Unsupported original owner/group or mode preservation is a deterministic prepublication rejection; actual ambiguous publication remains unknown. Private staging cleanup is separately recorded.
+- Preview now produces accurate, applicable line-oriented unified diffs for EOF/newline/multiline changes and safely truncates UTF-8 content at the configured byte limit with an explicit incomplete marker. Targeted unit/regression tests and disposable real OpenSSH owner/mode acceptance cover the corrected paths.
+- No v3 release, Production operation, v2 database migration, integration approval or change to parked Issues #327 / #200 Phase C is implied. Exact-head CI, fresh independent re-review and Owner merge authorization remain mandatory.
+
 # MCP Gateway v3.0.0-rc.5
 
 **Source candidate `3.0.0-rc.5` — NOT PUBLISHED.**

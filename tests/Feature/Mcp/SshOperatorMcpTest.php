@@ -4,6 +4,7 @@ namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
 use App\Application\Mcp\SshOperatorMcpToolHandlers;
+use App\Application\Targets\SshOperatorProbes;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -14,6 +15,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use ReflectionMethod;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -147,6 +149,49 @@ final class SshOperatorMcpTest extends TestCase
         self::assertSame('invalid_input', $tools->logs(
             $owner, $id, 'file', path: '/tmp/log', level: 'err',
         )['error']['code']);
+    }
+
+    public function test_journal_query_tool_and_activity_agree_on_failed_unsupported_success_and_unknown(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $dispatch = new ReflectionMethod(SshOperatorMcpToolHandlers::class, 'dispatch');
+        $tools = app(SshOperatorMcpToolHandlers::class);
+
+        foreach ([
+            'unsupported' => [127, "__GW_UNSUPPORTED__\n", 'completed', false, false, 'probe_unsupported', 'failure'],
+            'failed' => [1, '', 'completed', false, false, 'probe_failed', 'failure'],
+            'observed' => [0, "{\"__CURSOR\":\"s=one\",\"MESSAGE\":\"ok\"}\n", 'completed', false, true, null, 'success'],
+            'truncated' => [0, "{\"__CURSOR\":\"s=one\",\"MESSAGE\":\"partial\"}\n", 'completed', true, false, 'outcome_unknown', 'unknown'],
+            'uncertain' => [null, '', 'outcome_unknown', false, false, 'outcome_unknown', 'unknown'],
+        ] as $case => [$exit, $stdout, $sshStatus, $truncated, $expectedOk, $errorCode, $outcome]) {
+            $raw = [
+                'status' => $sshStatus,
+                'exit_code' => $exit,
+                'stdout' => $stdout,
+                'stderr' => $exit === 1 ? 'permission denied' : '',
+                'stdout_encoding' => 'utf-8',
+                'stderr_encoding' => 'utf-8',
+                'stdout_truncated' => $truncated,
+                'stderr_truncated' => false,
+            ];
+            $observation = SshOperatorProbes::parseJournal($raw);
+            $result = $dispatch->invoke(
+                $tools, $owner, $target->target_id, 'ssh-logs-query',
+                GatewayPermission::SshCommandRun,
+                static fn (Target $current): array => $observation,
+            );
+            self::assertSame($expectedOk, $result['ok'], $case);
+            self::assertSame($case === 'truncated' || $case === 'uncertain'
+                ? 'unknown' : $case, $result['result']['status'], $case);
+            self::assertSame($errorCode, $result['error']['code'] ?? null, $case);
+            $activity = DB::table('activity_events')->where('operation', 'ssh-logs-query')
+                ->orderByDesc('id')->first();
+            self::assertNotNull($activity, $case);
+            self::assertSame($outcome, $activity->outcome, $case);
+            self::assertSame($errorCode, $activity->error_code, $case);
+            self::assertSame($result['diagnostic_reference'], $activity->correlation_id, $case);
+        }
     }
 
     private function target(): Target

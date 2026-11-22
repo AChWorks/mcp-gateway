@@ -303,14 +303,18 @@ final readonly class SshOperatorMcpToolHandlers
         }
         $status = $result['status'] ?? 'unknown';
         $unknown = in_array($status, ['unknown', 'outcome_unknown'], true);
-        $checkFailed = in_array($name, ['ssh-change-verify', 'ssh-network-diagnose'], true)
-            && in_array($status, ['failed', 'unsupported'], true);
+        // All Tool envelopes must agree with their source observation:
+        // a failed or unsupported journal query is not a successful Tool
+        // invocation or successful Activity, even when the remote exec ends.
+        $checkFailed = in_array($status, ['failed', 'unsupported'], true);
+        $failureCode = $status === 'unsupported' ? 'probe_unsupported'
+            : ($name === 'ssh-change-verify' ? 'check_failed' : 'probe_failed');
         $reference = CorrelationId::current();
         $details = is_array($result['__diagnostic_context'] ?? null)
             ? $result['__diagnostic_context'] : [];
         unset($result['__diagnostic_context']);
         $this->activity->record($reference, $name, $unknown ? 'unknown' : ($checkFailed ? 'failure' : 'success'),
-            $target, $unknown ? 'outcome_unknown' : ($checkFailed ? $status : null), $unknown ? [
+            $target, $unknown ? 'outcome_unknown' : ($checkFailed ? $failureCode : null), $unknown ? [
                 'failure_origin' => 'remote_observation',
                 'failure_stage' => 'operation',
                 'effect_unconfirmed' => $name === 'ssh-file-patch',
@@ -324,8 +328,8 @@ final readonly class SshOperatorMcpToolHandlers
             'diagnostic_reference' => $reference,
             'result' => $result,
             ...($checkFailed ? ['error' => [
-                'code' => $status === 'unsupported' ? 'probe_unsupported' : 'check_failed',
-                'message' => 'Remote observation did not satisfy the requested check; inspect the returned source and exit evidence.',
+                'code' => $failureCode,
+                'message' => 'Remote observation failed or is unsupported; inspect the returned source and exit evidence.',
                 'diagnostic_reference' => $reference,
             ]] : []),
             ...($unknown ? ['error' => [
@@ -357,11 +361,16 @@ final readonly class SshOperatorMcpToolHandlers
                     'target_paused' => 'SSH Target operations are paused.',
                     'source_changed' => 'Remote file changed since the approved baseline; preview again.',
                     'patch_match_not_unique' => 'The requested text must occur exactly once in the current file.',
-                    'owner_preservation_unsupported' => 'SFTP cannot verify preservation of this file owner/group; no patch publication is confirmed.',
+                    'owner_preservation_unsupported' => 'SFTP cannot preserve the original owner/group; the destination was not published.',
+                    'mode_preservation_unsupported' => 'SFTP cannot preserve all original file mode bits; the destination was not published.',
                     'invalid_input' => $diagnostics['message'] ?? 'Invalid operator parameters.',
                     default => 'SSH operator operation failed at '.$code.'.',
                 },
                 'next_step' => OperationDiagnostics::nextStep($code),
+                ...(($diagnostics['publication_attempted'] ?? null) === false
+                    ? ['publication_attempted' => false] : []),
+                ...(is_bool($diagnostics['temporary_cleanup_confirmed'] ?? null)
+                    ? ['temporary_cleanup_confirmed' => $diagnostics['temporary_cleanup_confirmed']] : []),
                 ...($target instanceof Target ? ['diagnostic_reference' => $reference] : []),
             ],
         ];

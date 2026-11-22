@@ -62,7 +62,7 @@ final readonly class SshFilePatchService
             'source_gid' => $snapshot['gid'],
             'owner_preservation' => 'must_match_or_reject',
             'source_consistency' => 'sha256_preflight_plus_best_effort_size_mtime_not_atomic_cas',
-            'diff' => $this->diff($path, $before, $after, $offset, strlen($find), strlen($replace)),
+            'diff' => $this->diff($path, $before, $after),
             'change_required' => ! hash_equals($beforeSha, $afterSha),
         ];
         if (! $apply || ! $plan['change_required']) {
@@ -141,26 +141,90 @@ final readonly class SshFilePatchService
     }
 
     /** @return array{unified:string,truncated:bool} */
-    private function diff(string $path, string $before, string $after, int $offset, int $oldLength, int $newLength): array
+    private function diff(string $path, string $before, string $after): array
     {
-        $prefix = substr($before, 0, $offset);
-        $lineStart = strrpos($prefix, "\n");
-        $from = $lineStart === false ? 0 : $lineStart + 1;
-        $lineNumber = substr_count($prefix, "\n") + 1;
-        $oldEnd = strpos($before, "\n", $offset + $oldLength);
-        $newEnd = strpos($after, "\n", $offset + $newLength);
-        $oldBlock = substr($before, $from, ($oldEnd === false ? strlen($before) : $oldEnd) - $from);
-        $newBlock = substr($after, $from, ($newEnd === false ? strlen($after) : $newEnd) - $from);
-        $oldLines = substr_count($oldBlock, "\n") + 1;
-        $newLines = substr_count($newBlock, "\n") + 1;
-        $diff = "--- a/$path\n+++ b/$path\n@@ -$lineNumber,$oldLines +$lineNumber,$newLines @@\n"
-            .'-'.str_replace("\n", "\n-", $oldBlock)."\n"
-            .'+'.str_replace("\n", "\n+", $newBlock)."\n";
+        if ($before === $after) {
+            return ['unified' => '', 'truncated' => false];
+        }
+
+        // A localized replacement can insert/remove newlines. Identify its
+        // actual changed *lines*, rather than estimating hunk counts from
+        // replacement byte lengths (which is wrong at EOF and line breaks).
+        $old = self::lines($before);
+        $new = self::lines($after);
+        $oldTotal = count($old);
+        $newTotal = count($new);
+        $prefix = 0;
+        while ($prefix < min($oldTotal, $newTotal) && $old[$prefix] === $new[$prefix]) {
+            $prefix++;
+        }
+        $suffix = 0;
+        while ($suffix < $oldTotal - $prefix && $suffix < $newTotal - $prefix
+            && $old[$oldTotal - $suffix - 1] === $new[$newTotal - $suffix - 1]) {
+            $suffix++;
+        }
+        $leading = min(3, $prefix);
+        $trailing = min(3, $suffix);
+        $oldChanged = $oldTotal - $prefix - $suffix;
+        $newChanged = $newTotal - $prefix - $suffix;
+        $firstIndex = $prefix - $leading;
+        $oldCount = $leading + $oldChanged + $trailing;
+        $newCount = $leading + $newChanged + $trailing;
+
+        // In a zero-length side of a unified hunk the start points to
+        // the line BEFORE insertion/deletion (0 when the file was empty).
+        $oldStart = $firstIndex + ($oldCount === 0 ? 0 : 1);
+        $newStart = $firstIndex + ($newCount === 0 ? 0 : 1);
+        $diff = "--- a/$path\n+++ b/$path\n"
+            ."@@ -$oldStart,$oldCount +$newStart,$newCount @@\n";
+
+        foreach (array_slice($old, $firstIndex, $leading) as $line) {
+            $diff .= self::diffLine(' ', $line);
+        }
+        foreach (array_slice($old, $prefix, $oldChanged) as $line) {
+            $diff .= self::diffLine('-', $line);
+        }
+        foreach (array_slice($new, $prefix, $newChanged) as $line) {
+            $diff .= self::diffLine('+', $line);
+        }
+        foreach (array_slice($old, $oldTotal - $suffix, $trailing) as $line) {
+            $diff .= self::diffLine(' ', $line);
+        }
+
         $limit = $this->settings->sshCommandOutputLimits()['stdout_bytes'];
+        $truncated = strlen($diff) > $limit;
 
         return [
-            'unified' => strlen($diff) > $limit ? substr($diff, 0, $limit) : $diff,
-            'truncated' => strlen($diff) > $limit,
+            // Byte bounded but always valid UTF-8, even at the middle of
+            // Persian / multibyte content. The separate flag means a cut
+            // preview is never represented as a complete applicable patch.
+            'unified' => $truncated ? mb_strcut($diff, 0, $limit, 'UTF-8') : $diff,
+            'truncated' => $truncated,
         ];
+    }
+
+    /** @return list<string> Lines retain their original LF and final-newline state. */
+    private static function lines(string $text): array
+    {
+        if ($text === '') {
+            return [];
+        }
+        $parts = explode("\n", $text);
+        $last = count($parts) - 1;
+        $lines = [];
+        foreach ($parts as $index => $part) {
+            if ($index < $last) {
+                $lines[] = $part."\n";
+            } elseif ($part !== '') {
+                $lines[] = $part;
+            }
+        }
+
+        return $lines;
+    }
+
+    private static function diffLine(string $prefix, string $line): string
+    {
+        return $prefix.$line.(str_ends_with($line, "\n") ? '' : "\n\\ No newline at end of file\n");
     }
 }
