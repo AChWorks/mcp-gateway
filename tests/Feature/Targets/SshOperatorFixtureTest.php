@@ -123,7 +123,7 @@ final class SshOperatorFixtureTest extends TestCase
             self::assertLessThanOrEqual(65535, $port);
 
             $healthBefore = $tools->verify($owner, $id, 'http_status', '200',
-                host: '127.0.0.1', port: $port, scheme: 'http');
+                host: '127.0.0.1', port: $port, scheme: 'http', path: '/health');
             self::assertTrue($healthBefore['ok'], json_encode($healthBefore));
             self::assertSame('passed', $healthBefore['result']['status']);
 
@@ -177,7 +177,7 @@ final class SshOperatorFixtureTest extends TestCase
             self::assertTrue($afterHash['ok'], json_encode($afterHash));
             self::assertSame('passed', $afterHash['result']['status']);
             $healthAfter = $tools->verify($owner, $id, 'http_status', '200',
-                host: '127.0.0.1', port: $port, scheme: 'http', before: '200');
+                host: '127.0.0.1', port: $port, scheme: 'http', path: '/health', before: '200');
             self::assertTrue($healthAfter['ok'], json_encode($healthAfter));
             $response = $this->command($owner, $target,
                 'curl --fail --silent --max-time 5 -- '.escapeshellarg('http://127.0.0.1:'.$port.'/health'));

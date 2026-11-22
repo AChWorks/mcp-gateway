@@ -135,6 +135,15 @@ final class SshOperatorMcpTest extends TestCase
         self::assertSame('egress_denied', $tools->verify(
             $owner, $id, 'tcp_open', 'open', host: '127.0.0.1', port: 443,
         )['error']['code']);
+        self::assertSame('invalid_input', $tools->verify(
+            $owner, $id, 'http_status', '200', host: '127.0.0.1', port: 443,
+            path: "/health\nunsafe",
+        )['error']['code']);
+        self::assertSame('egress_denied', $tools->verify(
+            $owner, $id, 'http_status', '200', host: '127.0.0.1', port: 443,
+            path: '/health',
+        )['error']['code']);
+
         self::assertSame('invalid_input', $tools->logs(
             $owner, $id, 'file', path: '/tmp/log', level: 'err',
         )['error']['code']);

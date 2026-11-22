@@ -209,7 +209,10 @@ final readonly class SshOperatorMcpToolHandlers
                         throw new InvalidArgumentException('Network verification requires an exact destination and expected observation.');
                     }
                     $probe = $check === 'tcp_open' ? 'tcp' : 'http';
-                    $script = SshOperatorProbes::networkScript($probe, $host, $port, $scheme, '/', null, $timeout);
+                    $script = SshOperatorProbes::networkScript(
+                        $probe, $host, $port, $scheme,
+                        $probe === 'http' ? ($path ?? '/') : '/', null, $timeout,
+                    );
                 }
                 $raw = $this->command($user, $target, $script, $timeout);
                 $complete = $raw['status'] === 'completed' && ! $raw['stdout_truncated']
