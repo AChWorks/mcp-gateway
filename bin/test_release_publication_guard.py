@@ -674,5 +674,139 @@ class PublicationGuardTests(unittest.TestCase):
             guard.execute("after")
 
 
+class CleanV3PublicationTests(unittest.TestCase):
+    """The fresh-only v3 release never advertises a v2-compatible update ZIP."""
+
+    version = "3.0.0"
+
+    def setUp(self) -> None:
+        fixture = tempfile.TemporaryDirectory(prefix="v3-release-policy-")
+        self.addCleanup(fixture.cleanup)
+        self.root = Path(fixture.name)
+        self.dist = self.root / "dist"
+        self.dist.mkdir()
+        self.base = f"mcp-gateway-v{self.version}.zip"
+        self.files: dict[str, bytes] = {}
+        self.files[self.base] = b"fresh-v3-package-test-bytes"
+        self.files[self.base + ".sha256"] = (
+            hashlib.sha256(self.files[self.base]).hexdigest() + "  " + self.base + "\n"
+        ).encode()
+        for name, payload in self.files.items():
+            (self.dist / name).write_bytes(payload)
+
+    def release(self) -> dict:
+        return {
+            "tag_name": "v" + self.version,
+            "name": "MCP Gateway v" + self.version,
+            "target_commitish": APPROVED,
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-11-22T00:00:00Z",
+            "immutable": True,
+            "assets": [
+                {
+                    "name": name,
+                    "state": "uploaded",
+                    "size": len(data),
+                    "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
+                }
+                for name, data in self.files.items()
+            ],
+        }
+
+    def local_mock(self):
+        return patch.object(guard, "ROOT", self.root)
+
+    def download(self, *args: str):
+        if args[:3] != ("gh", "release", "download"):
+            self.fail(f"Unexpected external command {args!r}")
+        dest = Path(args[7])
+        for name, data in self.files.items():
+            (dest / name).write_bytes(data)
+        return ""
+
+    def test_only_fresh_install_and_checksum_are_authorized_for_v3(self) -> None:
+        with self.local_mock():
+            self.assertEqual(guard.published_package_names(self.version), (self.base,))
+            self.assertEqual(set(guard.local_assets(self.version)), set(self.files))
+        self.assertEqual(len(guard.published_package_names("2.7.3")), 2)
+        for future in ("1.0.0", "3.0.1", "3.1.0", "4.0.0"):
+            with self.subTest(unsupported=future):
+                with self.assertRaisesRegex(guard.PublicationStateError, "Unsupported release version"):
+                    guard.published_package_names(future)
+
+    def test_v3_postpublication_proves_two_immutable_downloaded_assets(self) -> None:
+        with self.local_mock(), patch.object(guard, "source_envelope", return_value=(
+            self.version, APPROVED, guard.REPOSITORY, "test-only-nonsecret-token",
+        )), patch.object(guard, "require_immutable_release_tag_policy", return_value=42), \
+             patch.object(guard, "remote_tag", return_value=(APPROVED, None)), \
+             patch.object(guard, "api_release", return_value=self.release()), \
+             patch.object(guard, "command", side_effect=self.download):
+            guard.execute("after")
+
+    def test_v3_rejects_any_extra_legacy_update_artifact(self) -> None:
+        with self.local_mock(), patch.object(guard, "command", side_effect=self.download):
+            extra = dict(self.release())
+            extra["assets"] = extra["assets"] + [{
+                "name": f"mcp-gateway-update-v{self.version}.zip",
+                "state": "uploaded",
+                "size": 100,
+                "digest": "sha256:" + "0" * 64,
+            }]
+            with self.assertRaisesRegex(guard.PublicationStateError, "exactly two"):
+                guard.verify_remote_assets(extra, "v" + self.version, self.version, guard.REPOSITORY)
+
+    def test_v3_rejects_missing_wrong_size_and_tampered_release_bytes(self) -> None:
+        with self.local_mock(), patch.object(guard, "command", side_effect=self.download):
+            missing = self.release()
+            missing["assets"] = missing["assets"][:1]
+            with self.assertRaises(guard.PublicationStateError):
+                guard.verify_remote_assets(missing, "v" + self.version, self.version, guard.REPOSITORY)
+            wrong = self.release()
+            wrong["assets"][0]["size"] += 1
+            with self.assertRaisesRegex(guard.PublicationStateError, "wrong-sized"):
+                guard.verify_remote_assets(wrong, "v" + self.version, self.version, guard.REPOSITORY)
+            self.files[self.base] = b"x" * len(self.files[self.base])
+            (self.dist / self.base).write_bytes(self.files[self.base])
+            # The local checksum is now stale and cannot pass just because
+            # size/name metadata for the remote asset was present.
+            with self.assertRaisesRegex(guard.PublicationStateError, "checksum companion"):
+                guard.verify_remote_assets(self.release(), "v" + self.version, self.version, guard.REPOSITORY)
+
+    def test_v3_release_workflow_has_separate_gates_and_no_v2_update_distribution(self) -> None:
+        workflow = (Path(__file__).resolve().parent.parent /
+                    ".github/workflows/release-package.yml").read_text()
+        required = {
+            "Verify clean v3 ZIP can initialize an isolated empty MariaDB database": "true",
+            "Verify v3 clean release rejects v2 in-place upgrading": "true",
+            "Publish clean-v3 fresh-install-only GitHub release": "true",
+            "Build browser update ZIP": "false",
+            "Verify browser update ZIP": "false",
+            "Download released deployment baselines": "false",
+            "Verify released-baseline browser updates": "false",
+            "Verify released-baseline backup integrity fail-safe": "false",
+            "Publish legacy-v2 GitHub release": "false",
+        }
+        for name, mode in required.items():
+            self.assertIn(
+                f"- name: {name}\n        if: steps.release.outputs.is_clean_v3 == '{mode}'",
+                workflow,
+                f"Missing exact source-version gate on {name}",
+            )
+        self.assertIn("bin/test-v3-fresh-install-package.sh", workflow)
+        self.assertIn("bin/test-v3-major-upgrade-guard.sh", workflow)
+        pr_workflow = (Path(__file__).resolve().parent.parent /
+                       ".github/workflows/update-package.yml").read_text()
+        self.assertIn(
+            "- name: Verify clean v3 packaged installer on isolated MariaDB\n"
+            "        if: steps.version_policy.outputs.is_clean_v3 == 'true'",
+            pr_workflow,
+        )
+        self.assertIn("bin/test-v3-fresh-install-package.sh", pr_workflow)
+        self.assertIn("bin/release_publication_guard.py before", workflow)
+        self.assertEqual(workflow.count("bin/release_publication_guard.py reserve"), 2)
+        self.assertEqual(workflow.count("bin/release_publication_guard.py after"), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

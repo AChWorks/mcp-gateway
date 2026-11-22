@@ -175,6 +175,21 @@ jobs:
             dist/mcp-gateway-update-test-runtime \
             dist/mcp-gateway-update-ci.zip
 
+      # PR candidate acceptance: use the production ZIP, a genuinely empty
+      # disposable MariaDB 12.3 schema and actual first-run installer. Never
+      # point this at a real Gateway database.
+      - name: Verify clean v3 packaged installer on isolated MariaDB
+        if: steps.version_policy.outputs.is_clean_v3 == 'true'
+        env:
+          V3_RELEASE_TEST_DB_HOST: 127.0.0.1
+          V3_RELEASE_TEST_DB_PORT: 3306
+          V3_RELEASE_TEST_DB_DATABASE: mcp_gateway_test
+          V3_RELEASE_TEST_DB_USERNAME: mcp_gateway
+          V3_RELEASE_TEST_DB_PASSWORD: test-password
+        run: |
+          bash bin/test-v3-fresh-install-package.sh \
+            dist/mcp-gateway-update-test-runtime.zip mcp-gateway-update-test-runtime
+
       - name: Download released deployment baselines
         if: steps.version_policy.outputs.is_clean_v3 != 'true'
         env:
