@@ -17,6 +17,7 @@ final readonly class SshMcpToolRegistrar
         private SshCommandMcpToolHandlers $sshCommands,
         private SshFileMcpToolHandlers $sshFiles,
         private SshJobMcpToolHandlers $sshJobs,
+        private SshOperatorMcpToolRegistrar $operator,
         private OperationalSettings $settings,
         private VerifiedMcpCaller $principal,
     ) {}
@@ -240,5 +241,7 @@ final readonly class SshMcpToolRegistrar
                     'additionalProperties' => false,
                 ],
             );
+
+        $this->operator->register($builder, $request);
     }
 }

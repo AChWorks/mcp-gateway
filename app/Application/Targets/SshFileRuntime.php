@@ -219,11 +219,73 @@ final readonly class SshFileRuntime
             }, expectedTargetBinding: $expectedTargetBinding);
     }
 
+    /**
+     * One bounded SFTP session for an entire localized-patch candidate.
+     * Avoid N repeated SSH handshakes for N read windows while preserving
+     * the same permission/Target binding and source drift checks.
+     *
+     * @return array{content:string,size:int,mtime:int,mode:string,uid:mixed,gid:mixed}
+     */
+    public function readForPatch(User $user, Target $target, string $path): array
+    {
+        $this->validatePath($path);
+        $maxBytes = $this->settings->sshFileLimits()['write_bytes'];
+
+        return $this->operate($user, $target, GatewayPermission::SshFileRead,
+            function (SFTP $sftp) use ($path, $maxBytes): array {
+                $sftp->disableStatCache();
+                try {
+                    $before = $sftp->lstat($path);
+                    if (($before['type'] ?? null) !== FileType::REGULAR) {
+                        throw new SshTargetConnectionException('unsupported_file_type');
+                    }
+                    $size = $before['size'] ?? null;
+                    $mtime = $before['mtime'] ?? null;
+                    $mode = $before['mode'] ?? null;
+                    if (! is_int($size) || ! is_int($mtime) || ! is_int($mode)) {
+                        throw new SshTargetConnectionException('file_unavailable');
+                    }
+                    if ($size > $maxBytes) {
+                        throw new SshTargetConnectionException('inline_patch_window_exceeded', [
+                            'observed_size_bytes' => $size,
+                            'effective_window_bytes' => $maxBytes,
+                        ]);
+                    }
+                    $bytes = $size === 0 ? '' : $sftp->get($path, null, 0, $size);
+                    $sftp->clearStatCache();
+                    $after = $sftp->lstat($path);
+                    if (strlen($bytes) !== $size
+                        || ($after['type'] ?? null) !== FileType::REGULAR
+                        || ($after['size'] ?? null) !== $size
+                        || ($after['mtime'] ?? null) !== $mtime
+                        || ($after['mode'] ?? null) !== $mode
+                        || ! $this->samePublishedIdentity($before, $after, $sftp->getNegotiatedVersion())) {
+                        throw new SshTargetConnectionException('source_changed');
+                    }
+                } catch (SshTargetConnectionException $exception) {
+                    throw $exception;
+                } catch (FileSystemException $exception) {
+                    throw $this->observedSftpFailure($exception);
+                } catch (Throwable $exception) {
+                    throw $this->unexpectedSftpFailure($exception);
+                }
+
+                return [
+                    'content' => $bytes,
+                    'size' => $size,
+                    'mtime' => $mtime,
+                    'mode' => sprintf('%04o', $mode & 07777),
+                    'uid' => $before['uid'] ?? $before['owner'] ?? null,
+                    'gid' => $before['gid'] ?? $before['group'] ?? null,
+                ];
+            });
+    }
+
     /** @return array<string,mixed> */
     public function write(
         User $user, Target $target, string $path, string $contentBase64,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
-        ?string $expectedTargetBinding = null,
+        ?string $expectedTargetBinding = null, bool $preserveOriginalOwner = false,
     ): array {
         $this->validatePath($path);
         if ($path === '/' || str_ends_with($path, '/')
@@ -245,10 +307,11 @@ final readonly class SshFileRuntime
 
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $assertWriteAuthority) use (
-                $path, $data, $overwrite, $expectedSize, $expectedMtime,
+                $path, $data, $overwrite, $expectedSize, $expectedMtime, $preserveOriginalOwner,
             ): array {
                 $sftp->disableStatCache();
                 $existingMode = null;
+                $existing = null;
                 try {
                     $existing = $sftp->lstat($path);
                     if (! $overwrite) {
@@ -263,7 +326,10 @@ final readonly class SshFileRuntime
                     }
                     // Replacing contents must not silently relax permissions
                     // of an already-private remote destination.
-                    $existingMode = $existing['mode'] & 0777;
+                    // Plain ssh-file-write retains its existing 0777
+                    // contract. Operator patches must preserve all POSIX
+                    // permission bits (setuid, setgid and sticky included).
+                    $existingMode = $existing['mode'] & ($preserveOriginalOwner ? 07777 : 0777);
                 } catch (SshTargetConnectionException $exception) {
                     throw $exception;
                 } catch (FileSystemException $exception) {
@@ -281,6 +347,8 @@ final readonly class SshFileRuntime
                 $stagingDir = ($parentDir === '/' ? '' : $parentDir)
                     .'/.gateway-private-'.bin2hex(random_bytes(16));
                 $temporary = $stagingDir.'/payload';
+
+                $publicationAttempted = false;
 
                 // Creating this initially empty directory is permitted before
                 // it becomes 0700. NEVER put confidential bytes inside until
@@ -308,6 +376,16 @@ final readonly class SshFileRuntime
                     }
 
                     $publicationMode = $existingMode ?? ($zero['mode'] & 0777);
+                    // Config patching must never silently change the file owner
+                    // or group as a side effect of a safe POSIX replacement.
+                    // SFTP cannot reliably chown every target: reject before
+                    // putting nonempty payload bytes if staging cannot preserve
+                    // the original identity. Ordinary ssh-file-write retains
+                    // its established contract.
+                    if ($preserveOriginalOwner && (! is_array($existing)
+                        || ! $this->samePublishedIdentity($existing, $zero, $sftp->getNegotiatedVersion()))) {
+                        throw new SshTargetConnectionException('owner_preservation_unsupported');
+                    }
                     $sftp->chmod($temporary, 0600);
                     $sftp->clearStatCache();
                     $privateZero = $sftp->lstat($temporary);
@@ -343,7 +421,16 @@ final readonly class SshFileRuntime
 
                     // Once content is checked, restore the server's default
                     // published permissions inside the still-private directory.
-                    $sftp->chmod($temporary, $publicationMode);
+                    try {
+                        $sftp->chmod($temporary, $publicationMode);
+                    } catch (FileSystemException $exception) {
+                        if (! $preserveOriginalOwner) {
+                            throw $exception;
+                        }
+                        throw new SshTargetConnectionException(
+                            'mode_preservation_unsupported', $this->observedSftpFailure($exception)->diagnostics,
+                        );
+                    }
                     $sftp->clearStatCache();
                     $beforePublicationDir = $sftp->lstat($stagingDir);
                     $beforePublication = $sftp->lstat($temporary);
@@ -352,15 +439,23 @@ final readonly class SshFileRuntime
                         || ! $this->sameSftpOwner($directory, $beforePublicationDir, $sftp->getNegotiatedVersion())
                         || ($beforePublication['type'] ?? null) !== FileType::REGULAR
                         || ($beforePublication['size'] ?? null) !== strlen($data)
-                        || (($beforePublication['mode'] ?? -1) & 0777) !== $publicationMode
                         || ! $this->sameSftpOwner($directory, $beforePublication, $sftp->getNegotiatedVersion())) {
                         throw new SshTargetConnectionException('staging_not_private');
+                    }
+                    // Never replace a content-only patch's destination if
+                    // SFTP chmod silently discarded special mode bits or the
+                    // remote filesystem cannot represent them. Check before
+                    // the first publication attempt, not during readback.
+                    if (! self::publicationModeMatches($beforePublication, $publicationMode, $preserveOriginalOwner)) {
+                        throw new SshTargetConnectionException($preserveOriginalOwner
+                            ? 'mode_preservation_unsupported' : 'staging_not_private');
                     }
 
                     if (! $overwrite) {
                         // Recheck current Target/user authority immediately
                         // before this irreversible, exclusive publication.
                         $assertWriteAuthority();
+                        $publicationAttempted = true;
                         $sftp->hardlink($temporary, $path);
                     } else {
                         // Explicit atomic replacement. Optional size+mtime
@@ -370,7 +465,11 @@ final readonly class SshFileRuntime
                             throw new SshTargetConnectionException('unsupported_file_type');
                         }
                         $this->requireVersion($latest, $expectedSize, $expectedMtime);
+                        if ($preserveOriginalOwner && ! $this->samePublishedIdentity($existing, $latest, $sftp->getNegotiatedVersion())) {
+                            throw new SshTargetConnectionException('source_changed');
+                        }
                         $assertWriteAuthority();
+                        $publicationAttempted = true;
                         $sftp->posix_rename($temporary, $path);
                     }
 
@@ -378,7 +477,8 @@ final readonly class SshFileRuntime
                     $result = $sftp->lstat($path);
                     if (($result['type'] ?? null) !== FileType::REGULAR
                         || ($result['size'] ?? null) !== strlen($data)
-                        || (($result['mode'] ?? -1) & 0777) !== $publicationMode) {
+                        || ! self::publicationModeMatches($result, $publicationMode, $preserveOriginalOwner)
+                        || ($preserveOriginalOwner && ! $this->samePublishedIdentity($existing, $result, $sftp->getNegotiatedVersion()))) {
                         throw new SshTargetConnectionException('write_unverified');
                     }
                     if (! $overwrite) {
@@ -387,9 +487,10 @@ final readonly class SshFileRuntime
                     // Successful POSIX rename consumes the staging inode.
                     $sftp->rmdir($stagingDir);
                 } catch (Throwable $exception) {
-                    // After staging starts, a failed reply or cleanup cannot
-                    // prove whether remote bytes were published. Keep that
-                    // effect certainty separate from the observed SFTP cause.
+                    // A failure after publication is attempted has uncertain
+                    // destination effect; a known refusal before that boundary
+                    // cannot have published. Track private staging separately
+                    // from that destination outcome.
                     try {
                         $diagnostics = $this->writeStagingDiagnostics($exception);
                     } catch (Throwable) {
@@ -410,26 +511,47 @@ final readonly class SshFileRuntime
                         $sftp->delete($temporary, false);
                         $removed = true;
                     } catch (Throwable) {
-                        // A partial remote write or already-published rename
-                        // may have left no source inode. Do not blindly retry.
+                        // A partial stage or published rename may no longer
+                        // have a temporary inode. Do not replay the write.
                     }
                     try {
                         $sftp->rmdir($stagingDir);
                         $directoryRemoved = true;
                     } catch (Throwable) {
-                        // Only a private ephemeral directory may remain.
+                        // Private ephemeral staging may remain; report it.
+                    }
+                    $cleanupConfirmed = $removed && $directoryRemoved;
+
+                    // A known prepublication refusal during a content-only
+                    // patch cannot replace the destination. Preserve the
+                    // original generic ssh-file-write unknown-outcome contract
+                    // for all other staging errors; only patches have the
+                    // stricter source/identity preflight guarantee.
+                    if ($preserveOriginalOwner && ! $publicationAttempted && $exception instanceof SshTargetConnectionException) {
+                        throw new SshTargetConnectionException($exception->reason, [
+                            ...$diagnostics,
+                            'failure_stage' => 'prepublication',
+                            'publication_attempted' => false,
+                            'temporary_cleanup_confirmed' => $cleanupConfirmed,
+                            'effect_unconfirmed' => false,
+                        ]);
                     }
 
                     return [
                         ...$this->context($ip, $config, $path),
                         'status' => 'outcome_unknown',
                         'complete' => false,
-                        'possible_remote_effect' => true,
-                        'temporary_cleanup_confirmed' => $removed && $directoryRemoved,
+                        'possible_remote_effect' => $preserveOriginalOwner ? $publicationAttempted : true,
+                        'publication_attempted' => $publicationAttempted,
+                        'temporary_cleanup_confirmed' => $cleanupConfirmed,
                         // Private in-process evidence. Public MCP output MUST
                         // strip it before serialization; ActivityRecorder then
                         // persists only selectively redacted, bounded values.
-                        '__diagnostic_context' => $diagnostics,
+                        '__diagnostic_context' => [
+                            ...$diagnostics,
+                            'publication_attempted' => $publicationAttempted,
+                            'temporary_cleanup_confirmed' => $cleanupConfirmed,
+                        ],
                     ];
                 }
 
@@ -648,6 +770,36 @@ final readonly class SshFileRuntime
             && hash_equals($directory['owner'], $candidate['owner']);
     }
 
+    /** @param array<string,mixed> $attributes */
+    private static function publicationModeMatches(array $attributes, int $mode, bool $preserveAllBits): bool
+    {
+        return is_int($attributes['mode'] ?? null)
+            && ($attributes['mode'] & ($preserveAllBits ? 07777 : 0777)) === $mode;
+    }
+
+    /**
+     * SFTP v3 exposes numeric uid/gid; v4+ reports owner/group identities.
+     * Unavailable/mismatched identity cannot certify owner preservation.
+     *
+     * @param  array<string,mixed>  $original
+     * @param  array<string,mixed>  $candidate
+     */
+    private function samePublishedIdentity(array $original, array $candidate, int $version): bool
+    {
+        if ($version <= 3) {
+            return isset($original['uid'], $original['gid'], $candidate['uid'], $candidate['gid'])
+                && is_int($original['uid']) && is_int($original['gid'])
+                && $original['uid'] === $candidate['uid']
+                && $original['gid'] === $candidate['gid'];
+        }
+
+        return isset($original['owner'], $original['group'], $candidate['owner'], $candidate['group'])
+            && is_string($original['owner']) && $original['owner'] !== ''
+            && is_string($original['group']) && $original['group'] !== ''
+            && hash_equals($original['owner'], (string) $candidate['owner'])
+            && hash_equals($original['group'], (string) $candidate['group']);
+    }
+
     private function ensureFileDeadline(int $deadlineNs): void
     {
         if (hrtime(true) >= $deadlineNs) {
@@ -691,9 +843,9 @@ final readonly class SshFileRuntime
     }
 
     /**
-     * Post-staging failures always preserve unknown-effect classification.
-     * Native provider codes/messages survive selective credential redaction;
-     * no unknown provider cause is invented as a specific SFTP status.
+     * Preserve native staging-provider causes through selective redaction.
+     * Effect certainty is decided separately from the failure's publication
+     * phase; no unknown provider cause is invented as a specific SFTP status.
      *
      * @return array<string,mixed>
      */
@@ -793,6 +945,10 @@ final readonly class SshFileRuntime
             'mtime' => isset($attributes['mtime']) && is_int($attributes['mtime']) ? $attributes['mtime'] : null,
             'mode' => isset($attributes['mode']) && is_int($attributes['mode'])
                 ? sprintf('%04o', $attributes['mode'] & 07777) : null,
+            'uid' => isset($attributes['uid']) && is_int($attributes['uid']) ? $attributes['uid'] : null,
+            'gid' => isset($attributes['gid']) && is_int($attributes['gid']) ? $attributes['gid'] : null,
+            'owner' => isset($attributes['owner']) && is_string($attributes['owner']) ? $attributes['owner'] : null,
+            'group' => isset($attributes['group']) && is_string($attributes['group']) ? $attributes['group'] : null,
         ];
     }
 

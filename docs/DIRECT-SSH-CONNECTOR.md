@@ -119,6 +119,10 @@ For creation or replacement, require validated explicit paths and suitable priva
 
 The internal `SshFileRuntime` stream methods can exchange bytes with **already authorized local/remote streams** using bounded reusable blocks, verified private staging and length/digest checks. Their existence alone does not give the AI client a binary upload/download transport. No arbitrary source URL, stream wrapper, generic remote file server or unsupported resume cursor is implied.
 
+### v3 non-production operator diagnostics and safe file patching
+
+The additional source-only SSH system/network/log inspection, localized patch/independent verify, and service-specific composed config workflow are documented in [v3 SSH operator capabilities](SSH-OPERATOR-CAPABILITIES.md). They are **not an installed v2 feature**. The existing shared Batch engine stays unchanged; the accepted config apply is a composition, not a new universal Tool.
+
 ## 4. Detached SSH Jobs
 
 The authenticated MCP Job family has five separate methods:

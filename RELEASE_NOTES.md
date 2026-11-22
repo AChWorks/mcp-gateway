@@ -1,3 +1,54 @@
+# MCP Gateway v3.0.0-rc.8
+
+**Source candidate `3.0.0-rc.8` — NOT PUBLISHED.**
+
+- Supersedes immutable rc.7 because exact-head CI revealed one remaining test-only problem: five real OpenSSH filesystem-mode scenarios were sharing a single Target's legitimate 30-operations-per-minute SFTP admission budget. Existing SFTP/SSH regressions and all other CI checks passed.
+- The disposable OpenSSH mode fixture now registers a distinct Target for each mode (0644, 0755, setuid, setgid, sticky) and cleans each uniquely named test file. Each case exercises the real scoped SFTP Patch application independently, preserving all admission/permission/host-key controls without raising limits, disabling rate limiting, sleeping between attempts, or weakening production behavior.
+- No production behavior changed from rc.7. The F-01 through F-04 independent-review fixes, generic ssh-file-write compatibility and explicit unknown publication boundaries remain as documented in the preceding candidate notes.
+- No official v3 release, Production operations or Merge authorization. Exact-head CI and independent re-review must be freshly satisfied.
+
+# MCP Gateway v3.0.0-rc.7
+
+**Source candidate `3.0.0-rc.7` — NOT PUBLISHED.**
+
+- Supersedes the immutable rc.6 test artifact after exact-head CI revealed two fixture-level regressions, while retaining the F-01 through F-04 remediation described below.
+- Restores the preexisting ssh-file-write unknown-effect contract for generic staging failures. Deterministic prepublication ownership/mode refusal remains specific to the new content-only SSH file patch path, with Stage cleanup evidence and no publication.
+- Real OpenSSH filesystem-mode acceptance now invokes the existing authorized SFTP Patch application service directly for its five mode cases, instead of rapidly calling public MCP dispatch until its legitimate admission limit is reached. Public MCP Tool/Activity acceptance remains independently exercised in dedicated real-fixture tests. No production admission or permission control was weakened.
+- The previous rc.6 CI returned five failures: four existing SSH File fixture cases exposed by unintended generic-write error classification and one new mode test blocked by intended MCP rate limiting. This candidate corrects both root causes; new exact-head CI and independent review are still required.
+- No official v3 release, Production migration, live Target operations, or Merge authorization.
+
+# MCP Gateway v3.0.0-rc.6
+
+**Source candidate `3.0.0-rc.6` — NOT PUBLISHED.**
+
+- Supersedes the immutable, previously distributed 3.0.0-rc.5 test candidate with a distinct version/source identity. This is source-only independent-review remediation of [PR #332](https://github.com/AChWorks/mcp-gateway/pull/332) for [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328).
+- SSH journald query failures and unsupported utilities now produce consistent Tool failure envelopes and correlated failure Activity, while truncated/incomplete observations remain explicitly unknown rather than falsely passed.
+- SSH localized patch publication verifies **all** original mode bits, including setuid, setgid and sticky bits, before publishing a replacement. Unsupported original owner/group or mode preservation is a deterministic prepublication rejection; actual ambiguous publication remains unknown. Private staging cleanup is separately recorded.
+- Preview now produces accurate, applicable line-oriented unified diffs for EOF/newline/multiline changes and safely truncates UTF-8 content at the configured byte limit with an explicit incomplete marker. Targeted unit/regression tests and disposable real OpenSSH owner/mode acceptance cover the corrected paths.
+- No v3 release, Production operation, v2 database migration, integration approval or change to parked Issues #327 / #200 Phase C is implied. Exact-head CI, fresh independent re-review and Owner merge authorization remain mandatory.
+
+# MCP Gateway v3.0.0-rc.5
+
+**Source candidate `3.0.0-rc.5` — NOT PUBLISHED.**
+
+- Supersedes the previously distributed, immutable `3.0.0-rc.4` owner-test candidate without reusing its version/source identity. The five independent SSH Tool contracts and native Batch integration remain as described below.
+- Remediates isolated real OpenSSH acceptance: `ssh-change-verify` now honors the exact optional HTTP `path` (default `/`) for service-specific health endpoint checks. This distinguishes an incorrect `404` at `/` from a true `200` at `/health`. Adds negative path validation and an explicit endpoint-aware real service test.
+- No v3 official release, Production migration, live Target mutation or Owner merge approval is implied. The prior `rc.4` candidate remains historically recorded as a test artifact; the exact-head CI and independent review gate apply to `rc.5`.
+
+# MCP Gateway v3.0.0-rc.4
+
+**Source candidate `3.0.0-rc.4` — NOT PUBLISHED.**
+
+The new rc.4 identifier avoids reuse of the previously distributed rc.3 test artifact for a different source tree. [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328) owns this follow-on; [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) remains canonical for v3 delivery.
+
+- Adds five typed independent SSH operator Tools for system, network, logs, localized file patch and change verification. All reuse the existing scoped SSH Command/SFTP, host-key/route/credential bindings and correlated activity. There is no new SSH transport, Batch engine or generic privileged dispatcher.
+- Diagnostics preserve source, units/timestamps where observed, remote exit/provider errors, unsupported/partial/truncated evidence and explicit probe outcome. UDP DNS requires an actual DNS response, not merely a sent datagram.
+- File patch preview includes bounded diff and baseline/proposed SHA256. Conditional apply demands the approved baseline, existing read and write permission, private SFTP staging, preservation of owner/group/mode and independent readback. This is best-effort concurrency detection, **not** atomic remote compare-and-swap. Unknown effects are never blindly retried or called rollback.
+- A service-specific config procedure composes patch preview, isolated proposed-config validation, authorized patch apply/revalidation, authorized reload and independent file/service/behavior verification. **No** universal ssh-config-apply Tool or service orchestration layer has been added.
+- The PR #331 connector-neutral Target Batch core/SSH Batch/WordPress read-only proof are unchanged. Durable ChatGPT client idle OAuth acceptance, full Human/Web Batch operator experience, multi-Target real effects/performance, v3-to-v3 updater, official v3 release and Production cutover remain open and separately gated.
+
+**Evidence gates:** exact-head CI, real isolated OpenSSH fixture acceptance, independent review and Owner approval for merge remain distinct from local targeted/PHPStan/Pint results. No real Production/live Target operation has been authorized. See [SSH operator contracts](docs/SSH-OPERATOR-CAPABILITIES.md).
+
 # MCP Gateway v3.0.0-rc.3
 
 **Source candidate `3.0.0-rc.3` — NOT PUBLISHED.**

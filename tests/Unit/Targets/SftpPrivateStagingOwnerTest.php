@@ -21,6 +21,22 @@ final class SftpPrivateStagingOwnerTest extends TestCase
         self::assertFalse($matches->invoke($runtime, ['uid' => 1001], ['mode' => 0600], 3));
     }
 
+    public function test_patch_publication_requires_all_original_mode_bits_but_plain_write_keeps_ordinary_contract(): void
+    {
+        $check = (new ReflectionClass(SshFileRuntime::class))->getMethod('publicationModeMatches');
+
+        foreach ([0644, 0755, 04755, 02755, 01755, 06755] as $mode) {
+            self::assertTrue($check->invoke(null, ['mode' => 0100000 | $mode], $mode, true));
+            self::assertFalse($check->invoke(null, ['mode' => 0100000 | ($mode ^ 0001)], $mode, true));
+        }
+        self::assertFalse($check->invoke(null, ['mode' => 0100755], 04755, true));
+        self::assertFalse($check->invoke(null, ['mode' => 0100755], 02755, true));
+        self::assertFalse($check->invoke(null, ['mode' => 0100755], 01755, true));
+        self::assertFalse($check->invoke(null, ['mode' => '04755'], 04755, true));
+        // No unrelated behavior change for generic ssh-file-write:
+        self::assertTrue($check->invoke(null, ['mode' => 0104755], 0755, false));
+    }
+
     public function test_sftp_v4_owner_name_requires_nonempty_exact_match(): void
     {
         $reflection = new ReflectionClass(SshFileRuntime::class);

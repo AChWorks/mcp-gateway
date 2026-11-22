@@ -76,6 +76,7 @@ final class OperationDiagnostics
             'connection_setup', 'relay_socks_connect', 'response_transfer', 'response_body',
             'remote_http', 'operation', 'admission', 'unknown',
             'batch_dispatch', 'batch_finalize', 'batch_reconciliation',
+            'prepublication',
         ], true)) {
             $safe['failure_stage'] = $stage;
         }
@@ -149,6 +150,14 @@ final class OperationDiagnostics
         }
         if (is_bool($details['effect_unconfirmed'] ?? null)) {
             $safe['effect_unconfirmed'] = $details['effect_unconfirmed'];
+        }
+        // SFTP failures distinguish a confirmed destination preflight
+        // rejection from an ambiguous publish. Stage residue is tracked
+        // separately; only safe booleans enter Activity diagnostics.
+        foreach (['publication_attempted', 'temporary_cleanup_confirmed'] as $field) {
+            if (is_bool($details[$field] ?? null)) {
+                $safe[$field] = $details[$field];
+            }
         }
         if (($details['provider_cause_unknown'] ?? null) === true
             || ($details['provider_cause'] ?? null) === 'unknown') {
