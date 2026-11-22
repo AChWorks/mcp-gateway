@@ -80,6 +80,13 @@ final class SafeHttpClientTest extends TestCase
         // response, not only after SafeHttpClient closes internal resources.
         // The old HTTP-buffer-then-copy path would fail the sink-identity
         // check even though its post-download FD count looked correct.
+        // The preceding mocked large-file response can retain a Guzzle
+        // php://temp backing stream through Laravel's HTTP fake factory
+        // until that fake is released. Drop the previous test's factory
+        // before taking the exact FD baseline for *this* transport. This
+        // changes no production resource handling or single-spool assertion.
+        Http::swap(new Factory);
+        gc_collect_cycles(); // Release mock-response streams before the FD baseline.
         $payload = str_repeat('signed-file'.chr(0).chr(255), 25000);
         $url = 'https://files.oaiusercontent.com/private/direct?sig=opaque';
         $sink = fopen('php://temp/maxmemory:65536', 'w+b');
