@@ -1,3 +1,15 @@
+# MCP Gateway v3.0.0-rc.9
+
+**Source candidate `3.0.0-rc.9` — NOT PUBLISHED.**
+
+- New non-production v3 architecture and acceptance package for [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) and [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333). No change to installed Production or existing released v2 upgrade paths.
+- Shared Target Batch binding now accepts optional, connector-owned exact identity evidence. SSH uses its own trust, route and login secret binding; WordPress binds original authorized client/resource/consent while allowing legitimate refresh token rotation. Other connectors remain unsupported for deferred Batch until an explicit audited provider and native binding are implemented.
+- Provider-owned remote runtime budgets replace the shared Worker's SSH-specific lease branch. Bounded keyset admission and per-Target active lookup avoid open PDO cursor/nested-query iteration; concurrent workers progress available siblings while rolling mode retains the operator's exact order. Original revocation, encrypted journal, no-blind-replay and `outcome_unknown` guarantees remain mandatory.
+- The shared Activity fallback Log now preserves redacted native storage cause and correlation rather than hiding the failure origin or surfacing an exception containing interpolated SQL/bindings. Cross-connector authorization parity and 100/1,000 Target **metadata-only** acceptance fixtures were added; neither is a live-fleet throughput claim.
+- CI now explicitly executes two pinned OpenSSH Batch scenarios against its existing disposable loopback fixture and fails if they are skipped. Existing MariaDB concurrency, authenticated MCP Tool family contracts, WordPress/ArvanCloud/source tests and original permission boundaries remain part of exact-head acceptance.
+- Initial local source check on isolated v3 worktree: 1,095 PHPUnit tests passed, 106 environment-dependent skipped, 16,155 assertions; PHPStan and Pint passed. CI/independent review and real multi-host/provider/install/recovery acceptance are distinct and remain required.
+- No v3 stable Release, Merge authorization, Production deployment, new Human Admin operator UI, or activation of parked #327/#200 Phase C is implied.
+
 # MCP Gateway v3.0.0-rc.8
 
 **Source candidate `3.0.0-rc.8` — NOT PUBLISHED.**
