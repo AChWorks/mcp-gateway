@@ -1,6 +1,6 @@
 # v3 SSH operator capabilities (source candidate)
 
-**Status:** v3 non-production source work under [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328). These contracts and tests are not an official v3 release, installed Gateway, authorized remote Target mutation, or real fleet acceptance. The already-merged shared Target Batch engine is under [#330](https://github.com/AChWorks/mcp-gateway/issues/330); this package adds no SSH Batch coordinator.
+**Scope:** v3 source implementation under [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328). Source contracts and CI alone are **not proof** of a published Release, installed Gateway, authorized remote Target mutation or real fleet acceptance. The already-merged shared Target Batch engine is under [#330](https://github.com/AChWorks/mcp-gateway/issues/330); this package adds no SSH Batch coordinator.
 
 ## Trust, resource and permission model
 
@@ -36,4 +36,4 @@ A CI-only loopback OpenSSH/isolated test HTTP service exercises success and vali
 
 Source unit tests and fake-denied transport tests cannot substitute for CI's disposable **real** OpenSSH tests. Exact-head GitHub CI, MariaDB/Batch regressions, independent review, Owner merge approval and any separately authorized installed-host acceptance are distinct gates.
 
-The shared SSH command Batch consumer, WordPress read-only proof, status/list/cancel and durable Target Batch core from PR #331 remain unchanged. Long-idle ChatGPT OAuth, full authorized Human/Web Batch UX, representative real multi-Target acceptance, v3-to-v3 updater, official release and Production cutover remain #330 obligations. [#327](https://github.com/AChWorks/mcp-gateway/issues/327) and [#200 Phase C](https://github.com/AChWorks/mcp-gateway/issues/200) remain Owner-parked.
+The shared SSH command Batch consumer, WordPress read-only proof, status/list/cancel and durable Target Batch core from PR #331 remain unchanged. Long-idle ChatGPT OAuth, full authorized Human/Web Batch UX, representative real multi-Target acceptance, v3-to-v3 updater, official release and Production cutover have separate Owner gates tracked through #330; recheck current Issue/Release state before acting. [#327](https://github.com/AChWorks/mcp-gateway/issues/327) and [#200 Phase C](https://github.com/AChWorks/mcp-gateway/issues/200) remain Owner-parked.

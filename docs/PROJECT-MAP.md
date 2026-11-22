@@ -1,6 +1,6 @@
 # Documentation guide
 
-This index helps contributors and operators find the **appropriate maintained reference** without repeating its content. The public `README.md` introduces Gateway and points to installation/usage; product and engineering contracts live in the documents below.
+This index helps contributors and operators find the **appropriate maintained reference** without repeating its content. **Start in [README](../README.md)** for first installation, connecting a Target or an MCP client. Use this map only when you need a detailed technical or operating reference; most readers need just one linked document.
 
 ## Product and engineering contracts
 
@@ -14,6 +14,7 @@ This index helps contributors and operators find the **appropriate maintained re
 | Reviewed, bounded downstream MCP-over-HTTPS wire primitive (not a generic Target) | [Outbound MCP transport](OUTBOUND-MCP-TRANSPORT.md) |
 | Result completeness, independently typed limits, file integrity and outcome uncertainty | [Remote I/O contract](REMOTE-IO-CONTRACT.md) |
 | SSH trust, OS execution, Jobs and SFTP | [Direct SSH connector](DIRECT-SSH-CONNECTOR.md) |
+| v3 SSH diagnostics and conditional patch/verification contracts | [SSH operator capabilities](SSH-OPERATOR-CAPABILITIES.md) |
 | Optional shared OpenSSH intermediary for SSH/SFTP and WordPress | [Connection Relays](CONNECTION-RELAYS.md) |
 | Inbound-blocked SSH Target host setup and one-command enrollment | [Managed Reverse SSH](REVERSE-SSH-MANAGED.md) |
 | Existing manually operator-managed reverse forwarding | [Manual Reverse SSH](REVERSE-SSH-OPERATOR.md) |
@@ -33,7 +34,7 @@ This index helps contributors and operators find the **appropriate maintained re
 | Owner-managed users, groups, Target access and bulk selection/review | [Admin access workflows](ADMIN-ACCESS-WORKFLOWS.md) |
 | Recover WordPress connection/revocation uncertainty | [Target disconnect recovery](TARGET-DISCONNECT-RECOVERY.md) |
 | Owner-authorized local removal of an unreachable Target | [Offline Target removal](OFFLINE-TARGET-REMOVAL.md) |
-| Upgrade an actual legacy Site-era installation with an explicit data reset | [Legacy Target transition runbook](TARGET-TRANSITION-RUNBOOK.md) |
+| Historical **v1 Site→v2 Target** transition only (not usable for v3 clean installation) | [Legacy Target transition runbook](TARGET-TRANSITION-RUNBOOK.md) |
 
 ## Authority and maintenance
 

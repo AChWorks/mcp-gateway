@@ -1,0 +1,61 @@
+name: Documentation Contracts
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'README.md'
+      - 'docs/ARCHITECTURE.md'
+      - 'docs/ADMIN-UI-QUALITY.md'
+      - 'docs/ARVANCLOUD-API-CONNECTOR.md'
+      - 'tests/Feature/Security/PermissionArchitectureDocumentationTest.php'
+      - 'tests/Feature/Admin/AdminUiPresentationTest.php'
+      - '.github/workflows/documentation-contracts.yml'
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - 'README.md'
+      - 'docs/ARCHITECTURE.md'
+      - 'docs/ADMIN-UI-QUALITY.md'
+      - 'docs/ARVANCLOUD-API-CONNECTOR.md'
+      - 'tests/Feature/Security/PermissionArchitectureDocumentationTest.php'
+      - 'tests/Feature/Admin/AdminUiPresentationTest.php'
+      - '.github/workflows/documentation-contracts.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-contracts-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documentation-contracts:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.5'
+          extensions: curl, mbstring, openssl, pdo_mysql, pdo_sqlite, sodium
+          coverage: none
+          tools: composer:v2
+
+      - name: Install locked dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Verify documentation-dependent security and Admin contracts
+        run: |
+          php artisan test --compact \
+            tests/Feature/Security/PermissionArchitectureDocumentationTest.php \
+            tests/Feature/Admin/AdminUiPresentationTest.php --fail-on-skipped

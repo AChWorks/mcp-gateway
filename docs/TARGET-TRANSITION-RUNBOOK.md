@@ -1,6 +1,6 @@
 # Site-era to Target-era upgrade — operator safety and recovery
 
-**Use only when upgrading a genuinely legacy Site-era Gateway installation (v1.x) to the reviewed Target-era major version.** This is a high-impact, destructive **historical compatibility path**, not current development work, a guide for ordinary v2.x updates, or an instruction to reapply migrations on an already upgraded Gateway. For routine installation/updating and web-updater recovery use [DEPLOYMENT.md](DEPLOYMENT.md); use the exact [published release and release notes](../RELEASE_NOTES.md) for source-version compatibility.
+**Historical v1 Site→v2 Target guide only.** The v3 source deliberately omits the old Site→Target migration and **does not support v2→v3 in-place upgrade**. Never use this guide or its reset flags for a v3 clean install. Use only when upgrading a genuinely legacy Site-era Gateway installation (v1.x) under a separately approved, supported v2 release. This is a high-impact, destructive **historical compatibility path**, not current development work, a guide for ordinary v2.x updates, or an instruction to reapply migrations on an already upgraded Gateway. For routine installation/updating and web-updater recovery use [DEPLOYMENT.md](DEPLOYMENT.md); use the exact [published release and release notes](../RELEASE_NOTES.md) for source-version compatibility.
 
 ## What the breaking migration actually means
 
@@ -8,7 +8,7 @@
 - Existing Gateway OAuth client authorizations, issued access/refresh tokens and pending authorization/recovery state are intentionally invalidated so a previously connected AI client cannot inherit rights over newly registered Targets without fresh consent.
 - Gateway **users, roles, global denials, private encryption/signing keys, unrelated activity and host-managed files** must remain protected. A user's scope mode maps to the Target-era mode, but Selected membership starts empty until Owner approval assigns Targets.
 - Only known compatible permission denials are mapped. Unknown roles or denial identifiers fail the migration **before destructive DDL**, rather than silently expanding access. Existing non-Owner SSH capabilities remain conservatively denied until explicitly authorized. Unsupported old connector families do not gain an implicit new runtime implementation.
-- The authoritative full list of legacy tables, guards and exact preservation behavior is the **already shipped migration source**, [`2026_10_09_000000_transition_site_domain_to_targets.php`](../database/migrations/2026_10_09_000000_transition_site_domain_to_targets.php), verified against the actual **selected release**. Do not copy old migration code or invent an unsafe shortcut.
+- The authoritative full list of legacy tables, guards and exact preservation behavior is the **already shipped migration source**, [`2026_10_09_000000_transition_site_domain_to_targets.php` (immutable v2.7.3 source)](https://github.com/AChWorks/mcp-gateway/blob/v2.7.3/database/migrations/2026_10_09_000000_transition_site_domain_to_targets.php), verified against the actual **selected release**. Do not copy old migration code or invent an unsafe shortcut.
 
 ## Mandatory preflight before an owner-authorized v1-to-v2 upgrade
 
