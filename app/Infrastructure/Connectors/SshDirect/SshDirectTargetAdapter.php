@@ -2,6 +2,8 @@
 
 namespace App\Infrastructure\Connectors\SshDirect;
 
+use App\Application\Batch\SshTargetBatchIdentity;
+use App\Application\Batch\TargetBatchBindingContributor;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetReconfiguration;
@@ -24,9 +26,17 @@ use InvalidArgumentException;
 use RuntimeException;
 
 /** SSH-specific enrollment, trust and verification never become generic OAuth behavior. */
-final readonly class SshDirectTargetAdapter implements TargetConnectorAdapter, TargetEnrollmentPreflight
+final readonly class SshDirectTargetAdapter implements TargetBatchBindingContributor, TargetConnectorAdapter, TargetEnrollmentPreflight
 {
     public function __construct(private Container $container) {}
+
+    /** @param list<Target> $targets
+     * @return array<string, list<string>|null>
+     */
+    public function batchBindingParts(array $targets): array
+    {
+        return $this->container->make(SshTargetBatchIdentity::class)->parts($targets);
+    }
 
     public function type(): string
     {

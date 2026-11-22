@@ -2,6 +2,8 @@
 
 namespace App\Infrastructure\Connectors\WpAiBridge;
 
+use App\Application\Batch\TargetBatchBindingContributor;
+use App\Application\Batch\WordpressTargetBatchIdentity;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorResult;
@@ -26,9 +28,17 @@ use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 /** WordPress-specific work stays behind the common Target lifecycle boundary. */
-final readonly class WpAiBridgeTargetAdapter implements TargetConnectorAdapter, TargetEnrollmentPreflight, TargetReviewContributor
+final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContributor, TargetConnectorAdapter, TargetEnrollmentPreflight, TargetReviewContributor
 {
     public function __construct(private Container $container) {}
+
+    /** @param list<Target> $targets
+     * @return array<string, list<string>|null>
+     */
+    public function batchBindingParts(array $targets): array
+    {
+        return $this->container->make(WordpressTargetBatchIdentity::class)->parts($targets);
+    }
 
     public function type(): string
     {

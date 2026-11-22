@@ -65,6 +65,23 @@ final class ActivityRecorderFailureTest extends TestCase
         Log::shouldHaveReceived('warning')->once();
     }
 
+    public function test_activity_write_failure_reports_database_cause_without_raw_sql_or_secret_values(): void
+    {
+        Log::spy();
+        Schema::drop('activity_events');
+        app(ActivityRecorder::class)->record((string) Str::uuid(), 'target-batch-dispatch', 'failure');
+
+        Log::shouldHaveReceived('warning')->once()
+            ->withArgs(static function (string $message, array $context): bool {
+                return $message === 'Gateway activity persistence failed.'
+                    && $context['failure_stage'] === 'activity_persist'
+                    && str_contains((string) ($context['exception_class'] ?? ''), 'QueryException')
+                    && is_string($context['source_error_code'] ?? null)
+                    && str_contains((string) ($context['gateway_error_message'] ?? ''), 'activity_events')
+                    && ! str_contains(json_encode($context, JSON_THROW_ON_ERROR), 'insert into');
+            });
+    }
+
     public function test_secret_shaped_unknown_site_id_is_not_retained_or_returned(): void
     {
         $secretSiteId = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.signature';

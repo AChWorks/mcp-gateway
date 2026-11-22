@@ -10,6 +10,7 @@ use App\Domain\Targets\Target;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
@@ -17,6 +18,63 @@ use Tests\TestCase;
 final class AccessControlTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_batched_permission_decisions_match_canonical_single_checks_for_every_role_and_connector(): void
+    {
+        $targets = [];
+        foreach (['wp_ai_bridge', 'ssh_direct', 'arvancloud'] as $connector) {
+            $targets[$connector] = Target::query()->forceCreate([
+                'target_id' => 'parity-'.str_replace('_', '-', $connector),
+                'display_name' => 'Parity '.$connector,
+                'connector_type' => $connector,
+            ]);
+        }
+        $users = [
+            'owner' => $this->user(GatewayRole::Owner, TargetScopeMode::All),
+            'administrator' => $this->user(GatewayRole::Administrator, TargetScopeMode::All),
+            'operator' => $this->user(GatewayRole::Operator, TargetScopeMode::Selected),
+            'viewer' => $this->user(GatewayRole::Viewer, TargetScopeMode::Selected),
+            'disabled' => $this->user(GatewayRole::Operator, TargetScopeMode::Selected, false),
+        ];
+        DB::table('user_target_access')->insert([
+            ['user_id' => $users['operator']->id, 'target_record_id' => $targets['wp_ai_bridge']->id, 'allowed' => true],
+            ['user_id' => $users['viewer']->id, 'target_record_id' => $targets['arvancloud']->id, 'allowed' => true],
+            ['user_id' => $users['administrator']->id, 'target_record_id' => $targets['arvancloud']->id, 'allowed' => false],
+        ]);
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $users['operator']->id,
+            'permission' => GatewayPermission::WordpressAbilitiesExecuteMutating->value,
+        ]);
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $users['administrator']->id,
+            'target_record_id' => $targets['ssh_direct']->id,
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+        $groupId = (string) Str::ulid();
+        DB::table('target_groups')->insert(['id' => $groupId, 'name' => 'Parity Group']);
+        DB::table('target_group_users')->insert([
+            'user_id' => $users['operator']->id, 'target_group_id' => $groupId,
+        ]);
+        DB::table('target_group_targets')->insert([
+            'target_group_id' => $groupId, 'target_record_id' => $targets['ssh_direct']->id,
+        ]);
+        DB::table('target_group_permission_denials')->insert([
+            'target_group_id' => $groupId, 'permission' => GatewayPermission::SshFileRead->value,
+        ]);
+        $access = app(AccessControl::class);
+        $permissions = GatewayPermission::cases();
+        foreach ($users as $role => $user) {
+            foreach ($targets as $type => $target) {
+                $batched = $access->allowsTargetPermissions($user, $target, $permissions);
+                self::assertCount(count($permissions), $batched);
+                foreach ($permissions as $permission) {
+                    self::assertSame($access->allows($user, $permission, $target),
+                        $batched[$permission->value],
+                        "Authoritative permission drift: $role $type {$permission->value}");
+                }
+            }
+        }
+    }
 
     public function test_owner_has_recoverable_full_access_to_every_site(): void
     {

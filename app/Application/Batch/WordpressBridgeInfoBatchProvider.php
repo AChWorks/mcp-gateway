@@ -2,6 +2,7 @@
 
 namespace App\Application\Batch;
 
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\WordpressTargetOperations;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -14,7 +15,10 @@ use Illuminate\Support\Str;
 /** Only this fixed read-only Bridge capability enters Batch; no publishing. */
 final readonly class WordpressBridgeInfoBatchProvider implements TargetBatchOperationProvider
 {
-    public function __construct(private WordpressTargetOperations $wordpress) {}
+    public function __construct(
+        private WordpressTargetOperations $wordpress,
+        private OperationalSettings $settings,
+    ) {}
 
     public function key(): string
     {
@@ -39,6 +43,21 @@ final readonly class WordpressBridgeInfoBatchProvider implements TargetBatchOper
     public function validArguments(array $arguments): bool
     {
         return $arguments === [];
+    }
+
+    public function remoteTimeoutSeconds(array $arguments): int
+    {
+        // This native read is a sequence of FOUR independently timed HTTP
+        // requests: initialize, ability classification, execute, close. A
+        // stale access bearer may first need one refresh request; its single-
+        // use ambiguous-response recovery can take another 45 seconds before
+        // a definitive result. Leasing for just ONE HTTP request would let a
+        // second worker declare a legitimate slow read outcome_unknown while
+        // its first worker was still running. The shared Worker adds the
+        // separately configured crash/DB margin to this provider budget.
+        $requestSeconds = $this->settings->httpTimeoutsSeconds()['request'];
+
+        return 5 * $requestSeconds + 45;
     }
 
     public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array

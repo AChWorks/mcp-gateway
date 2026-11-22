@@ -4,17 +4,21 @@ namespace Tests\Feature\Batch;
 
 use App\Application\Batch\BatchProviderResolver;
 use App\Application\Batch\DeferredBatchAuthority;
+use App\Application\Batch\TargetBatchBinding;
 use App\Application\Batch\TargetBatchCoordinator;
 use App\Application\Batch\TargetBatchOperationProvider;
 use App\Application\Batch\TargetBatchWorker;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Targets\SshTargetRegistration;
+use App\Application\Targets\TargetConnectorRegistry;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Models\User;
+use Carbon\Carbon;
 use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -31,6 +35,8 @@ final class FakeAuthorizedBatchProvider implements TargetBatchOperationProvider
     public bool $fail = false;
 
     public bool $simulateLostResponse = false;
+
+    public int $remoteSeconds = 10;
 
     public ?Closure $onDispatch = null;
 
@@ -60,6 +66,11 @@ final class FakeAuthorizedBatchProvider implements TargetBatchOperationProvider
     {
         return isset($arguments['command']) && is_string($arguments['command'])
             && ($arguments['timeout_seconds'] ?? null) === 10;
+    }
+
+    public function remoteTimeoutSeconds(array $arguments): int
+    {
+        return $this->remoteSeconds;
     }
 
     public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array
@@ -500,6 +511,183 @@ final class TargetBatchCoreTest extends TestCase
         self::assertSame('outcome_unknown', app(TargetBatchCoordinator::class)->status($user, $origin, $id)['status']);
     }
 
+    public function test_claim_lease_respects_provider_declared_remote_budget_not_known_connector(): void
+    {
+        $this->fake->remoteSeconds = 195;
+        config()->set('batch.lease_margin_seconds', 30);
+        $user = $this->owner();
+        $target = $this->targets(1)[0];
+        $batchId = $this->create($user, $this->web($user), [$target]);
+        $seconds = null;
+        $this->fake->onDispatch = static function () use ($batchId, &$seconds): void {
+            $item = DB::table('target_batch_items')->where('batch_id', $batchId)->firstOrFail();
+            $seconds = Carbon::parse($item->started_at)
+                ->diffInSeconds(Carbon::parse($item->lease_expires_at));
+        };
+        self::assertSame('completed', app(TargetBatchWorker::class)->workOnce()['status']);
+        self::assertEqualsWithDelta(225, $seconds, 0.1);
+    }
+
+    public function test_newer_independent_batch_gets_a_turn_before_old_backlog_drains(): void
+    {
+        config()->set('batch.global_active', 1);
+        config()->set('batch.user_active', 1);
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $targets = $this->targets(7);
+        $older = $this->create($user, $origin, array_slice($targets, 0, 6));
+        $newer = $this->create($user, $origin, [$targets[6]]);
+
+        $worker = app(TargetBatchWorker::class);
+        self::assertSame($targets[0]->target_id, $worker->workOnce()['target_id']);
+        // An older long Batch remains runnable. Re-entering the worker from
+        // scratch must rotate across eligible Batch parents, not favor the
+        // oldest Batch until all six of its Targets have been exhausted.
+        self::assertSame($targets[6]->target_id, $worker->workOnce()['target_id']);
+        self::assertSame('completed', app(TargetBatchCoordinator::class)
+            ->status($user, $origin, $newer)['status']);
+        self::assertSame(1, DB::table('target_batch_items')->where('batch_id', $older)
+            ->where('status', 'completed')->count());
+        self::assertSame('running', DB::table('target_batches')->where('id', $older)->value('status'));
+        self::assertCount(2, $this->fake->effects);
+    }
+
+    public function test_multiple_runnable_parents_rotate_even_on_tied_timestamps(): void
+    {
+        config()->set('batch.global_active', 1);
+        config()->set('batch.user_active', 1);
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $targets = $this->targets(7);
+        $older = $this->create($user, $origin, array_slice($targets, 0, 4));
+        $middle = $this->create($user, $origin, array_slice($targets, 4, 2));
+        $newer = $this->create($user, $origin, [$targets[6]]);
+
+        // Timestamp ties must not change fair ordering; state is durable
+        // across fresh worker instances without any process-local cursor.
+        DB::table('target_batches')->whereIn('id', [$older, $middle, $newer])
+            ->update(['created_at' => now()->startOfSecond()]);
+        $actual = [];
+        for ($i = 0; $i < 7; $i++) {
+            $actual[] = app(TargetBatchWorker::class)->workOnce()['target_id'];
+        }
+        self::assertSame([
+            $targets[0]->target_id, $targets[4]->target_id, $targets[6]->target_id,
+            $targets[1]->target_id, $targets[5]->target_id,
+            $targets[2]->target_id, $targets[3]->target_id,
+        ], $actual);
+        self::assertSame(7, (int) DB::table('operational_settings')->where('id', 1)
+            ->value('batch_dispatch_turn'));
+        self::assertSame(7, (int) DB::table('target_batches')->where('id', $older)
+            ->value('last_dispatch_turn'));
+        self::assertSame(5, (int) DB::table('target_batches')->where('id', $middle)
+            ->value('last_dispatch_turn'));
+        self::assertSame(3, (int) DB::table('target_batches')->where('id', $newer)
+            ->value('last_dispatch_turn'));
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+    }
+
+    public function test_busy_first_target_does_not_starve_other_targets_in_the_same_batch(): void
+    {
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $targets = $this->targets(2);
+        $core = app(TargetBatchCoordinator::class);
+        $firstBatch = $this->create($user, $origin, [$targets[0]]);
+        $ids = [$targets[0]->target_id, $targets[1]->target_id];
+        $arguments = ['command' => 'uptime', 'timeout_seconds' => 10];
+        $preview = $core->preview($user, $origin, 'ssh.command.run', $ids,
+            $arguments, 'concurrent', false, 2);
+        $secondBatch = $core->create($user, $origin, (string) Str::uuid(),
+            'ssh.command.run', $ids, $arguments, $preview['preview_token'],
+            'concurrent', false, 2)['batch_id'];
+
+        $nested = null;
+        $fake = $this->fake;
+        $fake->onDispatch = static function () use (&$nested, $fake): void {
+            // Batch A has made a durable claim but not completed its remote
+            // effect. Another worker must progress Batch B's *free* child.
+            $fake->onDispatch = null;
+            $nested = app(TargetBatchWorker::class)->workOnce();
+        };
+        $outer = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame($targets[1]->target_id, $nested['target_id'] ?? null);
+        self::assertSame('completed', $nested['status'] ?? null);
+        self::assertSame($targets[0]->target_id, $outer['target_id']);
+        self::assertSame('completed', $core->status($user, $origin, $firstBatch)['status']);
+
+        $last = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame($targets[0]->target_id, $last['target_id']);
+        self::assertSame('completed', $core->status($user, $origin, $secondBatch)['status']);
+        self::assertCount(3, $fake->effects);
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+    }
+
+    public function test_rolling_batch_waits_for_busy_first_target_without_reordering(): void
+    {
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $targets = $this->targets(2);
+        $firstBatch = $this->create($user, $origin, [$targets[0]]);
+        $orderedBatch = $this->create($user, $origin, $targets);
+        $nested = 'not-called';
+        $fake = $this->fake;
+        $fake->onDispatch = static function () use (&$nested, $fake): void {
+            $fake->onDispatch = null;
+            $nested = app(TargetBatchWorker::class)->workOnce();
+        };
+        $outer = app(TargetBatchWorker::class)->workOnce();
+        self::assertNull($nested, 'Rolling order cannot skip a temporarily busy first Target.');
+        self::assertSame($targets[0]->target_id, $outer['target_id']);
+        self::assertSame('completed', app(TargetBatchCoordinator::class)
+            ->status($user, $origin, $firstBatch)['status']);
+        self::assertSame($targets[0]->target_id, app(TargetBatchWorker::class)->workOnce()['target_id']);
+        self::assertSame($targets[1]->target_id, app(TargetBatchWorker::class)->workOnce()['target_id']);
+        self::assertSame('completed', app(TargetBatchCoordinator::class)
+            ->status($user, $origin, $orderedBatch)['status']);
+        self::assertSame([$targets[0]->target_id, $targets[0]->target_id, $targets[1]->target_id], $fake->effects);
+    }
+
+    public function test_worker_scans_beyond_one_bounded_page_of_in_flight_batches(): void
+    {
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $targets = $this->targets(2);
+        $busyBatchId = $this->create($user, $origin, [$targets[0]]);
+        $source = (array) DB::table('target_batches')->where('id', $busyBatchId)->firstOrFail();
+        $sourceItem = (array) DB::table('target_batch_items')->where('batch_id', $busyBatchId)->firstOrFail();
+        $lease = now()->addHour();
+        DB::table('target_batches')->where('id', $busyBatchId)->update(['status' => 'running']);
+        DB::table('target_batch_items')->where('batch_id', $busyBatchId)->update([
+            'status' => 'dispatching', 'lease_expires_at' => $lease,
+            'dispatch_attempt_id' => (string) Str::uuid(),
+        ]);
+        // Synthetic, isolated already-claimed entries. No remote effect occurs.
+        // Every one is still in-flight; the next eligible Batch must not be
+        // hidden by the first 64 active entries or unbuffered PDO iteration.
+        for ($i = 0; $i < 65; $i++) {
+            $id = (string) Str::ulid();
+            DB::table('target_batches')->insert([
+                ...$source, 'id' => $id, 'request_id' => (string) Str::uuid(),
+                'status' => 'running', 'created_at' => now()->subHour()->addSeconds($i),
+            ]);
+            DB::table('target_batch_items')->insert([
+                ...$sourceItem, 'id' => (string) Str::ulid(), 'batch_id' => $id,
+                'status' => 'dispatching', 'lease_expires_at' => $lease,
+                'dispatch_attempt_id' => (string) Str::uuid(),
+            ]);
+        }
+        config()->set('batch.global_active', 200);
+        config()->set('batch.user_active', 200);
+        $freeBatch = $this->create($user, $origin, [$targets[1]]);
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame($targets[1]->target_id, $worked['target_id']);
+        self::assertSame('completed', app(TargetBatchCoordinator::class)
+            ->status($user, $origin, $freeBatch)['status']);
+        self::assertSame([$targets[1]->target_id], $this->fake->effects);
+        self::assertSame(66, DB::table('target_batch_items')->where('status', 'dispatching')->count());
+    }
+
     public function test_missing_global_admission_lock_fails_closed_without_remote_effect(): void
     {
         $user = $this->owner();
@@ -616,6 +804,41 @@ final class TargetBatchCoreTest extends TestCase
         self::assertSame('blocked', $preview['items'][1]['status']);
         self::assertNull($preview['items'][1]['target_record_id']);
         self::assertSame('target_not_found', $preview['items'][1]['error_code']);
+    }
+
+    public function test_mixed_connector_binding_is_explicit_and_unimplemented_arvan_batch_cannot_dispatch(): void
+    {
+        $ssh = $this->targets(1)[0];
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                return $host === 'api.example.test' ? ['1.1.1.1'] : [];
+            }
+        });
+        $arvan = app(TargetConnectorRegistry::class)->forType('arvancloud')->register([
+            'target_id' => 'arvan-not-batch',
+            'display_name' => 'Arvan future Batch fixture',
+            'api_base_url' => 'https://api.example.test/cdn/4.0',
+            'api_spec_url' => null, 'api_probe_path' => null,
+            'api_key' => 'fixture-only-not-a-real-key',
+        ]);
+        $arvan->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $bindings = app(TargetBatchBinding::class)->hashMany([$ssh, $arvan]);
+        self::assertIsString($bindings[$ssh->target_id]);
+        self::assertNull($bindings[$arvan->target_id],
+            'A connector without an audited optional Batch binding must never receive an invented proof.');
+        self::assertSame($bindings[$ssh->target_id], app(TargetBatchBinding::class)->hash($ssh));
+        self::assertNull(app(TargetBatchBinding::class)->hash($arvan));
+        $owner = $this->owner();
+        $plan = app(TargetBatchCoordinator::class)->preview($owner, $this->web($owner),
+            'ssh.command.run', [$ssh->target_id, $arvan->target_id],
+            ['command' => 'uptime', 'timeout_seconds' => 10]);
+        self::assertSame(1, $plan['eligible_count']);
+        self::assertSame('blocked', $plan['items'][1]['status']);
+        self::assertNull($plan['items'][1]['target_record_id'],
+            'A cross-connector request cannot disclose the unavailable Target binding.');
+        self::assertSame([], $this->fake->effects);
     }
 
     private function owner(): User

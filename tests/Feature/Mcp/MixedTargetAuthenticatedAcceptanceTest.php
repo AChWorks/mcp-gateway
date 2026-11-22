@@ -109,7 +109,24 @@ final class MixedTargetAuthenticatedAcceptanceTest extends TestCase
         $token = $this->issueAccessToken($owner);
         $toolResponse = $this->callMcp($token, 'tools/list');
         self::assertSame(200, $toolResponse['http_status']);
-        $tools = array_column($toolResponse['payload']['result']['tools'] ?? [], 'name');
+        $catalogTools = $toolResponse['payload']['result']['tools'] ?? [];
+        $tools = array_column($catalogTools, 'name');
+        self::assertCount(count(array_unique($tools)), $tools,
+            'One public tool name must resolve to one stable registrar contract.');
+        foreach (['ssh-system-inspect', 'ssh-network-diagnose', 'ssh-logs-query',
+            'ssh-file-patch', 'ssh-change-verify', 'ssh-batch-preview', 'ssh-batch-run',
+            'wordpress-bridge-batch-preview', 'wordpress-bridge-batch-read',
+            'target-batch-status', 'target-batches-list', 'target-batch-cancel',
+            'arvan-api-catalog', 'arvan-api-request'] as $expected) {
+            self::assertContains($expected, $tools,
+                'One authenticated client must discover each current registered operation family.');
+        }
+        $registered = collect($catalogTools)->keyBy('name');
+        self::assertSame('object', $registered['ssh-batch-run']['inputSchema']['type'] ?? null);
+        self::assertContains('preview_token', $registered['ssh-batch-run']['inputSchema']['required'] ?? []);
+        self::assertContains('target_ids', $registered['ssh-batch-run']['inputSchema']['required'] ?? []);
+        self::assertSame('object', $registered['target-batch-status']['inputSchema']['type'] ?? null);
+        self::assertSame(['batch_id'], $registered['target-batch-status']['inputSchema']['required'] ?? null);
         foreach (['targets-list', 'target-context', 'wordpress-abilities-read', 'wordpress-ability-execute',
             'ssh-command-run', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write'] as $tool) {
             self::assertContains($tool, $tools, 'One authenticated client must see both families.');

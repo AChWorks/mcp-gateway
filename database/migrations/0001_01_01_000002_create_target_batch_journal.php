@@ -9,6 +9,12 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // One already-locked admission row owns a durable, strictly
+        // increasing turn. This is internal scheduler state, NOT an Owner
+        // setting/version; it is committed atomically with each child claim.
+        Schema::table('operational_settings', static function (Blueprint $table): void {
+            $table->unsignedBigInteger('batch_dispatch_turn')->default(0);
+        });
         Schema::create('target_batches', static function (Blueprint $table): void {
             $table->ulid('id')->primary();
             $table->unsignedBigInteger('actor_user_id'); // retain evidence after user removal
@@ -28,12 +34,13 @@ return new class extends Migration
             $table->boolean('stop_on_failure')->default(false);
             $table->unsignedInteger('parallelism');
             $table->unsignedBigInteger('target_count');
+            $table->unsignedBigInteger('last_dispatch_turn')->default(0);
             $table->string('status', 24)->default('queued');
             $table->timestamp('cancel_requested_at')->nullable();
             $table->timestamp('finished_at')->nullable();
             $table->timestamps();
             $table->unique(['actor_user_id', 'client_identity_hash', 'request_id'], 'target_batch_dedup');
-            $table->index(['status', 'created_at'], 'target_batch_active');
+            $table->index(['status', 'last_dispatch_turn', 'created_at', 'id'], 'target_batch_active');
         });
         Schema::create('target_batch_items', static function (Blueprint $table): void {
             $table->ulid('id')->primary();
@@ -56,6 +63,7 @@ return new class extends Migration
             $table->unique(['batch_id', 'position'], 'target_batch_position');
             $table->unique(['batch_id', 'target_id_snapshot'], 'target_batch_unique_target');
             $table->index(['batch_id', 'status', 'position'], 'target_batch_claim');
+            $table->index(['target_record_id', 'status'], 'target_batch_target_active');
             $table->index(['status', 'lease_expires_at'], 'target_batch_lease');
         });
     }
@@ -67,5 +75,8 @@ return new class extends Migration
         }
         Schema::dropIfExists('target_batch_items');
         Schema::dropIfExists('target_batches');
+        Schema::table('operational_settings', static function (Blueprint $table): void {
+            $table->dropColumn('batch_dispatch_turn');
+        });
     }
 };

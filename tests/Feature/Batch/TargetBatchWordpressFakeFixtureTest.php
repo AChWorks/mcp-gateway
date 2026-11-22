@@ -6,6 +6,7 @@ use App\Application\Batch\DeferredBatchAuthority;
 use App\Application\Batch\TargetBatchBinding;
 use App\Application\Batch\TargetBatchCoordinator;
 use App\Application\Batch\TargetBatchWorker;
+use App\Application\Batch\WordpressBridgeInfoBatchProvider;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
@@ -13,6 +14,7 @@ use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request as HttpRequest;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
@@ -47,6 +49,22 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
         });
         Http::preventStrayRequests();
         Http::fake(fn ($request) => $this->respond($request));
+    }
+
+    public function test_wordpress_batch_lease_covers_full_native_mcp_sequence_and_refresh_recovery(): void
+    {
+        $provider = app(WordpressBridgeInfoBatchProvider::class);
+        config()->set('bridge.http.request_timeout_seconds', 5);
+        self::assertSame(70, $provider->remoteTimeoutSeconds([]));
+        config()->set('bridge.http.request_timeout_seconds', 30);
+        self::assertSame(195, $provider->remoteTimeoutSeconds([]));
+
+        // The remote phase budget must include four sequential MCP calls,
+        // the possible refresh request, and the 45s one-shot recovery window;
+        // crash reconciliation adds a separate configured lease margin.
+        config()->set('batch.lease_margin_seconds', 30);
+        self::assertSame(225, $provider->remoteTimeoutSeconds([])
+            + max(30, (int) config('batch.lease_margin_seconds')));
     }
 
     public function test_readonly_wordpress_bridge_provider_uses_same_durable_batch_core_without_publishing(): void
@@ -106,11 +124,23 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
         self::assertSame(2, $preview['eligible_count']);
         $created = $core->create($user, $origin, (string) Str::uuid(),
             'wordpress.bridge.info', $ids, [], $preview['preview_token'], 'rolling', true, 1);
+        // The full native sequence can consume multiple HTTP deadlines; the
+        // durable claimed lease must cover all of them before the first call.
+        config()->set('bridge.http.request_timeout_seconds', 30);
+        config()->set('batch.lease_margin_seconds', 30);
         $worker = app(TargetBatchWorker::class);
         foreach ($ids as $name) {
             $outcome = $worker->workOnce();
             self::assertSame($name, $outcome['target_id']);
             self::assertSame('completed', $outcome['status'], json_encode($outcome, JSON_THROW_ON_ERROR));
+        }
+        $leases = DB::table('target_batch_items')->where('batch_id', $created['batch_id'])
+            ->orderBy('position')->get(['started_at', 'lease_expires_at']);
+        self::assertCount(2, $leases);
+        foreach ($leases as $lease) {
+            self::assertSame(225,
+                Carbon::parse($lease->lease_expires_at)->getTimestamp()
+                    - Carbon::parse($lease->started_at)->getTimestamp());
         }
         $status = $core->status($user, $origin, $created['batch_id']);
         self::assertSame('completed', $status['status']);
