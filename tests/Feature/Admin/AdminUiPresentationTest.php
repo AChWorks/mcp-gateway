@@ -218,14 +218,22 @@ final class AdminUiPresentationTest extends TestCase
         $readme = (string) file_get_contents(base_path('README.md'));
         $contract = (string) file_get_contents(base_path('docs/ADMIN-UI-QUALITY.md'));
         $guide = (string) file_get_contents(base_path('docs/ARVANCLOUD-API-CONNECTOR.md'));
-        foreach ([$readme, $contract, $guide] as $document) {
+        // README is a short operator entrypoint, not a historical release diary.
+        // Exact current Admin labels belong to the UI, detailed runbook and
+        // Admin presentation contract; the existing UI test above verifies them.
+        self::assertStringContainsString('docs/ARVANCLOUD-API-CONNECTOR.md', $readme);
+        self::assertStringContainsString('**Check HTTPS endpoint**', $readme);
+        self::assertStringContainsString('HEAD', $readme);
+        self::assertStringContainsString('**Verify API key**', $readme);
+        self::assertStringContainsString('optional', strtolower($readme));
+        self::assertStringContainsString('GET', $readme);
+
+        foreach ([$contract, $guide] as $document) {
             self::assertStringContainsString('Check HTTPS endpoint (no API key)', $document);
             self::assertStringContainsString('Verify API key (read-only GET)', $document);
         }
         self::assertStringContainsString('**Four distinct outcomes:**', $contract);
         self::assertStringNotContainsString('**Three distinct outcomes:**', $contract);
-        self::assertStringContainsString('optional', strtolower($readme));
-        self::assertStringContainsString('not included in the published v2.7.0 ZIP', $readme);
         self::assertStringContainsString('HEAD', $contract);
         self::assertStringContainsString('GET', $contract);
     }

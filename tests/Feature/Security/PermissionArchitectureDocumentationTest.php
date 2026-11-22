@@ -2,46 +2,35 @@
 
 namespace Tests\Feature\Security;
 
+use App\Application\Access\AccessControl;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use Tests\TestCase;
 
-/** The #226 review matrix is a checkable snapshot, never a policy engine. */
+/** Documentation points to the code-owned policy, not a copied permission table. */
 final class PermissionArchitectureDocumentationTest extends TestCase
 {
-    public function test_owner_audit_matrix_tracks_every_defined_role_ceiling_and_connector(): void
+    public function test_architecture_links_to_authoritative_permission_policy_and_exhaustive_tests(): void
     {
-        $text = (string) file_get_contents(base_path('docs/ARCHITECTURE.md'));
-        $start = strpos($text, '**Complete role × permission × applicable connector matrix**');
-        $end = strpos($text, '**Registration, form, enforcement and test axes.**');
-        self::assertIsInt($start);
-        self::assertIsInt($end);
-        self::assertGreaterThan($start, $end);
-        $section = substr($text, $start, $end - $start);
-        preg_match_all(
-            '/^\| \\x60([a-z.]+)\\x60 \| (Gateway|Any Target|WordPress|ArvanCloud|SSH) \| ([✓–]) \| ([✓–]) \| ([✓–]) \| ([✓–]) \|$/mu',
-            $section,
-            $rows,
-            PREG_SET_ORDER,
-        );
-        self::assertCount(count(GatewayPermission::cases()), $rows);
-        $snapshot = [];
-        foreach ($rows as $row) {
-            self::assertArrayNotHasKey($row[1], $snapshot, 'Duplicate permission in canonical source audit.');
-            $snapshot[$row[1]] = array_slice($row, 2);
+        $architecture = (string) file_get_contents(base_path('docs/ARCHITECTURE.md'));
+
+        // The source-of-truth roles, applicability and enforcement must be
+        // discoverable without maintaining a second permission registry in Markdown.
+        foreach ([
+            GatewayRole::class => '../app/Domain/Access/GatewayRole.php',
+            GatewayPermission::class => '../app/Domain/Access/GatewayPermission.php',
+            AccessControl::class => '../app/Application/Access/AccessControl.php',
+        ] as $class => $relativePath) {
+            self::assertTrue(class_exists($class), 'Missing policy source class: '.$class);
+            self::assertStringContainsString(']('.$relativePath.')', $architecture);
+            self::assertFileExists(base_path(substr($relativePath, 3)));
         }
-        foreach (GatewayPermission::cases() as $permission) {
-            $connector = match ($permission->targetApplicability()) {
-                null => 'Gateway',
-                'any' => 'Any Target',
-                'wp_ai_bridge' => 'WordPress',
-                'arvancloud' => 'ArvanCloud',
-                'ssh_direct' => 'SSH',
-            };
-            self::assertSame([
-                $connector,
-                ...array_map(static fn (GatewayRole $role): string => $role->allows($permission) ? '✓' : '–', GatewayRole::cases()),
-            ], $snapshot[$permission->value] ?? null, 'Update the source-derived audit matrix for '.$permission->value);
-        }
+
+        self::assertStringContainsString('GatewayRole::permissions()', $architecture);
+        self::assertStringContainsString('GatewayPermission::cases()', $architecture);
+        self::assertStringContainsString('targetApplicability()', $architecture);
+        self::assertStringContainsString('**Regression ownership:**', $architecture);
+        self::assertStringContainsString('](../tests/Feature/Security/AccessControlTest.php)', $architecture);
+        self::assertFileExists(base_path('tests/Feature/Security/AccessControlTest.php'));
     }
 }
