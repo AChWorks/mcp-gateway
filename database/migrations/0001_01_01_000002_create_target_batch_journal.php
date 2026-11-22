@@ -20,7 +20,8 @@ return new class extends Migration
             $table->char('authorization_id', 26)->nullable();
             $table->char('resource_hash', 64)->nullable();
             $table->uuid('request_id');
-            $table->char('request_fingerprint', 64);
+            $table->char('request_fingerprint', 64); // time-bound exact Preview identity
+            $table->char('request_intent_hash', 64); // stable idempotency identity, no mutable Target state
             $table->string('capability_key', 80);
             $table->longText('arguments_ciphertext');
             $table->string('execution_mode', 16); // concurrent | rolling

@@ -7,6 +7,7 @@ use App\Application\Batch\DeferredBatchAuthority;
 use App\Application\Batch\TargetBatchCoordinator;
 use App\Application\Batch\TargetBatchOperationProvider;
 use App\Application\Batch\TargetBatchWorker;
+use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -30,6 +31,8 @@ final class FakeAuthorizedBatchProvider implements TargetBatchOperationProvider
     public bool $simulateLostResponse = false;
 
     public ?Closure $onDispatch = null;
+
+    public ?Closure $afterEffect = null;
 
     public function key(): string
     {
@@ -66,6 +69,9 @@ final class FakeAuthorizedBatchProvider implements TargetBatchOperationProvider
             return ['ok' => false, 'status' => 'blocked', 'error_code' => 'authorization_revoked'];
         }
         $this->effects[] = $target->target_id;
+        if ($this->afterEffect instanceof Closure) {
+            ($this->afterEffect)();
+        }
         if ($this->simulateLostResponse) {
             throw new \RuntimeException('Test: simulated remote effect then lost response');
         }
@@ -130,6 +136,7 @@ final class TargetBatchCoreTest extends TestCase
             $worked = $worker->workOnce();
             self::assertSame($expected, $worked['target_id']);
             self::assertSame('completed', $worked['status']);
+            self::assertNull($worked['error_code']);
         }
         self::assertNull($worker->workOnce());
         self::assertSame($ids, $this->fake->effects);
@@ -141,6 +148,176 @@ final class TargetBatchCoreTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         $core->create($user, $origin, $request, 'ssh.command.run', $ids,
             ['command' => 'different', 'timeout_seconds' => 10], $preview['preview_token'], 'rolling', false, 3);
+    }
+
+    public function test_original_request_id_recovers_after_preview_expires_and_target_access_or_binding_changes(): void
+    {
+        $user = $this->owner();
+        $targets = $this->targets(1);
+        $ids = [$targets[0]->target_id];
+        $origin = $this->web($user);
+        $core = app(TargetBatchCoordinator::class);
+        $arguments = ['command' => 'uptime', 'timeout_seconds' => 10];
+        $preview = $core->preview($user, $origin, 'ssh.command.run', $ids, $arguments);
+        $requestId = (string) Str::uuid();
+        $created = $core->create($user, $origin, $requestId, 'ssh.command.run',
+            $ids, $arguments, $preview['preview_token']);
+        $this->travel(11)->minutes();
+        DB::table('ssh_direct_target_configs')
+            ->where('target_record_id', $targets[0]->getKey())
+            ->update(['host' => 'another-host.example.test']);
+        // Ownership of the original queued result remains visible while new
+        // effects cannot pass current authorization or binding checks.
+        $user->forceFill(['role' => 'operator', 'target_scope_mode' => 'selected'])->save();
+        $recovered = $core->create($user, $origin, $requestId, 'ssh.command.run',
+            $ids, $arguments, $preview['preview_token']);
+        self::assertSame($created['batch_id'], $recovered['batch_id']);
+        self::assertSame(1, DB::table('target_batches')->count());
+        self::assertSame([], $this->fake->effects);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('different original Batch input');
+        $core->create($user, $origin, $requestId, 'ssh.command.run',
+            $ids, ['command' => 'id', 'timeout_seconds' => 10], $preview['preview_token']);
+    }
+
+    public function test_revoked_actor_cannot_recover_existing_request_even_with_old_preview_token(): void
+    {
+        $user = $this->owner();
+        $targets = $this->targets(1);
+        $origin = $this->web($user);
+        $core = app(TargetBatchCoordinator::class);
+        $ids = [$targets[0]->target_id];
+        $arguments = ['command' => 'uptime', 'timeout_seconds' => 10];
+        $preview = $core->preview($user, $origin, 'ssh.command.run', $ids, $arguments);
+        $request = (string) Str::uuid();
+        $core->create($user, $origin, $request, 'ssh.command.run', $ids, $arguments, $preview['preview_token']);
+        $user->forceFill(['access_enabled' => false])->save();
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('not readable');
+        $core->create($user, $origin, $request, 'ssh.command.run', $ids, $arguments, $preview['preview_token']);
+    }
+
+    public function test_late_success_after_another_worker_reconciles_expired_lease_never_claims_success(): void
+    {
+        $user = $this->owner();
+        $targets = $this->targets(1);
+        $origin = $this->web($user);
+        $batchId = $this->create($user, $origin, $targets);
+        $this->fake->afterEffect = static function () use ($batchId): void {
+            DB::table('target_batch_items')->where('batch_id', $batchId)->update([
+                'lease_expires_at' => now()->subMinute(),
+            ]);
+            // A separately constructed Worker reconciles the first claim while
+            // its remote call is still holding the successful response.
+            self::assertNull(app(TargetBatchWorker::class)->workOnce());
+        };
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('outcome_unknown', $worked['status']);
+        self::assertSame('dispatch_lease_expired', $worked['error_code']);
+        self::assertSame('outcome_unknown', DB::table('target_batch_items')->where('batch_id', $batchId)->value('status'));
+        self::assertSame('outcome_unknown', DB::table('target_batches')->where('id', $batchId)->value('status'));
+        self::assertSame([$targets[0]->target_id], $this->fake->effects);
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+        $events = DB::table('activity_events')->where('operation', 'like', 'target-batch%')
+            ->orderBy('id')->get();
+        self::assertSame(1, $events->count());
+        self::assertSame('unknown', $events[0]->outcome);
+        self::assertSame('late_result_ignored', $events[0]->error_code);
+        $details = json_decode((string) $events[0]->diagnostic_context, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame($batchId, $details['batch_id']);
+        self::assertSame('outcome_unknown', $details['authoritative_status']);
+        self::assertSame('completed', $details['late_provider_status']);
+        self::assertTrue($details['late_response_after_lease']);
+        self::assertSame((string) $events[0]->correlation_id, $worked['diagnostic_reference']);
+    }
+
+    public function test_deferred_nonowner_mcp_diagnostics_preserve_actor_and_client_without_cross_client_access(): void
+    {
+        $operator = $this->owner();
+        $operator->forceFill(['role' => 'operator', 'target_scope_mode' => 'selected'])->save();
+        $target = $this->targets(1)[0];
+        DB::table('user_target_access')->insert([
+            'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(),
+            'allowed' => true,
+        ]);
+        $clientId = (string) config('oauth.client.id');
+        $authorization = (string) Str::ulid();
+        DB::table('oauth_authorizations')->insert([
+            'id' => $authorization, 'user_id' => $operator->getKey(),
+            'client_id' => $clientId, 'resource' => (string) config('oauth.resource'),
+            'resource_hash' => hash('sha256', (string) config('oauth.resource')),
+            'scopes' => json_encode([(string) config('oauth.scope')], JSON_THROW_ON_ERROR),
+            'client_profile_key' => 'chatgpt', 'client_profile_generation' => 1,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $origin = [
+            'source_channel' => 'mcp', 'client_id' => $clientId,
+            'client_identity_hash' => hash('sha256', 'chatgpt'."\0".$clientId),
+            'client_profile_key' => 'chatgpt', 'client_profile_generation' => 1,
+            'authorization_id' => $authorization,
+            'resource_hash' => hash('sha256', (string) config('oauth.resource')),
+        ];
+        $core = app(TargetBatchCoordinator::class);
+        $args = ['command' => 'uptime', 'timeout_seconds' => 10];
+        $preview = $core->preview($operator, $origin, 'ssh.command.run', [$target->target_id], $args);
+        self::assertSame(1, $preview['eligible_count']);
+        $requestId = (string) Str::uuid();
+        $created = $core->create($operator, $origin, $requestId, 'ssh.command.run',
+            [$target->target_id], $args, $preview['preview_token']);
+        $otherClient = [
+            ...$origin, 'client_id' => 'another-client.example.test',
+            'client_identity_hash' => hash('sha256', 'chatgpt'."\0".'another-client.example.test'),
+        ];
+        try {
+            $core->status($operator, $otherClient, $created['batch_id']);
+            self::fail('A different MCP Client must not recover another client\'s Batch.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('not authorized', $exception->getMessage());
+        }
+        try {
+            $core->create($operator, $otherClient, $requestId, 'ssh.command.run',
+                [$target->target_id], $args, $preview['preview_token']);
+            self::fail('Original client Preview cannot authorize a new other-client Batch.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('authorization', $exception->getMessage());
+        }
+        self::assertSame(1, DB::table('target_batches')->count());
+        // Actual worker runs with no HTTP request and a failed provider, not
+        // a fabricated request principal impersonating the original client.
+        $this->fake->fail = true;
+        $completed = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('failed', $completed['status']);
+        $event = DB::table('activity_events')
+            ->where('correlation_id', $completed['diagnostic_reference'])->first();
+        self::assertNotNull($event);
+        self::assertSame('oauth_user', $event->actor_type);
+        self::assertSame((string) $operator->getKey(), $event->actor_id);
+        self::assertSame(hash('sha256', $clientId), $event->client_id_hash);
+        self::assertSame('chatgpt', $event->client_profile_key);
+        $details = json_decode((string) $event->diagnostic_context, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame($created['batch_id'], $details['batch_id']);
+        self::assertSame('mcp', $details['source_channel']);
+        self::assertSame('failed', $details['batch_status']);
+        self::assertNotEmpty($details['batch_child_id']);
+        self::assertTrue(Str::isUuid($details['attempt_id']));
+
+        $reader = app(OperationDiagnosticsMcpToolHandlers::class);
+        $matching = $reader->read($operator, $completed['diagnostic_reference'], null, 1, $clientId, 'chatgpt');
+        self::assertTrue($matching['ok'], json_encode($matching, JSON_THROW_ON_ERROR));
+        self::assertSame('remote_exit_nonzero', $matching['events'][0]['error_code']);
+        self::assertSame($created['batch_id'], $matching['events'][0]['diagnostics']['batch_id']);
+        self::assertFalse($reader->read($operator, $completed['diagnostic_reference'], null, 1,
+            'different-oauth-client', 'chatgpt')['ok']);
+        self::assertFalse($reader->read($operator, $completed['diagnostic_reference'], null, 1,
+            $clientId, 'different-profile')['ok']);
+        $other = $this->owner();
+        $other->forceFill(['role' => 'operator', 'target_scope_mode' => 'selected'])->save();
+        DB::table('user_target_access')->insert([
+            'user_id' => $other->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        self::assertFalse($reader->read($other, $completed['diagnostic_reference'], null, 1,
+            $clientId, 'chatgpt')['ok']);
+        self::assertSame([$target->target_id], $this->fake->effects);
     }
 
     public function test_cancel_prevents_unstarted_effects_without_false_remote_cancellation_claim(): void

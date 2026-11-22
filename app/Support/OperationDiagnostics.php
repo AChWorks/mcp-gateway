@@ -75,6 +75,7 @@ final class OperationDiagnostics
             'tcp_connect', 'tls_handshake', 'request_timeout',
             'connection_setup', 'relay_socks_connect', 'response_transfer', 'response_body',
             'remote_http', 'operation', 'admission', 'unknown',
+            'batch_dispatch', 'batch_finalize', 'batch_reconciliation',
         ], true)) {
             $safe['failure_stage'] = $stage;
         }
@@ -164,6 +165,48 @@ final class OperationDiagnostics
             if (is_int($value) && $value >= 0 && $value <= 1099511627776) {
                 $safe[$key] = $value;
             }
+        }
+
+        // Trusted deferred Batch identity and provider cause-chain. Preserve
+        // bounded references, but never inputs, secrets or command output.
+        foreach (['batch_id', 'batch_child_id'] as $key) {
+            $value = $details[$key] ?? null;
+            if (is_string($value) && Str::isUlid($value)) {
+                $safe[$key] = $value;
+            }
+        }
+        foreach (['attempt_id', 'downstream_diagnostic_reference'] as $key) {
+            $value = $details[$key] ?? null;
+            if (is_string($value) && Str::isUuid($value)) {
+                $safe[$key] = $value;
+            }
+        }
+        foreach (['batch_status', 'authoritative_status', 'late_provider_status'] as $key) {
+            $value = $details[$key] ?? null;
+            if (is_string($value) && in_array($value, [
+                'queued', 'running', 'dispatching', 'cancel_requested',
+                'canceled', 'completed', 'failed', 'blocked', 'partial', 'outcome_unknown',
+            ], true)) {
+                $safe[$key] = $value;
+            }
+        }
+        if (in_array($details['source_channel'] ?? null, ['web', 'mcp'], true)) {
+            $safe['source_channel'] = $details['source_channel'];
+        }
+        if (is_bool($details['late_response_after_lease'] ?? null)) {
+            $safe['late_response_after_lease'] = $details['late_response_after_lease'];
+        }
+        $providerCode = $details['provider_error_code'] ?? null;
+        if (is_string($providerCode) && preg_match('/^[a-z][a-z0-9_.-]{0,63}$/D', $providerCode) === 1) {
+            $safe['provider_error_code'] = $providerCode;
+        }
+        $authoritativeCode = $details['authoritative_error_code'] ?? null;
+        if (is_string($authoritativeCode) && preg_match('/^[a-z][a-z0-9_.-]{0,63}$/D', $authoritativeCode) === 1) {
+            $safe['authoritative_error_code'] = $authoritativeCode;
+        }
+        $exitCode = $details['remote_exit_code'] ?? null;
+        if (is_int($exitCode) && $exitCode >= -1 && $exitCode <= 255) {
+            $safe['remote_exit_code'] = $exitCode;
         }
 
         // Explicit request identity for registered REST API operations.

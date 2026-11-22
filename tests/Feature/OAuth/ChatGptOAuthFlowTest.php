@@ -54,6 +54,13 @@ final class ChatGptOAuthFlowTest extends TestCase
     {
         parent::setUp();
 
+        // The signing files are shared by default across PHP processes.
+        // Independent test runners can otherwise rotate a key after another
+        // runner issues a token, producing intermittent invalid_token 401s.
+        // Keep production paths untouched: isolate this fixture by test PID.
+        $fixtureDirectory = storage_path('framework/testing/chatgpt-oauth-'.getmypid());
+        config()->set('oauth.keys.private', $fixtureDirectory.'/private.key');
+        config()->set('oauth.keys.public', $fixtureDirectory.'/public.key');
         Artisan::call('gateway:oauth-keygen', ['--force' => true]);
         [$this->clientPrivateKey, $this->clientJwk] = $this->newClientKeypair();
         $this->bindClientMetadataFixture();

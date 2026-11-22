@@ -51,6 +51,19 @@ final readonly class TargetBatchCoordinator
         if (! Str::isUuid($requestId)) {
             throw new InvalidArgumentException('request_id must be a stable UUID.');
         }
+        // First recover the *original* immutable request. A lost response
+        // remains recoverable after Preview expiry, ACL or Target drift.
+        // This lookup never authorizes a new remote dispatch.
+        $intent = $this->planner->requestIntent(
+            $user, $origin, $capability, $targetIds, $arguments, $mode, $stopOnFailure, $parallelism,
+        );
+        $existing = $this->existingRequest($user, $origin, $requestId);
+        if ($existing !== null) {
+            return $this->recoverExisting($existing, $user, $intent);
+        }
+
+        // Only a *new* Batch needs current Target eligibility and exact
+        // time-bound Preview authorization. Never re-admit a duplicate.
         $preview = $this->preview(
             $user, $origin, $capability, $targetIds, $arguments, $mode, $stopOnFailure, $parallelism,
         );
@@ -60,23 +73,12 @@ final readonly class TargetBatchCoordinator
         if ($preview['eligible_count'] === 0) {
             throw new InvalidArgumentException('No currently authorized, connected Target supports this operation.');
         }
-        $existing = DB::table('target_batches')
-            ->where('actor_user_id', $user->getKey())
-            ->where('client_identity_hash', $origin['client_identity_hash'])
-            ->where('request_id', $requestId)->first();
-        if ($existing !== null) {
-            if (! hash_equals((string) $existing->request_fingerprint, $preview['fingerprint'])) {
-                throw new InvalidArgumentException('request_id is already bound to a different Batch plan.');
-            }
-
-            return $this->summary($existing);
-        }
 
         $id = (string) Str::ulid();
         $now = now();
         try {
             DB::transaction(static function () use (
-                $user, $origin, $requestId, $capability, $arguments, $preview,
+                $user, $origin, $requestId, $capability, $arguments, $preview, $intent,
                 $mode, $stopOnFailure, $parallelism, $id, $now,
             ): void {
                 DB::table('target_batches')->insert([
@@ -90,6 +92,7 @@ final readonly class TargetBatchCoordinator
                     'resource_hash' => $origin['resource_hash'],
                     'request_id' => $requestId,
                     'request_fingerprint' => $preview['fingerprint'],
+                    'request_intent_hash' => $intent,
                     'capability_key' => $capability,
                     'arguments_ciphertext' => Crypt::encryptString(json_encode($arguments, JSON_THROW_ON_ERROR)),
                     'execution_mode' => $mode, 'stop_on_failure' => $stopOnFailure,
@@ -122,18 +125,12 @@ final readonly class TargetBatchCoordinator
             }, 3);
         } catch (QueryException $exception) {
             // An exact concurrent retry may have won the unique request key.
-            $existing = DB::table('target_batches')
-                ->where('actor_user_id', $user->getKey())
-                ->where('client_identity_hash', $origin['client_identity_hash'])
-                ->where('request_id', $requestId)->first();
+            $existing = $this->existingRequest($user, $origin, $requestId);
             if ($existing === null) {
                 throw $exception;
             }
-            if (! hash_equals((string) $existing->request_fingerprint, $preview['fingerprint'])) {
-                throw new InvalidArgumentException('Concurrent request_id reused with different Batch input.', previous: $exception);
-            }
 
-            return $this->summary($existing);
+            return $this->recoverExisting($existing, $user, $intent);
         }
 
         return $this->summary(DB::table('target_batches')->where('id', $id)->firstOrFail());
@@ -223,6 +220,30 @@ final readonly class TargetBatchCoordinator
 
         return ['ok' => true, 'batches' => $items,
             'next_cursor' => $hasMore ? $rows->get($limit - 1)->id : null];
+    }
+
+    /** @param array<string,mixed> $origin */
+    private function existingRequest(User $user, array $origin, string $requestId): ?object
+    {
+        return DB::table('target_batches')
+            ->where('actor_user_id', $user->getKey())
+            ->where('source_channel', $origin['source_channel'])
+            ->where('client_identity_hash', $origin['client_identity_hash'])
+            ->where('request_id', $requestId)->first();
+    }
+
+    /** @return array<string,mixed> */
+    private function recoverExisting(object $batch, User $user, string $intent): array
+    {
+        if (! hash_equals((string) $batch->request_intent_hash, $intent)) {
+            throw new InvalidArgumentException('request_id is already bound to different original Batch input.');
+        }
+        $currentUser = User::query()->find($user->getKey());
+        if (! $currentUser instanceof User || ! app(DeferredBatchAuthority::class)->allows($batch, $currentUser)) {
+            throw new InvalidArgumentException('Original Batch is not readable under current User/Client authorization.');
+        }
+
+        return $this->summary($batch);
     }
 
     /** @return array<string,mixed> */

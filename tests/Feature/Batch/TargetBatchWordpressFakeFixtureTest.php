@@ -28,6 +28,8 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
     /** @var list<string> */
     private array $abilityCalls = [];
 
+    private bool $rejectBridgeInfo = false;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -123,6 +125,54 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
         self::assertNull($worker->workOnce());
     }
 
+    public function test_failed_wordpress_provider_preserves_native_cause_and_original_reference_in_batch_activity(): void
+    {
+        $user = User::query()->create([
+            'name' => 'WP Batch Failure User', 'email' => 'wp-batch-failure@example.test',
+            'password' => 'StrongPassword!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true, 'ai_access_enabled' => true,
+        ]);
+        $target = app(WpAiBridgeTargetRegistration::class)->register(
+            'wp-batch-failure', 'WP Failure', 'https://wp-batch-failure.example.test',
+        );
+        $connection = app(WpAiBridgeTargetConnectionService::class);
+        $url = $connection->begin($target);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        $connection->completeCallback((string) $query['state'], 'wp-batch-failure-code',
+            'https://wp-batch-failure.example.test', null);
+        $this->rejectBridgeInfo = true;
+
+        $request = HttpRequest::create('/admin/target-batches', 'POST');
+        $request->setUserResolver(static fn (): User => $user);
+        $origin = app(DeferredBatchAuthority::class)->captureWeb($user, $request);
+        $core = app(TargetBatchCoordinator::class);
+        $preview = $core->preview($user, $origin, 'wordpress.bridge.info',
+            [$target->target_id], []);
+        $created = $core->create($user, $origin, (string) Str::uuid(),
+            'wordpress.bridge.info', [$target->target_id], [], $preview['preview_token']);
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('failed', $worked['status']);
+        self::assertSame('downstream_rejected', $worked['error_code']);
+        $activity = DB::table('activity_events')
+            ->where('correlation_id', $worked['diagnostic_reference'])->first();
+        self::assertNotNull($activity);
+        $context = json_decode((string) $activity->diagnostic_context, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame($created['batch_id'], $context['batch_id']);
+        self::assertTrue(Str::isUuid($context['downstream_diagnostic_reference']));
+        self::assertSame('downstream_rejected', $context['provider_error_code']);
+        self::assertSame('wp_permission_denied', $context['source_error_code']);
+        self::assertSame('Role lacks permission', $context['source_error_message']);
+        self::assertSame('missing_role', $context['source_error_details']['reason']);
+        $native = DB::table('activity_events')
+            ->where('correlation_id', $context['downstream_diagnostic_reference'])
+            ->where('target_record_id', $target->getKey())->first();
+        self::assertNotNull($native);
+        self::assertSame('downstream_rejected', $native->error_code);
+        self::assertSame('failed', $core->status($user, $origin, $created['batch_id'])['status']);
+        self::assertSame(['wp-ai-bridge/abilities-read', 'wp-ai-bridge/bridge-info'], $this->abilityCalls);
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+    }
+
     private function respond($request)
     {
         $host = (string) parse_url($request->url(), PHP_URL_HOST);
@@ -171,6 +221,22 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
             if (($data['method'] ?? null) === 'tools/call') {
                 $ability = (string) ($data['params']['arguments']['ability_name'] ?? '');
                 $this->abilityCalls[] = $ability;
+                if ($this->rejectBridgeInfo && $ability === 'wp-ai-bridge/bridge-info') {
+                    return Http::response([
+                        'jsonrpc' => '2.0', 'id' => $data['id'] ?? 2,
+                        'result' => [
+                            'isError' => true,
+                            'content' => [['type' => 'text', 'text' => 'Role lacks permission']],
+                            'structuredContent' => [
+                                'error' => [
+                                    'code' => 'wp_permission_denied',
+                                    'message' => 'Role lacks permission',
+                                    'data' => ['reason' => 'missing_role'],
+                                ],
+                            ],
+                        ],
+                    ], 200);
+                }
                 if (! in_array($ability, ['wp-ai-bridge/abilities-read', 'wp-ai-bridge/bridge-info'], true)) {
                     return Http::response(['error' => 'Mutating WordPress ability forbidden by fixture'], 403);
                 }

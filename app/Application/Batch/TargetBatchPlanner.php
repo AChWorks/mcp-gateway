@@ -127,6 +127,39 @@ final readonly class TargetBatchPlanner
         ];
     }
 
+    /**
+     * Immutable, caller-supplied intent for recovering an already accepted
+     * request_id. Target permissions, credentials and Preview expiry are
+     * deliberately NOT inputs: those can change after admission.
+     *
+     * @param  array<string,mixed>  $origin
+     * @param  array<mixed>  $targetIds
+     * @param  array<string,mixed>  $arguments
+     */
+    public function requestIntent(
+        User $user, array $origin, string $capability, array $targetIds,
+        array $arguments, string $mode, bool $stopOnFailure, int $parallelism,
+    ): string {
+        if ($targetIds === [] || ! array_is_list($targetIds)) {
+            throw new InvalidArgumentException('Batch requires a nonempty exact Target selection.');
+        }
+        $ids = [];
+        foreach ($targetIds as $id) {
+            if (! is_string($id) || preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $id) !== 1) {
+                throw new InvalidArgumentException('Batch Target identifiers are invalid.');
+            }
+            $ids[$id] = true;
+        }
+
+        return hash('sha256', json_encode([
+            'batch_request_intent_v1', (string) $user->getKey(),
+            $origin['source_channel'] ?? null, $origin['client_identity_hash'] ?? null,
+            $origin['authorization_id'] ?? null, $origin['client_profile_generation'] ?? null,
+            $origin['resource_hash'] ?? null,
+            $capability, array_keys($ids), $arguments, $mode, $stopOnFailure, $parallelism,
+        ], JSON_THROW_ON_ERROR));
+    }
+
     public function tokenValid(string $token, string $fingerprint): bool
     {
         if (preg_match('/^([0-9]{10})\.([a-f0-9]{64})$/D', $token, $matches) !== 1) {

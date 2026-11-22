@@ -4,8 +4,10 @@ namespace App\Application\Batch;
 
 use App\Application\Access\AccessControl;
 use App\Domain\Targets\Target;
+use App\Infrastructure\Activity\ActivityAttribution;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Models\User;
+use App\Support\OperationDiagnostics;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -197,36 +199,107 @@ final readonly class TargetBatchWorker
         $error = isset($outcome['error_code']) && is_string($outcome['error_code'])
             ? $outcome['error_code'] : null;
         $reference = (string) Str::uuid();
-        $effect = $state === 'completed' ? 'success' : ($state === 'outcome_unknown' ? 'unknown' : 'failure');
-        $this->activity->record($reference, 'target-batch-'.$batch->capability_key, $effect, $target, $error, [
-            'batch_id' => $batch->id, 'batch_child_id' => $item->id, 'batch_status' => $state,
-            'source_channel' => $batch->source_channel, 'attempt_id' => $attempt,
-            'retry_safe' => false,
-            ...($outcome['diagnostics'] ?? []),
-        ]);
         $encoded = Crypt::encryptString(json_encode($outcome, JSON_THROW_ON_ERROR));
-        DB::transaction(function () use ($batch, $item, $attempt, $state, $error, $encoded, $reference): void {
+
+        // Durable Journal state wins over any late local result. Commit before
+        // emitting success Activity or acknowledging completion to the CLI.
+        $journal = DB::transaction(function () use (
+            $batch, $item, $attempt, $state, $error, $encoded, $reference,
+        ): array {
             $current = DB::table('target_batches')->where('id', $batch->id)->lockForUpdate()->first();
-            if ($current === null) {
-                return;
-            }
-            $updated = DB::table('target_batch_items')->where('id', $item->id)
+            $accepted = $current !== null && DB::table('target_batch_items')
+                ->where('id', $item->id)
                 ->where('dispatch_attempt_id', $attempt)
                 ->whereIn('status', ['dispatching', 'cancel_requested'])->update([
                     'status' => $state, 'error_code' => $error,
                     'result_ciphertext' => $encoded,
                     'diagnostic_reference' => $reference,
                     'finished_at' => now(), 'updated_at' => now(),
-                ]);
-            if ($updated === 1) {
-                // Never let a stale worker overwrite an unknown result after
-                // its lease expired and another observer reconciled it.
-                $this->aggregate($current->id);
+                ]) === 1;
+            if ($accepted) {
+                $this->aggregate($batch->id);
             }
+            $authoritative = DB::table('target_batch_items')->where('id', $item->id)->first();
+
+            return [
+                'accepted' => $accepted,
+                'status' => $authoritative === null ? 'outcome_unknown' : $authoritative->status,
+                'error_code' => $authoritative === null
+                    ? 'batch_journal_unavailable' : $authoritative->error_code,
+                'diagnostic_reference' => $authoritative?->diagnostic_reference,
+            ];
         }, 3);
 
-        return ['batch_id' => $batch->id, 'target_id' => $item->target_id_snapshot,
-            'status' => $state, 'error_code' => $error, 'diagnostic_reference' => $reference];
+        $accepted = $journal['accepted'];
+        $actualState = $journal['status'];
+        $actualError = $journal['error_code'];
+        $details = [
+            'batch_id' => $batch->id,
+            'batch_child_id' => $item->id,
+            'batch_status' => $actualState,
+            'source_channel' => $batch->source_channel,
+            'attempt_id' => $attempt,
+            'retry_safe' => false,
+        ];
+        if ($accepted) {
+            $details = [...$details, ...($outcome['diagnostics'] ?? [])];
+            $activityOutcome = $actualState === 'completed' ? 'success'
+                : ($actualState === 'outcome_unknown' ? 'unknown' : 'failure');
+            $activityOperation = 'target-batch-'.$batch->capability_key;
+        } else {
+            // A second Worker already reconciled the lease or recorded a final
+            // result. Retain the late provider observation as UNKNOWN evidence,
+            // never as a second confirmed completion or a replay authorization.
+            $details = [
+                ...$details, 'failure_stage' => 'batch_reconciliation',
+                'late_response_after_lease' => true,
+                'late_provider_status' => $state,
+                'authoritative_status' => $actualState,
+                'authoritative_error_code' => $actualError,
+                'effect_unconfirmed' => true,
+            ];
+            $activityOutcome = 'unknown';
+            $activityOperation = 'target-batch-late-result';
+            // Add the first diagnostic reference without changing an already
+            // reconciled status/error/result. A separate late event can still
+            // be found by its own correlation ID in Activity.
+            if ($journal['diagnostic_reference'] === null) {
+                DB::table('target_batch_items')
+                    ->where('id', $item->id)
+                    ->where('dispatch_attempt_id', $attempt)
+                    ->whereNull('diagnostic_reference')
+                    ->update(['diagnostic_reference' => $reference, 'updated_at' => now()]);
+                $journal['diagnostic_reference'] = DB::table('target_batch_items')
+                    ->where('id', $item->id)->value('diagnostic_reference');
+            }
+        }
+
+        // The worker has no HTTP request. Restore the *persisted* originating
+        // User/Client identity explicitly, without bearer or refresh tokens.
+        // Diagnostics remain best-effort; finalized Journal truth is not.
+        try {
+            $this->activity->record(
+                $reference, $activityOperation, $activityOutcome,
+                $target, $accepted ? $actualError : 'late_result_ignored',
+                $details, ActivityAttribution::fromBatch($batch),
+            );
+        } catch (Throwable $exception) {
+            // A corrupt provenance witness cannot roll back a remote effect.
+            // The durable journal stays authoritative and the worker returns
+            // its persisted state, not a fabricated local result.
+            OperationDiagnostics::failure(
+                'target-batch-attribution', 'batch_diagnostic_unavailable', $target, [
+                    'batch_id' => $batch->id, 'batch_child_id' => $item->id,
+                    'exception_class' => $exception::class,
+                ], $reference,
+            );
+        }
+
+        return [
+            'batch_id' => $batch->id, 'target_id' => $item->target_id_snapshot,
+            'status' => $actualState, 'error_code' => $actualError,
+            'diagnostic_reference' => $journal['diagnostic_reference'] ?? $reference,
+        ];
     }
 
     /** Update an already locked parent's aggregate from durable child states. */

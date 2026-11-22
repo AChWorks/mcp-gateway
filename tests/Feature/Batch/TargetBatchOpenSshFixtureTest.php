@@ -12,6 +12,7 @@ use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -19,6 +20,59 @@ use Tests\TestCase;
 final class TargetBatchOpenSshFixtureTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_native_ssh_nonzero_exit_retains_original_failure_and_target_batch_correlation(): void
+    {
+        if (getenv('V3_BATCH_SSH_FIXTURE_ENABLED') !== '1') {
+            $this->markTestSkipped('Requires a disposable isolated loopback OpenSSH fixture.');
+        }
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                return ['127.0.0.1'];
+            }
+        });
+        $hostKey = preg_split('/\s+/', trim((string) file_get_contents((string) getenv('V3_BATCH_SSH_HOST_KEY'))));
+        $pin = implode(' ', array_slice($hostKey, 0, 2));
+        $privateKey = (string) file_get_contents((string) getenv('V3_BATCH_SSH_LOGIN_KEY'));
+        $user = User::query()->create([
+            'name' => 'SSH Failure Fixture', 'email' => 'v3-ssh-batch-failure@example.test',
+            'password' => 'StrongPassword!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true, 'ai_access_enabled' => true,
+        ]);
+        $target = app(SshTargetRegistration::class)->register(
+            'batch-real-ssh-failed', 'Disposable SSH failure', 'fixture.example.test',
+            (int) getenv('V3_BATCH_SSH_PORT'), (string) getenv('V3_BATCH_SSH_USER'),
+            $pin, 'private_key', $privateKey, null,
+        );
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $request = Request::create('/admin/target-batches', 'POST');
+        $request->setUserResolver(static fn (): User => $user);
+        $origin = app(DeferredBatchAuthority::class)->captureWeb($user, $request);
+        $core = app(TargetBatchCoordinator::class);
+        $arguments = ['command' => 'exit 37', 'timeout_seconds' => 10];
+        $preview = $core->preview($user, $origin, 'ssh.command.run', [$target->target_id], $arguments);
+        self::assertSame(1, $preview['eligible_count']);
+        $batch = $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run',
+            [$target->target_id], $arguments, $preview['preview_token']);
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('failed', $worked['status']);
+        self::assertSame('remote_exit_nonzero', $worked['error_code']);
+        $event = DB::table('activity_events')
+            ->where('correlation_id', $worked['diagnostic_reference'])->first();
+        self::assertNotNull($event);
+        self::assertSame('failure', $event->outcome);
+        $context = json_decode((string) $event->diagnostic_context, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame($batch['batch_id'], $context['batch_id']);
+        self::assertSame('operation', $context['failure_stage']);
+        self::assertSame(37, $context['remote_exit_code']);
+        self::assertSame('remote_exit_nonzero', $context['source_error_code']);
+        self::assertTrue(Str::isUuid($context['attempt_id']));
+        self::assertArrayNotHasKey('command', $context);
+        self::assertSame('failed', $core->status($user, $origin, $batch['batch_id'])['status']);
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+    }
 
     public function test_real_pinned_openssh_batch_executes_on_two_explicit_targets_with_durable_results(): void
     {

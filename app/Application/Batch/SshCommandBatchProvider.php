@@ -65,14 +65,20 @@ final readonly class SshCommandBatchProvider implements TargetBatchOperationProv
             );
         } catch (SshTargetConnectionException $exception) {
             return ['ok' => false, 'status' => 'failed', 'error_code' => $exception->reason,
-                'diagnostics' => $exception->diagnostics];
+                'diagnostics' => [
+                    ...$exception->diagnostics,
+                    'source_error_code' => $exception->reason,
+                    'gateway_error_message' => $exception->getMessage(),
+                ]];
         } catch (Throwable $exception) {
             return ['ok' => false, 'status' => 'outcome_unknown', 'error_code' => 'ssh_execution_unexpected',
                 'diagnostics' => ['exception_class' => $exception::class, 'effect_unconfirmed' => true]];
         }
 
         if (($result['status'] ?? null) === 'outcome_unknown') {
-            return ['ok' => false, 'status' => 'outcome_unknown', 'error_code' => 'outcome_unknown', 'result' => $result];
+            return ['ok' => false, 'status' => 'outcome_unknown', 'error_code' => 'outcome_unknown',
+                'result' => $result,
+                'diagnostics' => ['failure_stage' => 'operation', 'effect_unconfirmed' => true]];
         }
         $exit = $result['exit_code'] ?? null;
 
@@ -81,6 +87,11 @@ final readonly class SshCommandBatchProvider implements TargetBatchOperationProv
             'status' => $exit === 0 ? 'completed' : 'failed',
             'error_code' => $exit === 0 ? null : 'remote_exit_nonzero',
             'result' => $result,
+            'diagnostics' => $exit === 0 ? [] : [
+                'failure_stage' => 'operation',
+                'source_error_code' => 'remote_exit_nonzero',
+                'remote_exit_code' => $exit,
+            ],
         ];
     }
 }
