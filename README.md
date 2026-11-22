@@ -77,7 +77,7 @@ See [ArvanCloud API details](docs/ARVANCLOUD-API-CONNECTOR.md) for supported con
 
 ## MCP tools
 
-The official **v2.7.3** release has **18 standard Tools**; the **v3 source** registers **30** (the same 18 plus 12 below). Check the actual installed version and authenticated `tools/list` before relying on a tool. Tool discovery does not grant execution permission.
+The historical **v2.7.3** release has **18 standard Tools**; **v3.0.0 source** registers **30** (the same 18 plus 12 below). Check the selected official Release, actual installed version and authenticated `tools/list` before relying on any Tool. Tool discovery does not grant execution permission.
 
 | Available in v2.7.3 (18) | Purpose |
 | --- | --- |
@@ -87,7 +87,7 @@ The official **v2.7.3** release has **18 standard Tools**; the **v3 source** reg
 | `ssh-command-run`, `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | SSH command and bounded SFTP |
 | `ssh-job-start`, `ssh-jobs-list`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Retained SSH Job lifecycle |
 
-| Added in v3 source (12) | Purpose |
+| Added in v3.0.0 (12) | Purpose |
 | --- | --- |
 | `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-logs-query`, `ssh-file-patch`, `ssh-change-verify` | Typed SSH observations, conditional changes and independent verification; see [SSH operator contracts](docs/SSH-OPERATOR-CAPABILITIES.md) |
 | `ssh-batch-preview`, `ssh-batch-run` | Preview and queue durable SSH command Batch |
