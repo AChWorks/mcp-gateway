@@ -690,6 +690,17 @@ final class SshJobMcpTest extends TestCase
         foreach (['ssh-job-start', 'ssh-jobs-list', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel'] as $name) {
             self::assertTrue($byName->has($name));
         }
+        foreach (['ssh-system-inspect', 'ssh-network-diagnose', 'ssh-logs-query', 'ssh-file-patch', 'ssh-change-verify'] as $name) {
+            self::assertTrue($byName->has($name), $name);
+        }
+        self::assertTrue($byName['ssh-system-inspect']['annotations']['readOnlyHint']);
+        self::assertTrue($byName['ssh-network-diagnose']['annotations']['readOnlyHint']);
+        self::assertTrue($byName['ssh-logs-query']['annotations']['readOnlyHint']);
+        self::assertTrue($byName['ssh-change-verify']['annotations']['readOnlyHint']);
+        self::assertFalse($byName['ssh-file-patch']['annotations']['readOnlyHint']);
+        self::assertTrue($byName['ssh-file-patch']['annotations']['destructiveHint']);
+        self::assertSame(16384, $byName['ssh-file-patch']['inputSchema']['properties']['find']['maxLength']);
+        self::assertSame(16384, $byName['ssh-logs-query']['inputSchema']['properties']['length']['maximum']);
         self::assertSame(16384, $byName['ssh-job-start']['inputSchema']['properties']['script']['maxLength']);
         self::assertSame(300, $byName['ssh-job-start']['inputSchema']['properties']['max_runtime_seconds']['maximum']);
         self::assertFalse($byName['ssh-job-start']['annotations']['readOnlyHint']);
@@ -732,6 +743,9 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(524288, $changed['ssh-job-output']['inputSchema']['properties']['length']['maximum']);
         self::assertSame(524288, $changed['ssh-file-read']['inputSchema']['properties']['length']['maximum']);
         self::assertSame(699052, $changed['ssh-file-write']['inputSchema']['properties']['content_base64']['maxLength']);
+        self::assertSame(524288, $changed['ssh-file-patch']['inputSchema']['properties']['find']['maxLength']);
+        self::assertSame(524288, $changed['ssh-logs-query']['inputSchema']['properties']['length']['maximum']);
+        self::assertSame(360, $changed['ssh-change-verify']['inputSchema']['properties']['timeout_seconds']['maximum']);
 
         // Exercise the actual MCP tools/call transport envelope, not just
         // in-process handlers/schema. 512 KiB plain UTF-8 and canonical
