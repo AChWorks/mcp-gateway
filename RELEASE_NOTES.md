@@ -2,129 +2,21 @@
 
 **Source candidate `3.0.0-rc.14` — NOT PUBLISHED.**
 
-- Supersedes the prior PR #334 candidate `3.0.0-rc.13` / HEAD `a8ecd1a29ebdff0980f428874b5dae1caa3d6777`. GitHub already distributed an rc.13 **candidate artifact** for that exact HEAD; the packaging policy correctly rejects reusing the same VERSION on any different HEAD. rc.14 is a unique new candidate. No stable v3 Release, merge, or Production installation is authorized.
-- Owner reactivated Issue #226 and completed a source/fixture-backed **28 Permission × 4 Role × Target/Group × connector × Admin/MCP/Client** audit with all 30 standard MCP Tools and the Admin route inventory in `docs/ARCHITECTURE.md`. One root-cause extensibility correction moves Target/connector applicability to the **exhaustive `GatewayPermission::targetApplicability()`** contract used by `AccessControl`; future Permissions cannot silently default to cross-connector scope. Existing grants/role ceilings and nonreplayable effect rules remain unchanged, and no second policy engine or unrequested new auth surface was introduced. Scope-derived/document/route boundary regressions added; source-level completion still requires independent review; live-v3 installed acceptance stays under #330.
-- The preceding rc.13 exact-HEAD CI had **one** transient failure in `SafeHttpClientTest`: a previous HTTP Fake retained a disk-backed response spool as the next test acquired a file-descriptor baseline. The isolated test now discards that former mock and collects its cycles before measuring the verified caller-owned stream; no production transfer behavior was changed and no leak assertion was weakened.
-- All other rc.13 features in this PR (five Owner Batch limits, actual runtime settings, dynamic MCP tool schema, Tool descriptions, responsive UI) remain included. Fresh v3 database only; this is not a v2 upgrade or Production cutover.
+This is the current **unreleased v3 source**, designed for **fresh installation with a new, empty database**, not an in-place v2 upgrade. Official release artifacts and installed-host behavior must be verified independently. [v3 acceptance, outstanding work and approvals](https://github.com/AChWorks/mcp-gateway/issues/330).
 
-# MCP Gateway v3.0.0-rc.13
+### Changes since official v2.7.3
 
-**Source candidate `3.0.0-rc.13` — NOT PUBLISHED.**
+- **Clean v3 baseline and shared Target Batch:** a new schema, connector-neutral authorization/selection, signed previews, durable per-Target results, cancellation, recovery and nonreplayable unknown outcomes. Supported Batch consumers are SSH command execution and the fixed **read-only** WordPress Bridge information operation. [PR #331](https://github.com/AChWorks/mcp-gateway/pull/331).
+- **SSH operator capabilities:** five fixed inspection, network, log, conditional file-patch and independent change-verification Tools, composed with the existing verified SSH/SFTP/Job runtime. An arbitrary general-purpose configuration executor was **not** added. [PR #332](https://github.com/AChWorks/mcp-gateway/pull/332).
+- **Scheduling and connector separation:** connector-owned trust/credential binding, correctly budgeted WordPress execution leases, indexed bounded admission, fair parent Batch scheduling across worker restarts, stale-rank checks under MariaDB locks, and preserved native storage error diagnostics. [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333).
+- **Owner controls and permissions:** five effective Batch resource settings in the audited Admin form, clearer MCP Tool/FileParams descriptions and a source-backed exhaustive 28-permission/4-role/30-Tool authorization audit without widening grants. [PR #334](https://github.com/AChWorks/mcp-gateway/pull/334), [Issue #226 (source audit complete)](https://github.com/AChWorks/mcp-gateway/issues/226).
+- **Earlier Package A:** Owner-configurable WordPress Ability input and DCR registration capacity, SSH SFTP list pagination, SSH Job maintenance progress, and clearer System/Connectivity Admin navigation. [PR #329](https://github.com/AChWorks/mcp-gateway/pull/329).
 
-- Under Issue #330, adds five authenticated, Owner-only, revision-checked and audited Target Batch resource controls: per-Batch requested concurrency, Gateway active children, per-User active children, children handled per CLI worker invocation and the invocation's between-children time budget. Effective defaults remain the existing `BATCH_*` settings; resetting a field restores that default. Active limits are **not** limits on registered or explicitly selected Targets. Remote effects, permission checks, exact target binding, fairness, cancellation and non-replayable uncertainty retain their original semantics.
-- The same new configured values are consumed by actual Batch Preview, current MCP `tools/list` schemas, claim admission and CLI Worker. Laravel's cached route controller now resolves tool registrars per actual request rather than retaining a previous request's scoped Operational Settings snapshot. Source, standalone settings UI and authenticated dynamic-schema regressions protect the contract.
-- Improves AI-facing FileParams/WordPress Ability Tool selection guidance: both opt-in file tools stay **OFF** by default and must receive genuine host-supplied FileParams; an ordinary ChatGPT conversation attachment does not automatically supply one. WordPress staging cannot publish Media and native import is separately authorized; SSH file publication must be reconciled before an uncertain replay. No new Tool, permission, FileParams host capability or remote file effect was enabled.
-- Adds a ninth, clearly labelled Target Batch group to the existing Owner settings page, retaining the single auditable password-confirmed form, old-browser-tab compatibility, responsive native layout and honest unit labels. Corrects a whitespace-fragile Chromium navigation regression assertion while preserving the real native-fallback, active-link, and error-state checks.
+The v3 source has **30 standard MCP Tools** (18 published-v2 tools, five new SSH operator Tools and seven Batch Tools). The two optional ChatGPT FileParams tools remain **disabled by default**. No arbitrary WordPress content fanout, ArvanCloud Batch, second authorization engine or compatibility promise for an existing v2 database is implied.
 
-# MCP Gateway v3.0.0-rc.12
+**Evidence boundary:** exact merged-main GitHub CI and independently reviewed source passed. An isolated fresh HTTPS installation, Owner login, database backup/restore and same-schema **synthetic** v3 update rehearsal also passed. Real ChatGPT OAuth idle/reconnect, provider-connected WordPress/ArvanCloud, multi-host SSH/Batch, and full release/cutover recovery are **not yet accepted**. See [the recorded verification](https://github.com/AChWorks/mcp-gateway/issues/330#issuecomment-7084385907). Older rc candidate identities, fixes and review outcomes remain available in [the merged PRs](https://github.com/AChWorks/mcp-gateway/pulls?q=is%3Apr+is%3Amerged) and Issue #330 comments, rather than repeated as active release instructions.
 
-**Source candidate `3.0.0-rc.12` — NOT PUBLISHED.**
-
-- Resolves the independent re-review REQUIRED finding F-01-R1 from [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333): two PHP workers could select the same ordered parent before the serialized admission lock, allowing a stale snapshot of an older Batch to consume an independent newer Batch's next fair slot. Existing transactional budgets prevented double-dispatch but did not prove correct cross-parent fairness at claim time.
-- The Worker now verifies each selected parent's **current persisted turn under the original admission lock**. A stale turn triggers a fresh bounded keyset scan, never an operation claim or a remote replay. Optimistic contention rescans use the already-configured global active budget and leave normal free-slot progress intact; the original narrow transaction, authorization, connector binding, rolling child order, per-Target exclusion, uncertain-effect journal, and operational diagnostics are preserved. No additional broker, scheduler, lock, production setting or artificial fleet limit is introduced.
-- Adds a deterministic isolated MariaDB concurrency fixture in which both independent PHP processes capture the same pre-lock parent ranking, the first claim remains remote-in-flight, and the second must claim the newer independent Batch instead of the older Batch's next child. Fixture cleanup releases both simulated remote holds even after failed assertions. Existing same-Target and late-result tests remain required.
-- This is a distinct candidate from rc.11. Previous exact-HEAD CI evidence does **not** transfer to rc.12. All exact-HEAD CI and a new independent read-only focused remediation review are required before any Owner-authorized Merge. Other v3 real-host/OAuth/install/recovery acceptance is separately OPEN; no stable Release, Production deployment or live Target operation is authorized.
-
-# MCP Gateway v3.0.0-rc.11
-
-**Source candidate `3.0.0-rc.11` — NOT PUBLISHED.**
-
-- Responds to the first independent review of [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333): COMPLETE / CHANGES_REQUIRED, one REQUIRED finding F-01. The reviewer established that repeatedly scanning parent Batches oldest-first can starve an unrelated newer Batch behind a continuously runnable older Batch, even with no shared Target and legitimate single-worker capacity.
-- Fixes the shared Worker scheduling root cause using a **durable monotonic parent turn** committed with each claimed child under the existing global admission lock, with an indexed, bounded keyset scan. No new queue service, per-Target agent, clock-dependent ranking, artificial fleet size cap or loosened authorization is introduced. The same Batch maintains its own exact `rolling` child order, native connector binding, per-Target/global/User capacity, revocation checks and no-blind-replay `outcome_unknown` safeguards.
-- Adds a red/green reproduction (older multi-child Batch vs newer independent small Batch, global/User capacity one), three-parent turn/rolling-order and tied timestamp acceptance, and a dedicated **real MariaDB independent PHP worker** fairness test. Preserve existing MariaDB concurrency/late-result tests; do not treat local SQLite skips as real independent-worker evidence.
-- Previous rc.10 6/6 exact-head Actions and 1,165 CI tests passed, but that is historical evidence **for rc.10 only**. Fresh exact-HEAD rc.11 CI plus focused independent read-only re-review of F-01 and affected interactions remain mandatory before any Merge decision. Source-only: no Production change, formal v3 release or deployment authorization.
-
-# MCP Gateway v3.0.0-rc.10
-
-**Source candidate `3.0.0-rc.10` — NOT PUBLISHED.**
-
-- Supersedes the immutable rc.9 owner-test candidate from [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333). Exact-head rc.9 GitHub workflows passed, including full CI, MariaDB concurrency, real disposable OpenSSH Batch, WordPress contract, Chromium, and Update Package. That evidence applies **only to rc.9 HEAD**, not this new candidate.
-- Corrects a v3 Batch crash-recovery lease mismatch: the WordPress read-only `bridge-info` provider previously budgeted a single HTTP request even though its native MCP session performs initialization, Ability classification, execution, cleanup and may perform a bounded OAuth refresh/recovery first. At high permitted request timeouts, a second worker could prematurely reconcile a still-running authorized operation as `outcome_unknown` and discard its eventual successful journal result.
-- The connector-owned deadline now covers the complete sequential WordPress execution and bounded OAuth recovery. The existing separately configured worker margin remains additional; no connector request timeout, permission, token policy, remote replay semantics, or user-facing operational limit is weakened. Added 5s/30s timeout budget tests without real remote effects.
-- No official v3 release, production installation, remote Target mutation or Merge authorization. New exact-head CI and independent review are required.
-
-# MCP Gateway v3.0.0-rc.9
-
-**Source candidate `3.0.0-rc.9` — NOT PUBLISHED.**
-
-- New non-production v3 architecture and acceptance package for [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) and [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333). No change to installed Production or existing released v2 upgrade paths.
-- Shared Target Batch binding now accepts optional, connector-owned exact identity evidence. SSH uses its own trust, route and login secret binding; WordPress binds original authorized client/resource/consent while allowing legitimate refresh token rotation. Other connectors remain unsupported for deferred Batch until an explicit audited provider and native binding are implemented.
-- Provider-owned remote runtime budgets replace the shared Worker's SSH-specific lease branch. Bounded keyset admission and per-Target active lookup avoid open PDO cursor/nested-query iteration; concurrent workers progress available siblings while rolling mode retains the operator's exact order. Original revocation, encrypted journal, no-blind-replay and `outcome_unknown` guarantees remain mandatory.
-- The shared Activity fallback Log now preserves redacted native storage cause and correlation rather than hiding the failure origin or surfacing an exception containing interpolated SQL/bindings. Cross-connector authorization parity and 100/1,000 Target **metadata-only** acceptance fixtures were added; neither is a live-fleet throughput claim.
-- CI now explicitly executes two pinned OpenSSH Batch scenarios against its existing disposable loopback fixture and fails if they are skipped. Existing MariaDB concurrency, authenticated MCP Tool family contracts, WordPress/ArvanCloud/source tests and original permission boundaries remain part of exact-head acceptance.
-- Initial local source check on isolated v3 worktree: 1,095 PHPUnit tests passed, 106 environment-dependent skipped, 16,155 assertions; PHPStan and Pint passed. CI/independent review and real multi-host/provider/install/recovery acceptance are distinct and remain required.
-- No v3 stable Release, Merge authorization, Production deployment, new Human Admin operator UI, or activation of parked #327/#200 Phase C is implied.
-
-# MCP Gateway v3.0.0-rc.8
-
-**Source candidate `3.0.0-rc.8` — NOT PUBLISHED.**
-
-- Supersedes immutable rc.7 because exact-head CI revealed one remaining test-only problem: five real OpenSSH filesystem-mode scenarios were sharing a single Target's legitimate 30-operations-per-minute SFTP admission budget. Existing SFTP/SSH regressions and all other CI checks passed.
-- The disposable OpenSSH mode fixture now registers a distinct Target for each mode (0644, 0755, setuid, setgid, sticky) and cleans each uniquely named test file. Each case exercises the real scoped SFTP Patch application independently, preserving all admission/permission/host-key controls without raising limits, disabling rate limiting, sleeping between attempts, or weakening production behavior.
-- No production behavior changed from rc.7. The F-01 through F-04 independent-review fixes, generic ssh-file-write compatibility and explicit unknown publication boundaries remain as documented in the preceding candidate notes.
-- No official v3 release, Production operations or Merge authorization. Exact-head CI and independent re-review must be freshly satisfied.
-
-# MCP Gateway v3.0.0-rc.7
-
-**Source candidate `3.0.0-rc.7` — NOT PUBLISHED.**
-
-- Supersedes the immutable rc.6 test artifact after exact-head CI revealed two fixture-level regressions, while retaining the F-01 through F-04 remediation described below.
-- Restores the preexisting ssh-file-write unknown-effect contract for generic staging failures. Deterministic prepublication ownership/mode refusal remains specific to the new content-only SSH file patch path, with Stage cleanup evidence and no publication.
-- Real OpenSSH filesystem-mode acceptance now invokes the existing authorized SFTP Patch application service directly for its five mode cases, instead of rapidly calling public MCP dispatch until its legitimate admission limit is reached. Public MCP Tool/Activity acceptance remains independently exercised in dedicated real-fixture tests. No production admission or permission control was weakened.
-- The previous rc.6 CI returned five failures: four existing SSH File fixture cases exposed by unintended generic-write error classification and one new mode test blocked by intended MCP rate limiting. This candidate corrects both root causes; new exact-head CI and independent review are still required.
-- No official v3 release, Production migration, live Target operations, or Merge authorization.
-
-# MCP Gateway v3.0.0-rc.6
-
-**Source candidate `3.0.0-rc.6` — NOT PUBLISHED.**
-
-- Supersedes the immutable, previously distributed 3.0.0-rc.5 test candidate with a distinct version/source identity. This is source-only independent-review remediation of [PR #332](https://github.com/AChWorks/mcp-gateway/pull/332) for [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328).
-- SSH journald query failures and unsupported utilities now produce consistent Tool failure envelopes and correlated failure Activity, while truncated/incomplete observations remain explicitly unknown rather than falsely passed.
-- SSH localized patch publication verifies **all** original mode bits, including setuid, setgid and sticky bits, before publishing a replacement. Unsupported original owner/group or mode preservation is a deterministic prepublication rejection; actual ambiguous publication remains unknown. Private staging cleanup is separately recorded.
-- Preview now produces accurate, applicable line-oriented unified diffs for EOF/newline/multiline changes and safely truncates UTF-8 content at the configured byte limit with an explicit incomplete marker. Targeted unit/regression tests and disposable real OpenSSH owner/mode acceptance cover the corrected paths.
-- No v3 release, Production operation, v2 database migration, integration approval or change to parked Issues #327 / #200 Phase C is implied. Exact-head CI, fresh independent re-review and Owner merge authorization remain mandatory.
-
-# MCP Gateway v3.0.0-rc.5
-
-**Source candidate `3.0.0-rc.5` — NOT PUBLISHED.**
-
-- Supersedes the previously distributed, immutable `3.0.0-rc.4` owner-test candidate without reusing its version/source identity. The five independent SSH Tool contracts and native Batch integration remain as described below.
-- Remediates isolated real OpenSSH acceptance: `ssh-change-verify` now honors the exact optional HTTP `path` (default `/`) for service-specific health endpoint checks. This distinguishes an incorrect `404` at `/` from a true `200` at `/health`. Adds negative path validation and an explicit endpoint-aware real service test.
-- No v3 official release, Production migration, live Target mutation or Owner merge approval is implied. The prior `rc.4` candidate remains historically recorded as a test artifact; the exact-head CI and independent review gate apply to `rc.5`.
-
-# MCP Gateway v3.0.0-rc.4
-
-**Source candidate `3.0.0-rc.4` — NOT PUBLISHED.**
-
-The new rc.4 identifier avoids reuse of the previously distributed rc.3 test artifact for a different source tree. [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328) owns this follow-on; [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) remains canonical for v3 delivery.
-
-- Adds five typed independent SSH operator Tools for system, network, logs, localized file patch and change verification. All reuse the existing scoped SSH Command/SFTP, host-key/route/credential bindings and correlated activity. There is no new SSH transport, Batch engine or generic privileged dispatcher.
-- Diagnostics preserve source, units/timestamps where observed, remote exit/provider errors, unsupported/partial/truncated evidence and explicit probe outcome. UDP DNS requires an actual DNS response, not merely a sent datagram.
-- File patch preview includes bounded diff and baseline/proposed SHA256. Conditional apply demands the approved baseline, existing read and write permission, private SFTP staging, preservation of owner/group/mode and independent readback. This is best-effort concurrency detection, **not** atomic remote compare-and-swap. Unknown effects are never blindly retried or called rollback.
-- A service-specific config procedure composes patch preview, isolated proposed-config validation, authorized patch apply/revalidation, authorized reload and independent file/service/behavior verification. **No** universal ssh-config-apply Tool or service orchestration layer has been added.
-- The PR #331 connector-neutral Target Batch core/SSH Batch/WordPress read-only proof are unchanged. Durable ChatGPT client idle OAuth acceptance, full Human/Web Batch operator experience, multi-Target real effects/performance, v3-to-v3 updater, official v3 release and Production cutover remain open and separately gated.
-
-**Evidence gates:** exact-head CI, real isolated OpenSSH fixture acceptance, independent review and Owner approval for merge remain distinct from local targeted/PHPStan/Pint results. No real Production/live Target operation has been authorized. See [SSH operator contracts](docs/SSH-OPERATOR-CAPABILITIES.md).
-
-# MCP Gateway v3.0.0-rc.3
-
-**Source candidate `3.0.0-rc.3` — NOT PUBLISHED.**
-
-The candidate VERSION advanced to rc.3 because earlier rc.1 and rc.2 operator-test artifacts already exist for different PR HEADs. This follows the immutable candidate naming policy; it is not a stable release or approval.
-
-This is a **development milestone, not a complete or deployable v3 release**. GitHub Issue [#330](https://github.com/AChWorks/mcp-gateway/issues/330) remains the implementation authority. Production continues on the independently restorable v2 release; this source candidate does not authorize a cutover.
-
-- Introduces a fresh v3 application database baseline: one reviewed DDL migration with packaged MariaDB/MySQL and SQLite-test schema snapshots, no historical v2 Migration chain and no v2 data adoption.
-- Restores the current connector, Target, OAuth, SSH Job, admin-policy, and activity schema in a new empty database. Retains the existing live authorization, SSH/WordPress/Arvan code while the v3 shared operations and Batch packages are being built.
-- Explicitly rejects pre-existing application tables, v2 databases and destructive baseline rollback. Back up and independently preserve the v2 code, complete database, configuration, and cryptographic keys before any separately authorized transition. A fresh v3 installation starts with empty Target and consent state; deliberate manual re-enrollment remains an accepted option.
-- Splits MCP Tool registration into focused Target, WordPress, ArvanCloud, SSH, file and Batch registrars without changing the existing connector transports or verified principal path.
-- Introduces source-only v3 durable Target Batch Core: exact authorized Target selection/preview HMAC, idempotent admission, encrypted arguments/results, per-Target journals, concurrent or rolling worker claims, cancel-before-effect, grant/route/consent rechecks, truthful unknown outcomes and no blind replay. Separate trusted session/CSRF Admin JSON and authenticated MCP entry adapters share the same Application logic. The only enabled Batch operations are `ssh.command.run` and fixed read-only `wordpress.bridge.info`, not general WordPress publication.
-- Adds `gateway:batch-work` CLI/Scheduler with configurable active-worker capacity. CLI processes can be run independently; the default single scheduled worker does not by itself prove concurrent remote execution. Validated an isolated loopback OpenSSH fixture, WordPress mocked transport and two independent MariaDB worker processes; no real Production Target or remote-provider fleet test is claimed.
-- Uses scoped, batched Target permission/credential/connector selection for Preview rather than per-Target N+1 database calls. A synthetic 1,000-Target selection on isolated MariaDB required 17 SQL queries and ~711 ms versus 3,000 queries and ~3,070 ms for the row-wise comparison (local metadata only, no live remote hosts; machine-specific, not an SLA).
-- **Independent-review remediation (pending fresh review):** late Worker responses no longer claim success when an expired dispatch lease was reconciled as unknown; conditional Journal finalization happens before Activity/CLI acknowledgment, and late evidence is retained without replay. Deferred Activity carries the original verified User/Client/profile, preserving non-Owner MCP diagnostic isolation. An existing idempotent `request_id` can recover its original Batch after Preview expiry or Target/ACL drift without re-admission. Historical recovery uses current authenticated User/Client consent (including a new authorization or profile generation), while the original consent/generation remain immutable execution witnesses: a new authorization cannot dispatch queued effects under revoked original consent. Bounded Batch/attempt correlation and native WordPress/SSH error causes are retained with selective credential redaction. OAuth signing-key tests now isolate key paths by process; neither installed OAuth key paths nor Production credentials are changed. These are source changes only, not independent approval or release.
-- Refreshes schema preservation tests and runtime packaging to ship the v3 SQL snapshots. The **remaining** accepted v3 SSH diagnose/log/file-patch/verify/config package, OAuth idle continuity, full resource benchmarks, v3-to-v3 updater, operational Web UI and external acceptance are **outstanding**. This is not a complete v3 release.
-
-**Release and deployment status:** no official v3 Release, no Production deployment, and no authorization to update v2 in place. The legacy stable release workflow explicitly refuses a v3 publication; a separate v3-specific, reviewed release path is required. Never use this prerelease candidate as an in-place updater against any v2 installation.
+---
 
 # MCP Gateway v2.7.3
 

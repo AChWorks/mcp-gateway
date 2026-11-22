@@ -41,93 +41,17 @@ The first two audited `TargetBatchOperationProvider`s are `SshCommandBatchProvid
 
 The permission authority remains `GatewayRole` (role ceiling), `GatewayPermission` (capability names), and `AccessControl` (enabled account, global denies, Target scope, Group/direct denies, connector support). Owner recovery is explicit. AI admission additionally requires a verified OAuth User, Client/Profile, unrevoked consent and `ai_access_enabled`; it never inherits an Admin session, and a stale bearer token never substitutes for authority. The separate HTTP/Web Batch adapter uses the same application Batch Coordinator, but authenticated Session+CSRF as its origin. These are **code-owned decisions**, not new declarative permissions from this documentation.
 
-### Issue #226 comprehensive source/fixture authorization audit (v3 fresh-install candidate)
+### Issue #226 source authorization audit (completed; v3 installation acceptance separate)
 
-**Authority and scope.** This is a code+fixture evidence matrix of the **unreleased v3** candidate, not a claim about installed v2.7.3 or verified live ChatGPT connection. The authoritative source of role ceilings is `GatewayRole::permissions()`, the permission vocabulary is `GatewayPermission::cases()`, and the sole application decision engine is `AccessControl`. The exhaustive `GatewayPermission::targetApplicability()` defines Gateway-wide vs any Target vs exact connector without fallback-to-any on an unknown permission. This table snapshots the contract for review, never adds a second permission store or policy interpreter. Role entries show **possible ceiling only**; an allowed role does *not* grant a Target, transport mode, remote OS privilege, OAuth client or operation.
+[Issue #226](https://github.com/AChWorks/mcp-gateway/issues/226) verified **source and fixture** coverage of **28 permissions, four roles, 82 Admin routes and 30 standard MCP Tool registrations**. It is **closed for the source audit only**; real installed-v3 User/Client/Target/Group tests remain in [#330](https://github.com/AChWorks/mcp-gateway/issues/330). Detailed historical audit observations and the complete Role × Permission × Connector matrix belong to the [completed Issue](https://github.com/AChWorks/mcp-gateway/issues/226) and exact tests, **not** a copied second permissions registry in this document.
 
-**Complete role × permission × applicable connector matrix** (O = Owner; A = Administrator; Op = Operator; V = Viewer; ✓ = role ceiling contains the permission; – = not contained). `Gateway` denotes a non-Target-specific permission; `Any Target` denotes a Target-scoped operation valid on every registered connector but still restricted to in-scope Targets.
+**Code authority:** [`GatewayRole::permissions()`](../app/Domain/Access/GatewayRole.php) determines the role ceiling; [`GatewayPermission::cases()` and exhaustive `targetApplicability()`](../app/Domain/Access/GatewayPermission.php) determine permission vocabulary and exact connector scope; [`AccessControl`](../app/Application/Access/AccessControl.php) determines effective role, User status, global Deny, Target scope, direct/group Deny and connector compatibility. Target selection grants reachability, **not** a missing capability. Multiple Group denials accumulate. Owner's recovery privilege does **not** make a WordPress-only permission valid for an SSH or ArvanCloud Target; an unknown future permission cannot implicitly default to all connectors. A checked Deny never grants access.
 
-| Permission | Scope / connector | O | A | Op | V |
-| --- | --- | :---: | :---: | :---: | :---: |
-| `dashboard.view` | Gateway | ✓ | ✓ | ✓ | ✓ |
-| `gateway.connection.view` | Gateway | ✓ | ✓ | ✓ | ✓ |
-| `targets.view` | Any Target | ✓ | ✓ | ✓ | ✓ |
-| `targets.create` | Gateway | ✓ | ✓ | – | – |
-| `targets.update` | Any Target | ✓ | ✓ | – | – |
-| `targets.remove` | Any Target | ✓ | ✓ | – | – |
-| `targets.connect` | Any Target | ✓ | ✓ | – | – |
-| `targets.reconnect` | Any Target | ✓ | ✓ | – | – |
-| `targets.disconnect` | Any Target | ✓ | ✓ | – | – |
-| `targets.test` | Any Target | ✓ | ✓ | ✓ | – |
-| `wordpress.abilities.inspect` | WordPress | ✓ | ✓ | ✓ | ✓ |
-| `wordpress.abilities.execute.readonly` | WordPress | ✓ | ✓ | ✓ | ✓ |
-| `wordpress.abilities.execute.mutating` | WordPress | ✓ | ✓ | ✓ | – |
-| `wordpress.abilities.execute.destructive` | WordPress | ✓ | ✓ | – | – |
-| `wordpress.abilities.execute.unclassified` | WordPress | ✓ | ✓ | – | – |
-| `wordpress.content.publish.create` | WordPress | ✓ | ✓ | ✓ | – |
-| `arvan.api.inspect` | ArvanCloud | ✓ | ✓ | ✓ | ✓ |
-| `arvan.api.read` | ArvanCloud | ✓ | ✓ | ✓ | ✓ |
-| `arvan.api.write` | ArvanCloud | ✓ | ✓ | ✓ | – |
-| `arvan.api.destructive` | ArvanCloud | ✓ | ✓ | – | – |
-| `arvan.api.unclassified` | ArvanCloud | ✓ | ✓ | – | – |
-| `ssh.command.run` | SSH | ✓ | ✓ | ✓ | – |
-| `ssh.file.read` | SSH | ✓ | ✓ | ✓ | – |
-| `ssh.file.write` | SSH | ✓ | ✓ | ✓ | – |
-| `activity.view` | Gateway | ✓ | ✓ | ✓ | ✓ |
-| `users.view` | Gateway | ✓ | – | – | – |
-| `users.manage` | Gateway | ✓ | – | – | – |
-| `security.manage` | Gateway | ✓ | – | – | – |
+**Entry boundaries:** authenticated/CSRF-protected Human Admin routes use current User authority; OAuth-authenticated `/mcp` and file-transfer routes additionally enforce original User/Client/Profile/Consent, `ai_access_enabled`, Target and provider authority. A valid access token, a Tool listed in `tools/list`, a cached Target connection, an authorized Group or a prior verified SSH login cannot override a later revocation, changed Target binding, Pause or the remote account's real capabilities. Deferred Batch persists the verified original authority and rechecks it **before each not-yet-dispatched remote effect**; bearer expiry alone does not invalidate a durable grant, but revocation does. A successful or uncertain remote effect is never silently reexecuted to enforce a later policy change.
 
-**Registration, form, enforcement and test axes.** All 28 permission names above are defined by the enum and registered as Laravel Gates from `AppServiceProvider`. The Owner's **User create/edit** pages render effective role ceilings and **global Deny** choices, not an independent allowlist. Target-specific deny form surfaces only Target-scoped, connector-applicable permissions; Target Group restriction forms operate on Target-scoped permissions. Existing stored unknown denial values are retained inertly rather than silently granting future rights. Positive `wordpress.content.publish.create` delegation has a **separate User × Group** Owner-managed grant form; checking a capability alone never creates this permission. Any checkbox marked *Deny* removes capability, and removing an SSH deny requires Owner explicit review; no ordinary Admin can administer Users/Groups/Security.
+**Specialized effects:** `wordpress-content-publish-create` requires its separate positive User × Group publication grant; SSH command execution can exercise the remote OS account's privileges and is **not** sandboxed by SFTP Deny; `ssh-file-patch` preview and apply have distinct read/write rights; retained Jobs and Batch status/cancel remain bound to their original actors. FileParams registrations (`wordpress-file-input`, `target-file-input`) remain **OFF** unless the actual supported host supplies the required typed file argument and explicit Owner setting.
 
-**Authoritative decision precedence:** disabled/invalid User or unsupported Role → reject; Role ceiling → Global Deny → SSH Selected-only scope (except Owner recovery) → connector type → principal's All/Selected and self-created Target scope → explicit Target deny → overlapping Group denials → Target-specific permission denies → connector/provider authorization, current connection and pause/revocation. Explicit Direct Target grant and group membership supply **scope only**, never an absent role/operation permission; overlapping Group denials accumulate. `allows()`, `allowsTargetPermissions()`, `scopeTargets()`, and Laravel Gates must agree for every Target-scoped operation. The Owner bypasses user/Target Deny for explicit recovery, not connector mismatch. `wordpress.content.publish.create` additionally requires `allowsWordpressPublish()`. SSH Command can execute arbitrary commands available to the configured remote OS account; SFTP Read/Write denies **do not** sandbox a shell.
-
-**Actual human/Admin routes (router-derived).** The v3 route collection currently mounts **82** Admin routes (`/admin` plus 81 under `/admin/*`), of which two login endpoints are public/guest-only. Every other Admin route lives in the shared authenticated, enabled-User, rate-limited and correlated-feedback middleware group, including JSON Human Batch API. Browser session and CSRF are separate from OAuth bearer identity. Action-level enforcement:
-
-| Human route family / operation | Server-side authorization / extra gate | Form / support state |
-| --- | --- | --- |
-| Dashboard, Gateway connection information and Activity | `dashboard.view`, `gateway.connection.view`, `activity.view`; Activity feed also scopes events by Target visibility | Native UI, source/browser tests |
-| Target inventory/context/create/edit/rename/remove/forget | `targets.view/create/update/remove` and exact Target scope; privileged forget additionally `security.manage` | Native UI, route+Target tests |
-| Target connect/reconnect/disconnect/test/refresh/disconnect reconciliation | matching `targets.connect/reconnect/disconnect/test`; high-trust restoration requires Owner/security approval | Native UI, lifecycle tests; live host not verified for this candidate |
-| WordPress fixed Bridge information | scoped `targets.view` plus `wordpress.abilities.execute.readonly`, downstream authorization | Human POST, no arbitrary Ability editor |
-| SSH browser SFTP upload/download | `ssh.file.write` / `ssh.file.read`, current Target, File Transfer feature flag, source/host limits | Explicit opt-in UI, binary Transfer assertions |
-| User and Group management; direct/group rules; access batches | `users.manage` (Owner role ceiling), password confirmation/CSRF/revision, explicit SSH grant safeguards | Native User/Group forms, negative tests |
-| Explicit WordPress publish grant form | `security.manage` (Owner) plus a trusted User × Group semantic grant | Fixed publish-only delegation; no generic publishing grant |
-| SSH Reverse Managed Target, host settings and Connection Relay mutation | explicit Owner or `security.manage` and relevant Target grant, password/approved host identity | Native Owner UI, isolated SSH/host tests |
-| OAuth Client Authorization list/revoke | `security.manage` and fresh Owner admission | Native Owner UI, revoke and consent tests |
-| Target Pause/Resume and Operational Settings | Owner-only; current Target binding; settings use password/revision/audit | Native Owner UI, mobile/no-JS/Browser checks |
-| Human Target Batch preview/create/list/status/cancel | session+CSRF → `DeferredBatchAuthority::captureWeb` → shared `TargetBatchCoordinator`, exact per-Target permission, actor history, authorization recheck | JSON API only; a general Batch builder UI is **not** delivered |
-
-**Complete native MCP tool inventory** (the following 30 registrations are standard in v3 source; optional FileParams tools are **not** included in the count). Tool visibility/description is not authority; every executable tool enforces current authenticated principal/client/Target/provider contract.
-
-| Tools / actions | Permission / additional operation gate |
-| --- | --- |
-| `targets-list`, `target-context` | `targets.view`, per-Target inventory scoped before serialization |
-| `operation-diagnostics-read` | `activity.view` and applicable Target/actor evidence |
-| `wordpress-abilities-read` | `wordpress.abilities.inspect`, downstream catalog |
-| `wordpress-ability-execute` | **actual** `wordpress.abilities.execute.{readonly,mutating,destructive,unclassified}` based on downstream class, current Target and Bridge principal |
-| `wordpress-content-publish-create` | `wordpress.content.publish.create` plus positive `allowsWordpressPublish` and exact non-Owner User × Group grant |
-| `arvan-api-catalog`, `arvan-api-request` | `arvan.api.inspect` / exact method-class permission `read/write/destructive/unclassified` and bound downstream key |
-| `ssh-command-run`, `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-change-verify` | `ssh.command.run`; remote shell not a sandbox; probe results must be actual evidence |
-| `ssh-logs-query` | `ssh.file.read` for file source, `ssh.command.run` for command-based source |
-| `ssh-file-patch` | `ssh.file.read` for preview; apply additionally requires `ssh.file.write`, conditional baseline/readback, no blind replay |
-| `ssh-job-start`, `ssh-jobs-list`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | `ssh.command.run`; start also `ssh.file.read/write`, output also `ssh.file.read`; exact Job actor/client/Target binding |
-| `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | `ssh.file.read` / `ssh.file.write` by effect, SFTP Target |
-| `ssh-batch-preview`, `ssh-batch-run` | selected SSH Targets, `ssh.command.run`, signed preview, current execution grants and durable non-replay semantics |
-| `wordpress-bridge-batch-preview`, `wordpress-bridge-batch-read` | read-only `wordpress.abilities.execute.readonly` and current WordPress Target/Bridge principal; no generic publish |
-| `target-batch-status`, `target-batches-list`, `target-batch-cancel` | original User/channel/Client/Authorization history and current revocation gates; cannot reauthorize previously revoked pending effects |
-
-Two **optional** `wordpress-file-input` and `target-file-input` registrations require actual ChatGPT host-provided `FileParams`, an authenticated `chatgpt` OAuth profile, enabled feature and suitable Target/connector rights. OFF by default; an ordinary chat attachment is *not* a file argument. WordPress staging does not publish; SSH mode performs a real file write and uses separate SFTP permission and uncertain-outcome recovery.
-
-**Other exposed routes and authentication exceptions.** `/mcp` and both `/mcp/file-transfer/ssh/...` routes use `RequireMcpAccessToken`, edge+principal rate limits and correlation middleware. OAuth metadata/JWKS/registration/token endpoints are deliberately public but individually constrained by protocol/rate/authorization; `/_internal/mcp-bootstrap` only responds in `testing` with the explicit fixture flag and bearer token. Managed Reverse SSH installer is a bounded public artifact; enrollment claim requires a time-bound, one-use, Target-linked secret and rate limit. None of these public exceptions confers Target role grants.
-
-**Source-backed verification:** `tests/Feature/Security/AccessControlTest.php` now checks every defined permission and Role × Connector against both scalar/batched authorization **and the real scoped query**. `tests/Feature/Security/AuthorizationRouteBoundaryTest.php` protects every mounted Admin and Target-capable MCP entrypoint's middleware. Existing tests cover Group overlap/Direct Deny, Owner, selected scope, disabled Users, User/Group forms, OAuth profile and revocation, MCP consumer permissions, SSH Job actor binding, fixed WordPress publish grants, FileParams opt-in and deferred Batch reauthorization. GitHub's dedicated MariaDB, Chromium and pinned OpenSSH jobs provide separate transport-level evidence; **only current exact-HEAD successful runs count**.
-
-**Root-cause guardrail:** Target scope and connector applicability previously depended on separately maintained enum Target lists and string-prefix detection in `AccessControl`. v3 now obtains both from one exhaustive `GatewayPermission::targetApplicability()` match, so a newly registered permission must explicitly declare Gateway/Target/connector scope before it can be evaluated. Role ceilings and existing rights are preserved. **Assessment of possible changes:** No demonstrated current bypass or divergence requires a new policy/grant engine or extra permission per Tool. SSH Job observer-only and publish-only broader WordPress delegation are **product granularity choices** that would need a trusted actor/Target and semantic enforcement contract rather than changing role defaults in this PR. They are not silent authorization defects or prerequisites to v3 core foundation. Admin wording accurately separates Deny from Allow and discloses SSH shell capabilities. `v3` fresh install does not inherit a v2 grant/permission migration. No new roles, implicit grants, OAuth TTLs or automatic FileParams capability were added here.
-
-**Unverified / separate delivery gate:** This is a source + local/CI fixture audit only. Real installed **v3** role/connector/client/Target behavior, long-idle ChatGPT OAuth refresh, full clean v3 installation/recovery/backup and an optional full Human Batch UX are pending **#330 acceptance**; never claim Production or live-Target authorization is proven by local tests. The audit Issue may close after exact-candidate Independent APPROVE and its accepted source outcome; do not pretend that closes those separately tracked v3 deployment gates.
-
-Tool registrars are resolved for **each /mcp invocation**, so dynamic Owner-adjustable byte/concurrency schemas cannot retain a previous Laravel route-controller instance's `OperationalSettings`. The first-party `tools/list` order and annotations stay stable across accepted scopes, and clients must refresh an already cached Tool catalog after changing Owner limits. The five Batch active/worker controls are validated and audited in the existing Owner Operational Settings form; it does not allow changing authorization or the dispatch lease/recovery contract.
+**Regression ownership:** [AccessControlTest](../tests/Feature/Security/AccessControlTest.php) exhaustively checks role/permission/connector decisions and real scoped queries; [AuthorizationRouteBoundaryTest](../tests/Feature/Security/AuthorizationRouteBoundaryTest.php) checks mounted Admin and MCP boundaries. Connector-specific tests cover Group overlap, OAuth consent/revocation, Job/file identity and Batch deferred authority. CI's MariaDB, Chromium and pinned OpenSSH fixtures prove their own tested paths, **not** a live v3 deployment.
 
 ## 2. Component ownership
 

@@ -1,205 +1,119 @@
 # MCP Gateway
 
-**MCP Gateway** is a self-hosted application that connects MCP clients (including ChatGPT) to **WordPress sites**, **SSH servers**, and **registered ArvanCloud HTTPS API Targets** you explicitly authorize. Each connection is a *Target*. The web Admin panel controls Targets, users, client authorizations, permissions and activity in one place.
+**MCP Gateway** is a self-hosted access and operations gateway. It connects authorized MCP clients (including ChatGPT) and human operators to registered **WordPress**, **SSH**, and **ArvanCloud API** Targets. One web Admin manages users, Target Groups, client authorization, permissions, operational settings and Activity.
 
-Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run authorized SSH commands, inspect or transfer files with SFTP, and manage longer-running SSH Jobs. For ArvanCloud, it can discover public OpenAPI/Swagger documents and execute compatible REST requests with JSON, text/YAML, URL-encoded forms and small multipart payloads under a bound Machine User key; S3 signing and large binary streaming remain separate capabilities. The Gateway does not grant more access than the selected Target, authenticated principal, or remote service account already has.
+Each Target uses its own downstream identity and permissions. A visible Tool or registered Target is **not** proof of authorization or remote connectivity.
 
-**v3 development notice:** The `v3.0.0-rc.14` source candidate has a *fresh-database-only* bootstrap; the shared durable Batch foundation (with SSH and read-only WordPress consumers) is implemented in source for isolated validation, and five focused SSH inspection/network/log/patch/verification capabilities are implemented in non-production source, while independent acceptance and other v3 obligations remain open under [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330). This branch is **not a published installation or v2 upgrade**. The latest official release and installed Production continue to be v2.7.3 unless separately verified otherwise. Do not run v3 migrations against a v2 DB or use the old browser updater for a major-version cutover. Keep the v2 code, full DB, private `.env`/keys and restoration procedure independently recoverable. See [Deployment](docs/DEPLOYMENT.md#v3-clean-install-development-boundary).
+> **Version boundary:** Install only a verified, officially [published Release](https://github.com/AChWorks/mcp-gateway/releases). The current `main` source is an **unreleased v3 development candidate** ([VERSION](VERSION)); it requires a **new, empty database** and does **not** support upgrading a v2 installation in place. Do not run a v3 ZIP or migration against an installed v2 database. Source, CI, Release and installed-host status are distinct. See [v3 scope and remaining acceptance](https://github.com/AChWorks/mcp-gateway/issues/330) and [deployment safety](docs/DEPLOYMENT.md#v3-clean-install-development-boundary).
 
-**Get started:** [Latest official Release](https://github.com/AChWorks/mcp-gateway/releases) · [Install](#install) · [Connect WordPress](#connect-wordpress) · [Connect SSH](#connect-direct-ssh) · [Connect ArvanCloud](#connect-arvancloud-api) · [Managed Reverse SSH](#connect-an-inbound-blocked-server-with-reverse-ssh) · [Connection Relays](#connect-targets-through-a-relay) · [Connect ChatGPT](#connect-chatgpt-or-another-mcp-client)
+**Find what you need:** [Install](#install-a-published-release) · [Connect Targets](#connect-a-target) · [Connect ChatGPT](#connect-an-mcp-client) · [Tool inventory](#mcp-tools) · [Operations and recovery](#updates-and-recovery) · [Documentation map](docs/PROJECT-MAP.md).
 
-> **Browser updates:** only upgrades from the three latest preceding stable releases are supported directly. Older installations need a verified intermediate upgrade or separately approved migration/restore path. See [Deployment](docs/DEPLOYMENT.md#rolling-browser-update-support-window).
+## What it supports
 
-## How it works
+| Target | Operations | Detailed guide |
+| --- | --- | --- |
+| **WordPress / WP AI Bridge** | Discover and execute WordPress Abilities; separately gated, single-site publish operation | [WordPress and client setup](#wordpress) · [Integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md) |
+| **Direct / Reverse SSH** | Verified SSH commands, bounded SFTP, retained Jobs and optional binary transfer; the v3 **source** adds diagnostics and durable Batch | [SSH](#ssh) · [SSH/Jobs](docs/DIRECT-SSH-CONNECTOR.md) |
+| **ArvanCloud API** | Registered, fixed-origin REST calls with an encrypted Machine User key; optional OpenAPI catalog | [ArvanCloud](#arvancloud-api) · [Connector contract](docs/ARVANCLOUD-API-CONNECTOR.md) |
 
-1. Install the Gateway on your own HTTPS domain.
-2. In **Targets > Add Target**, select **WordPress**, **SSH** or **ArvanCloud API**. For SSH choose Direct SSH, optional Managed Reverse SSH, or advanced Manual Reverse SSH on the same form; inbound-blocked hosts require separately approved Gateway Reverse SSH setup.
-3. Authorize the Target and grant specific Gateway users or Target Groups access.
-   In the source Admin UI, **Users → Global restrictions**, **Target Groups → Capability restrictions**, and **Users → Target access → Edit** share connector-specific Deny controls for WordPress, ArvanCloud API and SSH. A checked ArvanCloud `arvan.api.*` permission restricts that operation class; unchecked is not an independent grant beyond the role, Target scope, group restrictions or Machine User key. These controls ship in **v2.7.3 and later**, not in the immutable v2.7.2 installation ZIP. Previously saved, Role-ineligible Target Denies remain stored and read-only; stale Target access forms cannot overwrite newer restrictions.
-4. Connect your MCP client using Gateway OAuth, then choose a Target and use its permitted tools.
-
-**Supported connectors:** WordPress through WP AI Bridge, SSH through verified OpenSSH/SFTP/Jobs, and registered ArvanCloud Machine User HTTPS REST/OpenAPI Targets. Each Target has its own identity, approved downstream principal, Gateway permissions and connection state. See the workflows below; a saved Target or available tool is not proof that the downstream credential works.
-
-The shared **Targets > Add Target** form preserves the chosen connection method and safe draft fields after errors, while never restoring SSH passwords or private keys. Before registering a WordPress, ArvanCloud HTTPS API or Direct SSH Target, use **Check endpoint from Gateway (no registration)** in **Add Target** to inspect public DNS/destination-policy errors and suggested fixes. This optional read-only check identifies the endpoint actually checked and becomes stale if you change the URL, host, port or connector; run it again for the new destination. It does not register the Target or test WordPress authorization, TLS, the SSH host key or login. The actual connection performs its own security checks.
-
-Targets can be **paused** without deleting their configuration or disconnecting WordPress. Pausing stops new Gateway operations for that Target; it does **not** stop a remote SSH Job already running. An MCP client's OAuth approval and a user's Target permissions are separate requirements. The Owner can also enable or disable a user's **AI connection access** independently of their human Admin login and Target operation grants; a disabled user's existing AI consent/tokens cannot be used. Optional per-Target AI guidance provides context to an AI client; it does not override permissions or approve operations.
+The ArvanCloud REST connector does not implement S3 signing or general large-object streaming. WordPress Abilities are discovered dynamically, not registered as a new public Gateway Tool for every Ability name.
 
 ## Requirements
 
-- Linux web hosting with **PHP 8.5 recommended** (PHP 8.4.1+ remains the Composer minimum) and the `curl`, `mbstring`, `openssl`, `pdo_mysql` and `sodium` extensions; cURL must support `CURLOPT_RESOLVE`.
-- **MariaDB 12.3** for the primary CI-validated profile (MariaDB 10.11 and MySQL remain supported), with a dedicated database and user.
-- A stable **HTTPS** domain and a web server that can serve the application's `public/` directory.
-- For **WordPress**, a compatible WP AI Bridge installation; for **SSH**, an accessible host and authorized credentials; for **ArvanCloud**, a scoped Machine User API key and the correct product/region HTTPS API root. Only configure the providers you intend to use.
+- Linux hosting with an HTTPS domain, a web root pointing **only** to the app's `public/` directory, and PHP **8.4.1+** (8.5 recommended) with `curl`, `mbstring`, `openssl`, `pdo_mysql`, `sodium` and cURL `CURLOPT_RESOLVE`.
+- A dedicated MariaDB/MySQL database. The primary CI profile uses PHP 8.5 and MariaDB 12.3; see the [supported host and compatibility baseline](docs/DEPLOYMENT.md#releases-supported-host-profile-and-migration-safety).
+- Credentials and reachable endpoints **only** for connectors you choose to use.
 
-The official installation ZIP includes PHP dependencies: **Git and Composer are not needed on the hosting server**. Normal operation needs no Docker, Redis, Node.js, queue worker or separate MCP daemon.
+Published deployment ZIPs include their PHP dependencies. The host does not need Git, Composer, Node, Redis, Docker or a dedicated MCP daemon for ordinary operation.
 
-## Install
+## Install a published Release
 
-1. Download **`mcp-gateway-vX.Y.Z.zip`** and its matching `.sha256` from a published [GitHub Release](https://github.com/AChWorks/mcp-gateway/releases). Verify the checksum. Do **not** use GitHub's generic “Source code (zip)” archive.
-2. Prepare a **new, empty** MariaDB/MySQL database. Extract the ZIP into a private application directory and point the site's document root to **`<app-root>/public`**, never the application root.
-3. Make `storage/` and `bootstrap/cache/` writable by the PHP site worker. Enable HTTPS and working URL rewrites; do not give the whole application `777` permissions.
-4. Open **`https://gateway.example.com/install`** and complete the web installer with the site URL, database connection and first Admin user.
-5. Sign in at **`/admin/login`**, then check **`/up`** and the Admin dashboard.
-6. Configure **one cron job every minute** to execute Laravel `schedule:run` using the site's matching PHP CLI **as the site worker, not root**. Confirm that the cron log shows it actually runs.
+1. Download `mcp-gateway-vX.Y.Z.zip` and its matching `.sha256` from the [official GitHub Release](https://github.com/AChWorks/mcp-gateway/releases), then verify the checksum. **Do not use** GitHub's generic source archive.
+2. Prepare a **new, empty** database. Extract the ZIP into a private application directory; configure the HTTPS site's document root to `<app-root>/public`, not `<app-root>`.
+3. Make `storage/` and `bootstrap/cache/` writable by the site worker. Keep the rest of the app, `.env` and private keys outside public access; do not use blanket `777` permissions.
+4. Open `https://gateway.example.com/install` and complete the **first-install-only** web installer.
+5. Sign in at `/admin/login`; check `/up` and the Admin dashboard.
+6. Configure a single cron entry running `php artisan schedule:run` **every minute as the site user**, and verify execution.
 
-**No control panel?** A regular Linux VPS works too: install Nginx, PHP-FPM 8.5 (or another supported PHP 8.4.1+ runtime), MariaDB and HTTPS, then use the same ZIP/web installer. Follow the [step-by-step panel-free Linux installation guide](docs/DEPLOYMENT.md#panel-free-linux-vps-nginx-php-fpm-and-mariadb), including Nginx rules for the standalone installer, temporary updater and OAuth endpoints.
+For aaPanel/OpenLiteSpeed or a plain Nginx/PHP-FPM VPS, use the [deployment instructions](docs/DEPLOYMENT.md), including rewrites, PHP worker ownership, cron, installation verification and recovery. Never assume a successful CI build means the package is installed.
 
-The web installer is for **first installation only**; use the [update instructions](#update-an-existing-installation) for existing deployments. aaPanel/OpenLiteSpeed and CLI/source installation details, cron examples and recovery procedures are in [Deployment](docs/DEPLOYMENT.md).
+## Connect a Target
 
-## Connect WordPress
+### WordPress
 
-1. Install and configure **WP AI Bridge** on WordPress, including the intended WordPress user's permissions.
-2. In Gateway, open **Admin → Connection** (`/admin/connection`) and copy the Gateway's **`/oauth/client.json` metadata URL**.
-3. In WordPress, open **WP AI Bridge → OAuth Clients** and approve that exact *client metadata URL* (not the JWKS URL).
-4. In Gateway, open **Targets → Add Target → WordPress (WP AI Bridge)**. Enter a unique `target_id` (lowercase letters, digits and hyphens; maximum 64 characters), display name and the WordPress site's canonical HTTPS URL.
-5. Verify the Target, select **Authorize WordPress**, complete consent using the intended WordPress account, and assign appropriate Gateway users or Target Groups.
-6. In your MCP client, call `wordpress-abilities-read` to discover permitted Ability names and schemas, then `wordpress-ability-execute` for the selected Target. The distinct `wordpress-content-publish-create` tool creates a **publicly published post** only when the user/Target Group, AI client and WordPress account are independently authorized; use the general Ability path for an approved draft or existing-post operation. Never try a live publication merely to test connectivity.
+1. Configure **WP AI Bridge** on the WordPress site and select the intended WordPress user/permissions.
+2. Copy the **Gateway client metadata URL** from **Admin → Connection** (`/admin/connection`) and approve that exact URL in **WP AI Bridge → OAuth Clients**. Do **not** substitute the JWKS URL.
+3. In **Targets → Add Target → WordPress**, enter a stable Target ID, name and canonical HTTPS WordPress URL; complete **Authorize WordPress** consent and assign the intended Gateway users/groups.
+4. Discover permitted operations with `wordpress-abilities-read`, then use `wordpress-ability-execute`. The separate `wordpress-content-publish-create` Tool creates a **live published post**, only under its additional explicit grant—never use publication as a connectivity test.
 
-A Gateway “Connected” status is not a guarantee that a remotely revoked or expired WordPress credential still works. For uncertain refresh, disconnect or consent, follow the [Target recovery guide](docs/TARGET-DISCONNECT-RECOVERY.md) rather than deleting credential state or repeatedly reconnecting.
+A saved or previously Connected Target does not prove its stored remote credential is currently valid. For expiry, revoke and uncertain refresh follow [connection recovery](docs/TARGET-DISCONNECT-RECOVERY.md).
 
-## Connect ArvanCloud API
+### SSH
 
-1. Create a suitably scoped **Machine User API key** in ArvanCloud. Keep it out of chat, scripts, logs and GitHub; it must be stored by the Gateway Owner, not passed as an MCP argument.
-2. As Gateway **Owner**, open **Targets → Add Target → ArvanCloud API**, select a stable Target ID and the **product/region-specific HTTPS API root**. A public OpenAPI/Swagger catalog URL and a known safe authenticated read-only GET probe path are **both optional**.
-3. Register the Target with its encrypted API key, then assign only the intended Gateway users, Target Groups and AI client grants. Registration alone does not mean authenticated verification.
-4. On Target Details, select **Check HTTPS endpoint (no API key)** to test fixed-root HTTPS reachability with unauthenticated HEAD. An HTTP response (including 3xx redirects, 401/403/404/405) does **not** prove API compatibility or a valid key, and this check **never** marks the Target connected. Redirects are never followed. Starting with v2.7.2, the no-key HEAD action reports an HTTP 3xx as HTTPS peer reachability only, without changing authentication state; the immutable v2.7.1 ZIP instead reports `unsafe_redirect` for 3xx.
-5. If you also configured a *known safe* GET path and stored key, select **Verify API key (read-only GET)** for a separate authenticated check. An empty probe must not hide the endpoint check, and the Gateway must not invent a potentially effectful GET endpoint. The v2.7.1 connection-check improvement is **not included in the published v2.7.0 ZIP**.
-6. After the appropriate grants, use `arvan-api-catalog` for an optional public API description and `arvan-api-request` for compatible Target-bound REST operations. Gateway limits the destination and operation class; the Machine User's real ArvanCloud permissions still apply. Do **not** make a mutating provider call just to check connectivity.
+1. Add an **SSH → Direct SSH** Target with the approved host, port, OS user and credential; independently verify and pin the remote **SSH server host key**.
+2. Grant scoped user/Target access. Test with `ssh-file-stat` or a harmless, approved read-only `ssh-command-run`.
+3. Use `ssh-file-read/write/list` for bounded SFTP, `ssh-job-start/status/output/cancel` for retained remote Jobs and `ssh-jobs-list` to recover the right Job after changing chats. Do not retry an uncertain remote effect with a new request ID.
+4. Enable separate whole-file browser/HTTPS binary exchange only when the **installed** Gateway configuration and hosting resource limits allow it. Remote OS account privileges still apply.
 
-ArvanCloud **S3 signing**, TUS resumable uploads and large binary streaming are **not** part of this REST connector. For API-root examples, request bodies, diagnostics and credential recovery, use the [ArvanCloud connector guide](docs/ARVANCLOUD-API-CONNECTOR.md). The original connector source work is recorded in [Issue #310](https://github.com/AChWorks/mcp-gateway/issues/310) (closed by the Owner); separate installed ArvanCloud provider acceptance (originally scoped to v2.7.2) remains tracked in [Issue #321](https://github.com/AChWorks/mcp-gateway/issues/321), independently of this release.
+For an inbound-blocked host, use the [Managed Reverse SSH guide](docs/REVERSE-SSH-MANAGED.md) or [manual route](docs/REVERSE-SSH-OPERATOR.md); privileged host installation requires explicit host approval. For intermediary routing, use [Connection Relays](docs/CONNECTION-RELAYS.md). Route registration or tunnel readiness is not proof of the final Target login.
 
-## Connect Direct SSH
+### ArvanCloud API
 
-1. Open **Targets → Add Target → SSH → Direct SSH**. Enter a unique `target_id`, SSH host, port and remote account, then configure the supported password or private-key authentication.
-2. **Independently verify the server's SSH host-key fingerprint** before trusting it; never bypass an unexpected host-key change.
-3. Grant only the needed user/Target permissions. Start with `ssh-file-stat` or a harmless read-only `ssh-command-run` call.
-4. Use `ssh-file-list` to inspect directories, `ssh-file-read` for bounded byte ranges, and `ssh-file-write` to create or conditionally overwrite a bounded file. Repeated writes do **not** append chunks.
-5. For larger, complete binary files, use the separately authorized **SSH whole-file browser upload/download or HTTPS exchange** when enabled. The Admin Target page offers a local file picker and download action; uploads require an explicit remote destination and pre-existing private `0700` staging directory. Verify received size and SHA-256.
-6. For scripts that outlive a synchronous command, use `ssh-job-start` with your own UUID `request_id`, then `ssh-job-status` and bounded `ssh-job-output`; cancel a specific Job with `ssh-job-cancel` only when appropriate.
-7. In a later chat, use **ssh-jobs-list** for the same authorized Gateway user, OAuth client/profile and Target to find retained Job IDs; then deliberately call **ssh-job-status** on the chosen ID. Job listing never connects to the server or retries an old command.
+1. Create a scoped ArvanCloud **Machine User key** and register the correct **product/region HTTPS API root** under **Targets → Add Target → ArvanCloud API**.
+2. Assign the intended Gateway users, Target Groups and client grants. An unauthenticated **Check HTTPS endpoint** uses HEAD to check peer reachability only; **Verify API key** is a separate, optional, explicitly configured safe authenticated GET. Neither makes a mutating provider call.
+3. Use `arvan-api-catalog` when an optional public OpenAPI description is configured, and `arvan-api-request` for authorized operations against the fixed API root. Downstream Machine User restrictions remain effective.
 
-**SSH transfer setting:** fresh-install templates enable `SSH_FILE_TRANSFER_ENABLED=true`; an existing installation retains its private `.env` and an **absent key means OFF**. Enable whole-file mode on an existing installation only after checking hosting limits and Target permissions. The Admin **Operational Settings** page provides bounded command and Job controls (including independent configurable SSH byte windows up to **512 KiB** and a selectable synchronous command timeout up to **600 seconds**, not guaranteed by every host/client); the remote account's actual OS privileges still apply. Detached Jobs require a compatible `systemd-run` environment, and an uncertain Job start must **not** be repeated with a new request UUID.
+See [ArvanCloud API details](docs/ARVANCLOUD-API-CONNECTOR.md) for supported content types, connection diagnostics and recovery.
 
-See [Direct SSH and Jobs](docs/DIRECT-SSH-CONNECTOR.md), [v3 SSH operator capabilities](docs/SSH-OPERATOR-CAPABILITIES.md) and [whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) for prerequisites, limits, integrity checks and recovery.
+## Connect an MCP client
 
-## Connect an inbound-blocked server with Reverse SSH
+1. From **Admin → Connection**, copy `https://gateway.example.com/mcp`.
+2. Register the endpoint in a compatible MCP client and complete **Gateway OAuth sign-in and consent** with a user whose **AI access** is enabled.
+3. Call `targets-list` and `target-context` to choose an authorized Target; then use the supported Tools.
 
-Reverse SSH is an **optional** route for the same `ssh_direct` Target when the real SSH host cannot accept inbound connections but can reach Gateway's separately approved OpenSSH control listener. The Gateway still verifies the **real Target's pinned SSH host key and login** before marking it Connected; a tunnel session or registration alone does not prove trust. There is no automatic Direct fallback or public reverse-forward listener.
+**ChatGPT client profiles:** fixed CIMD/`private_key_jwt` and separately opt-in DCR/`client_secret_post` connections are distinct identities. DCR registration is OFF by default; enabling it does not grant a Target or migrate existing consent. See [OAuth registration and reconnect](docs/OAUTH-CLIENT-REGISTRATION.md) and [client-profile diagnostics](docs/CLIENT-PROFILE-RUNBOOK.md).
 
-1. **Check actual installed release and host prerequisites.** Managed Reverse SSH starts **OFF** and requires an independently verified public release containing the two pinned installer scripts, compatible Linux/OpenSSH/systemd, and a separately authorized **one-time, privileged Gateway host bootstrap**. Ordinary PHP/aaPanel installations do not gain root privileges. The host installer provisions a restricted control SSHD service/account, owned host manifest and key reader; verify effective restrictions. Existing SSH services and firewall must remain untouched.
-2. In Owner Admin, open **Connectivity → Reverse SSH** (`/admin/settings/reverse-ssh`) for once-per-Gateway setup, verify the Gateway control endpoint and host key independently, and configure/enable it after host readiness is proved. A page reporting `Ready` describes **local** control-host readiness, not public reachability from the Target.
-3. Open **Targets → Add Target → SSH → Managed Reverse SSH** in the shared Add Target form. Register the original Target SSH host/port/account and independently checked **Target host key**. The Gateway creates a **Pending Setup** enrollment and a short-lived **one-use** Target-side installation command; execute it on that **approved Target** only after verifying the pinned script provenance. Never post the token or private keys in logs/chat.
-4. On Target Details, with a stored SSH login credential, an unpaused Target and permission to test that Target, select **Verify SSH host and login**. Only the actual pinned end-to-end SSH login changes Pending Setup to **Connected**. If the claim is uncertain, expired, or revoked, use Owner-authorized reissue/reconcile rather than blindly repeating commands. Stop the owned remote service separately when revoking an already established tunnel.
+**File attachments:** the optional `wordpress-file-input` and `target-file-input` FileParams tools remain **OFF by default**. A normal chat attachment is **not** automatically passed as a host-supported FileParams argument. This does not disable ordinary SFTP or supported file exchange. [Actual delivery evidence and open questions](https://github.com/AChWorks/mcp-gateway/issues/147).
 
-The [Managed Reverse SSH operator guide](docs/REVERSE-SSH-MANAGED.md) has one-time host preflight, enrollment, restrictions, diagnostics, rollback and release provenance. The [manual Reverse SSH runbook](docs/REVERSE-SSH-OPERATOR.md) remains supported for independently operator-managed routes. **Source changes, CI and publishing a GitHub Release do not deploy or test your installed NL/IR hosts.**
+## MCP tools
 
-## Connect Targets through a Relay
+The official **v2.7.3** release has **18 standard Tools**; the current **unreleased v3 source** has **30** (the same 18 plus 12 below). Check the actual installed version and authenticated `tools/list` before relying on a tool. Tool discovery does not grant execution permission.
 
-One reusable OpenSSH intermediary can route SSH/SFTP and WordPress connections for multiple Targets. Each Target explicitly selects Direct or a named Relay; an unavailable selected Relay never silently falls back to Direct.
-
-**Installed-version prerequisite:** the persistent, two-command Relay setup requires v2.6.1 or later actually installed. The UI generates one complete command for the Relay host and one for the Gateway host, with the native OpenSSH systemd service; read [release history](RELEASE_NOTES.md) for earlier foreground-only behavior. Do not run either command until host keys and exact host permissions are verified. Publishing a ZIP does not update a running Gateway.
-
-In **Connectivity > Connection Relays**, enter the intermediary endpoint and its independently verified SSH **server** public host key, then save as Owner. The UI generates the Gateway login identity without displaying its private key. Copy and run the first command on the intermediary to authorize that public client key, then run the second on the Gateway to install/start the native persistent tunnel. Test the local SOCKS5 endpoint, enable routing, and verify each real Target separately. Local status is not full Target authentication. Direct and Reverse SSH remain independent, and deliberate route edits/deletion do not automatically clean host-owned services.
-
-See the [Relay operator guide](docs/CONNECTION-RELAYS.md), [outstanding real-host acceptance #284](https://github.com/AChWorks/mcp-gateway/issues/284), and [completed Admin UX work #303](https://github.com/AChWorks/mcp-gateway/issues/303). Source changes do not deploy or authorize privileged host changes.
-
-## Connect ChatGPT or another MCP client
-
-1. From **Admin → Connection**, copy the Gateway MCP endpoint, normally **`https://gateway.example.com/mcp`**.
-2. Register it as a compatible MCP connection in your client and complete **Gateway OAuth** sign-in and consent with an authorized Gateway user/client profile.
-3. Use `targets-list` and `target-context` to select an authorized `target_id`, then call the permitted WordPress, SSH or ArvanCloud tools available to that user and client.
-
-Manage client profiles and grants under **Admin → AI clients** (`/admin/oauth-clients`). After an upgrade, refresh/reconnect the MCP connection if your client still displays an outdated Tool catalog.
-
-
-**ChatGPT OAuth options:** the original fixed ChatGPT CIMD/`private_key_jwt` connection remains supported alongside a separate opt-in DCR/`client_secret_post` connection. Public DCR registration starts **OFF**, and existing CIMD discovery stays ON. An administrator may enable DCR onboarding, create a **new** ChatGPT connection and approve its own consent; no grants, credentials or tokens transfer from the old connection. Closing registration afterward does not revoke existing DCR clients. Anonymous DCR registration itself never requires Admin login or grants Target access.
-
-**DCR safeguards:** anonymous registration has server-enforced rate and global registration caps, and only provably never-authorized old registrations may be reclaimed under pressure; existing consents are not discarded for capacity. Review [the exact DCR limits and safety conditions](docs/DEPLOYMENT.md#admin-and-dcr-abuse-boundaries-source-implementation) and [OAuth registration/recovery](docs/OAUTH-CLIENT-REGISTRATION.md). Publication alone does not deploy an update or prove a real ChatGPT reconnect.
-
-**ChatGPT attachments:** native ChatGPT FileParams handoff is **paused and OFF by default**. The optional `target-file-input` and `wordpress-file-input` tools are not advertised while `CHATGPT_FILEPARAMS_ENABLED` is absent or `false`; a reliable host-provided file handoff has not been demonstrated for the current integration. Do not enable it just to retry attachments or weaken source-URL security. **This does not disable** ordinary SFTP, supported SSH browser/HTTPS binary transfer, or WordPress's native file-transfer Abilities. A file attached to a ChatGPT conversation is **not automatically available** to these tools.
-
-## MCP tools at a glance
-
-The **unreleased v3** source registers **30 standard MCP tools**: the 18 tools in released v2.7.3 plus 5 focused SSH diagnostics/change tools and 7 Target Batch tools. Installed v2.7.3 still has the older catalog. Which tools a client sees depends on its installed version and authenticated capabilities; the two additional ChatGPT FileParams tools remain OFF by default:
-
-| Tools | Use |
+| Available in v2.7.3 (18) | Purpose |
 | --- | --- |
-| `targets-list`, `target-context` | Find permitted Targets and inspect non-secret Target context. |
-| `wordpress-abilities-read`, `wordpress-ability-execute` | Discover and invoke WordPress Abilities on a selected WordPress Target. |
-| `wordpress-content-publish-create` | Create **one live published** WordPress `post` with a fixed, bounded Bridge operation and a separate scoped publish grant. This is **not** a draft creator or unrestricted editing tool. |
-| `arvan-api-catalog`, `arvan-api-request` | Read an optional OpenAPI catalog and invoke permitted operations against the selected, fixed-origin ArvanCloud REST API Target. The catalog does not confer authority. |
-| `ssh-command-run` | Execute a bounded, non-interactive command as the authorized remote SSH account. |
-| `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | Inspect SFTP paths, read bounded ranges, or create/conditionally overwrite bounded files. |
-| `ssh-job-start`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Start, reconcile, inspect and cancel retained SSH Jobs without blindly replaying them. |
-| `ssh-jobs-list` | List only retained Jobs for the currently authorized user, OAuth client/profile and selected Target; no remote execution. |
-| `operation-diagnostics-read` | Look up permitted, credential-redacted failure evidence by `diagnostic_reference` or Target. |
-| `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-logs-query` | Collect scoped system, network or log observations from an authorized SSH Target; do not assume every probe is supported. |
-| `ssh-file-patch`, `ssh-change-verify` | Preview/apply a bounded conditional text edit and independently verify an intended remote change; service validation/reload are separately authorized operations. |
-| `ssh-batch-preview`, `ssh-batch-run` | Preview selected SSH Targets, then queue one durable command Batch; queue acceptance is not completion. |
-| `wordpress-bridge-batch-preview`, `wordpress-bridge-batch-read` | Preview/queue the fixed read-only WordPress Bridge information call, not arbitrary Ability execution or publishing. |
-| `target-batch-status`, `target-batches-list`, `target-batch-cancel` | Follow retained per-Target results, inspect queued work and request cancellation; in-flight remote effects may remain unknown. |
+| `targets-list`, `target-context`, `operation-diagnostics-read` | Authorized discovery and diagnostics |
+| `wordpress-abilities-read`, `wordpress-ability-execute`, `wordpress-content-publish-create` | WordPress discovery, scoped execution and separately authorized publication |
+| `arvan-api-catalog`, `arvan-api-request` | ArvanCloud catalog and fixed-origin REST |
+| `ssh-command-run`, `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | SSH command and bounded SFTP |
+| `ssh-job-start`, `ssh-jobs-list`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Retained SSH Job lifecycle |
 
-The optional FileParams tools are deliberately inactive until a **real ChatGPT host-provided file argument** is demonstrated and approved. When enabled, `wordpress-file-input` and `target-file-input` overlap for WordPress private staging: the former is WordPress-specific, the latter selects either `wordpress_media_stage` or `ssh_sftp_upload`. Neither converts an ordinary conversation attachment into an automatically transferable file. WordPress staging requires a separate authorized native Media import; SSH upload requires an explicit path/staging directory and can modify remote files.
+| Added in unreleased v3 source (12) | Purpose |
+| --- | --- |
+| `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-logs-query`, `ssh-file-patch`, `ssh-change-verify` | Typed SSH observations, conditional changes and independent verification; see [SSH operator contracts](docs/SSH-OPERATOR-CAPABILITIES.md) |
+| `ssh-batch-preview`, `ssh-batch-run` | Preview and queue durable SSH command Batch |
+| `wordpress-bridge-batch-preview`, `wordpress-bridge-batch-read` | Fixed **read-only** WordPress Bridge information Batch, **not** generic publishing |
+| `target-batch-status`, `target-batches-list`, `target-batch-cancel` | Child results, recovery and cancellation; an in-flight remote effect may remain uncertain |
 
-WordPress plugin Abilities are discovered dynamically; a newly available Ability does **not** require a new Gateway MCP tool for its name.
+No general `execute-anything` Tool, automatic WordPress bulk publishing or arbitrary ArvanCloud Batch provider is claimed.
+
+## Updates and recovery
+
+**For published v2 releases only:** use the exact Release's `mcp-gateway-update-vX.Y.Z.zip` and checksum with its **Owner-authenticated** `/update/` browser flow. Direct updates are supported only from the three most recent preceding published stable releases for the selected destination. **Never** use a fresh-install ZIP as an update, or point v3 at a v2 database. [Full update and rollback runbook](docs/DEPLOYMENT.md#11-upgrade-and-rollback-outline).
+
+Before a change, preserve a **verified-restorable database backup, app files, private `.env`, `APP_KEY`, OAuth/Bridge signing keys and relevant remote Job state**. A code rollback does not undo database schema changes or remote actions.
 
 ## Administration and safety
 
-From the Admin dashboard (`/admin`) use the permission-filtered sidebar to open **Targets**, **Target Groups**, **Users**, **AI clients**, **Operational Settings**, **Activity** and **Connection**. On smaller screens, **Navigation** exposes the same destinations. Eligible internal links update the page without a full document reload; direct URLs and no-JavaScript navigation still work. Forms, authorization handoffs and file transfers keep their native browser paths.
+**Authorization:** roles set the maximum permission ceiling. Direct/Group/Global **Deny** and selected Target scope can further restrict it. OAuth Client approval, AI access, Target access and remote user credentials are separate requirements; Target Pause blocks **new** Gateway effects, not a remote operation already dispatched. Owner-sensitive forms require current-password confirmation. [User/Group workflows](docs/ADMIN-ACCESS-WORKFLOWS.md).
 
-The Dashboard highlights Targets that **need review**, separates paused Targets from connection lifecycle state, and links to connector-filtered inventories and recent Activity. Counts and rows follow your effective Target scope. They summarize stored observations; opening the Dashboard does not test remote connections or guarantee current credential validity. **Operational Settings** uses section links within one form; review all changes before the final password-confirmed save.
+**Diagnostics:** use a response `diagnostic_reference` in **Admin → Activity** or `operation-diagnostics-read`. Preserve actual stage/cause and distinguish blocked, failed and uncertain remote effects; never blindly repeat an uncertain write.
 
-Successful sign-in opens an Administration section available to the account. If no section is available, the account receives a clear access message and can sign out; a forbidden Admin page keeps its 403 status with permitted navigation and recovery. This does not grant denied permissions. SSH acknowledgements appear only for the access operation that can require them. Permission restriction checkboxes explicitly say **Deny**: checked means blocked. Ordinary role defaults remain available without opening the advanced restriction list.
+## Troubleshooting and references
 
-In JavaScript-enabled Admin security forms, **your current password is not itself approval**: enter or select the password, then deliberately check the separate Owner authorization checkbox before Save/Revoke. Browser autofill alone cannot approve an action; server-side Owner-password verification remains required, and native no-JavaScript forms still work. After a rejected User save, secret password fields are never restored from the form draft.
+For install/login problems verify HTTPS, `public/` document root, PHP extensions, rewrite rules, DB and writable runtime paths. For WordPress `invalid_client`, verify exact Gateway metadata approval and real provider consent; do not rotate keys to guess. For ChatGPT OAuth 401/503, inspect correlation/Activity, upstream metadata/JWKS availability and approved client profile before revoking or reconnecting. For SSH, verify the **pinned host key**, OS user, SFTP path and current budget. [Deployment diagnostics](docs/DEPLOYMENT.md#production-diagnostics-runbook) · [Configuration](docs/CONFIGURATION.md).
 
-On **Users → Account and restrictions**, saved global **Deny** rules are visible, and an unsuccessful save is marked **not saved**; checked boxes after an error are only a draft. The editor separates Role-eligible Denies from capabilities unavailable to that Role. New Operator/Administrator accounts start with the three SSH command/SFTP Denies checked; unchecking one does not by itself grant access. With JavaScript disabled, Role preview links show the eligible choices without saving and discard other unsaved draft fields. See [User restrictions and access workflows](docs/ADMIN-ACCESS-WORKFLOWS.md#read-saved-user-account-restrictions) for the complete rules and recovery steps.
-
-Target groups open on their member Targets, with Users and Restrictions beside them. User pages provide direct Groups and Targets entry points. Search and select explicit items across 50-row pages, review up to 100 changes, then apply the batch with one current-password confirmation. See [group and Target assignment workflows](docs/ADMIN-ACCESS-WORKFLOWS.md) for selection, review, SSH and access-rule details.
-
-Only grant permissions appropriate to the actual WordPress user or SSH account; Gateway permissions do not turn root SSH into a sandbox.
-
-When a tool fails, use its `diagnostic_reference` with **Admin → Activity** (`/admin/activity`) or `operation-diagnostics-read`. Diagnostics preserve the *observed* error and its stage with sensitive values removed; if a downstream system omitted the original cause, Gateway cannot reconstruct it. Never blindly retry a mutation with an unknown result.
-
-Keep `.env`, application encryption and OAuth signing keys, database backups, credentials, tokens and private `storage/` outside the web root and out of public issue reports.
-
-## Update an existing installation
-
-1. Read the selected [Release notes](RELEASE_NOTES.md), preserve the existing `.env`, `APP_KEY`, OAuth/Bridge signing keys, application code and private `storage/`, and take a **consistent database backup whose restore can be verified**.
-2. Download the matching **`mcp-gateway-update-vX.Y.Z.zip`** and its `.sha256` from the published Release; **do not** use the fresh-install ZIP or GitHub's generic source archive.
-3. Extract the update ZIP into the **existing application root** (alongside `artisan`, `.env`, `public/` and `storage/`). Open **`https://gateway.example.com/update/`**, sign in with an enabled Gateway **Owner** account and follow the version/checksum/preflight checks. Dashboard access alone does not authorize updates.
-4. Complete the browser updater **once**, then verify the installed version, `/up`, Admin sign-in, OAuth connection and authorized WordPress/SSH Targets. Successful cleanup removes the temporary updater endpoint.
-
-Legacy releases v1.1.2–v1.1.10 predate roles and retain their existing administrator authentication. When upgrading from v2.4.1, sign-in may open Dashboard; return to `/update/` once to view preflight before starting.
-
-For **v2.3.10** upgrades, verify installed `users.email`/connection collation agreement, shared lock-capable cache, a consistent PHP worker version and the durable DCR consent-history migration before enabling public registration; follow the [version-specific migration and recovery gate](docs/DEPLOYMENT.md#releases-supported-host-profile-and-migration-safety).
-
-Source commits and GitHub Releases do **not** update an installed Gateway automatically.
-
-If an update stops during migration or recovery, **do not blindly retry** or treat a code-only backup as a database restore. Use the [Deployment and recovery guide](docs/DEPLOYMENT.md). Older v1 Site-era upgrades require the separate [Target transition runbook](docs/TARGET-TRANSITION-RUNBOOK.md); source/Composer installations use their own CLI procedure.
-
-## Troubleshooting
-
-- **Installer or HTTP error:** confirm PHP/extensions, HTTPS, URL rewrites, the `public/` web root, database access and writable runtime directories.
-- **WordPress `invalid_client`:** verify the exact Gateway client metadata URL is approved in WP AI Bridge and inspect the Target's real consent/recovery status. Do not regenerate signing keys as a shortcut.
-- **ChatGPT OAuth reconnect returns 503:** inspect the upstream ChatGPT CIMD/JWKS status and the Gateway correlation. If OpenAI documents are unavailable, use the separately reviewed DCR fallback described in [OAuth client registration](docs/OAUTH-CLIENT-REGISTRATION.md). Reconnecting the former CIMD client does not migrate it.
-- **ChatGPT OAuth `invalid_client` (401):** use the correlation ID and authorized **Admin → Activity** to inspect `oauth-token-refresh`, `oauth-token-authorization-code` or `oauth-token-revoke`. The redacted `oauth_failure_stage` and `oauth_failure_reason` distinguish unavailable client profiles, JWT/JWKS key mismatch, signature, audience, lifetime, replay, and DCR credential errors. A generic 401 alone does **not** prove token expiry; check the [production diagnostics runbook](docs/DEPLOYMENT.md#production-diagnostics-runbook) before revoking or reconnecting.
-- **OAuth 500 or repeated 429/503 failures (v2.6.3+):** when the installed version is v2.6.3 or later, use the response correlation ID to inspect authorized Activity/AI diagnostics. An OAuth client-profile lookup HTTP 500 can identify `profile_lookup_failed` and recommend checking Gateway database, PHP and dependency health; missing or unrelated evidence retains generic guidance. Repeated rate-limit 429s still have individual Activity events but do not amplify routine warning logs. A 503 may indicate upstream metadata/JWKS availability rather than an expired grant. These improvements require an actual installed update; publishing source alone does not change your running Gateway.
-- **MCP tools missing:** verify OAuth client/user/Target grants, whether a Target is paused, and whether the client needs a Tool catalog refresh.
-- **SSH command or file failure:** check the approved host-key fingerprint, remote OS account permissions, SFTP path and separately enabled whole-file transfer mode.
-- **Unclear failure or interrupted update:** use authorized diagnostic evidence or [recovery instructions](docs/DEPLOYMENT.md); never repeat an operation that may already have changed a remote system.
-
-## Further guides
-
-- [Official Releases](https://github.com/AChWorks/mcp-gateway/releases) and [Release notes](RELEASE_NOTES.md) — versions and compatibility.
-- [Deployment and recovery](docs/DEPLOYMENT.md) — hosting, cron, updates and backup procedures.
-- [Configuration](docs/CONFIGURATION.md) and [`.env.example`](.env.example) — supported settings and safe changes.
-- [Whole-file exchange](docs/WHOLE-FILE-EXCHANGE.md) and [Direct SSH](docs/DIRECT-SSH-CONNECTOR.md) — detailed remote file/Job operation.
-- [Target connection recovery](docs/TARGET-DISCONNECT-RECOVERY.md) — safe WordPress OAuth recovery.
-- [Connector integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md) and [downstream MCP transport](docs/OUTBOUND-MCP-TRANSPORT.md) — shared foundation and boundaries for future connectors.
-- [Project documentation map](docs/PROJECT-MAP.md) and [Master Specification](docs/MASTER-SPEC.md) — authoritative engineering references and durable product boundaries.
-- [Development](docs/DEVELOPMENT.md) — source/CLI installation and contributor tests.
+The [documentation map](docs/PROJECT-MAP.md) identifies **one maintained reference per task**. For implementers: [Architecture](docs/ARCHITECTURE.md), [Master Specification](docs/MASTER-SPEC.md), [Development](docs/DEVELOPMENT.md). For what shipped: [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases) and [Release notes](RELEASE_NOTES.md). Unresolved work and acceptance are in [GitHub Issues](https://github.com/AChWorks/mcp-gateway/issues).
 
 ## License
 
-Released under the [MIT License](LICENSE).
+[MIT](LICENSE).
