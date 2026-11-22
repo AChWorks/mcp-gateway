@@ -22,11 +22,13 @@ The MCP readOnlyHint describes intent and is **not** an OS read-only sandbox. An
 
 The accepted **ssh-config-apply** is a composed operator workflow, **not** a universal new MCP Tool. For an individually authorized service and its real validation/reload/health contracts:
 
-1. Determine the exact file, OS account, service and baseline. Inspect as needed and preview the patch without changes. Review its human-readable diff and baseline SHA-256.
-2. When specifically authorized to change the remote configuration, apply the exact SHA-preconditioned patch. If conflict, permission, ownership, staging or unknown outcome occurs, stop and inspect/reconcile instead of retrying.
-3. Run that service's actual syntax/configuration validator via the existing authorized SSH command path. An invalid or unknown result **must stop before reload/restart**. The file may already be changed: record partial state, do not claim automatic rollback.
-4. Only after proven validation, run a separately authorized service-specific reload/restart through the existing SSH command or Job operation. Record command acceptance distinctly from health.
-5. Independently check the resulting file digest and service state **and a real behavior/health probe**. Track file_modified, syntax_validated, reload_accepted and service_healthy as separate facts. If any check fails, stop and use the service's explicit recovery plan; never blindly fan out or invent success.
+1. Determine the exact file, OS account, service and baseline. Inspect as needed and preview the patch without changes. Review its diff and baseline SHA-256.
+2. Stage the *proposed* service configuration as an explicitly authorized isolated scratch file using existing SFTP file write, when the service-specific validator supports it. Run that actual validator on the proposed bytes **before apply**. Failure/unknown must stop; leave the active configuration and service unchanged.
+3. After successful prevalidation and separate authorization for the remote change, apply the exact SHA-preconditioned patch. If drift, permissions, ownership, publication or verification are unknown, stop and inspect/reconcile rather than blindly retrying. Revalidate the published configuration, if the validator supports it, before issuing reload.
+4. Only after proven validation, run an authorized service-specific reload/restart through the existing SSH command or Job operation. Command acceptance is **not** proof of health.
+5. Independently check resulting file digest and service state **plus actual behavior/health**. Track file_modified, syntax_validated, reload_accepted and service_healthy separately. If a check fails, stop and use explicit service recovery; never blindly fan out.
+
+Some real validators accept only the active path and cannot prevalidate staged bytes. In that exceptional case, the operator must explicitly accept and record the partial file-change risk, validate immediately after patch and **never reload after failed validation**. This is an operator-composed boundary, not a universal atomic config transaction or rollback.
 
 A CI-only loopback OpenSSH/isolated test HTTP service exercises success and validator-failure paths; its Python service-specific --check is a disposable fixture, not a general-purpose config evaluator. Real host changes are not authorized by this documentation.
 

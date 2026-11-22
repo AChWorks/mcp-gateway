@@ -96,6 +96,7 @@ final class SshOperatorFixtureTest extends TestCase
         $files = app(SshFileRuntime::class);
         $base = '/home/'.$this->env('SSH_FIXTURE_USER').'/gw-op-svc-'.bin2hex(random_bytes(8));
         $config = $base.'.conf';
+        $candidate = $base.'.candidate.conf';
         $server = $base.'.py';
         $portFile = $base.'.port';
         $pidFile = $base.'.pid';
@@ -141,6 +142,16 @@ final class SshOperatorFixtureTest extends TestCase
             $badOccurrence = $tools->patch($owner, $id, $config, 'missing', 'x');
             self::assertSame('patch_match_not_unique', $badOccurrence['error']['code']);
 
+            // Validate the PROPOSED configuration on an isolated scratch
+            // file before publishing any change to the live fixture config.
+            $candidateBody = "answer=healthy-v2\n";
+            self::assertSame('completed', $files->write(
+                $owner, $target, $candidate, base64_encode($candidateBody),
+            )['status']);
+            $validateCandidate = 'python3 '.escapeshellarg($server).' '
+                .escapeshellarg($candidate).' '.escapeshellarg($portFile).' --check';
+            self::assertSame(0, $this->command($owner, $target, $validateCandidate)['exit_code']);
+
             $applied = $tools->patch($owner, $id, $config, 'healthy-v1', 'healthy-v2',
                 apply: true, expectedSha256: $sha);
             self::assertTrue($applied['ok'], json_encode($applied));
@@ -173,34 +184,31 @@ final class SshOperatorFixtureTest extends TestCase
             self::assertSame('healthy-v2', trim($response['stdout']));
             self::assertSame(0, $response['exit_code']);
 
-            // Failure path: an intentionally invalid edited config MUST NOT
-            // receive reload. The running service stays on the last validated
-            // generation; apply of file bytes is not service health proof.
+            // Reject an invalid scratch candidate BEFORE publishing patch:
+            // validator failure must not affect active config or trigger HUP.
             $badPreview = $tools->patch($owner, $id, $config, 'answer=healthy-v2', 'answer=');
             self::assertTrue($badPreview['ok'], json_encode($badPreview));
-            $badApply = $tools->patch($owner, $id, $config, 'answer=healthy-v2', 'answer=',
-                apply: true, expectedSha256: $badPreview['result']['baseline_sha256']);
-            self::assertTrue($badApply['ok'], json_encode($badApply));
-            $validatorFailed = $this->command($owner, $target, $validate);
+            self::assertSame('completed', $files->write(
+                $owner, $target, $candidate, base64_encode("answer=\n"), true,
+            )['status']);
+            $validatorFailed = $this->command($owner, $target, $validateCandidate);
             self::assertNotSame(0, $validatorFailed['exit_code']);
-            // NO reload after rejected validation.
+            // No apply, no reload. Config SHA stays at the approved generation
+            // while the existing healthy service continues serving v2.
+            $stillApproved = $tools->verify($owner, $id, 'file_sha256',
+                hash('sha256', "answer=healthy-v2\n"), path: $config);
+            self::assertTrue($stillApproved['ok'], json_encode($stillApproved));
             $stillHealthy = $this->command($owner, $target,
                 'curl --fail --silent --max-time 5 -- '.escapeshellarg('http://127.0.0.1:'.$port.'/health'));
             self::assertSame('healthy-v2', trim($stillHealthy['stdout']));
-
-            $repairPreview = $tools->patch($owner, $id, $config, "answer=\n", "answer=healthy-v2\n");
-            self::assertTrue($repairPreview['ok'], json_encode($repairPreview));
-            $repair = $tools->patch($owner, $id, $config, "answer=\n", "answer=healthy-v2\n",
-                apply: true, expectedSha256: $repairPreview['result']['baseline_sha256']);
-            self::assertTrue($repair['ok'], json_encode($repair));
-            self::assertSame(0, $this->command($owner, $target, $validate)['exit_code']);
+            self::assertSame(0, $stillHealthy['exit_code']);
         } finally {
             // Only fixture-specific uniquely named files + exact PID created
             // by THIS test. Never stop unrelated system services/processes.
             $cleanup = 'if test -s '.escapeshellarg($pidFile)
                 .'; then kill -TERM -- "$(cat '.escapeshellarg($pidFile).')" 2>/dev/null || true; fi; '
                 .'rm -f -- '.implode(' ', array_map('escapeshellarg', [
-                    $config, $server, $portFile, $pidFile, $log,
+                    $config, $candidate, $server, $portFile, $pidFile, $log,
                 ]));
             $this->command($owner, $target, $cleanup);
         }

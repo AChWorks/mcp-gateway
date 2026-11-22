@@ -1,11 +1,13 @@
 # MCP Gateway v3.0.0-rc.4
 
-**Non-production source candidate only — not published or installed.** The new rc.4 identifier avoids reuse of the previously distributed rc.3 test artifact for a different source tree. [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328) owns this follow-on; [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) remains canonical for v3 delivery.
+**Source candidate `3.0.0-rc.4` — NOT PUBLISHED.**
+
+The new rc.4 identifier avoids reuse of the previously distributed rc.3 test artifact for a different source tree. [Issue #328](https://github.com/AChWorks/mcp-gateway/issues/328) owns this follow-on; [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) remains canonical for v3 delivery.
 
 - Adds five typed independent SSH operator Tools for system, network, logs, localized file patch and change verification. All reuse the existing scoped SSH Command/SFTP, host-key/route/credential bindings and correlated activity. There is no new SSH transport, Batch engine or generic privileged dispatcher.
 - Diagnostics preserve source, units/timestamps where observed, remote exit/provider errors, unsupported/partial/truncated evidence and explicit probe outcome. UDP DNS requires an actual DNS response, not merely a sent datagram.
 - File patch preview includes bounded diff and baseline/proposed SHA256. Conditional apply demands the approved baseline, existing read and write permission, private SFTP staging, preservation of owner/group/mode and independent readback. This is best-effort concurrency detection, **not** atomic remote compare-and-swap. Unknown effects are never blindly retried or called rollback.
-- A service-specific config procedure composes patch preview/apply, explicit validator, authorized reload and independent file/service/behavior verification. **No** universal ssh-config-apply Tool or service orchestration layer has been added.
+- A service-specific config procedure composes patch preview, isolated proposed-config validation, authorized patch apply/revalidation, authorized reload and independent file/service/behavior verification. **No** universal ssh-config-apply Tool or service orchestration layer has been added.
 - The PR #331 connector-neutral Target Batch core/SSH Batch/WordPress read-only proof are unchanged. Durable ChatGPT client idle OAuth acceptance, full Human/Web Batch operator experience, multi-Target real effects/performance, v3-to-v3 updater, official v3 release and Production cutover remain open and separately gated.
 
 **Evidence gates:** exact-head CI, real isolated OpenSSH fixture acceptance, independent review and Owner approval for merge remain distinct from local targeted/PHPStan/Pint results. No real Production/live Target operation has been authorized. See [SSH operator contracts](docs/SSH-OPERATOR-CAPABILITIES.md).
