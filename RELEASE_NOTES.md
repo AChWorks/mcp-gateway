@@ -1,3 +1,13 @@
+# MCP Gateway v3.0.0-rc.7
+
+**Source candidate `3.0.0-rc.7` — NOT PUBLISHED.**
+
+- Supersedes the immutable rc.6 test artifact after exact-head CI revealed two fixture-level regressions, while retaining the F-01 through F-04 remediation described below.
+- Restores the preexisting ssh-file-write unknown-effect contract for generic staging failures. Deterministic prepublication ownership/mode refusal remains specific to the new content-only SSH file patch path, with Stage cleanup evidence and no publication.
+- Real OpenSSH filesystem-mode acceptance now invokes the existing authorized SFTP Patch application service directly for its five mode cases, instead of rapidly calling public MCP dispatch until its legitimate admission limit is reached. Public MCP Tool/Activity acceptance remains independently exercised in dedicated real-fixture tests. No production admission or permission control was weakened.
+- The previous rc.6 CI returned five failures: four existing SSH File fixture cases exposed by unintended generic-write error classification and one new mode test blocked by intended MCP rate limiting. This candidate corrects both root causes; new exact-head CI and independent review are still required.
+- No official v3 release, Production migration, live Target operations, or Merge authorization.
+
 # MCP Gateway v3.0.0-rc.6
 
 **Source candidate `3.0.0-rc.6` — NOT PUBLISHED.**

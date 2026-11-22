@@ -4,7 +4,9 @@ namespace Tests\Feature\Targets;
 
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshOperatorMcpToolHandlers;
+use App\Application\Targets\SshFilePatchService;
 use App\Application\Targets\SshFileRuntime;
+use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -278,7 +280,10 @@ PY;
         $owner = $this->owner();
         $target = $this->target();
         $files = app(SshFileRuntime::class);
-        $tools = app(SshOperatorMcpToolHandlers::class);
+        // Probe the actual bounded SFTP patch service directly for all
+        // filesystem modes; MCP-level rate admission is covered separately
+        // by the public Tool fixture and must not be disabled for a test.
+        $patches = app(SshFilePatchService::class);
         $home = '/home/'.$this->env('SSH_FIXTURE_USER');
         $path = $home.'/gw-op-modes-'.bin2hex(random_bytes(8));
         $successfulSpecialModes = 0;
@@ -297,24 +302,25 @@ PY;
 
                 $before = $files->readForPatch($owner, $target, $path);
                 self::assertSame(sprintf('%04o', $mode), $before['mode']);
-                $preview = $tools->patch($owner, $target->target_id, $path, 'before', 'after');
-                self::assertTrue($preview['ok'], json_encode($preview));
-                $apply = $tools->patch($owner, $target->target_id, $path, 'before', 'after',
-                    apply: true, expectedSha256: $preview['result']['baseline_sha256']);
-                $after = $files->readForPatch($owner, $target, $path);
-
-                if (! $apply['ok']) {
-                    self::assertSame('mode_preservation_unsupported', $apply['error']['code'], json_encode($apply));
-                    self::assertFalse($apply['error']['publication_attempted']);
-                    self::assertSame($original, $after['content']);
-                } else {
-                    self::assertSame('completed', $apply['result']['status']);
-                    self::assertTrue($apply['result']['owner_and_mode_verified']);
-                    self::assertSame('version=after', $after['content']);
+                $preview = $patches->patch($owner, $target, $path, 'before', 'after');
+                self::assertSame('preview', $preview['status']);
+                $published = false;
+                try {
+                    $apply = $patches->patch($owner, $target, $path, 'before', 'after',
+                        apply: true, expectedSha256: $preview['baseline_sha256']);
+                    self::assertSame('completed', $apply['status']);
+                    self::assertTrue($apply['owner_and_mode_verified']);
+                    $published = true;
                     if (($mode & 07000) !== 0) {
                         $successfulSpecialModes++;
                     }
+                } catch (SshTargetConnectionException $exception) {
+                    self::assertSame('mode_preservation_unsupported', $exception->reason);
+                    self::assertFalse($exception->diagnostics['publication_attempted']);
                 }
+
+                $after = $files->readForPatch($owner, $target, $path);
+                self::assertSame($published ? 'version=after' : $original, $after['content']);
                 self::assertSame($before['mode'], $after['mode']);
                 self::assertSame($before['uid'], $after['uid']);
                 self::assertSame($before['gid'], $after['gid']);

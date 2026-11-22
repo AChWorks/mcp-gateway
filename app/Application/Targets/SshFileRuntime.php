@@ -522,11 +522,12 @@ final readonly class SshFileRuntime
                     }
                     $cleanupConfirmed = $removed && $directoryRemoved;
 
-                    // A known prepublication refusal cannot have replaced
-                    // the destination: expose its exact reason, and report
-                    // private staging cleanup separately. An ambiguous reply
-                    // once publication started remains outcome_unknown.
-                    if (! $publicationAttempted && $exception instanceof SshTargetConnectionException) {
+                    // A known prepublication refusal during a content-only
+                    // patch cannot replace the destination. Preserve the
+                    // original generic ssh-file-write unknown-outcome contract
+                    // for all other staging errors; only patches have the
+                    // stricter source/identity preflight guarantee.
+                    if ($preserveOriginalOwner && ! $publicationAttempted && $exception instanceof SshTargetConnectionException) {
                         throw new SshTargetConnectionException($exception->reason, [
                             ...$diagnostics,
                             'failure_stage' => 'prepublication',
@@ -540,7 +541,7 @@ final readonly class SshFileRuntime
                         ...$this->context($ip, $config, $path),
                         'status' => 'outcome_unknown',
                         'complete' => false,
-                        'possible_remote_effect' => $publicationAttempted,
+                        'possible_remote_effect' => $preserveOriginalOwner ? $publicationAttempted : true,
                         'publication_attempted' => $publicationAttempted,
                         'temporary_cleanup_confirmed' => $cleanupConfirmed,
                         // Private in-process evidence. Public MCP output MUST
