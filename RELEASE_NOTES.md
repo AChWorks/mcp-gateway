@@ -1,9 +1,10 @@
-# MCP Gateway v3.0.0-rc.15
+# MCP Gateway v3.0.0-rc.16
 
-**Source candidate `3.0.0-rc.15` — NOT PUBLISHED.**
+**Source candidate `3.0.0-rc.16` — NOT PUBLISHED.**
 
 ### Fresh-v3 release-readiness candidate
 
+- **Release Notes shell safety:** a source-level double-check found that Markdown backticks in the newly introduced **unexecuted** first-v3 publication heredoc could trigger shell command substitutions at Release time. The append now uses a **quoted literal heredoc** with the first-stable ZIP name and a new isolated test runs the exact extracted Bash fragment, verifies literal Markdown and rejects unsafe interpolation. The earlier `rc.15` candidate belongs only to its original HEAD; this correction uses a new immutable `rc.16` identity. No public Release or Tag was created.
 - Implements a **separately gated, Owner-triggered first-stable-v3 fresh-install Release path** in the existing GitHub release workflow: one verified deployment ZIP and matching SHA-256 companion, not a v2-to-v3 update artifact. Retains exact reviewed-main SHA/version approval, immutable stable tag and Release policy checks, create-once publication, and byte-for-byte post-publication verification. Historical v2 stable publication still includes its own install/update ZIPs, three released-source upgrade tests and recovery guards; there is no silent migration of v2 installations or credential state.
 - Adds a production-ZIP, **empty disposable MariaDB** install gate for v3 candidate and final stable publication. Proves real installer preflight, two fresh migrations, initial Owner, signing-key and private `.env` security, `gateway:check`, and refusal of a second install; rejects non-loopback/non-`*_test` databases. A second *test-only* update package proves the v2-to-v3 browser-updater refusal **before mutation** and is never offered as a v3 Release asset.
 - Source and isolated tests: release-policy negative cases enforce two v3 artifacts versus four v2 artifacts and reject added legacy update ZIPs, missing/altered assets, wrong major, and branch/Owner publication drift. An isolated PHP 8.5.12 / MariaDB 11.8.6 **synthetic stable-shaped** v3 ZIP installed successfully on a fresh database with 46 tables, two migrations and one Owner; this is **not a published v3.0.0 package**, real GitHub publication, MariaDB 12.3 CI acceptance, connected provider test or Production installation.

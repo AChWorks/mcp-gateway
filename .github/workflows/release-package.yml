@@ -293,12 +293,12 @@ jobs:
         run: |
           set -euo pipefail
           bash bin/render-github-release-notes.sh "$VERSION" RELEASE_NOTES.md dist/release-notes.md
-          cat >> dist/release-notes.md <<EOF_NOTES
+          cat >> dist/release-notes.md <<'EOF_NOTES'
 
           ## Fresh installation only — first stable v3
 
           This Release contains exactly one verified deployment-ready archive
-          `$PACKAGE.zip` and its `.sha256` companion. It is a **new installation**
+          `mcp-gateway-v3.0.0.zip` and its `.sha256` companion. It is a **new installation**
           using a **dedicated, empty database**, not an upgrade of any v2 install.
           There is **NO v2-to-v3 or same-version browser-update ZIP** in this Release.
 
@@ -307,7 +307,7 @@ jobs:
              database, private `.env`, encryption and OAuth signing keys before
              any separately authorized deployment/cutover. Publishing does not
              change an installed host or revoke any existing credentials.
-          3. Extract `$PACKAGE.zip` into a private application directory on
+          3. Extract `mcp-gateway-v3.0.0.zip` into a private application directory on
              a compatible HTTPS PHP 8.5/MariaDB host. Point the site document
              root **only** to `public/`; do not expose the application root.
           4. Use `/install` with a **new empty database** to create keys,

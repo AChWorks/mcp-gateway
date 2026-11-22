@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sys
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -772,6 +773,35 @@ class CleanV3PublicationTests(unittest.TestCase):
             # size/name metadata for the remote asset was present.
             with self.assertRaisesRegex(guard.PublicationStateError, "checksum companion"):
                 guard.verify_remote_assets(self.release(), "v" + self.version, self.version, guard.REPOSITORY)
+
+    def test_v3_public_release_notes_heredoc_renders_markdown_literally(self) -> None:
+        # Exercise the literal Bash heredoc EXTRACTED from the release workflow.
+        # An unquoted heredoc would interpret Markdown backticks as commands.
+        workflow = (Path(__file__).resolve().parent.parent /
+                    ".github/workflows/release-package.yml").read_text()
+        marker = "cat >> dist/release-notes.md <<'EOF_NOTES'"
+        self.assertIn(marker, workflow)
+        fragment = workflow.split(marker, 1)[1].split("EOF_NOTES", 1)[0]
+        body = "\n".join(
+            line[10:] if line.startswith(" " * 10) else line
+            for line in fragment.splitlines()
+        )
+        script = "set -euo pipefail\nmkdir -p dist\n" + marker + "\n" + body + "\nEOF_NOTES\n"
+        with tempfile.TemporaryDirectory(prefix="v3-notes-literal-") as root:
+            result = subprocess.run(
+                ["bash", "-c", script], cwd=root, capture_output=True,
+                text=True, check=True, timeout=5,
+            )
+            self.assertEqual(result.stderr, "")
+            rendered = (Path(root) / "dist/release-notes.md").read_text()
+            for snippet in (
+                "`mcp-gateway-v3.0.0.zip`", "`.sha256`", "`.env`",
+                "`public/`", "`/install`", "`/up`", "`/update/`",
+                "**dedicated, empty database**",
+            ):
+                self.assertIn(snippet, rendered)
+            self.assertNotIn("$PACKAGE", rendered)
+            self.assertIn("No production server is deployed or modified", rendered)
 
     def test_v3_release_workflow_has_separate_gates_and_no_v2_update_distribution(self) -> None:
         workflow = (Path(__file__).resolve().parent.parent /
