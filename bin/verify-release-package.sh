@@ -38,6 +38,7 @@ fi
 cat > "$tmp/expected-top-level.txt" <<'EOF'
 .env.example
 LICENSE
+NOTICE
 VERSION
 app
 artisan
@@ -60,6 +61,7 @@ diff -u "$tmp/expected-top-level.txt" "$tmp/actual-top-level.txt"
 required_entries=(
   "$package/.env.example"
   "$package/LICENSE"
+  "$package/NOTICE"
   "$package/VERSION"
   "$package/artisan"
   "$package/bin/"
@@ -212,6 +214,26 @@ if (count($psr4) !== 1) {
 $paths = (array) array_values($psr4)[0];
 if (count($paths) !== 1 || trim(str_replace("\\\\", "/", (string) $paths[0]), "/") !== "app") {
     fwrite(STDERR, "Runtime composer.json application PSR-4 mapping is invalid.\n");
+    exit(1);
+}
+' "$root/composer.json"
+
+# Project licensing is part of the deployable release identity; retain the
+# exact unmodified AGPL terms and project copyright/source notice. Independent
+# third-party notices are checked/preserved under vendor/ below.
+python3 "$repo_root/bin/test_project_license.py"
+cmp -s "$repo_root/LICENSE" "$root/LICENSE" || {
+  echo 'Deployment project LICENSE differs from the verified source license.' >&2
+  exit 1
+}
+cmp -s "$repo_root/NOTICE" "$root/NOTICE" || {
+  echo 'Deployment project copyright/source NOTICE differs from source.' >&2
+  exit 1
+}
+php -r '
+$metadata = json_decode(file_get_contents($argv[1]), true, 512, JSON_THROW_ON_ERROR);
+if (($metadata["license"] ?? null) !== "AGPL-3.0-only") {
+    fwrite(STDERR, "Deployment Composer SPDX project license does not match AGPL-3.0-only.\n");
     exit(1);
 }
 ' "$root/composer.json"

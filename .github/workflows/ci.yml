@@ -59,6 +59,9 @@ jobs:
       - name: Validate Composer metadata
         run: composer validate --strict
 
+      - name: Validate project AGPL license and retained copyright/source notice
+        run: python3 bin/test_project_license.py
+
       - name: Validate configuration reference matches .env.example
         run: python3 bin/test-configuration-docs.py
 

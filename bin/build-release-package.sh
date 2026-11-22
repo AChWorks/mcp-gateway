@@ -48,6 +48,7 @@ cp -a \
   "$repo_root/artisan" \
   "$repo_root/.env.example" \
   "$repo_root/LICENSE" \
+  "$repo_root/NOTICE" \
   "$repo_root/VERSION" \
   "$repo_root/composer.json" \
   "$repo_root/composer.lock" \

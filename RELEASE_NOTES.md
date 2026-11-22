@@ -1,9 +1,10 @@
-# MCP Gateway v3.0.0-rc.16
+# MCP Gateway v3.0.0-rc.17
 
-**Source candidate `3.0.0-rc.16` — NOT PUBLISHED.**
+**Source candidate `3.0.0-rc.17` — NOT PUBLISHED.**
 
 ### Fresh-v3 release-readiness candidate
 
+- **Project relicensing (Owner requested):** The original project code is offered under **GNU Affero General Public License v3.0 only** (`AGPL-3.0-only`), with the authoritative complete FSF text in `LICENSE`, SPDX identity in `composer.json`, and preserved prior ACh copyright in `NOTICE`. The deployable first-stable v3 ZIP must include and byte-verify both files; third-party vendor licenses remain intact. Prior official MIT releases do not lose their historical grants. A modified network service must offer its actual corresponding modified source under AGPL section 13. This new source candidate is **not** a published or installed relicensing of v2.7.3.
 - **Release Notes shell safety:** a source-level double-check found that Markdown backticks in the newly introduced **unexecuted** first-v3 publication heredoc could trigger shell command substitutions at Release time. The append now uses a **quoted literal heredoc** with the first-stable ZIP name and a new isolated test runs the exact extracted Bash fragment, verifies literal Markdown and rejects unsafe interpolation. The earlier `rc.15` candidate belongs only to its original HEAD; this correction uses a new immutable `rc.16` identity. No public Release or Tag was created.
 - Implements a **separately gated, Owner-triggered first-stable-v3 fresh-install Release path** in the existing GitHub release workflow: one verified deployment ZIP and matching SHA-256 companion, not a v2-to-v3 update artifact. Retains exact reviewed-main SHA/version approval, immutable stable tag and Release policy checks, create-once publication, and byte-for-byte post-publication verification. Historical v2 stable publication still includes its own install/update ZIPs, three released-source upgrade tests and recovery guards; there is no silent migration of v2 installations or credential state.
 - Adds a production-ZIP, **empty disposable MariaDB** install gate for v3 candidate and final stable publication. Proves real installer preflight, two fresh migrations, initial Owner, signing-key and private `.env` security, `gateway:check`, and refusal of a second install; rejects non-loopback/non-`*_test` databases. A second *test-only* update package proves the v2-to-v3 browser-updater refusal **before mutation** and is never offered as a v3 Release asset.

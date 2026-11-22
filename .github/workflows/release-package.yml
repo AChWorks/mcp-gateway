@@ -61,6 +61,7 @@ jobs:
       - name: Validate release source
         run: |
           composer validate --strict
+          python3 bin/test_project_license.py
           composer audit --locked
           composer check
           python3 bin/test-released-baseline-parity.py
