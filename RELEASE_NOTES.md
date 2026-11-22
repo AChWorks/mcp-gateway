@@ -1,3 +1,12 @@
+# MCP Gateway v3.0.0-rc.11
+
+**Source candidate `3.0.0-rc.11` — NOT PUBLISHED.**
+
+- Responds to the first independent review of [PR #333](https://github.com/AChWorks/mcp-gateway/pull/333): COMPLETE / CHANGES_REQUIRED, one REQUIRED finding F-01. The reviewer established that repeatedly scanning parent Batches oldest-first can starve an unrelated newer Batch behind a continuously runnable older Batch, even with no shared Target and legitimate single-worker capacity.
+- Fixes the shared Worker scheduling root cause using a **durable monotonic parent turn** committed with each claimed child under the existing global admission lock, with an indexed, bounded keyset scan. No new queue service, per-Target agent, clock-dependent ranking, artificial fleet size cap or loosened authorization is introduced. The same Batch maintains its own exact `rolling` child order, native connector binding, per-Target/global/User capacity, revocation checks and no-blind-replay `outcome_unknown` safeguards.
+- Adds a red/green reproduction (older multi-child Batch vs newer independent small Batch, global/User capacity one), three-parent turn/rolling-order and tied timestamp acceptance, and a dedicated **real MariaDB independent PHP worker** fairness test. Preserve existing MariaDB concurrency/late-result tests; do not treat local SQLite skips as real independent-worker evidence.
+- Previous rc.10 6/6 exact-head Actions and 1,165 CI tests passed, but that is historical evidence **for rc.10 only**. Fresh exact-HEAD rc.11 CI plus focused independent read-only re-review of F-01 and affected interactions remain mandatory before any Merge decision. Source-only: no Production change, formal v3 release or deployment authorization.
+
 # MCP Gateway v3.0.0-rc.10
 
 **Source candidate `3.0.0-rc.10` — NOT PUBLISHED.**

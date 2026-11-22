@@ -204,6 +204,76 @@ final class TargetBatchMariaDbConcurrencyTest extends TestCase
         }
     }
 
+    public function test_fair_turn_survives_independent_php_workers_with_single_active_budget(): void
+    {
+        config()->set('batch.global_active', 1);
+        config()->set('batch.user_active', 1);
+        $user = User::query()->create([
+            'name' => 'MariaDB Fairness', 'email' => 'batch-fairness@example.test',
+            'password' => 'StrongPassword!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $ids = [];
+        for ($i = 0; $i < 6; $i++) {
+            $pin = 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat(chr(80 + $i), 32));
+            $target = app(SshTargetRegistration::class)->register(
+                'fair-race-'.$i, 'Fair Race '.$i, 'fair-race-'.$i.'.example.test',
+                22, 'batchuser', $pin, 'password', 'fixture-secret', null,
+            );
+            $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+            $ids[] = $target->target_id;
+        }
+        $request = Request::create('/admin/target-batches', 'POST');
+        $request->setUserResolver(static fn (): User => $user);
+        $origin = app(DeferredBatchAuthority::class)->captureWeb($user, $request);
+        $core = app(TargetBatchCoordinator::class);
+        $args = ['command' => 'fixture-read', 'timeout_seconds' => 10];
+        $olderIds = array_slice($ids, 0, 5);
+        $oldPreview = $core->preview($user, $origin, 'ssh.command.run', $olderIds, $args);
+        $older = $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run',
+            $olderIds, $args, $oldPreview['preview_token'])['batch_id'];
+        $newPreview = $core->preview($user, $origin, 'ssh.command.run', [$ids[5]], $args);
+        $newer = $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run',
+            [$ids[5]], $args, $newPreview['preview_token'])['batch_id'];
+
+        // Two independent PHP processes and DB connections must share one
+        // durable fairness turn. No real host is contacted by this provider.
+        $pid = pcntl_fork();
+        if ($pid === -1) {
+            throw new RuntimeException('Could not start independent Batch fairness worker.');
+        }
+        if ($pid === 0) {
+            try {
+                DB::disconnect();
+                DB::reconnect();
+                $worked = app(TargetBatchWorker::class)->workOnce();
+                DB::disconnect();
+                exit(($worked['target_id'] ?? null) === $ids[0] ? 0 : 3);
+            } catch (\Throwable) {
+                exit(4);
+            }
+        }
+        $status = 0;
+        self::assertSame($pid, pcntl_waitpid($pid, $status));
+        self::assertTrue(pcntl_wifexited($status));
+        self::assertSame(0, pcntl_wexitstatus($status),
+            'First independent MariaDB worker did not claim the expected old child.');
+        DB::disconnect();
+        DB::reconnect();
+        self::assertSame($ids[5], app(TargetBatchWorker::class)->workOnce()['target_id']);
+        self::assertSame(2, (int) DB::table('operational_settings')->where('id', 1)
+            ->value('batch_dispatch_turn'));
+        self::assertSame(1, (int) DB::table('target_batches')->where('id', $older)
+            ->value('last_dispatch_turn'));
+        self::assertSame(2, (int) DB::table('target_batches')->where('id', $newer)
+            ->value('last_dispatch_turn'));
+        self::assertSame(4, DB::table('target_batch_items')->where('batch_id', $older)
+            ->where('status', 'queued')->count());
+        self::assertSame('completed', DB::table('target_batches')->where('id', $newer)->value('status'));
+        self::assertSame(2, DB::table('batch_fixture_effects')->count());
+        self::assertSame(2, DB::table('batch_fixture_effects')->distinct()->count('pid'));
+    }
+
     public function test_two_independent_workers_never_claim_or_dispatch_same_target_twice(): void
     {
         $user = User::query()->create([

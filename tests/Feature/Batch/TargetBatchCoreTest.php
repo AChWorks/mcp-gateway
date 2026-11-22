@@ -528,6 +528,65 @@ final class TargetBatchCoreTest extends TestCase
         self::assertEqualsWithDelta(225, $seconds, 0.1);
     }
 
+    public function test_newer_independent_batch_gets_a_turn_before_old_backlog_drains(): void
+    {
+        config()->set('batch.global_active', 1);
+        config()->set('batch.user_active', 1);
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $targets = $this->targets(7);
+        $older = $this->create($user, $origin, array_slice($targets, 0, 6));
+        $newer = $this->create($user, $origin, [$targets[6]]);
+
+        $worker = app(TargetBatchWorker::class);
+        self::assertSame($targets[0]->target_id, $worker->workOnce()['target_id']);
+        // An older long Batch remains runnable. Re-entering the worker from
+        // scratch must rotate across eligible Batch parents, not favor the
+        // oldest Batch until all six of its Targets have been exhausted.
+        self::assertSame($targets[6]->target_id, $worker->workOnce()['target_id']);
+        self::assertSame('completed', app(TargetBatchCoordinator::class)
+            ->status($user, $origin, $newer)['status']);
+        self::assertSame(1, DB::table('target_batch_items')->where('batch_id', $older)
+            ->where('status', 'completed')->count());
+        self::assertSame('running', DB::table('target_batches')->where('id', $older)->value('status'));
+        self::assertCount(2, $this->fake->effects);
+    }
+
+    public function test_multiple_runnable_parents_rotate_even_on_tied_timestamps(): void
+    {
+        config()->set('batch.global_active', 1);
+        config()->set('batch.user_active', 1);
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $targets = $this->targets(7);
+        $older = $this->create($user, $origin, array_slice($targets, 0, 4));
+        $middle = $this->create($user, $origin, array_slice($targets, 4, 2));
+        $newer = $this->create($user, $origin, [$targets[6]]);
+
+        // Timestamp ties must not change fair ordering; state is durable
+        // across fresh worker instances without any process-local cursor.
+        DB::table('target_batches')->whereIn('id', [$older, $middle, $newer])
+            ->update(['created_at' => now()->startOfSecond()]);
+        $actual = [];
+        for ($i = 0; $i < 7; $i++) {
+            $actual[] = app(TargetBatchWorker::class)->workOnce()['target_id'];
+        }
+        self::assertSame([
+            $targets[0]->target_id, $targets[4]->target_id, $targets[6]->target_id,
+            $targets[1]->target_id, $targets[5]->target_id,
+            $targets[2]->target_id, $targets[3]->target_id,
+        ], $actual);
+        self::assertSame(7, (int) DB::table('operational_settings')->where('id', 1)
+            ->value('batch_dispatch_turn'));
+        self::assertSame(7, (int) DB::table('target_batches')->where('id', $older)
+            ->value('last_dispatch_turn'));
+        self::assertSame(5, (int) DB::table('target_batches')->where('id', $middle)
+            ->value('last_dispatch_turn'));
+        self::assertSame(3, (int) DB::table('target_batches')->where('id', $newer)
+            ->value('last_dispatch_turn'));
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+    }
+
     public function test_busy_first_target_does_not_starve_other_targets_in_the_same_batch(): void
     {
         $user = $this->owner();

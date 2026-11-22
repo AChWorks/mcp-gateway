@@ -31,30 +31,42 @@ final readonly class TargetBatchWorker
     /** @return array<string,mixed>|null A single durable child attempt, or idle */
     public function workOnce(): ?array
     {
-        // Bounded keyset pages: a PDO cursor left open while acquiring row
-        // locks/issuing nested queries can invalidate iteration on some DB
-        // drivers. Never materialize the fleet-sized active Batch backlog.
+        // Persisted round-robin fairness across runnable parent Batches.
+        // A successful claim moves its Batch to the end using a strictly
+        // increasing turn allocated under the existing global admission lock.
+        // Bounded keyset pages avoid holding an unbuffered DB cursor while
+        // issuing nested transactional/row-lock queries.
+        $afterTurn = null;
         $afterCreatedAt = null;
         $afterId = null;
         do {
             $query = DB::table('target_batches')
                 ->whereIn('status', ['queued', 'running', 'cancel_requested']);
             if ($afterId !== null) {
-                $query->where(static function ($page) use ($afterCreatedAt, $afterId): void {
-                    $page->where('created_at', '>', $afterCreatedAt)
-                        ->orWhere(static function ($sameTime) use ($afterCreatedAt, $afterId): void {
-                            $sameTime->where('created_at', $afterCreatedAt)->where('id', '>', $afterId);
+                $query->where(static function ($page) use ($afterTurn, $afterCreatedAt, $afterId): void {
+                    $page->where('last_dispatch_turn', '>', $afterTurn)
+                        ->orWhere(static function ($sameTurn) use ($afterTurn, $afterCreatedAt): void {
+                            $sameTurn->where('last_dispatch_turn', $afterTurn)
+                                ->where('created_at', '>', $afterCreatedAt);
+                        })
+                        ->orWhere(static function ($sameTime) use ($afterTurn, $afterCreatedAt, $afterId): void {
+                            $sameTime->where('last_dispatch_turn', $afterTurn)
+                                ->where('created_at', $afterCreatedAt)->where('id', '>', $afterId);
                         });
                 });
             }
-            $candidates = $query->orderBy('created_at')->orderBy('id')->limit(64)->get();
+            $candidates = $query->orderBy('last_dispatch_turn')->orderBy('created_at')
+                ->orderBy('id')->limit(64)->get();
             foreach ($candidates as $candidate) {
+                $afterTurn = (int) $candidate->last_dispatch_turn;
                 $afterCreatedAt = $candidate->created_at;
                 $afterId = $candidate->id;
                 $claimed = DB::transaction(function () use ($candidate): ?array {
                     // A shared singleton lock serializes global/user capacity
                     // admission across concurrent Laravel worker processes.
-                    if (DB::table('operational_settings')->where('id', 1)->lockForUpdate()->first() === null) {
+                    $admission = DB::table('operational_settings')->where('id', 1)
+                        ->lockForUpdate()->first(['batch_dispatch_turn']);
+                    if ($admission === null) {
                         throw new \RuntimeException(
                             'Batch worker admission lock is unavailable: operational_settings row 1 is missing. No new remote effect was dispatched.',
                         );
@@ -148,8 +160,16 @@ final readonly class TargetBatchWorker
                             ),
                             'updated_at' => $now,
                         ]);
+                    // The same transaction commits both the durable child
+                    // claim and the next parent turn. Crashes cannot consume
+                    // a turn without a claim or allow concurrent workers to
+                    // allocate the same turn. No wall-clock precision needed.
+                    $nextTurn = (int) $admission->batch_dispatch_turn + 1;
+                    DB::table('operational_settings')->where('id', 1)->update([
+                        'batch_dispatch_turn' => $nextTurn,
+                    ]);
                     DB::table('target_batches')->where('id', $batch->id)->update([
-                        'status' => 'running', 'updated_at' => $now,
+                        'status' => 'running', 'last_dispatch_turn' => $nextTurn, 'updated_at' => $now,
                     ]);
 
                     return ['batch' => $batch, 'item' => $item, 'attempt' => $attemptId];
