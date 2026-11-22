@@ -116,4 +116,4 @@ The [documentation map](docs/PROJECT-MAP.md) identifies **one maintained referen
 
 ## License
 
-[MIT](LICENSE).
+See the [LICENSE](LICENSE) that belongs to the selected source revision or release. Earlier published releases retain the terms provided with their original artifacts.
