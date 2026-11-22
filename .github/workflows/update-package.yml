@@ -8,7 +8,8 @@ on:
       - VERSION
       - RELEASE_NOTES.md
       - 'database/migrations/**'
-      # Fresh-install policy and legacy fallback must pass release-baseline upgrades.
+      - 'database/schema/**'
+      # V3 clean installs must NOT update historic v2 release databases.
       - '.env.example'
       - 'app/Support/SimpleWebInstaller.php'
       - 'config/ssh.php'
@@ -28,6 +29,7 @@ on:
       - 'public/.htaccess'
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
+      - 'bin/test-v3-major-upgrade-guard.sh'
       - 'bin/test-updater-recovery.php'
       - 'bin/test-updater-postflight.php'
       - 'bin/test-update-backup-integrity.sh'
@@ -44,7 +46,8 @@ on:
       - VERSION
       - RELEASE_NOTES.md
       - 'database/migrations/**'
-      # Fresh-install policy and legacy fallback must pass release-baseline upgrades.
+      - 'database/schema/**'
+      # V3 clean installs must NOT update historic v2 release databases.
       - '.env.example'
       - 'app/Support/SimpleWebInstaller.php'
       - 'config/ssh.php'
@@ -64,6 +67,7 @@ on:
       - 'public/.htaccess'
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
+      - 'bin/test-v3-major-upgrade-guard.sh'
       - 'bin/test-updater-recovery.php'
       - 'bin/test-updater-postflight.php'
       - 'bin/test-update-backup-integrity.sh'
@@ -126,6 +130,11 @@ jobs:
           python3 bin/test-released-baseline-parity.py
           python3 bin/test_released_baseline_parity.py
           bash bin/test-github-release-notes.sh
+          if [[ "$version" == 3.* ]]; then
+            echo 'is_clean_v3=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'is_clean_v3=false' >> "$GITHUB_OUTPUT"
+          fi
           if bash bin/validate-version.sh candidate "$version" >/dev/null 2>&1; then
             echo 'is_candidate=true' >> "$GITHUB_OUTPUT"
           else
@@ -157,7 +166,17 @@ jobs:
           bash bin/build-update-package.sh mcp-gateway-update-ci dist/mcp-gateway-update-test-runtime
           bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip
 
+      # Clean v3 has no v2 browser-update path. The real v3 ZIP must reject a
+      # synthetic v2 host before any effect; do not hide this as a skipped test.
+      - name: Verify clean v3 refuses a v2 in-place upgrade
+        if: steps.version_policy.outputs.is_clean_v3 == 'true'
+        run: |
+          bash bin/test-v3-major-upgrade-guard.sh \
+            dist/mcp-gateway-update-test-runtime \
+            dist/mcp-gateway-update-ci.zip
+
       - name: Download released deployment baselines
+        if: steps.version_policy.outputs.is_clean_v3 != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -175,6 +194,7 @@ jobs:
           done
 
       - name: Verify released-baseline browser updates
+        if: steps.version_policy.outputs.is_clean_v3 != 'true'
         env:
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
@@ -192,6 +212,7 @@ jobs:
           done
 
       - name: Verify released-baseline backup integrity fail-safe
+        if: steps.version_policy.outputs.is_clean_v3 != 'true'
         env:
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
@@ -219,18 +240,37 @@ jobs:
           update_zip="mcp-gateway-update-v$version.zip"
           bash bin/build-release-package.sh "$release_package"
           bash bin/verify-release-package.sh "dist/$release_zip" "$release_package"
-          cp dist/mcp-gateway-update-ci.zip "dist/$update_zip"
           (
             cd dist
             sha256sum "$release_zip" > "$release_zip.sha256"
-            sha256sum "$update_zip" > "$update_zip.sha256"
           )
-          bash bin/verify-update-package.sh "dist/$update_zip"
+          if [[ "${{ steps.version_policy.outputs.is_clean_v3 }}" != 'true' ]]; then
+            cp dist/mcp-gateway-update-ci.zip "dist/$update_zip"
+            (
+              cd dist
+              sha256sum "$update_zip" > "$update_zip.sha256"
+            )
+            bash bin/verify-update-package.sh "dist/$update_zip"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "artifact=mcp-gateway-v$version-candidate-${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Upload owner-test candidate artifacts
-        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true'
+      # The v3 candidate is source/development proof only. Never expose an
+      # in-place v2->v3 update ZIP to operators as if it were a supported path.
+      - name: Upload clean v3 owner-test fresh-install candidate
+        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true' && steps.version_policy.outputs.is_clean_v3 == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.candidate.outputs.artifact }}
+          path: |
+            dist/mcp-gateway-v${{ steps.candidate.outputs.version }}.zip
+            dist/mcp-gateway-v${{ steps.candidate.outputs.version }}.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload owner-test legacy update candidate artifacts
+        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true' && steps.version_policy.outputs.is_clean_v3 != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.candidate.outputs.artifact }}

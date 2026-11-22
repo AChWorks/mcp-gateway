@@ -104,6 +104,24 @@ final class WebUpdater
             throw new RuntimeException('Update metadata and payload version do not match.');
         }
 
+        // A clean v3 database has no in-place upgrade path from the v2
+        // migration ledger. Refuse the candidate before maintenance, code
+        // replacement or any database modification, regardless of attestations.
+        // This updater is shipped IN the new package and runs on the existing
+        // v2 host during a candidate update's read-only preflight.
+        $installedMajor = (int) explode('.', $installed, 2)[0];
+        $targetMajor = (int) explode('.', $target, 2)[0];
+        if ($targetMajor >= 3 && $installedMajor !== $targetMajor) {
+            throw new RuntimeException(sprintf(
+                'MCP Gateway %s cannot be upgraded in place to %s: v3 requires a clean installation '
+                .'and a fresh database. Preserve the complete, independently restorable v2 code, '
+                .'database, private configuration and keys. A major-version transition requires '
+                .'separate Owner authorization; no files or database contents were changed.',
+                $installed,
+                $target,
+            ));
+        }
+
         if (version_compare($installed, $target, '>=')) {
             throw new RuntimeException(sprintf(
                 'This package cannot update MCP Gateway %s to %s. The target version must be newer.',

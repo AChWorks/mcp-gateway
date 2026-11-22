@@ -16,6 +16,7 @@ use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
 use App\Support\OperationTiming;
+use Closure;
 use JsonException;
 
 final readonly class WordpressTargetOperations
@@ -78,7 +79,7 @@ final readonly class WordpressTargetOperations
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
      */
-    public function execute(User $user, string $target_id, string $ability, array $input, bool $readonlyOnly = false, bool $requiresAiAccess = false): array
+    public function execute(User $user, string $target_id, string $ability, array $input, bool $readonlyOnly = false, bool $requiresAiAccess = false, ?Closure $beforeRemoteEffect = null): array
     {
         $operation = 'wordpress-ability-execute';
         $timing = OperationTiming::forWordpress();
@@ -137,7 +138,7 @@ final readonly class WordpressTargetOperations
                 $ability,
                 $input,
                 CorrelationId::current(),
-                function (AbilityExecutionClass $class) use ($allowed, $user, $target, $readonlyOnly, $requiresAiAccess): bool {
+                function (AbilityExecutionClass $class) use ($allowed, $user, $target, $readonlyOnly, $requiresAiAccess, $beforeRemoteEffect): bool {
                     $permission = $class->permission();
                     // The request-entry snapshot is an immutable ceiling:
                     // later grants cannot elevate a previously denied class.
@@ -165,7 +166,8 @@ final readonly class WordpressTargetOperations
                     $current = $this->access->allowsTargetPermissions($currentUser, $target, $permissions);
 
                     return ($current[$permission->value] ?? false)
-                        && (! $readonlyOnly || ($current[GatewayPermission::TargetsView->value] ?? false));
+                        && (! $readonlyOnly || ($current[GatewayPermission::TargetsView->value] ?? false))
+                        && ($beforeRemoteEffect === null || $beforeRemoteEffect());
                 },
                 $timing,
             );

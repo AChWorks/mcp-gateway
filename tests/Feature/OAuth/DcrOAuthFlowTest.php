@@ -605,14 +605,14 @@ final class DcrOAuthFlowTest extends TestCase
         self::assertSame(1, DB::table('oauth_authorizations')->count());
     }
 
-    public function test_dcr_migration_refuses_to_discard_a_registered_client(): void
+    public function test_v3_schema_rollback_refuses_to_discard_a_registered_dcr_client(): void
     {
         $this->registerClient();
 
-        $migration = require database_path('migrations/2026_10_24_000000_create_oauth_dcr_clients.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Cannot drop durable DCR client credentials');
+        $this->expectExceptionMessage('Do not roll back the Gateway v3 baseline');
         $migration->down();
     }
 

@@ -19,6 +19,7 @@ final class ActivityRecorder
         ?Target $target = null,
         ?string $errorCode = null,
         array $diagnostics = [],
+        ?ActivityAttribution $attribution = null,
     ): void {
         [$correlationId, $operation, $outcome, $target, $errorCode] = $this->normalized(
             $correlationId,
@@ -36,10 +37,11 @@ final class ActivityRecorder
                     ...$diagnostics,
                     ...($outcome === 'unknown' ? ['retry_safe' => false] : []),
                 ])
-                : ($outcome === 'success' && (isset($diagnostics['timing']) || isset($diagnostics['api_operation']))
+                : ($outcome === 'success' && (isset($diagnostics['timing']) || isset($diagnostics['api_operation'])
+                    || $attribution !== null)
                     ? OperationDiagnostics::safeContext($diagnostics)
                     : []);
-            $this->persist($correlationId, $operation, $outcome, $target, $errorCode, $safeDetails);
+            $this->persist($correlationId, $operation, $outcome, $target, $errorCode, $safeDetails, $attribution);
             // One shared operational diagnostic path across WordPress, SSH,
             // inventory, MCP and file handlers; no raw inputs or tool outputs.
             // Routine rejected/invalid requests remain in Activity only so
@@ -121,10 +123,14 @@ final class ActivityRecorder
         ?Target $target,
         ?string $errorCode,
         array $safeDetails = [],
+        ?ActivityAttribution $attribution = null,
     ): void {
-        [$actorType, $actorId, $clientHash] = $this->actor();
+        [$actorType, $actorId, $clientHash] = $attribution === null
+            ? $this->actor()
+            : [$attribution->actorType, $attribution->actorId, $attribution->clientHash];
         $request = app()->bound('request') ? app('request') : null;
-        $profileKey = $request?->attributes->get('oauth_client_profile_key');
+        $profileKey = $attribution !== null
+            ? $attribution->clientProfileKey : $request?->attributes->get('oauth_client_profile_key');
 
         DB::table('activity_events')->insert([
             'id' => (string) Str::ulid(),

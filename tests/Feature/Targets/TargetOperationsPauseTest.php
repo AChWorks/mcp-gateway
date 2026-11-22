@@ -174,12 +174,12 @@ final class TargetOperationsPauseTest extends TestCase
         ])->assertAdminRedirect()->assertSessionHasErrors('file_exchange');
     }
 
-    public function test_pause_migration_rollback_refuses_fail_open_when_a_target_is_paused(): void
+    public function test_v3_schema_rollback_refuses_fail_open_when_a_target_is_paused(): void
     {
         $target = $this->target('rollback-pause', 'ssh_direct');
         $target->forceFill(['operations_paused' => true])->save();
 
-        $migration = require database_path('migrations/2026_10_16_000000_add_target_operations_paused.php');
+        $migration = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         $this->expectException(\RuntimeException::class);
         $migration->down();
     }

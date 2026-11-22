@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'app/Application/Access/**'
+      - 'app/Application/Batch/**'
       - 'app/Application/Mcp/**'
       - 'app/Application/Files/**'
       - 'app/Application/Sites/**'
@@ -23,8 +24,10 @@ on:
       - 'routes/oauth.php'
       - 'config/bridge.php'
       - 'config/database.php'
+      - 'config/batch.php'
       - 'config/oauth.php'
       - 'database/migrations/**'
+      - 'database/schema/**'
       - 'tests/Feature/Admin/AdminAuthorizationTest.php'
       - 'tests/Feature/Admin/UserAccessManagementTest.php'
       - 'tests/Feature/Admin/AccessBatch*'
@@ -33,6 +36,7 @@ on:
       - 'tests/Feature/OAuth/**'
       - 'tests/Feature/Sites/**'
       - 'tests/Feature/Targets/**'
+      - 'tests/Feature/Batch/**'
       - 'tests/Feature/Security/Access*'
       - 'tests/Feature/Security/Activity*'
       - 'tests/Support/oauth_concurrent_token_request.php'
@@ -57,6 +61,7 @@ on:
       - ready_for_review
     paths:
       - 'app/Application/Access/**'
+      - 'app/Application/Batch/**'
       - 'app/Application/Mcp/**'
       - 'app/Application/Files/**'
       - 'app/Application/Sites/**'
@@ -74,8 +79,10 @@ on:
       - 'routes/oauth.php'
       - 'config/bridge.php'
       - 'config/database.php'
+      - 'config/batch.php'
       - 'config/oauth.php'
       - 'database/migrations/**'
+      - 'database/schema/**'
       - 'tests/Feature/Admin/AdminAuthorizationTest.php'
       - 'tests/Feature/Admin/UserAccessManagementTest.php'
       - 'tests/Feature/Admin/AccessBatch*'
@@ -84,6 +91,7 @@ on:
       - 'tests/Feature/OAuth/**'
       - 'tests/Feature/Sites/**'
       - 'tests/Feature/Targets/**'
+      - 'tests/Feature/Batch/**'
       - 'tests/Feature/Security/Access*'
       - 'tests/Feature/Security/Activity*'
       - 'tests/Support/oauth_concurrent_token_request.php'

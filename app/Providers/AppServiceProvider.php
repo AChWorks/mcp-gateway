@@ -3,6 +3,8 @@
 namespace App\Providers;
 
 use App\Application\Access\AccessControl;
+use App\Application\Batch\BatchProviderResolver;
+use App\Application\Batch\TargetBatchProviderRegistry;
 use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -27,6 +29,7 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->bind(BatchProviderResolver::class, TargetBatchProviderRegistry::class);
         $this->app->bind(DnsResolver::class, SystemDnsResolver::class);
         $this->app->bind(SshDialAddressPolicy::class, SshTcpAddressPolicy::class);
         // One DB read per HTTP request/CLI maintenance invocation when used;

@@ -18,6 +18,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
 use App\Models\User;
+use Closure;
 use phpseclib4\Net\SSH2;
 use Throwable;
 
@@ -39,6 +40,7 @@ final readonly class SshCommandRuntime
     public function run(
         User $user, Target $target, string $command, int $timeoutSeconds = 10,
         ?string $expectedTargetBinding = null,
+        ?Closure $beforeRemoteEffect = null,
     ): array {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
@@ -60,7 +62,7 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('timeout_unsupported');
         }
 
-        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding): array {
+        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $beforeRemoteEffect): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             if ($fresh instanceof Target && $fresh->operations_paused) {
@@ -95,7 +97,7 @@ final readonly class SshCommandRuntime
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SSH2 $ssh, string $peerIp) use (
-                    $user, $target, $fresh, $config, $credential, $command, $timeoutSeconds, $started, $expectedTargetBinding,
+                    $user, $target, $fresh, $config, $credential, $command, $timeoutSeconds, $started, $expectedTargetBinding, $beforeRemoteEffect,
                 ): array {
                     // Credential disconnect or permission revocation during KEX/login
                     // must not authorize a NEW exec after the revocation.
@@ -130,6 +132,9 @@ final readonly class SshCommandRuntime
                     // sending even one effectful command.
                     $this->reverseRoutes->forTarget($currentTarget, $currentConfig);
                     $this->relayRoutes->sshRouteForTarget($currentTarget);
+                    if ($beforeRemoteEffect instanceof Closure && ! $beforeRemoteEffect()) {
+                        throw new SshTargetConnectionException('authorization_revoked');
+                    }
 
                     return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started);
                 },

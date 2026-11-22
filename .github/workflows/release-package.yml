@@ -84,6 +84,15 @@ jobs:
           [[ "$current" == "$APPROVED_SHA" ]] || { echo 'main moved after approval; review again.' >&2; exit 1; }
           current_version="$(tr -d '[:space:]' < VERSION)"
           [[ "$current_version" == "$APPROVED_VERSION" ]] || { echo 'Approved release version differs from checked-out source.' >&2; exit 1; }
+          # This v2 workflow still publishes a browser-update ZIP and asserts
+          # release-baseline upgrades. A clean v3 source candidate has no such
+          # contract, even after a VERSION bump or merge to main. Fail before
+          # reserving a tag or publishing files until a separately reviewed
+          # v3 fresh-install/cutover release workflow is approved.
+          if [[ "$APPROVED_VERSION" == 3.* ]]; then
+            echo 'MCP Gateway v3 clean installation requires its own accepted release workflow; the legacy v2 browser-update publisher is disabled for v3.' >&2
+            exit 1
+          fi
 
       - name: Resolve release identity
         id: release
