@@ -3,6 +3,7 @@
 namespace App\Application\Batch;
 
 use App\Application\Access\AccessControl;
+use App\Application\Operations\OperationalSettings;
 use App\Domain\Targets\Target;
 use App\Models\User;
 use InvalidArgumentException;
@@ -15,6 +16,7 @@ final readonly class TargetBatchPlanner
         private DeferredBatchAuthority $authority,
         private BatchProviderResolver $providers,
         private TargetBatchBinding $bindings,
+        private OperationalSettings $settings,
     ) {}
 
     /**
@@ -32,7 +34,7 @@ final readonly class TargetBatchPlanner
             throw new InvalidArgumentException('Unsupported Batch capability or invalid bounded arguments.');
         }
         if (! in_array($mode, ['concurrent', 'rolling'], true)
-            || $parallelism < 1 || $parallelism > max(1, (int) config('batch.max_parallelism', 4))) {
+            || $parallelism < 1 || $parallelism > $this->settings->batchLimits()['max_parallelism']) {
             throw new InvalidArgumentException('Invalid Batch execution mode or Owner-configured parallelism.');
         }
         if ($targetIds === [] || ! array_is_list($targetIds)) {

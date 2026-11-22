@@ -267,6 +267,11 @@ CREATE TABLE `operational_settings` (
   `ssh_file_list_name_kib` smallint(5) unsigned DEFAULT NULL,
   `wp_ability_input_kib` smallint(5) unsigned DEFAULT NULL,
   `dcr_registration_capacity` int(10) unsigned DEFAULT NULL,
+  `batch_max_parallelism` smallint(5) unsigned DEFAULT NULL,
+  `batch_global_active` smallint(5) unsigned DEFAULT NULL,
+  `batch_user_active` smallint(5) unsigned DEFAULT NULL,
+  `batch_worker_max_children` smallint(5) unsigned DEFAULT NULL,
+  `batch_worker_max_seconds` int(10) unsigned DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `operational_settings_changed_by_foreign` (`changed_by`),
   CONSTRAINT `operational_settings_changed_by_foreign` FOREIGN KEY (`changed_by`) REFERENCES `users` (`id`) ON DELETE SET NULL

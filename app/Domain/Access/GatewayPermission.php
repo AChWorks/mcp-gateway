@@ -121,9 +121,56 @@ enum GatewayPermission: string
         return $this->isTargetScoped() ? 'Target-scoped' : 'Gateway-wide';
     }
 
+    /**
+     * Exhaustive applicability declaration, separate from authorization.
+     *
+     * null = Gateway-wide; any = any registered Target connector; otherwise
+     * the exact connector type. New permissions MUST explicitly choose one:
+     * forgetting applicability cannot silently become cross-connector access.
+     *
+     * @return 'any'|'wp_ai_bridge'|'arvancloud'|'ssh_direct'|null
+     */
+    public function targetApplicability(): ?string
+    {
+        return match ($this) {
+            self::DashboardView,
+            self::GatewayConnectionView,
+            self::TargetsCreate,
+            self::ActivityView,
+            self::UsersView,
+            self::UsersManage,
+            self::SecurityManage => null,
+
+            self::TargetsView,
+            self::TargetsUpdate,
+            self::TargetsRemove,
+            self::TargetsConnect,
+            self::TargetsReconnect,
+            self::TargetsDisconnect,
+            self::TargetsTest => 'any',
+
+            self::WordpressAbilitiesInspect,
+            self::WordpressAbilitiesExecuteReadonly,
+            self::WordpressAbilitiesExecuteMutating,
+            self::WordpressAbilitiesExecuteDestructive,
+            self::WordpressAbilitiesExecuteUnclassified,
+            self::WordpressContentPublishCreate => 'wp_ai_bridge',
+
+            self::ArvanApiInspect,
+            self::ArvanApiRead,
+            self::ArvanApiWrite,
+            self::ArvanApiDestructive,
+            self::ArvanApiUnclassified => 'arvancloud',
+
+            self::SshCommandRun,
+            self::SshFileRead,
+            self::SshFileWrite => 'ssh_direct',
+        };
+    }
+
     public function isTargetScoped(): bool
     {
-        return in_array($this, self::targetScoped(), true);
+        return $this->targetApplicability() !== null;
     }
 
     /** @return list<self> */
@@ -135,26 +182,7 @@ enum GatewayPermission: string
     /** @return list<self> */
     public static function targetScoped(): array
     {
-        return [
-            self::TargetsView,
-            self::TargetsUpdate,
-            self::TargetsRemove,
-            self::TargetsConnect,
-            self::TargetsReconnect,
-            self::TargetsDisconnect,
-            self::TargetsTest,
-            self::WordpressAbilitiesInspect,
-            self::WordpressAbilitiesExecuteReadonly,
-            self::WordpressAbilitiesExecuteMutating,
-            self::WordpressAbilitiesExecuteDestructive,
-            self::WordpressAbilitiesExecuteUnclassified,
-            self::WordpressContentPublishCreate,
-            self::ArvanApiInspect,
-            self::ArvanApiRead,
-            self::ArvanApiWrite,
-            self::ArvanApiDestructive,
-            self::ArvanApiUnclassified,
-            ...self::sshCapabilities(),
-        ];
+        return array_values(array_filter(self::cases(),
+            static fn (self $permission): bool => $permission->isTargetScoped()));
     }
 }

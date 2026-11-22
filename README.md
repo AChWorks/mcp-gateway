@@ -4,7 +4,7 @@
 
 Use it to discover and execute WordPress Abilities through **WP AI Bridge**, run authorized SSH commands, inspect or transfer files with SFTP, and manage longer-running SSH Jobs. For ArvanCloud, it can discover public OpenAPI/Swagger documents and execute compatible REST requests with JSON, text/YAML, URL-encoded forms and small multipart payloads under a bound Machine User key; S3 signing and large binary streaming remain separate capabilities. The Gateway does not grant more access than the selected Target, authenticated principal, or remote service account already has.
 
-**v3 development notice:** The `v3.0.0-rc.12` source candidate has a *fresh-database-only* bootstrap; the shared durable Batch foundation (with SSH and read-only WordPress consumers) is implemented in source for isolated validation, and five focused SSH inspection/network/log/patch/verification capabilities are implemented in non-production source, while independent acceptance and other v3 obligations remain open under [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330). This branch is **not a published installation or v2 upgrade**. The latest official release and installed Production continue to be v2.7.3 unless separately verified otherwise. Do not run v3 migrations against a v2 DB or use the old browser updater for a major-version cutover. Keep the v2 code, full DB, private `.env`/keys and restoration procedure independently recoverable. See [Deployment](docs/DEPLOYMENT.md#v3-clean-install-development-boundary).
+**v3 development notice:** The `v3.0.0-rc.14` source candidate has a *fresh-database-only* bootstrap; the shared durable Batch foundation (with SSH and read-only WordPress consumers) is implemented in source for isolated validation, and five focused SSH inspection/network/log/patch/verification capabilities are implemented in non-production source, while independent acceptance and other v3 obligations remain open under [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330). This branch is **not a published installation or v2 upgrade**. The latest official release and installed Production continue to be v2.7.3 unless separately verified otherwise. Do not run v3 migrations against a v2 DB or use the old browser updater for a major-version cutover. Keep the v2 code, full DB, private `.env`/keys and restoration procedure independently recoverable. See [Deployment](docs/DEPLOYMENT.md#v3-clean-install-development-boundary).
 
 **Get started:** [Latest official Release](https://github.com/AChWorks/mcp-gateway/releases) · [Install](#install) · [Connect WordPress](#connect-wordpress) · [Connect SSH](#connect-direct-ssh) · [Connect ArvanCloud](#connect-arvancloud-api) · [Managed Reverse SSH](#connect-an-inbound-blocked-server-with-reverse-ssh) · [Connection Relays](#connect-targets-through-a-relay) · [Connect ChatGPT](#connect-chatgpt-or-another-mcp-client)
 
@@ -120,7 +120,7 @@ Manage client profiles and grants under **Admin → AI clients** (`/admin/oauth-
 
 ## MCP tools at a glance
 
-The standard Gateway MCP catalog defines **18 tools** across the three registered connector families (subject to installed version, enabled capabilities, and authenticated user, client and Target grants). Optional ChatGPT FileParams tools remain OFF by default:
+The **unreleased v3** source registers **30 standard MCP tools**: the 18 tools in released v2.7.3 plus 5 focused SSH diagnostics/change tools and 7 Target Batch tools. Installed v2.7.3 still has the older catalog. Which tools a client sees depends on its installed version and authenticated capabilities; the two additional ChatGPT FileParams tools remain OFF by default:
 
 | Tools | Use |
 | --- | --- |
@@ -133,6 +133,13 @@ The standard Gateway MCP catalog defines **18 tools** across the three registere
 | `ssh-job-start`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Start, reconcile, inspect and cancel retained SSH Jobs without blindly replaying them. |
 | `ssh-jobs-list` | List only retained Jobs for the currently authorized user, OAuth client/profile and selected Target; no remote execution. |
 | `operation-diagnostics-read` | Look up permitted, credential-redacted failure evidence by `diagnostic_reference` or Target. |
+| `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-logs-query` | Collect scoped system, network or log observations from an authorized SSH Target; do not assume every probe is supported. |
+| `ssh-file-patch`, `ssh-change-verify` | Preview/apply a bounded conditional text edit and independently verify an intended remote change; service validation/reload are separately authorized operations. |
+| `ssh-batch-preview`, `ssh-batch-run` | Preview selected SSH Targets, then queue one durable command Batch; queue acceptance is not completion. |
+| `wordpress-bridge-batch-preview`, `wordpress-bridge-batch-read` | Preview/queue the fixed read-only WordPress Bridge information call, not arbitrary Ability execution or publishing. |
+| `target-batch-status`, `target-batches-list`, `target-batch-cancel` | Follow retained per-Target results, inspect queued work and request cancellation; in-flight remote effects may remain unknown. |
+
+The optional FileParams tools are deliberately inactive until a **real ChatGPT host-provided file argument** is demonstrated and approved. When enabled, `wordpress-file-input` and `target-file-input` overlap for WordPress private staging: the former is WordPress-specific, the latter selects either `wordpress_media_stage` or `ssh_sftp_upload`. Neither converts an ordinary conversation attachment into an automatically transferable file. WordPress staging requires a separate authorized native Media import; SSH upload requires an explicit path/staging directory and can modify remote files.
 
 WordPress plugin Abilities are discovered dynamically; a newly available Ability does **not** require a new Gateway MCP tool for its name.
 

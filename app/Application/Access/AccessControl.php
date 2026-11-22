@@ -249,8 +249,8 @@ final readonly class AccessControl
             return $query->whereRaw('1 = 0');
         }
 
-        $connector = $this->connectorForPermission($permission);
-        if ($connector !== null) {
+        $connector = $permission->targetApplicability();
+        if ($connector !== null && $connector !== 'any') {
             $query->where('connector_type', $connector);
         }
 
@@ -406,19 +406,10 @@ final readonly class AccessControl
      */
     public function permissionMatchesTarget(GatewayPermission $permission, Target $target): bool
     {
-        $connector = $this->connectorForPermission($permission);
+        $applicability = $permission->targetApplicability();
 
-        return $connector === null || $target->connector_type === $connector;
-    }
-
-    private function connectorForPermission(GatewayPermission $permission): ?string
-    {
-        return match (true) {
-            str_starts_with($permission->value, 'wordpress.') => 'wp_ai_bridge',
-            str_starts_with($permission->value, 'ssh.') => 'ssh_direct',
-            str_starts_with($permission->value, 'arvan.') => 'arvancloud',
-            default => null,
-        };
+        return $applicability === null || $applicability === 'any'
+            || $target->connector_type === $applicability;
     }
 
     private function role(User $user): ?GatewayRole

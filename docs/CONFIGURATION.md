@@ -200,7 +200,7 @@ Remote timeout/response settings are **budgets**, not guarantees of response spe
 
 ### V3 Target Batch resource policy (unreleased source candidate only)
 
-These seven keys are deliberately **commented** in the source `.env.example`, are not installed in v2.7.3, and do not impose limits on the number of registered Targets or the total explicitly selected Batch items. The worker uses shared MariaDB admission locks and exact per-Target authorization; real effective concurrency depends on separately running CLI workers and measured CPU, RAM, DB, network and remote capacity. A default single scheduled worker is sequential.
+These seven keys are deliberately **commented** in the source `.env.example`, are not installed in v2.7.3, and do not impose limits on the number of registered Targets or the total explicitly selected Batch items. In unreleased v3, the first three and both `WORKER_MAX_*` values supply **defaults** for five password-confirmed, version-checked, audited Owner controls under **Operational settings → Target Batch execution**. A blank control restores the effective source/.env default. `BATCH_LEASE_MARGIN_SECONDS` and `BATCH_SCHEDULER_LOCK_MINUTES` remain operator infrastructure tuning rather than an Admin convenience knob: changing crash/recovery timing needs separate technical review. The worker uses shared MariaDB admission locks and exact per-Target authorization; real effective concurrency depends on separately running CLI workers and measured CPU, RAM, DB, network and remote capacity. A default single scheduled worker is sequential.
 
 | Key | Sample default | Effect / operator note |
 | --- | --- | --- |

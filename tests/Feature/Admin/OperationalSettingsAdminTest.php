@@ -57,6 +57,8 @@ final class OperationalSettingsAdminTest extends TestCase
             ->assertSee('WordPress connection deadlines')
             ->assertSee('SSH whole-file transfer')
             ->assertSee('Detached SSH Jobs')
+            ->assertSee('Target Batch execution')
+            ->assertSee('Active children across the Gateway')
             ->assertSee('Outbound DNS compatibility preflight')
             ->assertSee('/etc/resolv.conf')
             ->assertSee('/etc/hosts')
@@ -70,7 +72,7 @@ final class OperationalSettingsAdminTest extends TestCase
         libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($dom);
         self::assertSame(1, (int) $xpath->evaluate('count(//form[contains(@class,"operations-form")])'));
-        self::assertSame(8, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
+        self::assertSame(9, (int) $xpath->evaluate('count(//fieldset[contains(@class,"operations-group") and not(contains(@class,"operations-confirmation"))])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//div[contains(@class,"operations-setting") and contains(@class,"field")])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//input[@type="number"][starts-with(@name,"values[")])'));
         self::assertSame(count(OperationalSettings::allowed()), (int) $xpath->evaluate('count(//button[@data-clear-setting])'));
@@ -140,6 +142,84 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
         ])->assertSessionHasErrors('values');
         self::assertSame(0, (int) DB::table('operational_settings')->value('version'));
+    }
+
+    public function test_owner_batch_resource_controls_are_effective_audited_and_preserve_old_open_forms(): void
+    {
+        config()->set('batch.max_parallelism', 7);
+        config()->set('batch.global_active', 8);
+        config()->set('batch.user_active', 3);
+        config()->set('batch.worker_max_children', 14);
+        config()->set('batch.worker_max_seconds', 75);
+        $this->actingAs($this->account('owner'));
+        $defaults = (new OperationalSettings)->batchLimits();
+        self::assertSame([
+            'max_parallelism' => 7, 'global_active' => 8,
+            'user_active' => 3, 'worker_max_children' => 14, 'worker_max_seconds' => 75,
+        ], $defaults);
+
+        $values = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
+        $expected = [
+            'batch_max_parallelism' => 11, 'batch_global_active' => 9, 'batch_user_active' => 5,
+            'batch_worker_max_children' => 25, 'batch_worker_max_seconds' => 180,
+        ];
+        foreach ($expected as $key => $value) {
+            $values[$key] = (string) $value;
+        }
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        self::assertSame([
+            'max_parallelism' => 11, 'global_active' => 9, 'user_active' => 5,
+            'worker_max_children' => 25, 'worker_max_seconds' => 180,
+        ], (new OperationalSettings)->batchLimits());
+        self::assertEqualsCanonicalizing(array_keys($expected),
+            DB::table('operational_setting_changes')->pluck('setting_key')->all());
+        $html = $this->get('/admin/operations')->assertOk()->getContent();
+        self::assertStringContainsString('Target Batch execution', $html);
+        self::assertStringContainsString('Active children across the Gateway', $html);
+        foreach ($expected as $key => $value) {
+            self::assertStringContainsString('name="values['.$key.']"', $html);
+            self::assertSame($value, (int) DB::table('operational_settings')->value($key));
+        }
+
+        // The 22-input Package A form remains valid and cannot silently clear
+        // the newly introduced Batch settings, even if an older tab is saved.
+        $older = array_fill_keys(array_slice(array_keys(OperationalSettings::allowed()), 0, 22), '');
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => $older, 'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        self::assertSame(1, (int) DB::table('operational_settings')->value('version'));
+        self::assertSame(11, (new OperationalSettings)->batchLimits()['max_parallelism']);
+
+        foreach ($expected as $key => $value) {
+            $values[$key] = '';
+        }
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => $values, 'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        self::assertSame($defaults, (new OperationalSettings)->batchLimits());
+        self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
+    }
+
+    public function test_batch_limits_reject_invalid_values_without_partial_audit(): void
+    {
+        $this->actingAs($this->account('owner'));
+        $values = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
+        foreach (['batch_max_parallelism', 'batch_global_active', 'batch_user_active',
+            'batch_worker_max_children', 'batch_worker_max_seconds'] as $key) {
+            $values[$key] = '0';
+            $this->put('/admin/operations', [
+                'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
+            ])->assertSessionHasErrors('values.'.$key);
+            $values[$key] = '';
+        }
+        $values['batch_worker_max_seconds'] = '86401';
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('values.batch_worker_max_seconds');
+        self::assertSame(0, (int) DB::table('operational_settings')->value('version'));
+        self::assertSame(0, DB::table('operational_setting_changes')->count());
     }
 
     public function test_owner_can_set_both_finite_response_budgets_and_reset_them_without_redeploy(): void

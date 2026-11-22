@@ -50,6 +50,11 @@ final class OperationalSettingsController extends Controller
                 'ssh_file_list_name_kib' => 16,
                 'wp_ability_input_kib' => 1024,
                 'dcr_registration_capacity' => 1024,
+                'batch_max_parallelism' => max(1, (int) config('batch.max_parallelism', 4)),
+                'batch_global_active' => max(1, (int) config('batch.global_active', 4)),
+                'batch_user_active' => max(1, (int) config('batch.user_active', 2)),
+                'batch_worker_max_children' => max(1, (int) config('batch.worker_max_children', 16)),
+                'batch_worker_max_seconds' => max(1, (int) config('batch.worker_max_seconds', 50)),
             ],
         ]);
     }

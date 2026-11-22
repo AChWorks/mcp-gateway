@@ -68,9 +68,15 @@ final class AccessControlTest extends TestCase
                 $batched = $access->allowsTargetPermissions($user, $target, $permissions);
                 self::assertCount(count($permissions), $batched);
                 foreach ($permissions as $permission) {
-                    self::assertSame($access->allows($user, $permission, $target),
-                        $batched[$permission->value],
+                    $single = $access->allows($user, $permission, $target);
+                    self::assertSame($single, $batched[$permission->value],
                         "Authoritative permission drift: $role $type {$permission->value}");
+                    if ($permission->isTargetScoped()) {
+                        self::assertSame($single, $access->scopeTargets(
+                            Target::query(), $user, $permission,
+                        )->whereKey($target->getKey())->exists(),
+                            "Authorization query/operation drift: $role $type {$permission->value}");
+                    }
                 }
             }
         }

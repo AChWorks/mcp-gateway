@@ -121,6 +121,42 @@ final class TargetBatchCoreTest extends TestCase
         config()->set('batch.user_active', 12);
     }
 
+    public function test_owner_batch_limits_restrict_new_plans_and_worker_defaults_without_losing_queue(): void
+    {
+        $user = $this->owner();
+        $targets = $this->targets(3);
+        $origin = $this->web($user);
+        $ids = array_map(static fn (Target $target): string => $target->target_id, $targets);
+        DB::table('operational_settings')->where('id', 1)->update([
+            'batch_max_parallelism' => 2, 'batch_global_active' => 1,
+            'batch_user_active' => 1, 'batch_worker_max_children' => 1,
+            'batch_worker_max_seconds' => 60,
+        ]);
+
+        $core = app(TargetBatchCoordinator::class);
+        try {
+            $core->preview($user, $origin, 'ssh.command.run', $ids,
+                ['command' => 'uptime', 'timeout_seconds' => 10], 'concurrent', false, 3);
+            self::fail('A Batch must not use a larger concurrency than the current Owner setting.');
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString('parallelism', $exception->getMessage());
+        }
+
+        $preview = $core->preview($user, $origin, 'ssh.command.run', $ids,
+            ['command' => 'uptime', 'timeout_seconds' => 10], 'concurrent', false, 2);
+        $batch = $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run', $ids,
+            ['command' => 'uptime', 'timeout_seconds' => 10], $preview['preview_token'], 'concurrent', false, 2);
+        self::assertSame('queued', $batch['status']);
+        $this->artisan('gateway:batch-work')->assertSuccessful();
+        self::assertSame(1, count($this->fake->effects),
+            'An Owner-configured one-child worker invocation must not drain all queued Targets.');
+        self::assertSame(2, DB::table('target_batch_items')->where('status', 'queued')->count());
+        $this->artisan('gateway:batch-work')->assertSuccessful();
+        self::assertSame(2, count($this->fake->effects));
+        $this->artisan('gateway:batch-work')->assertSuccessful();
+        self::assertSame('completed', $core->status($user, $origin, $batch['batch_id'])['status']);
+    }
+
     public function test_explicit_preview_durable_queue_idempotent_request_and_sequential_worker_completion(): void
     {
         $user = $this->owner();

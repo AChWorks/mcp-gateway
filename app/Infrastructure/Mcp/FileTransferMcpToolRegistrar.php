@@ -43,7 +43,7 @@ final readonly class FileTransferMcpToolRegistrar
                     $this->principal->user($request), $target_id, $file,
                 ),
                 name: 'wordpress-file-input',
-                description: 'ONLY stage and hash-verify a host-provided ChatGPT file into an authorized WordPress private Media transfer. This tool cannot publish native Media: separately invoke wordpress-ability-execute with wp-ai-bridge/transfer-media-import and the returned stable transfer_id after explicit authorization. Repeating this file-input can never create a second Media item. Builder Write/upload_files are checked before signed-file download. A finite Owner-configurable WordPress-mode file budget (separate from Bridge limits). No arbitrary URLs or executable packages.',
+                description: 'Use only with a genuine ChatGPT host-supplied FileParams file for an authorized WordPress Target; an attachment in the chat is NOT automatically a valid file argument. Stage and SHA-256 verify a private transfer_id without creating Media or publishing content. For an authorized import, separately call wordpress-ability-execute with wp-ai-bridge/transfer-media-import and that transfer_id. Use target-file-input with mode=wordpress_media_stage for the same staging operation. Never invent download_url or file_id.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -63,7 +63,7 @@ final readonly class FileTransferMcpToolRegistrar
                     $this->principal->user($request), $target_id, $file, $mode, $ssh_destination,
                 ),
                 name: 'target-file-input',
-                description: 'Transfer a ChatGPT file to an explicitly authorized selected WordPress or SSH Target. WordPress stages a verified private Media lease (no publication). SSH writes verified SFTP bytes to an explicit destination and pre-provisioned private staging directory; overwrite requires opt-in. All signed-file URLs, current Target grants, SHA-256, finite budgets and uncertain-effect recovery are enforced. No arbitrary URLs or executable packages.',
+                description: 'Use only with genuine ChatGPT host-supplied FileParams, not an invented download_url/file_id or an ordinary chat attachment. Select an authorized Target and exact mode: wordpress_media_stage stages a private verified transfer_id (no Media import or publish); ssh_sftp_upload writes an SFTP file to ssh_destination.path using a pre-provisioned private_staging_dir, with explicit overwrite opt-in. This can change remote files. Verify an uncertain SSH upload before any retry; arbitrary URLs and executable packages are rejected.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',

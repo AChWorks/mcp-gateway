@@ -51,6 +51,13 @@ final class OperationalSettings
         // JSON-RPC request limit and the DCR admission-rate quota are separate.
         'wp_ability_input_kib' => ['minimum' => 16, 'maximum' => 4096],
         'dcr_registration_capacity' => ['minimum' => 16, 'maximum' => 65536],
+        // Batch admission is not a limit on registered/selected Target counts.
+        // These are independently tunable active and per-invocation budgets.
+        'batch_max_parallelism' => ['minimum' => 1, 'maximum' => 65535],
+        'batch_global_active' => ['minimum' => 1, 'maximum' => 65535],
+        'batch_user_active' => ['minimum' => 1, 'maximum' => 65535],
+        'batch_worker_max_children' => ['minimum' => 1, 'maximum' => 65535],
+        'batch_worker_max_seconds' => ['minimum' => 1, 'maximum' => 86400],
     ];
 
     /** @var array<string, int>|null */
@@ -72,7 +79,7 @@ final class OperationalSettings
     {
         $all = array_keys(self::SETTING_RANGES);
         sort($names);
-        foreach ([2, 4, 6, 8, 13, 14, count($all) - 2, count($all)] as $size) {
+        foreach ([2, 4, 6, 8, 13, 14, 20, 22, count($all)] as $size) {
             $prefix = array_slice($all, 0, $size);
             sort($prefix);
             if ($names === $prefix) {
@@ -201,6 +208,20 @@ final class OperationalSettings
         ];
     }
 
+    /** @return array{max_parallelism:int,global_active:int,user_active:int,worker_max_children:int,worker_max_seconds:int} */
+    public function batchLimits(): array
+    {
+        $overrides = $this->overrides();
+
+        return [
+            'max_parallelism' => $overrides['batch_max_parallelism'] ?? max(1, (int) config('batch.max_parallelism', 4)),
+            'global_active' => $overrides['batch_global_active'] ?? max(1, (int) config('batch.global_active', 4)),
+            'user_active' => $overrides['batch_user_active'] ?? max(1, (int) config('batch.user_active', 2)),
+            'worker_max_children' => $overrides['batch_worker_max_children'] ?? max(1, (int) config('batch.worker_max_children', 16)),
+            'worker_max_seconds' => $overrides['batch_worker_max_seconds'] ?? max(1, (int) config('batch.worker_max_seconds', 50)),
+        ];
+    }
+
     /** @return array{version:int,overrides:array<string,int>} */
     public function state(): array
     {
@@ -292,8 +313,13 @@ final class OperationalSettings
                 || ! property_exists($record, 'ssh_command_stdout_kib')
                 || ! property_exists($record, 'ssh_file_list_name_kib')
                 || ! property_exists($record, 'wp_ability_input_kib')
-                || ! property_exists($record, 'dcr_registration_capacity')) {
-                throw new RuntimeException('Network settings migration is missing.');
+                || ! property_exists($record, 'dcr_registration_capacity')
+                || ! property_exists($record, 'batch_max_parallelism')
+                || ! property_exists($record, 'batch_global_active')
+                || ! property_exists($record, 'batch_user_active')
+                || ! property_exists($record, 'batch_worker_max_children')
+                || ! property_exists($record, 'batch_worker_max_seconds')) {
+                throw new RuntimeException('Operational settings schema is missing required columns.');
             }
             $old = $this->combineOverrides($record);
             if ($old === $next) {
@@ -328,6 +354,11 @@ final class OperationalSettings
                 'ssh_file_list_name_kib' => $next['ssh_file_list_name_kib'] ?? null,
                 'wp_ability_input_kib' => $next['wp_ability_input_kib'] ?? null,
                 'dcr_registration_capacity' => $next['dcr_registration_capacity'] ?? null,
+                'batch_max_parallelism' => $next['batch_max_parallelism'] ?? null,
+                'batch_global_active' => $next['batch_global_active'] ?? null,
+                'batch_user_active' => $next['batch_user_active'] ?? null,
+                'batch_worker_max_children' => $next['batch_worker_max_children'] ?? null,
+                'batch_worker_max_seconds' => $next['batch_worker_max_seconds'] ?? null,
                 'version' => $revision,
                 'changed_by' => $actor->getKey(),
                 'updated_at' => $now,
@@ -395,7 +426,9 @@ final class OperationalSettings
             'ssh_command_stdout_kib', 'ssh_command_stderr_kib',
             'ssh_job_output_window_kib', 'ssh_file_read_window_kib',
             'ssh_file_write_window_kib', 'ssh_file_list_name_kib',
-            'wp_ability_input_kib', 'dcr_registration_capacity'] as $key) {
+            'wp_ability_input_kib', 'dcr_registration_capacity',
+            'batch_max_parallelism', 'batch_global_active', 'batch_user_active',
+            'batch_worker_max_children', 'batch_worker_max_seconds'] as $key) {
             $value = $record->{$key} ?? null;
             if ($value === null) {
                 continue;

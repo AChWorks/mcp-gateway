@@ -20,7 +20,7 @@ final readonly class TargetBatchMcpToolRegistrar
     public function register(Builder $builder, Request $request): void
     {
         $sshLimits = $this->settings->sshCommandLimits();
-        $parallelism = max(1, (int) config('batch.max_parallelism', 4));
+        $parallelism = $this->settings->batchLimits()['max_parallelism'];
         $targets = ['type' => 'array', 'minItems' => 1,
             'items' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64]];
         $common = [
