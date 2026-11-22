@@ -2,7 +2,7 @@
 
 ## V3 clean-install development boundary
 
-The current **unreleased v3 source** (see [VERSION](../VERSION)) is **fresh-database-only**, not an in-place v2 upgrade. A valid v2 installation, database, credentials, OAuth grants and SSH Job state must remain untouched until an independently approved cutover and full verified-restorable backup/re-enrollment plan exists. Do **not** run v3 migrations, the v2 browser updater or an unreleased v3 ZIP against an installed v2 database. The legacy public Release workflow also deliberately **rejects v3** until a separately reviewed clean-install publication path is approved.
+The **v3 source and first stable v3** (verify exact identity in [VERSION](../VERSION) and [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases)) are **fresh-database-only**, not an in-place v2 upgrade. A valid v2 installation, database, credentials, OAuth grants and SSH Job state must remain untouched until an independently approved cutover and full verified-restorable backup/re-enrollment plan exists. Do **not** run v3 migrations, the v2 browser updater or any v3 ZIP against an installed v2 database. The v2 browser updater remains v2-only. Any first-stable-v3 publication must use an independently reviewed, Owner-approved **fresh-install-only** Release path; no v2-compatible update ZIP or automatic Production deployment is implied.
 
 The source implements a scheduled CLI Batch worker (`php artisan gateway:batch-work`) with durable per-Target state. A single default scheduler process is **sequential**, not a measured multi-host throughput guarantee. A remote effect whose dispatch outcome is uncertain is recorded as `outcome_unknown`, never blindly replayed. **Installed v3 acceptance, provider connectivity, backup/rollback and public Release approval remain tracked in [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330)**; CI or a successful isolated installation does not establish a production deployment.
 
@@ -14,7 +14,7 @@ The source implements a scheduled CLI Batch worker (`php artisan gateway:batch-w
 | **First-time published ZIP** on Nginx/PHP-FPM VPS | [Panel-free Linux VPS](#panel-free-linux-vps-nginx-php-fpm-and-mariadb) |
 | **Existing published v2 install** update or recover | [Direct-upgrade window](#rolling-browser-update-support-window) → [Backup](#10-backup-and-recovery-baseline) → [Update/rollback](#11-upgrade-and-rollback-outline) |
 | **Diagnose an installed host** | [Environment check](#8-run-the-repository-owned-environment-gate) → [HTTP checks](#9-safe-http-verification) → [Diagnostics](#production-diagnostics-runbook) |
-| **Build/test the unreleased v3 source** | [Development](DEVELOPMENT.md#v3-clean-database-development-boundary) and [v3 Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) — **not** the v2 browser-update instructions below |
+| **Build/test the v3 source or candidate** | [Development](DEVELOPMENT.md#v3-clean-database-development-boundary) and [v3 Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) — **not** the v2 browser-update instructions below |
 
 The detailed v2 migration, filesystem permissions, recovery and host-specific procedures remain in this runbook because operators may still depend on their exact steps. Historical release/version differences belong to [Release notes](../RELEASE_NOTES.md); read the selected official Release's actual package/manifest before following older upgrade steps.
 

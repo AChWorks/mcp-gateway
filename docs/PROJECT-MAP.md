@@ -14,7 +14,7 @@ This index helps contributors and operators find the **appropriate maintained re
 | Reviewed, bounded downstream MCP-over-HTTPS wire primitive (not a generic Target) | [Outbound MCP transport](OUTBOUND-MCP-TRANSPORT.md) |
 | Result completeness, independently typed limits, file integrity and outcome uncertainty | [Remote I/O contract](REMOTE-IO-CONTRACT.md) |
 | SSH trust, OS execution, Jobs and SFTP | [Direct SSH connector](DIRECT-SSH-CONNECTOR.md) |
-| Unreleased v3 SSH diagnostics and conditional patch/verification contracts | [SSH operator capabilities](SSH-OPERATOR-CAPABILITIES.md) |
+| v3 SSH diagnostics and conditional patch/verification contracts | [SSH operator capabilities](SSH-OPERATOR-CAPABILITIES.md) |
 | Optional shared OpenSSH intermediary for SSH/SFTP and WordPress | [Connection Relays](CONNECTION-RELAYS.md) |
 | Inbound-blocked SSH Target host setup and one-command enrollment | [Managed Reverse SSH](REVERSE-SSH-MANAGED.md) |
 | Existing manually operator-managed reverse forwarding | [Manual Reverse SSH](REVERSE-SSH-OPERATOR.md) |

@@ -4,7 +4,7 @@
 
 Each Target uses its own downstream identity and permissions. A visible Tool or registered Target is **not** proof of authorization or remote connectivity.
 
-> **Version boundary:** Install only a verified, officially [published Release](https://github.com/AChWorks/mcp-gateway/releases). The current `main` source is an **unreleased v3 development candidate** ([VERSION](VERSION)); it requires a **new, empty database** and does **not** support upgrading a v2 installation in place. Do not run a v3 ZIP or migration against an installed v2 database. Source, CI, Release and installed-host status are distinct. See [v3 scope and remaining acceptance](https://github.com/AChWorks/mcp-gateway/issues/330) and [deployment safety](docs/DEPLOYMENT.md#v3-clean-install-development-boundary).
+> **Version boundary:** Install only a verified, officially [published Release](https://github.com/AChWorks/mcp-gateway/releases). Version and release status are separate: check [VERSION](VERSION) for **source identity** and the official Releases page for **published packages**. A v3 source candidate or merge is not itself a published deployment. v3 requires a **new, empty database** and does **not** support upgrading a v2 installation in place. Do not run a v3 ZIP or migration against an installed v2 database. Source, CI, Release and installed-host status are distinct. See [v3 scope and remaining acceptance](https://github.com/AChWorks/mcp-gateway/issues/330) and [deployment safety](docs/DEPLOYMENT.md#v3-clean-install-development-boundary).
 
 **Find what you need:** [Install](#install-a-published-release) · [Connect Targets](#connect-a-target) · [Connect ChatGPT](#connect-an-mcp-client) · [Tool inventory](#mcp-tools) · [Operations and recovery](#updates-and-recovery) · [Documentation map](docs/PROJECT-MAP.md).
 
@@ -77,7 +77,7 @@ See [ArvanCloud API details](docs/ARVANCLOUD-API-CONNECTOR.md) for supported con
 
 ## MCP tools
 
-The official **v2.7.3** release has **18 standard Tools**; the current **unreleased v3 source** has **30** (the same 18 plus 12 below). Check the actual installed version and authenticated `tools/list` before relying on a tool. Tool discovery does not grant execution permission.
+The official **v2.7.3** release has **18 standard Tools**; the **v3 source** registers **30** (the same 18 plus 12 below). Check the actual installed version and authenticated `tools/list` before relying on a tool. Tool discovery does not grant execution permission.
 
 | Available in v2.7.3 (18) | Purpose |
 | --- | --- |
@@ -87,7 +87,7 @@ The official **v2.7.3** release has **18 standard Tools**; the current **unrelea
 | `ssh-command-run`, `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | SSH command and bounded SFTP |
 | `ssh-job-start`, `ssh-jobs-list`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Retained SSH Job lifecycle |
 
-| Added in unreleased v3 source (12) | Purpose |
+| Added in v3 source (12) | Purpose |
 | --- | --- |
 | `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-logs-query`, `ssh-file-patch`, `ssh-change-verify` | Typed SSH observations, conditional changes and independent verification; see [SSH operator contracts](docs/SSH-OPERATOR-CAPABILITIES.md) |
 | `ssh-batch-preview`, `ssh-batch-run` | Preview and queue durable SSH command Batch |
