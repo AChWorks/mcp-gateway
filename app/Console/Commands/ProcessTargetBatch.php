@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Application\Batch\TargetBatchWorker;
+use App\Application\Operations\OperationalSettings;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -12,7 +13,7 @@ final class ProcessTargetBatch extends Command
 
     protected $description = 'Process authorized, durable v3 Target Batch work; uncertain remote effects are never replayed.';
 
-    public function handle(TargetBatchWorker $worker): int
+    public function handle(TargetBatchWorker $worker, OperationalSettings $settings): int
     {
         $maxChildren = (int) $this->option('max-children');
         $maxSeconds = (int) $this->option('max-seconds');
@@ -21,8 +22,9 @@ final class ProcessTargetBatch extends Command
 
             return self::FAILURE;
         }
-        $maxChildren = $this->option('once') ? 1 : ($maxChildren ?: max(1, (int) config('batch.worker_max_children', 16)));
-        $maxSeconds = $maxSeconds ?: max(1, (int) config('batch.worker_max_seconds', 50));
+        $limits = $settings->batchLimits();
+        $maxChildren = $this->option('once') ? 1 : ($maxChildren ?: $limits['worker_max_children']);
+        $maxSeconds = $maxSeconds ?: $limits['worker_max_seconds'];
         $start = hrtime(true);
         $done = 0;
         while ($done < $maxChildren && (hrtime(true) - $start) / 1_000_000_000 < $maxSeconds) {

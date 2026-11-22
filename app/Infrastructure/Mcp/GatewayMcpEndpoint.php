@@ -15,15 +15,6 @@ use Symfony\Component\HttpFoundation\Response;
 /** Transport and verified session boundary; tool registration is delegated. */
 final readonly class GatewayMcpEndpoint
 {
-    public function __construct(
-        private TargetMcpToolRegistrar $targets,
-        private WordpressMcpToolRegistrar $wordpress,
-        private ArvanMcpToolRegistrar $arvan,
-        private FileTransferMcpToolRegistrar $files,
-        private SshMcpToolRegistrar $ssh,
-        private TargetBatchMcpToolRegistrar $batches,
-    ) {}
-
     public function handle(Request $request): Response
     {
         $builder = Server::builder()
@@ -39,12 +30,16 @@ final readonly class GatewayMcpEndpoint
 
         // Preserve the verified v2 ordering and dynamic tool schemas. A future
         // discovery strategy cannot alter the actual operation executors.
-        $this->targets->register($builder, $request);
-        $this->wordpress->register($builder, $request);
-        $this->arvan->register($builder, $request);
-        $this->files->register($builder, $request);
-        $this->ssh->register($builder, $request);
-        $this->batches->register($builder, $request);
+        // Laravel caches route-controller instances in a long-lived Router.
+        // Resolve registrars on each invocation rather than in its constructor:
+        // otherwise their request-scoped OperationalSettings may be stale on
+        // subsequent requests. Keep the direct handle(Request) contract too.
+        app(TargetMcpToolRegistrar::class)->register($builder, $request);
+        app(WordpressMcpToolRegistrar::class)->register($builder, $request);
+        app(ArvanMcpToolRegistrar::class)->register($builder, $request);
+        app(FileTransferMcpToolRegistrar::class)->register($builder, $request);
+        app(SshMcpToolRegistrar::class)->register($builder, $request);
+        app(TargetBatchMcpToolRegistrar::class)->register($builder, $request);
 
         $server = $builder->build();
 

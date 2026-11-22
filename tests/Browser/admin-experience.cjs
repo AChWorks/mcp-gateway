@@ -397,6 +397,13 @@ async function nativeFormsAndScope(browser) {
     try {
         await enter(page);
         await nav(page, 'Operational settings', 'Operational settings');
+        const batchGroup = page.locator('#settings-target-batch');
+        assert.equal(await batchGroup.count(), 1, 'Owner Batch controls must be in the existing audited form.');
+        for (const key of ['batch_max_parallelism', 'batch_global_active', 'batch_user_active',
+            'batch_worker_max_children', 'batch_worker_max_seconds']) {
+            assert.equal(await batchGroup.locator('input[name="values[' + key + ']"]').count(), 1,
+                'Batch setting must have one labelled numeric control: ' + key);
+        }
         const posts = [];
         page.on('request', request => {
             if (new URL(request.url()).pathname === '/admin/operations' && request.method() === 'PUT') {
@@ -687,7 +694,9 @@ async function networkFailure(browser) {
         assert.equal(nativeFallbacks, 1, 'Failed enhanced GET must fall back to one real native GET.');
         assert.match(page.url(), /\/admin\/targets$/);
         assert.match(await page.title(), /Targets/);
-        assert.equal(await page.locator('.admin-nav [aria-current="page"]').innerText(), 'Targets');
+        const currentLink = page.locator('.admin-nav a[aria-current="page"]');
+        assert.equal(await currentLink.count(), 1, 'Exactly one current navigation link must remain after fallback.');
+        assert.equal((await currentLink.innerText()).trim(), 'Targets');
         assert.equal(await page.evaluate(() => window.__beforeFailureDocument), undefined);
         assert.equal(await page.locator('#main-content').getAttribute('aria-busy'), null);
         assert.equal(errorStates.length, 1, 'The product did not expose its navigation error state.');

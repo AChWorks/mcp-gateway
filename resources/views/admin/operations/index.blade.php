@@ -54,6 +54,15 @@
             ],
         ],
         [
+            'id' => 'target-batch',
+            'title' => __('Target Batch execution'),
+            'description' => __('Controls how many previously authorized Target operations may run at once. These limits do not cap registered/selected Targets, change permissions, or start background workers. The smallest applicable active budget wins.'),
+            'keys' => [
+                'batch_max_parallelism', 'batch_global_active', 'batch_user_active',
+                'batch_worker_max_children', 'batch_worker_max_seconds',
+            ],
+        ],
+        [
             'id' => 'ssh-inline',
             'title' => __('SSH SFTP inline windows'),
             'description' => __('Per-call file read/write decoded-byte limits and directory-name aggregate. These do not change SSH whole-file transfer budgets or internal streaming block sizes.'),
@@ -83,6 +92,11 @@
         'ssh_file_read_window_kib' => __('Maximum inline SFTP read per call (KiB)'),
         'ssh_file_write_window_kib' => __('Maximum inline SFTP write per call (KiB)'),
         'ssh_file_list_name_kib' => __('Maximum directory listing aggregate names (KiB)'),
+        'batch_max_parallelism' => __('Concurrent children requested by one Batch'),
+        'batch_global_active' => __('Active children across the Gateway'),
+        'batch_user_active' => __('Active children across Batches per user'),
+        'batch_worker_max_children' => __('Maximum children claimed per worker invocation'),
+        'batch_worker_max_seconds' => __('Worker time budget between child operations'),
     ];
 @endphp
 <div class="page-heading">
@@ -142,6 +156,7 @@
             <li>{{ __('SSH whole-file limits are independent of Owner-selected inline SFTP read/write windows, 64 KiB temporary streaming blocks, and WordPress transfer limits. The binary sidecar must be independently enabled and authorized.') }}</li>
             <li>{{ __('SSH Job concurrency counts only live admission leases, not retained historical records. Remote systemd runtime and metadata retention are independent. A stale or ambiguous Job is never automatically replayed; remote uncertainty remains visible after its admission lease ends.') }}</li>
             <li>{{ __('Unverifiable orphaned Job spools require deliberate operator reconciliation after independently verified cleanup on the original SSH host, never a newly rebound Target.') }}</li>
+            <li>{{ __('Target Batch concurrency limits apply only to active remote operations, not the number of registered or selected Targets. A single scheduled worker processes children one at a time; launch separately authorized workers to use higher concurrency. The worker time budget is checked between children, never used to terminate a running remote effect.') }}</li>
             <li>{{ __('Selecting up to 600 seconds for a synchronous SSH command requires the hosting PHP worker, HTTP proxy and MCP client to support that duration. An unsupported hop can terminate the HTTP request even when the remote effect is uncertain. Use detached SSH Jobs for longer or uncertain work.') }}</li>
             <li>{{ __('Values cannot override PHP worker, proxy/CDN, filesystem or actual client limits. These bounded ranges remain provisional pending operational measurements.') }}</li>
         </ul>
@@ -161,16 +176,22 @@
                         @php
                             $range = $definitions[$key];
                             $isTime = str_ends_with($key, '_seconds');
+                            $batchCountKeys = [
+                                'batch_max_parallelism', 'batch_global_active',
+                                'batch_user_active', 'batch_worker_max_children',
+                            ];
                             $unit = str_ends_with($key, '_hours') ? __('hours')
-                                : (str_ends_with($key, '_per_user') ? __('jobs')
+                                : ($key === 'ssh_job_max_active_per_user' ? __('jobs')
                                     : ($key === 'dcr_registration_capacity' ? __('clients')
-                                        : ($isTime ? __('seconds') : __('KiB'))));
+                                        : (in_array($key, $batchCountKeys, true) ? __('children')
+                                            : ($isTime ? __('seconds') : __('KiB')))));
                             $fieldId = 'setting_'.$key;
                             $effective = $state['overrides'][$key] ?? $defaults[$key];
                             if ($key === 'wp_request_timeout_seconds') {
                                 $effective = max($effective, $state['overrides']['wp_connect_timeout_seconds'] ?? $defaults['wp_connect_timeout_seconds']);
                             }
-                            $isIntegerUnit = $isTime || str_ends_with($key, '_hours') || str_ends_with($key, '_per_user') || $key === 'dcr_registration_capacity';
+                            $isIntegerUnit = $isTime || str_ends_with($key, '_hours') || str_ends_with($key, '_per_user')
+                                || $key === 'dcr_registration_capacity' || in_array($key, $batchCountKeys, true);
                             $formattedEffective = $isIntegerUnit ? $effective : number_format($effective, 2);
                             $formattedDefault = $isIntegerUnit ? $defaults[$key] : number_format($defaults[$key], 2);
                             $overridden = array_key_exists($key, $state['overrides']);

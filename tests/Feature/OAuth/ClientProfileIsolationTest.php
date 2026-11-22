@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\OAuth;
 
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
@@ -131,6 +132,25 @@ final class ClientProfileIsolationTest extends TestCase
                     && ! in_array($tool['name'], $internalOnly, true), $tool['annotations']['openWorldHint'] ?? null);
             }
         }
+        // Owner changes must update actual public schemas, not just the
+        // Admin form or the backend planner. Existing authorized clients
+        // discover the next permitted concurrency on a new request.
+        DB::table('operational_settings')->where('id', 1)->update(['batch_max_parallelism' => 7]);
+        // This multi-request fixture keeps the Laravel container alive. A real
+        // request gets a fresh scoped OperationalSettings instance.
+        $this->app->forgetScopedInstances();
+        self::assertSame(7, app(OperationalSettings::class)->batchLimits()['max_parallelism']);
+        $reconfigured = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$chatTokens['access_token']])
+            ->postJson('/mcp', $mcp)->assertOk();
+        $reconfiguredTools = collect((array) $reconfigured->json('result.tools'))->keyBy('name');
+        foreach (['ssh-batch-preview', 'ssh-batch-run',
+            'wordpress-bridge-batch-preview', 'wordpress-bridge-batch-read'] as $name) {
+            self::assertSame(7,
+                $reconfiguredTools[$name]['inputSchema']['properties']['parallelism']['maximum'] ?? null);
+        }
+        DB::table('operational_settings')->where('id', 1)->update(['batch_max_parallelism' => null]);
+        $this->app->forgetScopedInstances();
+
         // The profile must be the authenticated OAuth registration, never an
         // untrusted clientInfo or caller-claimed host feature. Target-level
         // permissions and the installed SSH transfer feature govern discovery.
@@ -191,6 +211,9 @@ final class ClientProfileIsolationTest extends TestCase
         self::assertIsArray($fileTool);
         self::assertSame(['ssh_sftp_upload'], $fileTool['inputSchema']['properties']['mode']['enum']);
         self::assertSame(['file'], $fileTool['_meta']['openai/fileParams']);
+        self::assertStringContainsString('genuine ChatGPT host-supplied FileParams', $fileTool['description']);
+        self::assertStringContainsString('not an invented download_url/file_id', $fileTool['description']);
+        self::assertStringContainsString('uncertain SSH upload', $fileTool['description']);
 
         $otherClient = $this->withHeaders([...$headers, 'Authorization' => 'Bearer '.$fixtureTokens['access_token']])
             ->postJson('/mcp', $mcp)->assertOk();

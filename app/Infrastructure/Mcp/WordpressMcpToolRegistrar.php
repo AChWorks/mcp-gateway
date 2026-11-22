@@ -72,7 +72,7 @@ final readonly class WordpressMcpToolRegistrar
             ->addTool(
                 handler: fn (string $target_id, string $ability, array $input = []): array => $this->wordpress->execute($this->principal->user($request), $target_id, $ability, $input),
                 name: 'wordpress-ability-execute',
-                description: 'Execute one explicitly authorized WordPress Ability with runtime safety-class enforcement.',
+                description: 'Execute one WordPress Ability on an authorized Target. First use wordpress-abilities-read to inspect its exact name, input schema and declared effects. Gateway checks current user/Target rights, read-only vs mutating/destructive classification and downstream WordPress permissions. A write may create or alter remote content; reconcile unknown outcomes before retrying.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',

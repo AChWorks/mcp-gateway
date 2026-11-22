@@ -3,6 +3,7 @@
 namespace App\Application\Batch;
 
 use App\Application\Access\AccessControl;
+use App\Application\Operations\OperationalSettings;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityAttribution;
 use App\Infrastructure\Activity\ActivityRecorder;
@@ -26,6 +27,7 @@ final readonly class TargetBatchWorker
         private TargetBatchBinding $bindings,
         private AccessControl $access,
         private ActivityRecorder $activity,
+        private OperationalSettings $settings,
     ) {}
 
     /** @return array<string,mixed>|null A single durable child attempt, or idle */
@@ -41,7 +43,8 @@ final readonly class TargetBatchWorker
         // admission slot ahead of its siblings. Bound contention rescans to
         // the already-configured global active budget; a later invocation
         // can retry if contention persists, without spinning indefinitely.
-        $rescanLimit = max(1, (int) config('batch.global_active', 4));
+        $limits = $this->settings->batchLimits();
+        $rescanLimit = $limits['global_active'];
         for ($rescan = 0; $rescan <= $rescanLimit; $rescan++) {
             $stale = false;
             $afterTurn = null;
@@ -69,7 +72,7 @@ final readonly class TargetBatchWorker
                     $afterTurn = (int) $candidate->last_dispatch_turn;
                     $afterCreatedAt = $candidate->created_at;
                     $afterId = $candidate->id;
-                    $claimed = DB::transaction(function () use ($candidate): ?array {
+                    $claimed = DB::transaction(function () use ($candidate, $limits): ?array {
                         // A shared singleton lock serializes global/user capacity
                         // admission across concurrent Laravel worker processes.
                         $admission = DB::table('operational_settings')->where('id', 1)
@@ -127,14 +130,14 @@ final readonly class TargetBatchWorker
                         }
                         $globalActive = DB::table('target_batch_items')
                             ->whereIn('status', ['dispatching', 'cancel_requested'])->count();
-                        if ($globalActive >= max(1, (int) config('batch.global_active', 4))) {
+                        if ($globalActive >= $limits['global_active']) {
                             return null;
                         }
                         $userActive = DB::table('target_batch_items as items')
                             ->join('target_batches as batches', 'batches.id', '=', 'items.batch_id')
                             ->where('batches.actor_user_id', $batch->actor_user_id)
                             ->whereIn('items.status', ['dispatching', 'cancel_requested'])->count();
-                        if ($userActive >= max(1, (int) config('batch.user_active', 2))) {
+                        if ($userActive >= $limits['user_active']) {
                             return null;
                         }
                         // Concurrent Batches may bypass a busy child to use

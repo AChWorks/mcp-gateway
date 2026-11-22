@@ -1,3 +1,13 @@
+# MCP Gateway v3.0.0-rc.13
+
+**Source candidate `3.0.0-rc.13` — NOT PUBLISHED.**
+
+- Under Issue #330, adds five authenticated, Owner-only, revision-checked and audited Target Batch resource controls: per-Batch requested concurrency, Gateway active children, per-User active children, children handled per CLI worker invocation and the invocation's between-children time budget. Effective defaults remain the existing `BATCH_*` settings; resetting a field restores that default. Active limits are **not** limits on registered or explicitly selected Targets. Remote effects, permission checks, exact target binding, fairness, cancellation and non-replayable uncertainty retain their original semantics.
+- The same new configured values are consumed by actual Batch Preview, current MCP `tools/list` schemas, claim admission and CLI Worker. Laravel's cached route controller now resolves tool registrars per actual request rather than retaining a previous request's scoped Operational Settings snapshot. Source, standalone settings UI and authenticated dynamic-schema regressions protect the contract.
+- Improves AI-facing FileParams/WordPress Ability Tool selection guidance: both opt-in file tools stay **OFF** by default and must receive genuine host-supplied FileParams; an ordinary ChatGPT conversation attachment does not automatically supply one. WordPress staging cannot publish Media and native import is separately authorized; SSH file publication must be reconciled before an uncertain replay. No new Tool, permission, FileParams host capability or remote file effect was enabled.
+- Adds a ninth, clearly labelled Target Batch group to the existing Owner settings page, retaining the single auditable password-confirmed form, old-browser-tab compatibility, responsive native layout and honest unit labels. Corrects a whitespace-fragile Chromium navigation regression assertion while preserving the real native-fallback, active-link, and error-state checks.
+- Current #226 permission framework remains the single source of role/Target/Group/global-deny and AI/consent authority. A bounded cross-surface source audit did not justify inventing a new permission engine or widening existing roles; real-host/principal and independent review still apply. This source candidate has **no approval to Merge, publish, install, or update Production**.
+
 # MCP Gateway v3.0.0-rc.12
 
 **Source candidate `3.0.0-rc.12` — NOT PUBLISHED.**

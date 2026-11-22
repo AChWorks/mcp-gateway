@@ -30,7 +30,7 @@ final class AdminPageConsistencyTest extends TestCase
 
         $links = $xpath->query('//nav[@aria-label="Operational settings sections"]/a');
         self::assertNotFalse($links);
-        self::assertSame(10, $links->length);
+        self::assertSame(11, $links->length);
         foreach ($links as $link) {
             $id = substr($link->getAttribute('href'), 1);
             self::assertSame(1, (int) $xpath->evaluate('count(//*[@id="'.$id.'"])'));
