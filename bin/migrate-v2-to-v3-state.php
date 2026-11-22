@@ -32,6 +32,7 @@ function tableName(string $schema, string $table): string
 {
     return quoteId($schema).'.'.quoteId($table);
 }
+/** @return list<array<string, mixed>> */
 function rows(PDO $pdo, string $sql): array
 {
     return $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
@@ -40,6 +41,7 @@ function countTable(PDO $pdo, string $schema, string $table): int
 {
     return (int) $pdo->query('SELECT COUNT(*) FROM '.tableName($schema, $table))->fetchColumn();
 }
+/** @return list<string> */
 function dbColumns(PDO $pdo, string $schema, string $table): array
 {
     $stmt = $pdo->prepare('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION');
@@ -47,6 +49,7 @@ function dbColumns(PDO $pdo, string $schema, string $table): array
 
     return $stmt->fetchAll(PDO::FETCH_COLUMN);
 }
+/** @return list<string> */
 function pkColumns(PDO $pdo, string $schema, string $table): array
 {
     $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_KEY='PRI' ORDER BY ORDINAL_POSITION");
@@ -54,10 +57,12 @@ function pkColumns(PDO $pdo, string $schema, string $table): array
 
     return $stmt->fetchAll(PDO::FETCH_COLUMN);
 }
+/** @param list<string> $pk */
 function joinPk(array $pk): string
 {
     return implode(' AND ', array_map(fn ($k) => 'd.'.quoteId($k).' = s.'.quoteId($k), $pk));
 }
+/** @return list<string> */
 function sharedColumns(PDO $pdo, string $source, string $dest, string $table): array
 {
     $src = dbColumns($pdo, $source, $table);
@@ -68,6 +73,7 @@ function sharedColumns(PDO $pdo, string $source, string $dest, string $table): a
 
     return $src;
 }
+/** @param list<string> $columns */
 function compareRecords(PDO $pdo, string $source, string $dest, string $table, array $columns, string $where = '1=1'): int
 {
     $pk = pkColumns($pdo, $source, $table);
@@ -79,6 +85,10 @@ function compareRecords(PDO $pdo, string $source, string $dest, string $table, a
 
     return (int) $pdo->query($sql)->fetchColumn();
 }
+/**
+ * @param  list<string>  $columns
+ * @param  array<string, string>  $extra
+ */
 function copyRows(PDO $pdo, string $source, string $dest, string $table, array $columns, string $where = '1=1', array $extra = []): int
 {
     $pk = pkColumns($pdo, $source, $table);
@@ -101,6 +111,7 @@ function sameOwner(PDO $pdo, string $source, string $dest): void
     check(count($old) === 1 && count($new) === 1, 'Require exactly one Owner per installation.');
     check($old[0]['id'] === $new[0]['id'] && strcasecmp($old[0]['email'], $new[0]['email']) === 0, 'Owner identity/ID differs: explicit remap required.');
 }
+/** @param list<string> $cols */
 function settingsSync(PDO $pdo, string $source, string $dest, array $cols): void
 {
     check(countTable($pdo, $source, 'operational_settings') === 1, 'Source setting singleton absent.');
@@ -252,6 +263,6 @@ try {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
-    fwrite(STDERR,'RESULT=FAILED '.get_class($e).' '.$e->getMessage()."\n");
+    fwrite(STDERR, 'RESULT=FAILED '.get_class($e).' '.$e->getMessage()."\n");
     exit(1);
 }
