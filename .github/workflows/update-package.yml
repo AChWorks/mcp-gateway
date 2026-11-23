@@ -9,7 +9,6 @@ on:
       - RELEASE_NOTES.md
       - 'database/migrations/**'
       - 'database/schema/**'
-      # V3 clean installs must NOT update historic v2 release databases.
       - '.env.example'
       - 'app/Support/SimpleWebInstaller.php'
       - 'config/ssh.php'
@@ -33,7 +32,6 @@ on:
       - 'public/.htaccess'
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
-      - 'bin/test-v3-major-upgrade-guard.sh'
       - 'bin/test-updater-recovery.php'
       - 'bin/test-updater-postflight.php'
       - 'bin/test-update-backup-integrity.sh'
@@ -51,7 +49,6 @@ on:
       - RELEASE_NOTES.md
       - 'database/migrations/**'
       - 'database/schema/**'
-      # V3 clean installs must NOT update historic v2 release databases.
       - '.env.example'
       - 'app/Support/SimpleWebInstaller.php'
       - 'config/ssh.php'
@@ -75,7 +72,6 @@ on:
       - 'public/.htaccess'
       - 'bin/prune-production-vendor.php'
       - 'bin/test-update-package.sh'
-      - 'bin/test-v3-major-upgrade-guard.sh'
       - 'bin/test-updater-recovery.php'
       - 'bin/test-updater-postflight.php'
       - 'bin/test-update-backup-integrity.sh'
@@ -139,11 +135,6 @@ jobs:
           python3 bin/test_released_baseline_parity.py
           bash bin/test-github-release-notes.sh
           python3 bin/test_project_license.py
-          if [[ "$version" == 3.* ]]; then
-            echo 'is_clean_v3=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'is_clean_v3=false' >> "$GITHUB_OUTPUT"
-          fi
           if bash bin/validate-version.sh candidate "$version" >/dev/null 2>&1; then
             echo 'is_candidate=true' >> "$GITHUB_OUTPUT"
           else
@@ -175,20 +166,10 @@ jobs:
           bash bin/build-update-package.sh mcp-gateway-update-ci dist/mcp-gateway-update-test-runtime
           bash bin/verify-update-package.sh dist/mcp-gateway-update-ci.zip
 
-      # Clean v3 has no v2 browser-update path. The real v3 ZIP must reject a
-      # synthetic v2 host before any effect; do not hide this as a skipped test.
-      - name: Verify clean v3 refuses a v2 in-place upgrade
-        if: steps.version_policy.outputs.is_clean_v3 == 'true'
-        run: |
-          bash bin/test-v3-major-upgrade-guard.sh \
-            dist/mcp-gateway-update-test-runtime \
-            dist/mcp-gateway-update-ci.zip
-
-      # PR candidate acceptance: use the production ZIP, a genuinely empty
+      # Verify the v3 ZIP can install on a genuinely empty
       # disposable MariaDB 12.3 schema and actual first-run installer. Never
       # point this at a real Gateway database.
       - name: Verify clean v3 packaged installer on isolated MariaDB
-        if: steps.version_policy.outputs.is_clean_v3 == 'true'
         env:
           V3_RELEASE_TEST_DB_HOST: 127.0.0.1
           V3_RELEASE_TEST_DB_PORT: 3306
@@ -200,13 +181,13 @@ jobs:
             dist/mcp-gateway-update-test-runtime.zip mcp-gateway-update-test-runtime
 
       - name: Download released deployment baselines
-        if: steps.version_policy.outputs.is_clean_v3 != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist/baseline
           mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
-          [[ ${#versions[@]} -eq 3 ]] || { echo "Rolling three-release baseline selection failed" >&2; exit 1; }
+          expected_count="$(python3 bin/test-released-baseline-parity.py --count)"
+          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Rolling three-release baseline selection failed" >&2; exit 1; }
           for version in "${versions[@]}"; do
             gh release download "v$version" \
               --pattern "mcp-gateway-v$version.zip*" \
@@ -218,7 +199,6 @@ jobs:
           done
 
       - name: Verify released-baseline browser updates
-        if: steps.version_policy.outputs.is_clean_v3 != 'true'
         env:
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
@@ -228,7 +208,8 @@ jobs:
           UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC: '1'
         run: |
           mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
-          [[ ${#versions[@]} -eq 3 ]] || { echo "Rolling three-release baseline selection failed" >&2; exit 1; }
+          expected_count="$(python3 bin/test-released-baseline-parity.py --count)"
+          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Rolling three-release baseline selection failed" >&2; exit 1; }
           for version in "${versions[@]}"; do
             bash bin/test-update-package.sh \
               dist/mcp-gateway-update-ci.zip \
@@ -236,7 +217,6 @@ jobs:
           done
 
       - name: Verify released-baseline backup integrity fail-safe
-        if: steps.version_policy.outputs.is_clean_v3 != 'true'
         env:
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
@@ -245,7 +225,8 @@ jobs:
           UPDATE_TEST_DB_PASSWORD: test-password
         run: |
           mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
-          [[ ${#versions[@]} -eq 3 ]] || { echo "Rolling three-release baseline selection failed" >&2; exit 1; }
+          expected_count="$(python3 bin/test-released-baseline-parity.py --count)"
+          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Rolling three-release baseline selection failed" >&2; exit 1; }
           for version in "${versions[@]}"; do
             bash bin/test-update-backup-integrity.sh \
               dist/mcp-gateway-update-ci.zip \
@@ -268,33 +249,19 @@ jobs:
             cd dist
             sha256sum "$release_zip" > "$release_zip.sha256"
           )
-          if [[ "${{ steps.version_policy.outputs.is_clean_v3 }}" != 'true' ]]; then
-            cp dist/mcp-gateway-update-ci.zip "dist/$update_zip"
-            (
-              cd dist
-              sha256sum "$update_zip" > "$update_zip.sha256"
-            )
-            bash bin/verify-update-package.sh "dist/$update_zip"
-          fi
+          cp dist/mcp-gateway-update-ci.zip "dist/$update_zip"
+          (
+            cd dist
+            sha256sum "$update_zip" > "$update_zip.sha256"
+          )
+          bash bin/verify-update-package.sh "dist/$update_zip"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "artifact=mcp-gateway-v$version-candidate-${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
-      # The v3 candidate is source/development proof only. Never expose an
-      # in-place v2->v3 update ZIP to operators as if it were a supported path.
-      - name: Upload clean v3 owner-test fresh-install candidate
-        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true' && steps.version_policy.outputs.is_clean_v3 == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ steps.candidate.outputs.artifact }}
-          path: |
-            dist/mcp-gateway-v${{ steps.candidate.outputs.version }}.zip
-            dist/mcp-gateway-v${{ steps.candidate.outputs.version }}.zip.sha256
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
-      - name: Upload owner-test legacy update candidate artifacts
-        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true' && steps.version_policy.outputs.is_clean_v3 != 'true'
+      # First v3.0.0 remains fresh-install-only. Later v3 releases ship a
+      # separately tested browser update ZIP.
+      - name: Upload owner-test same-major update candidate artifacts
+        if: github.event_name == 'pull_request' && steps.version_policy.outputs.is_candidate == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.candidate.outputs.artifact }}

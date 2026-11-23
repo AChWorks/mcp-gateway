@@ -19,7 +19,7 @@ import release_publication_guard as guard
 
 APPROVED = "a" * 40
 OTHER = "b" * 40
-VERSION = "2.2.1"
+VERSION = "3.0.1"
 TAG = "v" + VERSION
 
 
@@ -730,10 +730,11 @@ class CleanV3PublicationTests(unittest.TestCase):
         with self.local_mock():
             self.assertEqual(guard.published_package_names(self.version), (self.base,))
             self.assertEqual(set(guard.local_assets(self.version)), set(self.files))
-        self.assertEqual(len(guard.published_package_names("2.7.3")), 2)
-        for future in ("1.0.0", "3.0.1", "3.1.0", "4.0.0"):
+        self.assertEqual(guard.published_package_names("3.0.1"),
+                         ("mcp-gateway-v3.0.1.zip", "mcp-gateway-update-v3.0.1.zip"))
+        for future in ("1.0.0", "4.0.0"):
             with self.subTest(unsupported=future):
-                with self.assertRaisesRegex(guard.PublicationStateError, "Unsupported release version"):
+                with self.assertRaisesRegex(guard.PublicationStateError, "Gateway v3 only"):
                     guard.published_package_names(future)
 
     def test_v3_postpublication_proves_two_immutable_downloaded_assets(self) -> None:
@@ -774,68 +775,35 @@ class CleanV3PublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(guard.PublicationStateError, "checksum companion"):
                 guard.verify_remote_assets(self.release(), "v" + self.version, self.version, guard.REPOSITORY)
 
-    def test_v3_public_release_notes_heredoc_renders_markdown_literally(self) -> None:
-        # Exercise the literal Bash heredoc EXTRACTED from the release workflow.
-        # An unquoted heredoc would interpret Markdown backticks as commands.
+    def test_v3_release_workflow_has_one_reviewed_install_and_update_path(self) -> None:
         workflow = (Path(__file__).resolve().parent.parent /
                     ".github/workflows/release-package.yml").read_text()
-        marker = "cat >> dist/release-notes.md <<'EOF_NOTES'"
-        self.assertIn(marker, workflow)
-        fragment = workflow.split(marker, 1)[1].split("EOF_NOTES", 1)[0]
-        body = "\n".join(
-            line[10:] if line.startswith(" " * 10) else line
-            for line in fragment.splitlines()
-        )
-        script = "set -euo pipefail\nmkdir -p dist\n" + marker + "\n" + body + "\nEOF_NOTES\n"
-        with tempfile.TemporaryDirectory(prefix="v3-notes-literal-") as root:
-            result = subprocess.run(
-                ["bash", "-c", script], cwd=root, capture_output=True,
-                text=True, check=True, timeout=5,
-            )
-            self.assertEqual(result.stderr, "")
-            rendered = (Path(root) / "dist/release-notes.md").read_text()
-            for snippet in (
-                "`mcp-gateway-v3.0.0.zip`", "`.sha256`", "`.env`",
-                "`public/`", "`/install`", "`/up`", "`/update/`",
-                "**dedicated, empty database**",
-            ):
-                self.assertIn(snippet, rendered)
-            self.assertNotIn("$PACKAGE", rendered)
-            self.assertIn("No production server is deployed or modified", rendered)
-
-    def test_v3_release_workflow_has_separate_gates_and_no_v2_update_distribution(self) -> None:
-        workflow = (Path(__file__).resolve().parent.parent /
-                    ".github/workflows/release-package.yml").read_text()
-        required = {
-            "Verify clean v3 ZIP can initialize an isolated empty MariaDB database": "true",
-            "Verify v3 clean release rejects v2 in-place upgrading": "true",
-            "Publish clean-v3 fresh-install-only GitHub release": "true",
-            "Build browser update ZIP": "false",
-            "Verify browser update ZIP": "false",
-            "Download released deployment baselines": "false",
-            "Verify released-baseline browser updates": "false",
-            "Verify released-baseline backup integrity fail-safe": "false",
-            "Publish legacy-v2 GitHub release": "false",
-        }
-        for name, mode in required.items():
-            self.assertIn(
-                f"- name: {name}\n        if: steps.release.outputs.is_clean_v3 == '{mode}'",
-                workflow,
-                f"Missing exact source-version gate on {name}",
-            )
+        for name in (
+            "Verify clean v3 ZIP can initialize an isolated empty MariaDB database",
+            "Build browser update ZIP",
+            "Verify browser update ZIP",
+            "Download released deployment baselines",
+            "Verify released-baseline browser updates",
+            "Verify released-baseline backup integrity fail-safe",
+            "Publish v3 deployment and browser-update release",
+        ):
+            self.assertIn(f"- name: {name}", workflow)
+        self.assertNotIn("is_clean_v3", workflow)
+        self.assertEqual(workflow.count("gh release create"), 1)
+        self.assertIn('dist/$UPDATE_PACKAGE.zip.sha256', workflow)
+        self.assertIn('bash bin/render-github-release-notes.sh "$VERSION" RELEASE_NOTES.md', workflow)
         self.assertIn("bin/test-v3-fresh-install-package.sh", workflow)
-        self.assertIn("bin/test-v3-major-upgrade-guard.sh", workflow)
+        self.assertIn("bin/release_publication_guard.py before", workflow)
+        self.assertEqual(workflow.count("bin/release_publication_guard.py reserve"), 1)
+        self.assertEqual(workflow.count("bin/release_publication_guard.py after"), 1)
+
         pr_workflow = (Path(__file__).resolve().parent.parent /
                        ".github/workflows/update-package.yml").read_text()
-        self.assertIn(
-            "- name: Verify clean v3 packaged installer on isolated MariaDB\n"
-            "        if: steps.version_policy.outputs.is_clean_v3 == 'true'",
-            pr_workflow,
-        )
+        self.assertIn("- name: Verify clean v3 packaged installer on isolated MariaDB", pr_workflow)
         self.assertIn("bin/test-v3-fresh-install-package.sh", pr_workflow)
-        self.assertIn("bin/release_publication_guard.py before", workflow)
-        self.assertEqual(workflow.count("bin/release_publication_guard.py reserve"), 2)
-        self.assertEqual(workflow.count("bin/release_publication_guard.py after"), 1)
+        self.assertIn("- name: Upload owner-test same-major update candidate artifacts", pr_workflow)
+        self.assertIn("mcp-gateway-update-v${{ steps.candidate.outputs.version }}.zip.sha256", pr_workflow)
+        self.assertNotIn("is_clean_v3", pr_workflow)
 
 
 if __name__ == "__main__":

@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace McpGatewayUpdate;
 
 use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Throwable;
 
@@ -42,16 +40,6 @@ final class WebUpdater
 
     private const BACKUP_MANIFEST_FILE = 'BACKUP_MANIFEST.sha256';
 
-    // Standalone updater must inspect the *installed* v1 schema before
-    // replacing Laravel source. Keep this list aligned with the destructive
-    // transition's LEGACY_TABLES; only existence, never secret data, is read.
-    private const LEGACY_TARGET_TABLES = [
-        'sites', 'site_credentials', 'site_oauth_flows', 'site_revocation_intents',
-        'site_target_reservations', 'site_check_operations', 'site_check_operation_targets',
-        'site_groups', 'site_group_sites', 'site_group_users',
-        'site_group_permission_denials', 'user_site_access', 'user_site_permission_denials',
-    ];
-
     public function __construct(
         private readonly string $basePath,
         private readonly string $packagePath,
@@ -67,27 +55,15 @@ final class WebUpdater
      *
      * @param  array<string,mixed>|null  $account
      */
-    public static function accountMayStart(?array $account, string $installedVersion): bool
+    public static function accountMayStart(?array $account): bool
     {
-        if ($account === null || ! isset($account['id'])
-            || (! is_int($account['id']) && ! is_string($account['id']))
-            || ! ctype_digit((string) $account['id']) || (int) $account['id'] < 1) {
-            return false;
-        }
-
-        // A partial schema or malformed modern role must never become a
-        // role-less compatibility grant.
-        if (array_key_exists('role', $account) || array_key_exists('access_enabled', $account)) {
-            return ($account['role'] ?? null) === 'owner'
-                && in_array($account['access_enabled'] ?? null, [true, 1, '1'], true);
-        }
-
-        // These supported releases predate the access-control schema; every
-        // authenticated local account was an administrator. v1.2.1 and newer
-        // must have explicit Owner/enabled fields, even on a damaged schema.
-        return preg_match('/\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z/D', $installedVersion) === 1
-            && version_compare($installedVersion, '1.1.2', '>=')
-            && version_compare($installedVersion, '1.1.10', '<=');
+        return $account !== null
+            && isset($account['id'])
+            && (is_int($account['id']) || is_string($account['id']))
+            && ctype_digit((string) $account['id'])
+            && (int) $account['id'] >= 1
+            && ($account['role'] ?? null) === 'owner'
+            && in_array($account['access_enabled'] ?? null, [true, 1, '1'], true);
     }
 
     /** @return array{installed:string,target:string,checks:array<string,bool>} */
@@ -102,24 +78,6 @@ final class WebUpdater
 
         if ($payloadVersion !== $target) {
             throw new RuntimeException('Update metadata and payload version do not match.');
-        }
-
-        // A clean v3 database has no in-place upgrade path from the v2
-        // migration ledger. Refuse the candidate before maintenance, code
-        // replacement or any database modification, regardless of attestations.
-        // This updater is shipped IN the new package and runs on the existing
-        // v2 host during a candidate update's read-only preflight.
-        $installedMajor = (int) explode('.', $installed, 2)[0];
-        $targetMajor = (int) explode('.', $target, 2)[0];
-        if ($targetMajor >= 3 && $installedMajor !== $targetMajor) {
-            throw new RuntimeException(sprintf(
-                'MCP Gateway %s cannot be upgraded in place to %s: v3 requires a clean installation '
-                .'and a fresh database. Preserve the complete, independently restorable v2 code, '
-                .'database, private configuration and keys. A major-version transition requires '
-                .'separate Owner authorization; no files or database contents were changed.',
-                $installed,
-                $target,
-            ));
         }
 
         if (version_compare($installed, $target, '>=')) {
@@ -163,74 +121,13 @@ final class WebUpdater
         ];
     }
 
-    /**
-     * Read-only reset preflight, before maintenance/code mutation. No token,
-     * credential or personal data is read or exposed by this summary.
-     *
-     * @return array{required:bool,affected:array<string,bool>,package_sha256:string,from:string,to:string}
-     */
-    public function targetResetPreflight(): array
+    /** @return array{from:string,to:string,continuation:string} */
+    public function stage(string $browserToken): array
     {
-        $info = $this->inspect();
-
-        return $this->targetResetPlan($info['installed'], $info['target']);
+        return $this->withExecutionLock(fn (): array => $this->timed('stage-total', fn (): array => $this->stageLocked($browserToken)));
     }
 
-    /** @return array{required:bool,affected:array<string,bool>,package_sha256:string,from:string,to:string} */
-    private function targetResetPlan(string $from, string $to): array
-    {
-        $manifestSha = hash_file('sha256', $this->packagePath.'/manifest.sha256');
-        if (! is_string($manifestSha) || preg_match('/^[a-f0-9]{64}$/D', $manifestSha) !== 1) {
-            throw new RuntimeException('Could not bind the reset preflight to the extracted update package.');
-        }
-
-        $affected = [
-            'WordPress Sites and connector credentials' => false,
-            'Target assignments, groups and pending operations' => false,
-            'Target-scoped Activity' => false,
-            'Gateway OAuth client grants (including ChatGPT tokens)' => false,
-        ];
-        if (version_compare($from, '2.0.0', '>=') || version_compare($to, '2.0.0', '<')) {
-            return ['required' => false, 'affected' => $affected, 'package_sha256' => $manifestSha, 'from' => $from, 'to' => $to];
-        }
-
-        foreach (self::LEGACY_TARGET_TABLES as $table) {
-            if (! Schema::hasTable($table)) {
-                continue;
-            }
-            $present = DB::table($table)->exists();
-            if (in_array($table, ['sites', 'site_credentials', 'site_oauth_flows', 'site_revocation_intents', 'site_target_reservations'], true)) {
-                $affected['WordPress Sites and connector credentials'] = $affected['WordPress Sites and connector credentials'] || $present;
-            } else {
-                $affected['Target assignments, groups and pending operations'] = $affected['Target assignments, groups and pending operations'] || $present;
-            }
-        }
-        if (Schema::hasTable('activity_events') && Schema::hasColumn('activity_events', 'site_id')) {
-            $affected['Target-scoped Activity'] = DB::table('activity_events')->whereNotNull('site_id')->exists();
-        }
-        if (Schema::hasTable('oauth_authorizations')) {
-            $affected['Gateway OAuth client grants (including ChatGPT tokens)'] = DB::table('oauth_authorizations')->exists();
-        }
-
-        return [
-            'required' => in_array(true, $affected, true),
-            'affected' => $affected,
-            'package_sha256' => $manifestSha,
-            'from' => $from,
-            'to' => $to,
-        ];
-    }
-
-    /**
-     * @param  array<string,string>  $attestations
-     * @return array{from:string,to:string,continuation:string}
-     */
-    public function stage(string $browserToken, array $attestations = []): array
-    {
-        return $this->withExecutionLock(fn (): array => $this->timed('stage-total', fn (): array => $this->stageLocked($browserToken, $attestations)));
-    }
-
-    private function stageLocked(string $browserToken, array $attestations): array
+    private function stageLocked(string $browserToken): array
     {
         if (is_file($this->statePath())) {
             throw new RuntimeException('An update is already staged. Resume or recover it; do not start another update.');
@@ -239,20 +136,6 @@ final class WebUpdater
         $info = $this->inspect();
         $from = $info['installed'];
         $to = $info['target'];
-        $plan = $this->targetResetPlan($from, $to);
-        $resetApproved = $plan['required']
-            && ($attestations['reset_acknowledged'] ?? null) === 'RESET_TARGET_STATE'
-            && ($attestations['database_backup_verified'] ?? null) === 'RESTORABLE_DATABASE_BACKUP_VERIFIED'
-            && ($attestations['confirmed_target_version'] ?? null) === $to
-            && is_string($attestations['package_sha256'] ?? null)
-            && hash_equals($plan['package_sha256'], $attestations['package_sha256']);
-
-        // A configured .env acknowledgment is NOT a substitute for a fresh,
-        // package-bound browser attestation. Reject before backup, maintenance
-        // or any live application file mutation.
-        if ($plan['required'] && ! $resetApproved) {
-            throw new RuntimeException('Breaking Target reset requires both explicit browser confirmations for this exact update package and an independently restorable database backup. No files were changed.');
-        }
         $continuation = bin2hex(random_bytes(32));
 
         $this->runArtisan('gateway:check', ['--no-interaction' => true], 'Current Gateway preflight failed. No files were changed.');
@@ -287,8 +170,6 @@ final class WebUpdater
                 'backup' => $backup,
                 'phase' => 'replace-files',
                 'migration_started' => false,
-                'target_reset_attested' => $resetApproved,
-                'target_reset_package_sha256' => $plan['package_sha256'],
                 'browser_token_hash' => hash('sha256', $browserToken),
                 'continuation_token' => $continuation,
             ]);
@@ -310,8 +191,6 @@ final class WebUpdater
                 'backup' => $backup,
                 'phase' => 'files-replaced',
                 'migration_started' => false,
-                'target_reset_attested' => $resetApproved,
-                'target_reset_package_sha256' => $plan['package_sha256'],
                 'browser_token_hash' => hash('sha256', $browserToken),
                 'continuation_token' => $continuation,
                 'continuation_expires_at' => $this->now() + self::BROWSER_SESSION_TTL_SECONDS,
@@ -415,20 +294,6 @@ final class WebUpdater
             $this->assertBackupCredible($backup, $from, $to);
             $backupCredible = true;
             $this->timed('verify-installed', fn () => $this->assertInstalledRuntimeMatchesPackage($to));
-            $plan = $this->targetResetPlan($from, $to);
-            if ($plan['required']) {
-                if (($state['target_reset_attested'] ?? null) !== true
-                    || ! is_string($state['target_reset_package_sha256'] ?? null)
-                    || ! hash_equals($plan['package_sha256'], $state['target_reset_package_sha256'])) {
-                    throw new RuntimeException('The package-bound Target reset/backup attestation is absent or stale. Database migration was not started.');
-                }
-
-                // Per-update, in-memory configuration for this migration call,
-                // NOT persistent .env consent that can silently authorize
-                // unrelated future upgrades.
-                config()->set('target_transition.reset_acknowledged', 'RESET_TARGET_STATE');
-                config()->set('target_transition.database_backup_verified', 'RESTORABLE_DATABASE_BACKUP_VERIFIED');
-            }
             $this->runArtisan('optimize:clear', ['--no-interaction' => true], 'Cache cleanup failed after file replacement.');
 
             $state['phase'] = 'migrate';

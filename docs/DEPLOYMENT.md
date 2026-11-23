@@ -1,8 +1,8 @@
 # MCP Gateway Deployment Baseline
 
-## V3 clean-install development boundary
+## Gateway v3 installation and upgrades
 
-The **v3 source and first stable v3** (verify exact identity in [VERSION](../VERSION) and [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases)) are **fresh-database-only**, not an in-place v2 upgrade. A valid v2 installation, database, credentials, OAuth grants and SSH Job state must remain untouched until an independently approved cutover and full verified-restorable backup/re-enrollment plan exists. Do **not** run v3 migrations, the v2 browser updater or any v3 ZIP against an installed v2 database. The v2 browser updater remains v2-only. Any first-stable-v3 publication must use an independently reviewed, Owner-approved **fresh-install-only** Release path; no v2-compatible update ZIP or automatic Production deployment is implied.
+Gateway v3.0.0 is the initial supported installation. Its first-install Web Installer requires a dedicated **empty database**; a clean installation must not reuse a previous Gateway database. Starting with later v3 releases, use the separately published **Update ZIP** through the enabled Owner's `/update/` browser flow to preserve the installed application data. Installing or merging source does not deploy production; verify the exact official Release, checksum, backup and installed version before an approved update. [Current acceptance](https://github.com/AChWorks/mcp-gateway/issues/330) distinguishes source tests from installed-host results.
 
 The source implements a scheduled CLI Batch worker (`php artisan gateway:batch-work`) with durable per-Target state. A single default scheduler process is **sequential**, not a measured multi-host throughput guarantee. A remote effect whose dispatch outcome is uncertain is recorded as `outcome_unknown`, never blindly replayed. **Installed v3 acceptance, provider connectivity, backup/rollback and public Release approval remain tracked in [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330)**; CI or a successful isolated installation does not establish a production deployment.
 
@@ -12,9 +12,9 @@ The source implements a scheduled CLI Batch worker (`php artisan gateway:batch-w
 | --- | --- |
 | **First-time published ZIP** on aaPanel/OpenLiteSpeed | [Requirements](#1-prerequisites) → [Document root and rewrite rules](#2-openlitespeed-document-root-and-rewrite-boundary) → [Immutable release ZIP and web installer](#4-install-an-immutable-release) |
 | **First-time published ZIP** on Nginx/PHP-FPM VPS | [Panel-free Linux VPS](#panel-free-linux-vps-nginx-php-fpm-and-mariadb) |
-| **Existing published v2 install** update or recover | [Direct-upgrade window](#rolling-browser-update-support-window) → [Backup](#10-backup-and-recovery-baseline) → [Update/rollback](#11-upgrade-and-rollback-outline) |
+| **Existing v3 installation** update or recover | [Direct-upgrade window](#rolling-browser-update-support-window) → [Backup](#10-backup-and-recovery-baseline) → [Update/rollback](#11-upgrade-and-rollback-outline) |
 | **Diagnose an installed host** | [Environment check](#8-run-the-repository-owned-environment-gate) → [HTTP checks](#9-safe-http-verification) → [Diagnostics](#production-diagnostics-runbook) |
-| **Build/test the v3 source or candidate** | [Development](DEVELOPMENT.md#v3-clean-database-development-boundary) and [v3 Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) — **not** the v2 browser-update instructions below |
+| **Build/test a v3 candidate** | [Development](DEVELOPMENT.md#v3-clean-database-development-boundary) and [acceptance Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) |
 
 The detailed v2 migration, filesystem permissions, recovery and host-specific procedures remain in this runbook because operators may still depend on their exact steps. Historical release/version differences belong to [Release notes](../RELEASE_NOTES.md); read the selected official Release's actual package/manifest before following older upgrade steps.
 
@@ -24,9 +24,9 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## Rolling browser-update support window
 
-**Direct browser updates for published v2 releases** are supported only from the **three most recent preceding published stable releases** into the selected destination release. The tagged release's `bin/released-baselines.txt` (source repository; **not** part of its deployment ZIP) and the official Release assets/checksums define the exact supported window. For example, the **v2.7.3** destination supports **v2.7.0, v2.7.1 and v2.7.2** as direct update sources; earlier v2 release windows belong to their respective immutable tags and Release notes, not a second cumulative version ledger here. Older direct upgrades are **unsupported and unverified**, even when an outdated updater does not actively reject them. **The first stable v3 is a new empty-database installation, not a v2 direct update**; see the [v3 boundary](#v3-clean-install-development-boundary).
+The initial stable **v3.0.0** was a fresh install. A subsequent v3 Release, starting with v3.0.1, carries a separate, verified browser Update ZIP. Direct updates are tested from the **up to three latest preceding published v3 stable releases** (currently only v3.0.0 exists). The tagged Release's `bin/released-baselines.txt` and official artifacts/checksums define the supported window. Never infer that an untested older version is supported just because the updater accepts a newer version number.
 
-For an older installation, do not skip blindly to the newest release. Preserve an independently restorable full code/database/secret backup, inspect each archived official intermediate version's supported upgrade window, and plan a sequential supported hop to a version within the current three-release window. Verify SHA256/signatures, installation health, schema and recovery after each hop. If the exact hop or old installed runtime cannot be verified, use a tested migration/reinstall/restore plan with operator approval rather than assuming a direct update is safe. Existing browser-updater authorization, maintenance, pre-migration backup validation and fail-closed recovery behavior still apply; narrowing the support window does not weaken these controls.
+For an installed v3, follow the Release's `/update/` procedure after independently backing up the database, `.env`, keys, storage and code. Verify both the upgraded runtime and stored Target/OAuth/permission state. If a required earlier update hop is not validated, plan and test the sequence instead of skipping blindly.
 
 ### Optional Managed Reverse SSH installation and upgrade
 

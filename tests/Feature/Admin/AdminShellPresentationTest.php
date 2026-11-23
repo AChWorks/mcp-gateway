@@ -23,6 +23,8 @@ final class AdminShellPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//a[@class="skip-link"][@href="#main-content"])'));
         self::assertSame(1, (int) $xpath->evaluate('count(//main[@id="main-content"][@tabindex="-1"])'));
         self::assertSame(4, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]/section)'));
+        self::assertSame('nav-connectivity-title', $xpath->evaluate('string(//nav[@class="admin-nav"]/section[3]/@aria-labelledby)'));
+        self::assertSame('nav-system-title', $xpath->evaluate('string(//nav[@class="admin-nav"]/section[4]/@aria-labelledby)'));
         self::assertSame(2, (int) $xpath->evaluate('count(//section[@aria-labelledby="nav-system-title"]//a)'));
         self::assertSame(2, (int) $xpath->evaluate('count(//section[@aria-labelledby="nav-connectivity-title"]//a)'));
         self::assertSame(10, (int) $xpath->evaluate('count(//nav[@class="admin-nav"]//a)'));
