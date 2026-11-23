@@ -24,7 +24,7 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## Rolling browser-update support window
 
-The initial stable **v3.0.0** was a fresh install. A subsequent v3 Release, starting with v3.0.1, carries a separate, verified browser Update ZIP. Direct updates are tested from the **up to three latest preceding published v3 stable releases** (currently only v3.0.0 exists). The tagged Release's `bin/released-baselines.txt` and official artifacts/checksums define the supported window. Never infer that an untested older version is supported just because the updater accepts a newer version number.
+The initial stable **v3.0.0** was a fresh install. A subsequent v3 Release, starting with v3.0.1, carries a separate, verified browser Update ZIP. Direct updates are tested from the **up to three latest preceding published v3 stable releases** (the exact previous stable baselines are pinned per Release). The tagged Release's `bin/released-baselines.txt` and official artifacts/checksums define the supported window. Never infer that an untested older version is supported just because the updater accepts a newer version number.
 
 For an installed v3, follow the Release's `/update/` procedure after independently backing up the database, `.env`, keys, storage and code. Verify both the upgraded runtime and stored Target/OAuth/permission state. If a required earlier update hop is not validated, plan and test the sequence instead of skipping blindly.
 
@@ -149,7 +149,7 @@ For the web installer, use database host `127.0.0.1`, port `3306`, name `mcp_gat
 Choose a **published stable tag** from [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases); the tag below is an **example**, not a permanently pinned latest version.
 
 ```bash
-RELEASE_TAG=v3.0.0    # Currently published initial v3 Release; verify intended tag before installing.
+RELEASE_TAG=v3.0.0    # Historical initial-v3 example; choose the intended published stable tag.
 cd "$(mktemp -d)"
 curl --fail --location --output "mcp-gateway-$RELEASE_TAG.zip" \
   "https://github.com/AChWorks/mcp-gateway/releases/download/$RELEASE_TAG/mcp-gateway-$RELEASE_TAG.zip"
