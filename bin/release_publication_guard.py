@@ -314,21 +314,12 @@ def create_tag_once(tag: str, approved: str, token: str) -> None:
 
 
 def published_package_names(version: str) -> tuple[str, ...]:
-    """Choose artifacts from the real major-version deployment contract.
-
-    v2 has an authenticated browser-upgrade ZIP. First stable v3 is a fresh
-    installation only, and must not imply a supported v2-to-v3 update.
-    Future major versions require an independently reviewed release policy.
-    """
+    """Gateway v3 release assets: initial installation and subsequent updates."""
     major = int(version.split(".", 1)[0])
+    if major != 3:
+        raise PublicationStateError("The current release workflow publishes Gateway v3 only.")
     base = f"mcp-gateway-v{version}.zip"
-    if major == 2:
-        return (base, f"mcp-gateway-update-v{version}.zip")
-    # The first stable v3 is fresh-only. Do not silently extend that model
-    # to subsequent v3 versions once operators may hold valuable v3 state.
-    if version == "3.0.0":
-        return (base,)
-    raise PublicationStateError("Unsupported release version/upgrade contract; review the publisher.")
+    return (base,) if version == "3.0.0" else (base, f"mcp-gateway-update-v{version}.zip")
 
 
 def local_assets(version: str) -> dict[str, tuple[Path, str, int]]:

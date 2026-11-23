@@ -1,3 +1,16 @@
+# MCP Gateway v3.0.1
+
+**Stable v3.0.1 — maintenance and first v3 browser-update release.**
+
+### Changes
+
+- **v3 browser updater:** a separate SHA-256-verified Release Update ZIP supports upgrading an existing installed v3.0.0 Gateway to this v3 release, using the Owner-authenticated staged `/update/` flow. It preserves the current database, `.env`, encryption/OAuth/Bridge keys, users, Targets, Group rules, scheduler and host-managed public configuration; a restorable independent database/secret backup is required before production update.
+- **Admin:** Connectivity now appears before System, making System the final sidebar group without changing route permissions or layout.
+- **ArvanCloud:** a missing optional OpenAPI specification URL produces a specific, safely retained diagnostic code, readable next action and a pre-dispatch classification. The authenticated API remains usable without a catalog.
+- **Acceptance:** real write/readback/Trash tests on dedicated WordPress Test, Relay-bound SSH/SFTP/Job tests and mixed Direct+Relay Batch acceptance are captured under Issues #330 and #284. Published content from QA was moved to Trash after verification.
+
+Do not infer installation or deployment from GitHub release publication. v3.0.0 was the initial install; future releases provide a separate update package for installed v3 Gateways.
+
 # MCP Gateway v3.0.0
 
 **Stable v3.0.0 — first clean-install-only Gateway v3 release.**

@@ -22,14 +22,14 @@ final class AdminNavigation
             ['destination' => 'admin.target-groups.index', 'activePattern' => 'admin.target-groups.*', 'label' => 'Target groups', 'icon' => 'groups', 'permission' => GatewayPermission::UsersManage],
             ['destination' => 'admin.oauth-clients.index', 'activePattern' => 'admin.oauth-clients.*', 'label' => 'AI clients', 'icon' => 'clients', 'permission' => GatewayPermission::SecurityManage],
         ]],
+        ['id' => 'connectivity', 'label' => 'Connectivity', 'items' => [
+            ['destination' => 'admin.reverse-ssh.index', 'activePattern' => 'admin.reverse-ssh.index', 'label' => 'Reverse SSH', 'icon' => 'settings', 'permission' => null],
+            ['destination' => 'admin.connection-relays.index', 'activePattern' => 'admin.connection-relays.*', 'label' => 'Connection Relays', 'icon' => 'connection', 'permission' => null],
+        ]],
         ['id' => 'system', 'label' => 'System', 'items' => [
             ['destination' => 'admin.connection', 'activePattern' => 'admin.connection', 'label' => 'Connection information', 'icon' => 'connection', 'permission' => GatewayPermission::GatewayConnectionView],
             // Operations has always been Owner-only, independently of menu permissions.
             ['destination' => 'admin.operations.index', 'activePattern' => 'admin.operations.*', 'label' => 'Operational settings', 'icon' => 'settings', 'permission' => null],
-        ]],
-        ['id' => 'connectivity', 'label' => 'Connectivity', 'items' => [
-            ['destination' => 'admin.reverse-ssh.index', 'activePattern' => 'admin.reverse-ssh.index', 'label' => 'Reverse SSH', 'icon' => 'settings', 'permission' => null],
-            ['destination' => 'admin.connection-relays.index', 'activePattern' => 'admin.connection-relays.*', 'label' => 'Connection Relays', 'icon' => 'connection', 'permission' => null],
         ]],
     ];
 

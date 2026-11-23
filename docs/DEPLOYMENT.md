@@ -1,8 +1,8 @@
 # MCP Gateway Deployment Baseline
 
-## V3 clean-install development boundary
+## Gateway v3 installation and upgrades
 
-The **v3 source and first stable v3** (verify exact identity in [VERSION](../VERSION) and [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases)) are **fresh-database-only**, not an in-place v2 upgrade. A valid v2 installation, database, credentials, OAuth grants and SSH Job state must remain untouched until an independently approved cutover and full verified-restorable backup/re-enrollment plan exists. Do **not** run v3 migrations, the v2 browser updater or any v3 ZIP against an installed v2 database. The v2 browser updater remains v2-only. Any first-stable-v3 publication must use an independently reviewed, Owner-approved **fresh-install-only** Release path; no v2-compatible update ZIP or automatic Production deployment is implied.
+Gateway v3.0.0 is the initial supported installation. Its first-install Web Installer requires a dedicated **empty database**; a clean installation must not reuse a previous Gateway database. Starting with later v3 releases, use the separately published **Update ZIP** through the enabled Owner's `/update/` browser flow to preserve the installed application data. Installing or merging source does not deploy production; verify the exact official Release, checksum, backup and installed version before an approved update. [Current acceptance](https://github.com/AChWorks/mcp-gateway/issues/330) distinguishes source tests from installed-host results.
 
 The source implements a scheduled CLI Batch worker (`php artisan gateway:batch-work`) with durable per-Target state. A single default scheduler process is **sequential**, not a measured multi-host throughput guarantee. A remote effect whose dispatch outcome is uncertain is recorded as `outcome_unknown`, never blindly replayed. **Installed v3 acceptance, provider connectivity, backup/rollback and public Release approval remain tracked in [Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330)**; CI or a successful isolated installation does not establish a production deployment.
 
@@ -12,11 +12,11 @@ The source implements a scheduled CLI Batch worker (`php artisan gateway:batch-w
 | --- | --- |
 | **First-time published ZIP** on aaPanel/OpenLiteSpeed | [Requirements](#1-prerequisites) → [Document root and rewrite rules](#2-openlitespeed-document-root-and-rewrite-boundary) → [Immutable release ZIP and web installer](#4-install-an-immutable-release) |
 | **First-time published ZIP** on Nginx/PHP-FPM VPS | [Panel-free Linux VPS](#panel-free-linux-vps-nginx-php-fpm-and-mariadb) |
-| **Existing published v2 install** update or recover | [Direct-upgrade window](#rolling-browser-update-support-window) → [Backup](#10-backup-and-recovery-baseline) → [Update/rollback](#11-upgrade-and-rollback-outline) |
+| **Existing v3 installation** update or recover | [Direct-upgrade window](#rolling-browser-update-support-window) → [Backup](#10-backup-and-recovery-baseline) → [Update/rollback](#11-upgrade-and-rollback-outline) |
 | **Diagnose an installed host** | [Environment check](#8-run-the-repository-owned-environment-gate) → [HTTP checks](#9-safe-http-verification) → [Diagnostics](#production-diagnostics-runbook) |
-| **Build/test the v3 source or candidate** | [Development](DEVELOPMENT.md#v3-clean-database-development-boundary) and [v3 Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) — **not** the v2 browser-update instructions below |
+| **Build/test a v3 candidate** | [Development](DEVELOPMENT.md#v3-clean-database-development-boundary) and [acceptance Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) |
 
-The detailed v2 migration, filesystem permissions, recovery and host-specific procedures remain in this runbook because operators may still depend on their exact steps. Historical release/version differences belong to [Release notes](../RELEASE_NOTES.md); read the selected official Release's actual package/manifest before following older upgrade steps.
+This runbook describes **current v3 installations and v3-to-v3 upgrades**. Historical v1/v2 release and migration details belong to [Release notes](../RELEASE_NOTES.md) and archived Git history; they are not active installation instructions.
 
 This document separates the **current CI validation profile (PHP 8.5 + MariaDB 12.3 on a GitHub-hosted Linux runner)** from historical host acceptance (PHP 8.4 + MariaDB 10.11 and aaPanel/OpenLiteSpeed). PHP ^8.4.1 and MySQL remain compatibility contracts; shared PHP hosting is supported when only `public/` is web-served. The Owner-reported common Debian 13 + NGINX/PHP-FPM installation must still undergo actual host validation: GitHub Ubuntu CI is not evidence of that environment.
 
@@ -24,9 +24,9 @@ GitHub releases own public release identity. Production deployment remains an op
 
 ## Rolling browser-update support window
 
-**Direct browser updates for published v2 releases** are supported only from the **three most recent preceding published stable releases** into the selected destination release. The tagged release's `bin/released-baselines.txt` (source repository; **not** part of its deployment ZIP) and the official Release assets/checksums define the exact supported window. For example, the **v2.7.3** destination supports **v2.7.0, v2.7.1 and v2.7.2** as direct update sources; earlier v2 release windows belong to their respective immutable tags and Release notes, not a second cumulative version ledger here. Older direct upgrades are **unsupported and unverified**, even when an outdated updater does not actively reject them. **The first stable v3 is a new empty-database installation, not a v2 direct update**; see the [v3 boundary](#v3-clean-install-development-boundary).
+The initial stable **v3.0.0** was a fresh install. A subsequent v3 Release, starting with v3.0.1, carries a separate, verified browser Update ZIP. Direct updates are tested from the **up to three latest preceding published v3 stable releases** (currently only v3.0.0 exists). The tagged Release's `bin/released-baselines.txt` and official artifacts/checksums define the supported window. Never infer that an untested older version is supported just because the updater accepts a newer version number.
 
-For an older installation, do not skip blindly to the newest release. Preserve an independently restorable full code/database/secret backup, inspect each archived official intermediate version's supported upgrade window, and plan a sequential supported hop to a version within the current three-release window. Verify SHA256/signatures, installation health, schema and recovery after each hop. If the exact hop or old installed runtime cannot be verified, use a tested migration/reinstall/restore plan with operator approval rather than assuming a direct update is safe. Existing browser-updater authorization, maintenance, pre-migration backup validation and fail-closed recovery behavior still apply; narrowing the support window does not weaken these controls.
+For an installed v3, follow the Release's `/update/` procedure after independently backing up the database, `.env`, keys, storage and code. Verify both the upgraded runtime and stored Target/OAuth/permission state. If a required earlier update hop is not validated, plan and test the sequence instead of skipping blindly.
 
 ### Optional Managed Reverse SSH installation and upgrade
 
@@ -38,21 +38,14 @@ systemd/SSHD state. Do not open the control port, change existing SSH
 services, or run the generated Target command without the exact Owner
 host/Target approval and independent host-key verification.
 
-The released v2.5.5 artifact does **not** contain the managed scripts;
-v2.5.6 first shipped them. v2.5.7 handled PHP `open_basedir` denial of the
-root-owned host manifest as a fail-closed Admin readiness state rather than
-HTTP 500. v2.5.8 additionally separates one-time Gateway host setup from
-the unified Add Target enrollment and requires explicit Owner authorization
-on enhanced reauthentication forms. For an approved installed upgrade,
-verify official ZIP/checksum provenance and an independently restorable
-code/database/secret backup first. Browser Update must preserve both pinned
-managed scripts without overwriting unrelated `bin/` content; incomplete
-updates retain protected recovery evidence. **Do not disable `open_basedir`
-or grant PHP root privileges** to work around host setup. Independently
-verify installed `VERSION`, authenticated Admin settings, actual Target
-end-host login and reconnect after upgrade; a local control-host `Ready`
-status, green CI or published Release never proves a live reverse route,
-reboot persistence or actual Owner-browser compatibility.
+For an approved installed v3 update, verify the official ZIP/checksum and
+independently restorable application/database/secret backup first. Browser
+Update preserves both pinned managed scripts and unrelated operator-owned
+`bin/` content; incomplete updates retain protected recovery evidence.
+**Do not disable `open_basedir` or grant PHP root privileges** to work around
+host setup. Independently verify actual installed `VERSION`, authenticated
+Admin settings, Target end-host login and reconnect; local control-host
+`Ready` or a green CI result alone does not prove the final reverse route.
 The independent [manual Reverse SSH route](REVERSE-SSH-OPERATOR.md)
 remains available.
 
@@ -62,36 +55,9 @@ Install or update **only** from the named official [GitHub Release](https://gith
 
 **Runtime profile:** HTTPS PHP 8.5 with MariaDB 12.3 is the principal new CI target; older PHP 8.4.1+/MariaDB 10.11 and MySQL compatibility are retained; required PHP extensions include `curl` with `CURLOPT_RESOLVE`, `mbstring`, `openssl`, `pdo_mysql`, `sodium`. Keep `public/` the only served document root, encrypted keys/storage private, and distinct Gateway OAuth-server vs Bridge-client RSA keypairs. No production Node, Redis, separate queue daemon or Docker is required by the baseline. Provider connectivity enforces approved destination/address policy and independently verified TLS/SSH host identity, whether the Target uses Direct routing or an explicitly selected [Connection Relay](CONNECTION-RELAYS.md). The Gateway does not trust ambient unapproved HTTP proxy environment variables.
 
-**Version-dependent schema/behavior:** The v1 **Site → v2 Target** transition is a separately authorized **destructive** migration; see [legacy upgrade/recovery runbook](TARGET-TRANSITION-RUNBOOK.md). Later v2 updates are version-specific; use source migration files and official release notes, not a copied historical checklist. In particular public v2.3.0 introduced additive SSH command/Job/lease and Target Pause schema:
-- `2026_10_15_000000_add_ssh_command_operational_limits.php`
-- `2026_10_15_010000_create_ssh_command_jobs.php`
-- `2026_10_15_020000_add_ssh_job_lifecycle_policy.php`
-- `2026_10_15_030000_snapshot_ssh_job_admission_policy.php`
-- `2026_10_16_000000_add_target_operations_paused.php`
+**v3 schema and migration safety:** v3.0.0 is the initial installation and requires an empty database. For an installed v3, only use the separately published matching Update ZIP from a supported later v3 release; preserve the whole runtime and independently test-restore the database and private keys before any migration. Inspect `php artisan migrate:status`, installed `VERSION`, and the release's own migration files. If migration status is uncertain, do not replay a potentially started operation or assume a code rollback reverses database DDL.
 
-Stable v2.3.1 introduces two additive Target-era migrations:
-- `2026_10_16_010000_add_ssh_job_script_input_limit.php` for the Owner-adjustable detached SSH Job script limit;
-- `2026_10_17_000000_add_target_ai_guidance.php` for optional per-Target AI guidance (an ordinary nullable note, never enforced authorization).
-
-The supported updater must apply them before the new fields are used. A rollback refuses to discard non-null operator notes silently. Publication alone is **not** evidence an installed v2.3.0 host has either migration.
-
-**Stable v2.3.2 adds one additive Activity migration:**
-
-- `2026_10_17_010000_add_activity_diagnostic_context.php` adds a nullable
-  JSON `activity_events.diagnostic_context` field for bounded, selectively
-  credential-redacted observed source errors. Existing rows and the existing
-  correlation/Activity storage remain intact; there is no new datastore.
-  Apply the migration through the supported updater before using the new
-  diagnostics view/MCP lookup. Reversing this migration **drops retained
-  diagnostic context**; a code rollback does not safely undo database DDL.
-
-The supported Job journal enforces immutable original user/client/Target/host binding and **no-replay** of an uncertain launch. Journal-bearing Job rollback refuses unsafe destructive schema cleanup; reconciliation requires evidence on the **original** remote host and the guarded command in [Direct SSH](DIRECT-SSH-CONNECTOR.md). Owner-only Target Pause blocks new Gateway-mediated stages, **not** an in-flight remote effect. Historic Agent connector type/support was retired; no Agent data cleanup/replay of the old Target migration is implied. v2.3.1's **fresh-install-only** SSH binary transfer default does **not** change an existing private `.env` or guarantee effective enablement on an installed host. Existing missing-key installs retain OFF; a new installation enables the mode but still requires genuine host/proxy/private-staging capacity and grants.
-
-**Stable v2.3.9 OAuth onboarding:** `2026_10_24_000000_create_oauth_dcr_clients` is an additive, independent DCR client-registration table. Existing fixed CIMD identities, grants, tokens and private `.env` are retained; the new DCR public registration endpoint is OFF unless deliberately enabled. If any DCR registration exists, reversing this migration refuses to drop the table. Code-only downgrade may make already-onboarded DCR clients unusable; plan roll-forward or a separately authorized client transition instead of deleting DCR history. Preserve and test the coherent backup set below before an operator-approved update, and verify existing CIMD OAuth and new opt-in DCR separately on the installed host. See [OAuth registration/recovery](OAUTH-CLIENT-REGISTRATION.md) and [Issue #235](https://github.com/AChWorks/mcp-gateway/issues/235) for outstanding real ChatGPT acceptance.
-
-**Published v2.3.10 security-hardening upgrade (not an installed-host claim):** The new `2026_10_24_010000_index_dcr_admin_history` migration adds a bounded Admin DCR history query index, and `2026_10_24_020000_track_dcr_authorization_history` adds `ever_authorized_at`, `auto_retirement_eligible`, a reclamation index and conservative historical-grant backfill. Existing DCR identities with unknown prior consent are not automatically reclaimable; successfully consented new identities permanently lose automatic-retirement eligibility. The consent-history migration **cannot be rolled back while any DCR identity exists**, because losing its witness could cause irreversible retirement of a previously authorized client. Preserve a verified-restorable DB and private identity/credential backup, use the authenticated official updater, and prefer an approved forward fix over destructive schema rollback. The public DCR feature flag remains OFF unless an operator deliberately enables registration.
-
-For the new cross-IP Admin login quota, validate the installed MariaDB/MySQL `users.email` column collation matches the connection/parameter collation (default `utf8mb4_unicode_ci`), and all serving PHP workers/instances share the same lock-capable cache. Avoid mixed-version rolling activation: legacy and new login namespaces do not enforce one shared cross-version failure budget. Use a fenced/atomic source replacement, verify that every serving worker uses the new version, then inspect the actual installed version, security migrations and health before testing login. These are **operator/Production approval gates**; repository CI and a published ZIP do not prove actual host safety. See [OAuth registration/recovery](OAUTH-CLIENT-REGISTRATION.md) for authenticated consent, DCR capacity/grace and follow-up verification.
+**OAuth and SSH operations:** Gateway v3 maintains user/Target/Group authorization, separate OAuth-server and Bridge-client identities, retained Job and Batch journals, and no-replay of uncertain remote effects. Target Pause blocks new Gateway effects, not already dispatched remote work. The DCR registration capability remains opt-in. For active operating instructions consult [OAuth registration and recovery](OAUTH-CLIENT-REGISTRATION.md), [SSH operations](DIRECT-SSH-CONNECTOR.md), and [OAuth Client diagnostics](CLIENT-PROFILE-RUNBOOK.md).
 
 **Upgrade safety:** Independently test-restore the consistent database backup, protect `.env`, `APP_KEY`, OAuth/Bridge signing keys, storage and host-managed public files. A browser updater's application-file backup **cannot** undo MariaDB/MySQL DDL or revocations. Never replay a possibly dispatched WordPress refresh/revoke, SSH command/Job or migration after unknown progress to guess its result. Preserve original recovery fences and follow the updater's authenticated recovery path.
 
@@ -183,7 +149,7 @@ For the web installer, use database host `127.0.0.1`, port `3306`, name `mcp_gat
 Choose a **published stable tag** from [GitHub Releases](https://github.com/AChWorks/mcp-gateway/releases); the tag below is an **example**, not a permanently pinned latest version.
 
 ```bash
-RELEASE_TAG=v2.7.3    # Example; verify the intended tag is actually published before installing.
+RELEASE_TAG=v3.0.0    # Currently published initial v3 Release; verify intended tag before installing.
 cd "$(mktemp -d)"
 curl --fail --location --output "mcp-gateway-$RELEASE_TAG.zip" \
   "https://github.com/AChWorks/mcp-gateway/releases/download/$RELEASE_TAG/mcp-gateway-$RELEASE_TAG.zip"
@@ -608,7 +574,11 @@ cd /www/acdomains/gateway.example.com || exit 1
 runuser -u www -- /www/server/php/85/bin/php artisan schedule:run --no-ansi
 ```
 
-The aaPanel `/www/server/php/85/bin/php` path above is only a PHP 8.5 example; substitute the exact **installed** PHP CLI version, site path and PHP worker account. Do not change a running host merely to match this example. Check the **aaPanel Cron task log** after at least one real dispatch: `artisan schedule:list` only proves Laravel registered tasks, not that host cron executes them. The v2.2.1 application schedules `activity:prune` once per day and `gateway:wordpress-credentials-maintain` every minute, both with overlap protection. An installed v2.3.0 additionally schedules `gateway:ssh-jobs-prune` hourly, limited to safely reconciled terminal SSH Jobs with verified private remote spool directories; it does not start or stop Jobs. This command and its guarded new `ssh_command_jobs` migration are **not part of installed v2.2.1**. Migration rollback refuses to drop the table while *any* durable job record remains. Unknown or active remote work requires explicit reconciliation; do not manually erase the no-replay journal. Actual credential rotation occurs only when due; a successful cron run alone does not prove a token was renewed. Without scheduled pruning the configured age/row targets are not enforced, and without regular maintenance idle WordPress refresh grants may expire.
+The aaPanel `/www/server/php/85/bin/php` path above is only a PHP 8.5 example; substitute the exact **installed** PHP CLI version, site path and PHP worker account. Do not change a running host merely to match this example. Check the **aaPanel Cron task log** after at least one real dispatch: `artisan schedule:list` only proves Laravel registered tasks, not that host cron executes them. In v3, inspect the **installed** scheduler with `php artisan schedule:list`
+and confirm execution via the host cron log; registered tasks may include
+Activity pruning, WordPress credential maintenance, SSH Job pruning and Batch
+work. Never manually erase unknown or active retained Job records.
+Actual credential rotation occurs only when due; a successful cron run alone does not prove a token was renewed. Without scheduled pruning the configured age/row targets are not enforced, and without regular maintenance idle WordPress refresh grants may expire.
 
 Operators may also apply the configured policy on demand:
 
@@ -834,7 +804,7 @@ When escalating a problem, share only the timestamp/time zone, correlation ID, s
 
 Before every migration-bearing upgrade, preserve a recoverable set containing:
 
-- a consistent MariaDB/MySQL database backup **of the actual installed revision**, including its migration ledger, registered `targets` and connector-specific configurations, encrypted `target_credentials` and credential metadata, WordPress OAuth flows and refresh/revocation intents, Gateway OAuth client authorizations and related grant/recovery state, Target Groups, user/Target grants and denials, Activity, and retained `ssh_command_jobs` journal records **where those tables exist**. When upgrading a genuine legacy Site-era installation, also preserve the actual legacy Site records and flows before the destructive transition (see [Target transition runbook](TARGET-TRANSITION-RUNBOOK.md));
+- a consistent MariaDB/MySQL database backup **of the actual installed revision**, including its migration ledger, registered `targets` and connector-specific configurations, encrypted `target_credentials` and credential metadata, WordPress OAuth flows and refresh/revocation intents, Gateway OAuth client authorizations and related grant/recovery state, Target Groups, user/Target grants and denials, Activity, and retained `ssh_command_jobs` journal records **where those tables exist**.
 - the deployment `.env` / Laravel `APP_KEY` through the installation's approved secret-backup mechanism;
 - `OAUTH_PRIVATE_KEY_PATH` and `OAUTH_PUBLIC_KEY_PATH` with permissions preserved;
 - `BRIDGE_CLIENT_PRIVATE_KEY_PATH` and `BRIDGE_CLIENT_PUBLIC_KEY_PATH` with permissions preserved;
@@ -847,10 +817,9 @@ Treat the database, matching `APP_KEY`, both signing keypairs and required priva
 
 The web installer is **fresh-install only**. Never use `/install` to upgrade an existing Gateway.
 
-### Deployment
+### Browser update for installed v3 ZIPs
 
 For optional, separately approved client-initiated SSH RemoteForward on inbound-blocked SSH Targets, see [Reverse SSH operator runbook](REVERSE-SSH-OPERATOR.md). It never grants permission to modify production SSHD, services or accounts as part of repository development.
--ZIP installations
 
 Each release publishes a separate browser-update artifact named `mcp-gateway-update-vX.Y.Z.zip`. Git, Composer, and SSH are not required for the normal update path.
 
@@ -865,7 +834,7 @@ For an authorized upgrade:
 7. Confirm the installed/target versions and all preflight checks, then choose **Update MCP Gateway**.
 8. Keep the browser page open. The authenticated Stage uses a **303 See Other** transition to a fresh `GET /update/` after file replacement. This commits the renewed HttpOnly/Secure cookie before the newly installed runtime presents the browser-bound continuation form. JavaScript submits Finish once; with JavaScript disabled, choose **Continue update** once. Do not refresh a POST or start again. After success, repeat HTTP verification from this document.
 
-Supported pre-role releases v1.1.2–v1.1.10 retain their existing authenticated administrator model only while the real user row has neither role nor enabled fields. Role-aware, partial, missing or malformed account state fails closed. Owner means the explicit role, not the first user ID. If the installed v2.4.1 sign-in opens Dashboard, return to `/update/` once to inspect preflight before Start; this known old-login quirk does not authorize another Stage or Finish.
+The updater permits **only an authenticated, enabled Owner** to inspect preflight and start a fresh update. It checks the current Owner row on each authorized Start; disabled or demoted accounts cannot start updates. Its separate browser-bound continuation is limited to the already-staged update and is not a new authorization grant.
 
 After an authorized Start, maintenance continuation and read-only recovery use the existing browser-bound, time-limited capability because Laravel may be down. A cookie alone cannot authorize a fresh Start or bypass a changed/disabled Owner account before staging.
 

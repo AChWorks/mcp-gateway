@@ -449,11 +449,7 @@ try {
             ->where($principal->getAuthIdentifierName(), $principal->getAuthIdentifier())
             ->first()
         : null;
-    $installedVersion = @file_get_contents($basePath.'/VERSION');
-    if (! WebUpdater::accountMayStart(
-        $account === null ? null : (array) $account,
-        is_string($installedVersion) ? trim($installedVersion) : '',
-    )) {
+    if (! WebUpdater::accountMayStart($account === null ? null : (array) $account)) {
         $httpKernel->terminate($authRequest, $authResponse);
         updaterRender('MCP Gateway Update', '<p class="error">Only an enabled Owner can view or start an update.</p>', 403);
     }
@@ -478,7 +474,6 @@ if ($browserToken === '' || ! preg_match('/^[a-f0-9]{64}$/D', $browserToken)) {
 
 try {
     $info = $updater->inspect();
-    $resetPlan = $updater->targetResetPreflight();
 } catch (Throwable $exception) {
     $reference = updaterErrorReference('preflight', $exception);
     updaterRender('MCP Gateway Update', '<p class="error">'.updaterEscape($exception->getMessage()).'</p><p>Server error-log reference: <code>'.$reference.'</code></p>', 400);
@@ -495,12 +490,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'start') {
     updaterCookie($browserToken);
 
     try {
-        $result = $updater->stage($browserToken, [
-            'reset_acknowledged' => is_string($_POST['reset_acknowledged'] ?? null) ? $_POST['reset_acknowledged'] : '',
-            'database_backup_verified' => is_string($_POST['database_backup_verified'] ?? null) ? $_POST['database_backup_verified'] : '',
-            'confirmed_target_version' => is_string($_POST['confirmed_target_version'] ?? null) ? $_POST['confirmed_target_version'] : '',
-            'package_sha256' => is_string($_POST['package_sha256'] ?? null) ? $_POST['package_sha256'] : '',
-        ]);
+        $result = $updater->stage($browserToken);
         // A 303 makes the browser apply the refreshed HttpOnly update cookie
         // and perform a fresh GET from the newly installed PHP runtime before
         // it initiates Finish. Refreshing the original POST cannot replay Stage.
@@ -529,33 +519,11 @@ foreach ($info['checks'] as $label => $passed) {
     $checks .= '<li class="'.($passed ? 'ok' : 'error').'">'.($passed ? '✓' : '✗').' '.updaterEscape($label).'</li>';
 }
 
-$resetWarning = '';
-$resetFields = '';
-if ($resetPlan['required']) {
-    $affected = '';
-    foreach ($resetPlan['affected'] as $label => $present) {
-        if ($present) {
-            $affected .= '<li>'.updaterEscape($label).'</li>';
-        }
-    }
-    $resetWarning = '<div class="notice" role="alert"><h2>Breaking v2.0 Target/OAuth reset — independent database backup REQUIRED</h2>'
-        .'<p>This upgrade permanently removes legacy WordPress Site registrations/credentials, Target assignments and groups, pending Target work, old Target-scoped Activity, and Gateway OAuth grants, access/refresh tokens and pending codes (including ChatGPT). Exact affected categories currently found:</p><ul>'.$affected.'</ul>'
-        .'<p>Administrator accounts, roles, encryption/signing keys, global permission denials, configured client profiles, and unrelated Gateway Activity must be preserved. Every WordPress Target and ChatGPT client must reauthorize.</p>'
-        .'<p><strong>The updater creates a CODE backup only; it is NOT a database backup.</strong> Before clicking Update, put the Gateway into an operator-controlled safe upgrade window, create a consistent independent database backup, and prove restoration into a separate disposable database. MariaDB partial DDL cannot be safely rolled back by this updater. Keep the backup outside the installation.</p>'
-        .'<p>Both confirmations are required for this exact '.updaterEscape($info['installed']).' → '.updaterEscape($info['target']).' update package. Pre-configured .env consent alone is insufficient.</p></div>';
-    $resetFields = '<p><label><input type="checkbox" name="reset_acknowledged" value="RESET_TARGET_STATE" required> '
-        .'I explicitly approve the permanent reset of the above legacy Target/WordPress and Gateway OAuth connection state for this update.</label></p>'
-        .'<p><label><input type="checkbox" name="database_backup_verified" value="RESTORABLE_DATABASE_BACKUP_VERIFIED" required> '
-        .'I independently created and verified restoration of a consistent full database backup, stored separately from the updater code backup.</label></p>';
-}
-
 updaterRender(
     'Update MCP Gateway',
     updaterSteps('preflight').'<p>This temporary updater will upgrade the current Gateway without SSH, Git, or Composer.</p><p><strong>Installed:</strong> '.updaterEscape($info['installed']).'<br><strong>Target:</strong> '.updaterEscape($info['target']).'</p><h2>Preflight</h2><ul class="checks">'.$checks.'</ul><div class="notice">The existing <code>.env</code> and persistent <code>storage/</code> are preserved. A private code backup is retained before any managed files are replaced.</div>'
-    .$resetWarning
     .'<form id="start-update" method="post"><input type="hidden" name="_token" value="'.updaterEscape($csrf).'"><input type="hidden" name="action" value="start">'
-    .'<input type="hidden" name="confirmed_target_version" value="'.updaterEscape($resetPlan['to']).'"><input type="hidden" name="package_sha256" value="'.updaterEscape($resetPlan['package_sha256']).'">'
-    .$resetFields.'<button type="submit">Update MCP Gateway</button></form>'
+    .'<button type="submit">Update MCP Gateway</button></form>'
     .'<div id="start-progress" class="busy" role="status" aria-live="polite" hidden><span class="spinner" aria-hidden="true"></span><p>Creating the private code backup and replacing managed files. Keep this page open.</p></div>',
     200, updaterStartScript(),
 );

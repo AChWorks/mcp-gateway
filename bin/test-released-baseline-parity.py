@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed rolling-three stable baseline, release-notes and workflow parity."""
+"""Fail-closed same-major rolling stable baselines, release-notes and workflow parity."""
 import argparse
 from pathlib import Path
 import re
@@ -37,22 +37,27 @@ def package_version_key(value: str) -> tuple[int, int, int, int, int]:
 
 def previous_stables(notes: str, candidate: str, limit: int = 3) -> tuple[str, ...]:
     headings = re.findall(r"(?m)^# MCP Gateway v([^\r\n]*)$", notes)
-    if len(headings) < limit + 1 or headings[0] != candidate:
-        raise ValueError(f"Release notes must identify candidate VERSION and {limit} previous stable releases")
+    if len(headings) < 2 or headings[0] != candidate:
+        raise ValueError("Release notes must identify candidate VERSION and its preceding stable releases")
     keys = [package_version_key(value) for value in headings]
     if any(current <= older for current, older in zip(keys, keys[1:])):
         raise ValueError("Release-note versions must be unique and strictly descending")
-    selected = [v for v, k in zip(headings[1:], keys[1:]) if k[3] == 1][:limit]
-    if len(selected) != limit:
-        raise ValueError(f"Release notes do not identify {limit} preceding stable releases")
+    # Direct browser upgrades must never select a different major family.
+    # The first update has one prior stable; the verified window grows to three.
+    major = keys[0][0]
+    selected = [v for v, k in zip(headings[1:], keys[1:])
+                if k[3] == 1 and k[0] == major][:limit]
+    minimum = 1
+    if len(selected) < minimum:
+        raise ValueError(f"Release notes do not identify the required same-major stable baselines: {minimum}")
     return tuple(reversed(selected))
 
 
 def read_manifest(root: Path = ROOT) -> tuple[str, ...]:
     lines = (root / MANIFEST).read_text(encoding="utf-8").splitlines()
     versions = tuple(line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#"))
-    if len(versions) != 3:
-        raise ValueError(f"{MANIFEST}: exactly three stable baselines required; found {len(versions)}")
+    if not 1 <= len(versions) <= 3:
+        raise ValueError(f"{MANIFEST}: require one to three same-major stable baselines; found {len(versions)}")
     keys = [version_key(version) for version in versions]
     if any(a >= b for a, b in zip(keys, keys[1:])):
         raise ValueError(f"{MANIFEST}: duplicated or nonascending release baselines")
@@ -92,11 +97,13 @@ def check_workflow(root: Path, path: str) -> None:
             raise ValueError(f"{path}: missing baseline verification step {name}")
         block = match.group(1)
         if block.count("python3 bin/test-released-baseline-parity.py --list") != 1:
-            raise ValueError(f"{path}: {name} must select exactly the manifest's 3 baselines")
+            raise ValueError(f"{path}: {name} must select the exact verified manifest window")
         if not re.search(r'mapfile -t versions < <\(python3 bin/test-released-baseline-parity.py --list\)', block):
             raise ValueError(f"{path}: {name} must capture manifest versions via mapfile")
-        if not re.search(r'\[\[ \$\{#versions\[@\]\} -eq 3 \]\]', block):
-            raise ValueError(f"{path}: {name} must fail if baseline manifest selection is incomplete")
+        if not re.search(r'expected_count="\$\(python3 bin/test-released-baseline-parity.py --count\)"', block):
+            raise ValueError(f"{path}: {name} must independently retrieve the checked baseline count")
+        if not re.search(r'\[\[ \$\{#versions\[@\]\} -eq "\$expected_count" \]\]', block):
+            raise ValueError(f"{path}: {name} must reject an incomplete baseline selection")
         if 'for version in "${versions[@]}"; do' not in block:
             raise ValueError(f"{path}: {name} must run for each selected baseline")
         if not all(command in block for command in expected):
@@ -112,19 +119,22 @@ def main(root: Path = ROOT) -> None:
         raise ValueError(f"Rolling supported upgrade window is {expected!r}, manifest has {versions!r}")
     for workflow in WORKFLOWS:
         check_workflow(root, workflow)
-    print(f"PASS: exact three-release supported update window {', '.join(versions)}; "
-          f"candidate={candidate}; all three release/PR integration stages present", file=sys.stderr)
+    print(f"PASS: exact same-major supported update window ({len(versions)}) {', '.join(versions)}; "
+          f"candidate={candidate}; all release/PR integration stages present", file=sys.stderr)
 
 
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument("--list", action="store_true", help="Print validated three-release baseline list")
+        parser.add_argument("--list", action="store_true", help="Print validated same-major baselines")
+        parser.add_argument("--count", action="store_true", help="Print validated same-major baseline count")
         args = parser.parse_args()
         main()
         if args.list:
             # Keep stdout machine-readable for mapfile; validation messages go to stderr.
             print(*read_manifest(), sep="\n")
+        if args.count:
+            print(len(read_manifest()))
     except (OSError, ValueError) as error:
         print(f"Release-baseline parity FAILED: {error}", file=sys.stderr)
         raise SystemExit(1) from error

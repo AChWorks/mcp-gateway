@@ -60,7 +60,10 @@ final readonly class ArvanApiOperations
         $config = $this->config($target);
         if ($config?->spec_url === null) {
             return $this->failed($operation, $target, 'catalog_unavailable', [
-                'reason' => 'Target has no Owner-configured OpenAPI description URL.',
+                'source_error_code' => 'openapi_spec_url_missing',
+                'source_error_message' => 'Target has no Owner-configured OpenAPI description URL.',
+                'failure_origin' => 'gateway_admission', 'failure_stage' => 'admission',
+                'request_not_sent' => true, 'retry_safe' => true,
             ]);
         }
 
@@ -446,7 +449,9 @@ final readonly class ArvanApiOperations
             'message' => $unknown
                 ? 'ArvanCloud may have applied the change; inspect the remote state before retrying.'
                 : 'ArvanCloud API operation could not complete.',
-            'next_step' => OperationDiagnostics::nextStep($code),
+            'next_step' => ($code === 'catalog_unavailable' && ($details['source_error_code'] ?? null) === 'openapi_spec_url_missing')
+                ? 'Configure an optional OpenAPI description URL in this Target settings, or call arvan-api-request with an explicit approved relative path.'
+                : OperationDiagnostics::nextStep($code),
             'diagnostic_reference' => $reference,
         ]];
     }

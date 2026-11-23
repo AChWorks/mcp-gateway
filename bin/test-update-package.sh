@@ -1,110 +1,58 @@
 #!/usr/bin/env bash
+# Exact released v3 installation -> candidate v3 browser-update acceptance.
+# Disposable local DB only; never target any operator/production installation.
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "Usage: bash bin/test-update-package.sh <update-zip> <old-deployment-zip>" >&2
-  exit 2
-fi
-
-update_zip="$1"
-old_zip="$2"
-
-for command in unzip php curl find sha256sum mktemp cp rm grep awk sed python3 cmp ln mv; do
-  command -v "$command" >/dev/null 2>&1 || { echo "Required test command is unavailable: $command" >&2; exit 1; }
+[[ $# -eq 2 ]] || { echo "Usage: $0 <update-zip> <released-v3-install-zip>" >&2; exit 2; }
+for tool in unzip php curl sha256sum mktemp grep sed awk; do
+  command -v "$tool" >/dev/null || { echo "Missing test prerequisite: $tool" >&2; exit 2; }
 done
-[[ -f "$update_zip" ]] || { echo "Missing update ZIP: $update_zip" >&2; exit 1; }
-[[ -f "$old_zip" ]] || { echo "Missing old deployment ZIP: $old_zip" >&2; exit 1; }
-
-tmp="$(mktemp -d)"
+update_zip="$(realpath "$1")"
+baseline_zip="$(realpath "$2")"
+[[ -f "$update_zip" && -f "$baseline_zip" ]] || { echo "Missing update/baseline ZIP." >&2; exit 2; }
+db_host="${UPDATE_TEST_DB_HOST:-127.0.0.1}"
+db_name="${UPDATE_TEST_DB_DATABASE:-}"
+db_user="${UPDATE_TEST_DB_USERNAME:-}"
+db_pass="${UPDATE_TEST_DB_PASSWORD:-}"
+db_port="${UPDATE_TEST_DB_PORT:-3306}"
+[[ "$db_host" == '127.0.0.1' && "$db_name" =~ ^[a-z0-9_]+_test$ &&
+    -n "$db_user" && -n "$db_pass" && "$db_port" =~ ^[0-9]+$ ]] || {
+  echo "Only an explicitly configured disposable loopback *_test database is accepted." >&2
+  exit 2
+}
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/gateway-v3-browser-qa-XXXXXXXX")"
 server_pid=""
-recovery_server_pid=""
-crash_server_pid=""
-needs_sudo_cleanup=0
-protected_public_enforced=0
 cleanup() {
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" >/dev/null 2>&1 || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  if [[ -n "$recovery_server_pid" ]]; then
-    kill "$recovery_server_pid" >/dev/null 2>&1 || true
-    wait "$recovery_server_pid" 2>/dev/null || true
-  fi
-  if [[ -n "$crash_server_pid" ]]; then
-    kill "$crash_server_pid" >/dev/null 2>&1 || true
-    wait "$crash_server_pid" 2>/dev/null || true
-  fi
-  if [[ "$needs_sudo_cleanup" -eq 1 ]] && command -v sudo >/dev/null 2>&1; then
-    sudo -n rm -rf "$tmp" >/dev/null 2>&1 || true
-  else
-    rm -rf "$tmp"
-  fi
+  rm -rf -- "$tmp"
 }
 trap cleanup EXIT
 
-protect_host_public_state() {
-  local root="$1"
-  mkdir -p "$root/public/css"
-  printf 'aaPanel-host-managed-state\n' > "$root/public/.user.ini"
-  printf 'host-managed-shared-directory-file\n' > "$root/public/css/host-managed.txt"
-  chmod 0444 "$root/public/.user.ini"
+root="$(unzip -Z1 "$baseline_zip" | awk -F/ 'NF && $1 != "" && root == "" { root=$1 } END { print root }')"
+[[ -n "$root" ]] || { echo "Cannot identify the released installation root." >&2; exit 1; }
+unzip -q "$baseline_zip" -d "$tmp/installation"
+site="$tmp/installation/$root"
+[[ -f "$site/artisan" && -f "$site/vendor/autoload.php" ]] || { echo "Incomplete v3 baseline ZIP." >&2; exit 1; }
+from="$(tr -d '[:space:]' < "$site/VERSION")"
+[[ "$from" == 3.* ]] || { echo "Only installed v3 baselines are in scope." >&2; exit 1; }
 
-  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    sudo -n chown root:root "$root/public" "$root/public/.user.ini"
-    sudo -n chmod 1777 "$root/public"
-    sudo -n chmod 0444 "$root/public/.user.ini"
-    needs_sudo_cleanup=1
-    protected_public_enforced=1
-
-    if rm -f "$root/public/.user.ini" 2>/dev/null; then
-      echo "Protected host-managed public regression setup is invalid: .user.ini was deletable by the updater user." >&2
-      exit 1
-    fi
-  elif [[ "${UPDATE_TEST_REQUIRE_PROTECTED_PUBLIC:-0}" == "1" ]]; then
-    echo "Protected host-managed public regression requires passwordless sudo on this runner." >&2
-    exit 1
-  fi
-}
-
-unzip -Z1 "$old_zip" > "$tmp/old-zip-list.txt"
-old_root_name="$(awk -F/ 'NF && $1 != "" {print $1; exit}' "$tmp/old-zip-list.txt")"
-[[ -n "$old_root_name" ]] || { echo "Could not identify old package root." >&2; exit 1; }
-unzip -q "$old_zip" -d "$tmp/old"
-target="$tmp/old/$old_root_name"
-[[ -d "$target" ]] || { echo "Old package root is missing." >&2; exit 1; }
-# Current released baselines predate this feature. Future supported rolling
-# baselines may already contain both scripts: verify BOTH old forms.
-old_managed_bin_present=0
-if [[ -f "$target/bin/managed-reverse-target.sh" && -f "$target/bin/managed-reverse-gateway.sh" ]]; then
-  old_managed_bin_present=1
-elif [[ -e "$target/bin/managed-reverse-target.sh" || -e "$target/bin/managed-reverse-gateway.sh" ]]; then
-  echo "Old release contains an incomplete managed bin/ contract." >&2; exit 1
-fi
-
-DB_HOST_VALUE="${UPDATE_TEST_DB_HOST:-127.0.0.1}"
-DB_PORT_VALUE="${UPDATE_TEST_DB_PORT:-3306}"
-DB_DATABASE_VALUE="${UPDATE_TEST_DB_DATABASE:-mcp_gateway_update_test}"
-DB_USERNAME_VALUE="${UPDATE_TEST_DB_USERNAME:-mcp_gateway}"
-DB_PASSWORD_VALUE="${UPDATE_TEST_DB_PASSWORD-test-password}"
-DB_SOCKET_VALUE="${UPDATE_TEST_DB_SOCKET:-}"
-if [[ -n "$DB_SOCKET_VALUE" && ! "$DB_SOCKET_VALUE" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
-  echo "Unsafe update-test DB_SOCKET path." >&2
-  exit 2
-fi
-
-cat > "$target/.env" <<EOF_ENV
-APP_NAME="MCP Gateway Update Test"
+mkdir -p "$site/storage/app/private"
+app_key="$(php -r 'echo base64_encode(random_bytes(32));')"
+cat > "$site/.env" <<EOF_ENV
+APP_NAME="Gateway v3 Update QA"
 APP_ENV=testing
-APP_KEY=base64:a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=
+APP_KEY=base64:$app_key
 APP_DEBUG=false
 APP_URL=https://gateway-update.example.test
 DB_CONNECTION=mysql
-DB_HOST=$DB_HOST_VALUE
-DB_PORT=$DB_PORT_VALUE
-DB_SOCKET=$DB_SOCKET_VALUE
-DB_DATABASE=$DB_DATABASE_VALUE
-DB_USERNAME=$DB_USERNAME_VALUE
-DB_PASSWORD=$DB_PASSWORD_VALUE
+DB_HOST=$db_host
+DB_PORT=$db_port
+DB_DATABASE=$db_name
+DB_USERNAME=$db_user
+DB_PASSWORD=$db_pass
 SESSION_DRIVER=file
 SESSION_ENCRYPT=true
 SESSION_SECURE_COOKIE=false
@@ -113,1524 +61,122 @@ SESSION_SAME_SITE=lax
 CACHE_STORE=file
 QUEUE_CONNECTION=sync
 FILESYSTEM_DISK=local
-MCP_BOOTSTRAP_FIXTURE_ENABLED=false
-MCP_BOOTSTRAP_FIXTURE_TOKEN=
 OAUTH_PRIVATE_KEY_PATH=storage/app/private/oauth/private.key
 OAUTH_PUBLIC_KEY_PATH=storage/app/private/oauth/public.key
 BRIDGE_CLIENT_PRIVATE_KEY_PATH=storage/app/private/bridge-client/private.key
 BRIDGE_CLIENT_PUBLIC_KEY_PATH=storage/app/private/bridge-client/public.key
 EOF_ENV
-
 (
-  cd "$target"
+  cd "$site"
   php artisan gateway:oauth-keygen --force --no-interaction >/dev/null
   php artisan gateway:bridge-client-keygen --force --no-interaction >/dev/null
   php artisan migrate:fresh --force --no-interaction >/dev/null
-  php -r '
-    require "vendor/autoload.php";
-    $app = require "bootstrap/app.php";
-    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-    $schema = Illuminate\Support\Facades\Schema::class;
-    $roleAware = $schema::hasColumn("users", "role") && $schema::hasColumn("users", "access_enabled");
-    $accessMatrix = $roleAware && trim((string) file_get_contents("VERSION")) === "2.4.1";
-    if ($accessMatrix) {
-      // First seed a Viewer so the actual Owner is not identified by ID/order.
-      App\Models\User::query()->create([
-        "name" => "Update access Viewer", "email" => "update-viewer@example.test",
-        "password" => "CorrectHorse!234", "role" => "viewer", "access_enabled" => true,
-      ]);
-    }
-    $owner = App\Models\User::query()->create([
-      "name" => "Gateway Admin",
-      "email" => "admin@example.test",
-      "password" => "CorrectHorse!234",
-    ]);
-    if ($roleAware) {
-      // This fixture represents a real installed Owner, not the Viewer default
-      // of a plain User::create after migrate:fresh.
-      $fields = ["role" => "owner", "access_enabled" => true];
-      if ($schema::hasColumn("users", "target_scope_mode")) {
-        $fields["target_scope_mode"] = "all";
-      } elseif ($schema::hasColumn("users", "site_scope_mode")) {
-        $fields["site_scope_mode"] = "all";
-      }
-      $owner->forceFill($fields)->save();
-    }
-    if ($accessMatrix) {
-      foreach (["administrator", "operator"] as $role) {
-        App\Models\User::query()->create([
-          "name" => "Update access ".$role, "email" => "update-".$role."@example.test",
-          "password" => "CorrectHorse!234", "role" => $role, "access_enabled" => true,
-        ]);
-      }
-      App\Models\User::query()->create([
-        "name" => "Deleted update Owner", "email" => "update-deleted@example.test",
-        "password" => "CorrectHorse!234", "role" => "owner", "access_enabled" => true,
-      ]);
-      App\Models\User::query()->create([
-        "name" => "Disabled update Owner", "email" => "update-disabled@example.test",
-        "password" => "CorrectHorse!234", "role" => "owner", "access_enabled" => false,
-      ]);
-    }
-  '
   printf '{"installed":true}\n' > storage/app/private/installed
-  printf 'persistent-private-state\n' > storage/app/private/update-preserve-sentinel.txt
-  printf 'stale-managed-file\n' > app/obsolete-update-test.txt
-  php artisan gateway:check --no-interaction >/dev/null
-)
-
-env_hash_before="$(sha256sum "$target/.env" | awk '{print $1}')"
-private_hash_before="$(sha256sum "$target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')"
-(cd "$target" && sha256sum \
-  storage/app/private/oauth/private.key \
-  storage/app/private/oauth/public.key \
-  storage/app/private/bridge-client/private.key \
-  storage/app/private/bridge-client/public.key) > "$tmp/signing-keys.before.sha256"
-old_version="$(tr -d '[:space:]' < "$target/VERSION")"
-
-# Released-v1.2.1 real-schema regression, not a synthetic post-transition
-# schema: seed connection data that is intentionally discarded and unrelated
-# identity/security data that must survive the breaking browser upgrade.
-if [[ "$old_version" == "1.2.1" ]]; then
-  (
-    cd "$target"
-    php -r '
-      require "vendor/autoload.php";
-      $app = require "bootstrap/app.php";
-      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-      $db = Illuminate\Support\Facades\DB::class;
-      $owner = App\Models\User::query()->where("email", "admin@example.test")->firstOrFail();
-      // The baseline creates its first account *after* migrate:fresh.
-      // V1 defaults new accounts to Viewer; explicitly seed the owner role
-      // rather than incorrectly attributing the seed role to migration.
-      $owner->forceFill(["role" => "owner", "site_scope_mode" => "all", "access_enabled" => true])->save();
-      $operator = App\Models\User::query()->create([
-        "name" => "Legacy operator", "email" => "operator@example.test",
-        "password" => "CorrectHorse!234", "role" => "operator",
-        "site_scope_mode" => "selected", "access_enabled" => true,
-      ]);
-      $site = (string) Illuminate\Support\Str::ulid();
-      $base = "https://legacy-wordpress.example.test";
-      $db::table("sites")->insert([
-        "id" => $site, "site_id" => "legacy-wordpress",
-        "display_name" => "Historical WordPress", "base_url" => $base,
-        "base_url_hash" => hash("sha256", $base),
-        "connector_type" => "wp_ai_bridge", "connection_state" => "connected",
-        "mcp_resource_url" => $base."/wp-json/wp-ai-bridge/v1/mcp",
-        "oauth_issuer_url" => $base,
-        "oauth_authorization_url" => $base."/oauth/authorize",
-        "oauth_token_url" => $base."/oauth/token",
-        "oauth_revocation_url" => $base."/oauth/revoke",
-      ]);
-      $db::table("site_credentials")->insert([
-        "id" => (string) Illuminate\Support\Str::ulid(),
-        "site_record_id" => $site,
-        "client_id" => "https://gateway-update.example.test/oauth/client.json",
-        "resource_url" => $base."/wp-json/wp-ai-bridge/v1/mcp",
-        "binding_hash" => hash("sha256", "test-binding"),
-        "encrypted_payload" => Illuminate\Support\Facades\Crypt::encryptString("historical-fixture"),
-      ]);
-      $db::table("user_site_access")->insert([
-        "user_id" => $operator->id, "site_record_id" => $site, "allowed" => true,
-      ]);
-      $group = (string) Illuminate\Support\Str::ulid();
-      $db::table("site_groups")->insert(["id" => $group, "name" => "Retired WordPress group"]);
-      $db::table("site_group_sites")->insert(["site_group_id" => $group, "site_record_id" => $site]);
-      $db::table("site_group_users")->insert(["site_group_id" => $group, "user_id" => $operator->id]);
-      $db::table("user_permission_denials")->insert([
-        "user_id" => $operator->id, "permission" => "sites.view",
-      ]);
-      foreach (["legacy-wordpress", null] as $siteId) {
-        $db::table("activity_events")->insert([
-          "id" => (string) Illuminate\Support\Str::ulid(),
-          "correlation_id" => (string) Illuminate\Support\Str::uuid(),
-          "actor_type" => "system", "site_id" => $siteId,
-          "operation" => $siteId === null ? "keep-global-event" : "discard-site-event",
-          "outcome" => "success",
-        ]);
-      }
-      $grant = (string) Illuminate\Support\Str::ulid();
-      $client = "https://chatgpt.com/oauth/client.json";
-      $resource = "https://gateway-update.example.test/mcp";
-      $data = ["authorization_id" => $grant, "client_id" => $client,
-        "user_id" => $owner->id, "resource" => $resource];
-      $db::table("oauth_authorizations")->insert([
-        "id" => $grant, "user_id" => $owner->id, "client_id" => $client,
-        "resource" => $resource, "resource_hash" => hash("sha256", $resource),
-        "scopes" => "[\"mcp:use\"]",
-      ]);
-      $db::table("oauth_access_tokens")->insert([
-        ...$data, "id" => "browser-old-access",
-        "scopes" => "[\"mcp:use\"]", "expires_at" => now()->addHour(),
-      ]);
-      $db::table("oauth_refresh_tokens")->insert([
-        ...$data, "id" => "browser-old-refresh",
-        "access_token_id" => "browser-old-access",
-        "expires_at" => now()->addDay(),
-      ]);
-      if ($db::getSchemaBuilder()->hasTable("oauth_client_profiles")) {
-        file_put_contents("storage/app/private/v121-client-profiles-present", "yes");
-      }
-    '
-    php artisan gateway:check --no-interaction >/dev/null
-  )
-  echo "Seeded actual published v1.2.1 WordPress connection, Target scope/group, ChatGPT OAuth grant/access/refresh and unrelated identity/Activity."
-fi
-
-# Published v2.0.x, v2.1.2 and distributed v2.1.0/v2.1.1 test-candidate
-# upgrades must preserve Target identities, ACLs, credentials and OAuth grants.
-# The published v2.1.2 case also seeds an unresolved legacy revoke, which
-# MUST NOT gain new dispatch/cancellation proof from a schema migration.
-if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[0-2])$ ]]; then
-  (
-    cd "$target"
-    php -r '
-      require "vendor/autoload.php";
-      $app = require "bootstrap/app.php";
-      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-      $db = Illuminate\Support\Facades\DB::class;
-      $owner = App\Models\User::query()->where("email", "admin@example.test")->firstOrFail();
-      $owner->forceFill(["role" => "owner", "target_scope_mode" => "all", "access_enabled" => true])->save();
-      $operator = App\Models\User::query()->create([
-        "name" => "Existing v2 operator", "email" => "v200-operator@example.test",
-        "password" => "CorrectHorse!234", "role" => "operator",
-        "target_scope_mode" => "selected", "access_enabled" => true,
-      ]);
-      $isPublished212 = trim((string) file_get_contents("VERSION")) === "2.1.2";
-      $existing = App\Domain\Targets\Target::query()->create([
-        "target_id" => "v200-wordpress", "display_name" => "Existing WordPress",
-        "connector_type" => "wp_ai_bridge",
-        "connection_state" => $isPublished212 ? "error" : "disconnected",
-      ]);
-      $group = App\Domain\Targets\TargetGroup::query()->create(["name" => "Existing v2 group"]);
-      $credential = App\Domain\Targets\TargetCredential::query()->create([
-        "target_record_id" => $existing->getKey(), "connector_type" => "wp_ai_bridge",
-        "purpose" => "wordpress_oauth",
-        "encrypted_payload" => Illuminate\Support\Facades\Crypt::encryptString("v200-test-credential"),
-      ]);
-      $now = now();
-      if ($isPublished212) {
-        $origin = "https://v212-recovery.example.test";
-        $db::table("wp_ai_bridge_target_configs")->insert([
-          "id" => (string) Illuminate\Support\Str::ulid(),
-          "target_record_id" => $existing->getKey(),
-          "base_url" => $origin, "base_url_hash" => hash("sha256", $origin),
-          "mcp_resource_url" => $origin."/wp-json/mcp",
-          "oauth_issuer_url" => $origin,
-          "oauth_authorization_url" => $origin."/authorize",
-          "oauth_token_url" => $origin."/token",
-          "oauth_revocation_url" => $origin."/revoke",
-          "created_at" => $now, "updated_at" => $now,
-        ]);
-        $db::table("wp_ai_bridge_credential_metadata")->insert([
-          "credential_id" => $credential->getKey(),
-          "client_id" => "pre-upgrade-client",
-          "resource_url" => $origin."/wp-json/mcp",
-          "binding_hash" => hash("sha256", "v212-binding"),
-          "generation" => 5,
-          "access_expires_at" => $now->copy()->addHour(),
-        ]);
-        $db::table("wp_ai_bridge_revocation_intents")->insert([
-          "id" => (string) Illuminate\Support\Str::ulid(),
-          "target_record_id" => $existing->getKey(),
-          "kind" => "disconnect",
-          "created_at" => $now, "updated_at" => $now,
-        ]);
-      }
-      $db::table("target_group_targets")->insert([
-        "target_group_id" => $group->getKey(), "target_record_id" => $existing->getKey(),
-        "created_at" => $now, "updated_at" => $now,
-      ]);
-      $db::table("target_group_users")->insert([
-        "target_group_id" => $group->getKey(), "user_id" => $operator->getKey(),
-        "created_at" => $now, "updated_at" => $now,
-      ]);
-      $db::table("user_target_access")->insert([
-        "target_record_id" => $existing->getKey(), "user_id" => $operator->getKey(),
-        "allowed" => true, "created_at" => $now, "updated_at" => $now,
-      ]);
-      $db::table("user_target_permission_denials")->insert([
-        "target_record_id" => $existing->getKey(), "user_id" => $operator->getKey(),
-        "permission" => "wordpress.abilities.execute.mutating",
-        "created_at" => $now, "updated_at" => $now,
-      ]);
-      $db::table("target_group_permission_denials")->insert([
-        "target_group_id" => $group->getKey(),
-        "permission" => "wordpress.abilities.execute.destructive",
-        "created_at" => $now, "updated_at" => $now,
-      ]);
-      $db::table("user_permission_denials")->insert([
-        "user_id" => $operator->getKey(), "permission" => "ssh.command.run",
-        "created_at" => $now, "updated_at" => $now,
-      ]);
-      $resource = "https://gateway-update.example.test/mcp";
-      $db::table("oauth_authorizations")->insert([
-        "id" => (string) Illuminate\Support\Str::ulid(),
-        "user_id" => $owner->getKey(),
-        "client_id" => (string) config("oauth.client.id"),
-        "client_profile_key" => "chatgpt",
-        "client_profile_generation" => 1,
-        "resource" => $resource, "resource_hash" => hash("sha256", $resource),
-        "scopes" => "[\"mcp:use\"]",
-      ]);
-      if (! $credential->exists) {
-        throw new RuntimeException("Could not seed v2 credential persistence fixture.");
-      }
-    '
-  )
-  echo "Seeded Target-era $old_version Target, credential, Target Group, user rules, denials and ChatGPT grant; published v2.1.2 also holds a legacy unknown revocation and metadata."
-fi
-
-candidate="$tmp/candidate"
-mkdir -p "$candidate"
-unzip -q "$update_zip" -d "$candidate"
-new_version="$(tr -d '[:space:]' < "$candidate/update/UPDATE_VERSION")"
-[[ -f "$candidate/public/update/index.php" && -f "$candidate/update/WebUpdater.php" ]] || { echo "Browser updater files are missing after extraction." >&2; exit 1; }
-[[ -f "$candidate/update/MANAGED_PUBLIC_PATHS" ]] || { echo "Gateway-owned public path manifest is missing after extraction." >&2; exit 1; }
-for script in managed-reverse-target.sh managed-reverse-gateway.sh; do
-  [[ -f "$candidate/update/payload/bin/$script" && ! -L "$candidate/update/payload/bin/$script" ]] || {
-    echo "Update ZIP is missing approved bin/$script." >&2; exit 1;
-  }
-done
-
-# Regression for the production incident: an unknown public/.user.ini is made
-# non-deletable by the updater user while Gateway-owned public files remain
-# replaceable. A forced pre-migration verification failure must restore the old
-# managed runtime without touching host-managed public state.
-rollback_target="$tmp/rollback-target"
-cp -a "$target" "$rollback_target"
-protect_host_public_state "$rollback_target"
-rollback_user_ini_hash="$(sha256sum "$rollback_target/public/.user.ini" | awk '{print $1}')"
-rollback_host_file_hash="$(sha256sum "$rollback_target/public/css/host-managed.txt" | awk '{print $1}')"
-rollback_artisan_hash="$(sha256sum "$rollback_target/artisan" | awk '{print $1}')"
-if [[ "$old_managed_bin_present" -eq 1 ]]; then
-  (cd "$rollback_target" && sha256sum bin/managed-reverse-target.sh bin/managed-reverse-gateway.sh) > "$tmp/old-managed-bin.sha256"
-fi
-rollback_migrations_before="$(cd "$rollback_target" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')"
-rollback_zip="$rollback_target/mcp-gateway-update-v$new_version.zip"
-cp "$update_zip" "$rollback_zip"
-sha256sum "$rollback_zip" > "$rollback_zip.sha256"
-unzip -q "$rollback_zip" -d "$rollback_target"
-
-php -r '
-  [$base] = array_slice($argv, 1);
-  chdir($base);
-  require $base."/vendor/autoload.php";
-  $app = require $base."/bootstrap/app.php";
-  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-  require $base."/update/WebUpdater.php";
-  $token = str_repeat("a", 64);
-  $updater = new McpGatewayUpdate\WebUpdater($base, $base."/update");
-  $reset = $updater->targetResetPreflight();
-  $attest = $reset["required"] ? [
-      "reset_acknowledged" => "RESET_TARGET_STATE",
-      "database_backup_verified" => "RESTORABLE_DATABASE_BACKUP_VERIFIED",
-      "confirmed_target_version" => $reset["to"],
-      "package_sha256" => $reset["package_sha256"],
-  ] : [];
-  $stage = $updater->stage($token, $attest);
-  file_put_contents($base."/artisan", "\n# force pre-migration restore regression\n", FILE_APPEND);
-  try {
-    $updater->finish($token, $stage["continuation"]);
-    fwrite(STDERR, "Forced pre-migration failure unexpectedly completed.\n");
-    exit(1);
-  } catch (Throwable $e) {
-    if (!str_contains($e->getMessage(), "Gateway-managed files were restored")) {
-      fwrite(STDERR, $e->getMessage()."\n");
-      exit(2);
-    }
-  }
-' "$rollback_target"
-
-[[ "$(tr -d '[:space:]' < "$rollback_target/VERSION")" == "$old_version" ]] || { echo "Pre-migration restore did not restore the previous VERSION." >&2; exit 1; }
-[[ "$(sha256sum "$rollback_target/artisan" | awk '{print $1}')" == "$rollback_artisan_hash" ]] || { echo "Pre-migration restore did not restore managed application files." >&2; exit 1; }
-if [[ "$old_managed_bin_present" -eq 1 ]]; then
-  (cd "$rollback_target" && sha256sum --check --strict "$tmp/old-managed-bin.sha256" >/dev/null) || {
-    echo "Pre-migration restore did not restore original managed scripts." >&2; exit 1;
-  }
-else
-  [[ ! -e "$rollback_target/bin/managed-reverse-target.sh" && ! -e "$rollback_target/bin/managed-reverse-gateway.sh" ]] || {
-    echo "Pre-migration restore left newly introduced Managed Reverse SSH scripts." >&2; exit 1;
-  }
-fi
-[[ "$(sha256sum "$rollback_target/public/.user.ini" | awk '{print $1}')" == "$rollback_user_ini_hash" ]] || { echo "Pre-migration restore changed host-managed public/.user.ini." >&2; exit 1; }
-[[ "$(sha256sum "$rollback_target/public/css/host-managed.txt" | awk '{print $1}')" == "$rollback_host_file_hash" ]] || { echo "Pre-migration restore changed an unknown file inside a shared public directory." >&2; exit 1; }
-[[ "$(cd "$rollback_target" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')" == "$rollback_migrations_before" ]] || { echo "Database migration state changed during the forced pre-migration restore regression." >&2; exit 1; }
-[[ ! -e "$rollback_target/storage/framework/down" ]] || { echo "Application remained in maintenance mode after successful pre-migration restore." >&2; exit 1; }
-php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??null)!=="recovery-files-restored" || ($s["migration_started"]??null)!==false) exit(1);' "$rollback_target/storage/app/private/update-state.json" || { echo "Verified rollback discarded the required HTTP-unverified recovery journal." >&2; exit 1; }
-
-if [[ "$needs_sudo_cleanup" -eq 1 ]]; then
-  sudo -n rm -rf "$rollback_target"
-else
-  rm -rf "$rollback_target"
-fi
-
-# REQUIRED-01-R2: a verified Owner pre-migration restore can crash after
-# removing config/ but before its backup copy. Exercise this on the newest
-# actually published supported baseline, with both CLI modes and real HTTP.
-latest_supported="$(awk 'NF && $1 !~ /^#/ {last=$1} END {print last}' "$(dirname "$0")/released-baselines.txt")"
-if [[ "$old_version" == "$latest_supported" ]]; then
-  crash_root="$tmp/interrupted-config-restore"
-  cp -a "$target" "$crash_root"
-  mkdir -p "$crash_root/bin"
-  printf 'unrelated operator script\n' > "$crash_root/bin/operator.sh"
-  (cd "$crash_root" && sha256sum .env config/ssh.php artisan bin/operator.sh \
-    storage/app/private/oauth/private.key storage/app/private/bridge-client/private.key) > "$tmp/crash-original-files.sha256"
-  crash_ledger="$(cd "$crash_root" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')"
-  cp "$update_zip" "$crash_root/mcp-gateway-update-v$new_version.zip"
-  unzip -q "$update_zip" -d "$crash_root"
-
-  # Current-config validation remains mandatory on the normal upgrade path.
-  mv "$crash_root/config/ssh.php" "$tmp/crash-ssh-config"
-  if (cd "$crash_root" && php -r '
-    require "vendor/autoload.php"; require "update/WebUpdater.php";
-    (new McpGatewayUpdate\WebUpdater(getcwd(),getcwd()."/update"))->inspect();
-  ' > "$tmp/crash-normal-preflight.log" 2>&1); then
-    echo "Normal Browser Update accepted missing config/ssh.php" >&2; exit 1;
-  fi
-  grep -F 'installer identity configuration is unreadable' "$tmp/crash-normal-preflight.log" >/dev/null || {
-    cat "$tmp/crash-normal-preflight.log" >&2; exit 1;
-  }
-  mv "$tmp/crash-ssh-config" "$crash_root/config/ssh.php"
-
-  # Stage using the real old Laravel runtime. Save both authenticated
-  # backups and persist recovery-restoring BEFORE simulating the crash.
+  printf 'PRIVATE-DO-NOT-LOSE\n' > storage/app/private/qa-update-sentinel.txt
   php -r '
-    $root=$argv[1]; chdir($root); require "vendor/autoload.php";
-    $app=require "bootstrap/app.php";
-    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-    require "update/WebUpdater.php";
-    $u=new McpGatewayUpdate\WebUpdater($root,$root."/update");
-    $stage=$u->stage(str_repeat("b",64));
-    $archive=(new ReflectionMethod($u,"createBackup"))->invoke($u,$stage["to"],$stage["from"]);
-    $state=json_decode(file_get_contents($root."/storage/app/private/update-state.json"),true,512,JSON_THROW_ON_ERROR);
-    $state["phase"]="recovery-restoring"; $state["recovery_origin"]="owner-local";
-    $state["recovery_started_at"]=time(); $state["recovery_archive"]=$archive;
-    (new ReflectionMethod($u,"writeState"))->invoke($u,$state);
-  ' "$crash_root"
-  crash_state="$crash_root/storage/app/private/update-state.json"
-  [[ "$crash_root" == "$tmp/"* && -f "$crash_root/storage/framework/down" ]] || exit 1
-  rm -rf "$crash_root/config"
-  (cd "$crash_root" && php update/Recover.php --check) > "$tmp/crash-check.log" 2>&1 || {
-    cat "$tmp/crash-check.log" >&2; exit 1;
-  }
-  grep -F 'PRE_MIGRATION_PROOF=PASS phase=recovery-restoring' "$tmp/crash-check.log" >/dev/null || exit 1
-
-  # The interrupted-recovery exception never permits unknown script bytes.
-  printf '\n# forged script\n' >> "$crash_root/bin/managed-reverse-target.sh"
-  if (cd "$crash_root" && php update/Recover.php --check > "$tmp/crash-forged.log" 2>&1); then
-    echo "Unknown privileged installer bytes accepted by recovery" >&2; exit 1;
-  fi
-  grep -F 'not an approved prior or current release artifact' "$tmp/crash-forged.log" >/dev/null || {
-    cat "$tmp/crash-forged.log" >&2; exit 1;
-  }
-  cp "$crash_root/update/payload/bin/managed-reverse-target.sh" "$crash_root/bin/managed-reverse-target.sh"
-  (cd "$crash_root" && php update/Recover.php --check) > "$tmp/crash-recheck.log" 2>&1 || {
-    cat "$tmp/crash-recheck.log" >&2; exit 1;
-  }
-
-  # Restore succeeds but missing HTTP readiness must retain the journal.
-  if (cd "$crash_root" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:18759" \
-    php update/Recover.php --recover > "$tmp/crash-http-failed.log" 2>&1); then
-    echo "Recovery declared success without HTTP readiness" >&2; exit 1;
-  fi
-  grep -F RECOVERY_NOT_VERIFIED "$tmp/crash-http-failed.log" >/dev/null || {
-    cat "$tmp/crash-http-failed.log" >&2; exit 1;
-  }
-  php -r '
-    $s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
-    if (($s["phase"]??"")!=="recovery-http-unverified"
-      || ($s["migration_started"]??null)!==false
-      || !is_file(($s["backup"]??"")."/BACKUP_MANIFEST.sha256")
-      || !is_file(($s["recovery_archive"]??"")."/BACKUP_MANIFEST.sha256")) exit(1);
-  ' "$crash_state" || { echo "Recovery lost journal or backup before HTTP readiness" >&2; exit 1; }
-
-  cat > "$tmp/crash-router.php" <<'PHP_CRASH_ROUTER'
-<?php
-$public=$_SERVER['DOCUMENT_ROOT'];
-$path=parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
-$file=rtrim($public,'/').$path;
-if ($path!=='/' && (is_file($file) || is_dir($file))) return false;
-require $public.'/index.php';
-PHP_CRASH_ROUTER
-  crash_port=18758
-  php -S "127.0.0.1:$crash_port" -t "$crash_root/public" "$tmp/crash-router.php" > "$tmp/crash-server.log" 2>&1 &
-  crash_server_pid=$!
-  for attempt in $(seq 1 35); do
-    curl -fsS "http://127.0.0.1:$crash_port/up" >/dev/null 2>&1 && break
-    sleep 0.2
-  done
-  curl -fsS "http://127.0.0.1:$crash_port/up" >/dev/null || { cat "$tmp/crash-server.log" >&2; exit 1; }
-  (cd "$crash_root" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:$crash_port" \
-    php update/Recover.php --recover) > "$tmp/crash-completed.log" 2>&1 || {
-    cat "$tmp/crash-completed.log" >&2; exit 1;
-  }
-  grep -F 'RECOVERY_COMPLETE=PASS' "$tmp/crash-completed.log" >/dev/null || {
-    cat "$tmp/crash-completed.log" >&2; exit 1;
-  }
-  kill "$crash_server_pid" >/dev/null 2>&1 || true
-  wait "$crash_server_pid" 2>/dev/null || true
-  crash_server_pid=""
-  [[ "$(tr -d '[:space:]' < "$crash_root/VERSION")" == "$old_version" ]] || exit 1
-  (cd "$crash_root" && sha256sum --check --strict "$tmp/crash-original-files.sha256" >/dev/null) || {
-    echo "Recovery changed protected .env/credential/config or unrelated bin files" >&2; exit 1;
-  }
-  [[ "$(cd "$crash_root" && php artisan migrate:status --no-interaction | sha256sum | awk '{print $1}')" == "$crash_ledger" ]] || exit 1
-  php -r '
-    $s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
-    if (($s["phase"]??"")!=="recovery-completed"
-      || ($s["migration_started"]??null)!==false
-      || !is_file(($s["backup"]??"")."/BACKUP_MANIFEST.sha256")
-      || !is_file(($s["recovery_archive"]??"")."/BACKUP_MANIFEST.sha256")) exit(1);
-  ' "$crash_state" || { echo "Recovered backup/journal was discarded" >&2; exit 1; }
-  echo "PASS: crash after config/ removal, exact old code restoration, denied unknown installer, journal and HTTP readiness verified."
-fi
-
-# Owner-local recovery of a stranded v2.1.2 -> candidate update uses the
-# real published old runtime and the candidate's exact private Recover.php.
-# Keep the main successful-upgrade fixture isolated and unchanged.
-if [[ "$old_version" == "2.1.2" ]]; then
-  recovery_target="$tmp/operator-recovery-target"
-  cp -a "$target" "$recovery_target"
-  recovery_port="${UPDATE_TEST_RECOVERY_HTTP_PORT:-18752}"
-  protect_host_public_state "$recovery_target"
-  recovery_user_ini="$(sha256sum "$recovery_target/public/.user.ini" | awk '{print $1}')"
-  recovery_private="$(sha256sum "$recovery_target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')"
-  recovery_env="$(sha256sum "$recovery_target/.env" | awk '{print $1}')"
-  (cd "$recovery_target" && sha256sum storage/app/private/oauth/private.key storage/app/private/bridge-client/private.key) > "$tmp/recovery-private-keys.before.sha256"
-  recovery_database="$(cd "$recovery_target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')"
-  recovery_artisan="$(sha256sum "$recovery_target/artisan" | awk '{print $1}')"
-  # The previous runtime may have had an enabled Laravel config cache.
-  # Preserve its authenticated original cached DB identity in the snapshot;
-  # recovery must not trust a possibly broken candidate config cache.
-  (cd "$recovery_target" && php artisan config:cache --no-interaction >/dev/null)
-  [[ -f "$recovery_target/bootstrap/cache/config.php" ]] || {
-    echo "Could not create original-runtime cached configuration fixture." >&2; exit 1;
-  }
-  cp "$update_zip" "$recovery_target/mcp-gateway-update-v$new_version.zip"
-  unzip -q "$update_zip" -d "$recovery_target"
-  [[ -f "$recovery_target/update/Recover.php" && ! -e "$recovery_target/public/update/Recover.php" ]] || {
-    echo "Operator recovery entry is not private." >&2; exit 1;
-  }
-
-  php -r '
-    $base=$argv[1]; chdir($base);
-    require $base."/vendor/autoload.php";
-    $app=require $base."/bootstrap/app.php";
-    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-    require $base."/update/WebUpdater.php";
-    $updater=new McpGatewayUpdate\WebUpdater($base,$base."/update");
-    $updater->stage(str_repeat("a",64));
-  ' "$recovery_target"
-  [[ "$(tr -d '[:space:]' < "$recovery_target/VERSION")" == "$new_version" ]] || {
-    echo "Recovery fixture was not staged." >&2; exit 1;
-  }
-
-  # A misleading old POST or lost cookie never authorizes migration.
-  recovery_state="$recovery_target/storage/app/private/update-state.json"
-  # The candidate is fully staged, but Laravel bootstrap cannot execute.
-  # Browser Finish must not cross the migration boundary and the private
-  # Owner-local --check must work independently of candidate bootstrap.
-  cat > "$recovery_target/bootstrap/cache/config.php" <<'PHP_BROKEN_CANDIDATE_BOOTSTRAP'
-<?php
-throw new RuntimeException('Disposable candidate bootstrap failure before DDL.');
-PHP_BROKEN_CANDIDATE_BOOTSTRAP
-  if (cd "$recovery_target" && php artisan about --no-interaction >/dev/null 2>&1); then
-    echo "Candidate bootstrap-failure fixture did not fail." >&2; exit 1;
-  fi
-  (cd "$recovery_target" && php update/Recover.php --check) >"$tmp/recovery-staged-broken-bootstrap-check.log" 2>&1 || {
-    cat "$tmp/recovery-staged-broken-bootstrap-check.log" >&2
-    echo "Owner recovery could not verify a stranded fully staged candidate." >&2; exit 1;
-  }
-  grep -F 'PRE_MIGRATION_PROOF=PASS phase=files-replaced' "$tmp/recovery-staged-broken-bootstrap-check.log" >/dev/null || {
-    echo "Stranded candidate lacked independent DB and original-snapshot proof." >&2; exit 1;
-  }
-  php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??null)!=="files-replaced" || ($s["migration_started"]??null)!==false) exit(1);' "$recovery_state" || {
-    echo "Candidate bootstrap failure crossed migration boundary." >&2; exit 1;
-  }
-  rm "$recovery_target/bootstrap/cache/config.php"
-
-  # A changed private .env cannot be used to redirect a standalone ledger
-  # check away from the database authenticated by the old config cache.
-  cp "$recovery_target/.env" "$tmp/recovery-original-env"
-  sed -i 's/^DB_DATABASE=.*/DB_DATABASE=mcp_gateway_incorrect_recovery_fixture/' "$recovery_target/.env"
-  if (cd "$recovery_target" && php update/Recover.php --check >"$tmp/recovery-mismatched-env.log" 2>&1); then
-    echo "Standalone Owner recovery trusted a changed DB identity." >&2; exit 1;
-  fi
-  cp "$tmp/recovery-original-env" "$recovery_target/.env"
-
-  php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["migration_started"]=true; $s["phase"]="migrate"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
-  if (cd "$recovery_target" && php update/Recover.php --check >"$tmp/recovery-migrate-rejected.log" 2>&1); then
-    echo "Migration-started state was incorrectly treated as recoverable." >&2; exit 1
-  fi
-  php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["migration_started"]=false; $s["phase"]="files-replaced"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
-
-  # An incomplete filesystem stage or advanced migration ledger never
-  # authorizes code rollback without explicit operator reconciliation.
-  php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["phase"]="replace-files"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
-  if (cd "$recovery_target" && php update/Recover.php --check > "$tmp/recovery-incomplete-stage.log" 2>&1); then
-    echo "Partially replaced managed code was marked safe for rollback." >&2; exit 1;
-  fi
-  php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["phase"]="files-replaced"; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$recovery_state"
-  (cd "$recovery_target" && php -r 'require "vendor/autoload.php"; $app=require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); Illuminate\Support\Facades\DB::table("migrations")->insert(["migration"=>"9999_99_99_999999_unauthorized_extra","batch"=>999]);')
-  if (cd "$recovery_target" && php update/Recover.php --check > "$tmp/recovery-ledger-diverged.log" 2>&1); then
-    echo "Changed migration ledger was incorrectly marked safe for code rollback." >&2; exit 1;
-  fi
-  (cd "$recovery_target" && php -r 'require "vendor/autoload.php"; $app=require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); Illuminate\Support\Facades\DB::table("migrations")->where("migration","9999_99_99_999999_unauthorized_extra")->delete();')
-
-  original_backup="$(php -r '$s=json_decode(file_get_contents($argv[1]),true); echo $s["backup"];' "$recovery_state")"
-  mv "$original_backup/BACKUP_MANIFEST.sha256" "$original_backup/BACKUP_MANIFEST.sha256.hidden"
-  if (cd "$recovery_target" && php update/Recover.php --recover >"$tmp/recovery-bad-manifest.log" 2>&1); then
-    echo "Corrupt/missing backup manifest permitted recovery." >&2; exit 1
-  fi
-  mv "$original_backup/BACKUP_MANIFEST.sha256.hidden" "$original_backup/BACKUP_MANIFEST.sha256"
-  [[ "$(tr -d '[:space:]' < "$recovery_target/VERSION")" == "$new_version" ]] || {
-    echo "Unsafe backup attempted code rollback." >&2; exit 1;
-  }
-  (cd "$recovery_target" && php update/Recover.php --check) > "$tmp/recovery-check.log"
-  grep -F 'PRE_MIGRATION_PROOF=PASS' "$tmp/recovery-check.log" >/dev/null || {
-    echo "Operator code-only preflight failed unexpectedly." >&2; exit 1;
-  }
-
-  recovery_lock="$recovery_target/storage/app/private/update-execution.lock"
-  php -r '$f=fopen($argv[1],"c"); if (!$f || !flock($f,LOCK_EX|LOCK_NB)) exit(1); file_put_contents($argv[2],"locked"); sleep(3);' "$recovery_lock" "$tmp/recovery-lock-held" &
-  recovery_lock_pid=$!
-  for attempt in $(seq 1 30); do
-    [[ -f "$tmp/recovery-lock-held" ]] && break
-    sleep 0.1
-  done
-  [[ -f "$tmp/recovery-lock-held" ]] || { echo "Could not simulate an active updater lock." >&2; exit 1; }
-  if (cd "$recovery_target" && php update/Recover.php --recover > "$tmp/recovery-busy.log" 2>&1); then
-    echo "Concurrent updater lock allowed operator recovery." >&2; exit 1;
-  fi
-  wait "$recovery_lock_pid"
-
-  # Crash after durable recovery-restoring journal; verify safe resume from
-  # the immutable original backup and the retained pre-restore archive.
-  php -r '
-    $base=$argv[1]; chdir($base);
     require "vendor/autoload.php";
     $app=require "bootstrap/app.php";
     $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-    require "update/WebUpdater.php";
-    $updater=new McpGatewayUpdate\WebUpdater($base,$base."/update");
-    $create=new ReflectionMethod(McpGatewayUpdate\WebUpdater::class,"createBackup");
-    $archive=$create->invoke($updater,$argv[2],$argv[3]);
-    $statePath=$base."/storage/app/private/update-state.json";
-    $state=json_decode(file_get_contents($statePath),true,512,JSON_THROW_ON_ERROR);
-    $state["phase"]="recovery-restoring";
-    $state["recovery_archive"]=$archive;
-    $state["recovery_started_at"]=time();
-    file_put_contents($statePath,json_encode($state,JSON_THROW_ON_ERROR));
-    file_put_contents($base."/app/interrupted-recovery-test.txt","mixed candidate");
-  ' "$recovery_target" "$new_version" "$old_version"
-
-  # Production-shaped pre-migration bootstrap incompatibility: the signed
-  # candidate files still match their package, but its generated Laravel
-  # configuration cannot bootstrap. The private Owner recovery MUST be able
-  # to validate old-code/DB evidence without starting candidate Laravel.
-  cat > "$recovery_target/bootstrap/cache/config.php" <<'PHP_INVALID_CANDIDATE_CONFIG'
-<?php
-throw new RuntimeException('Disposable candidate config-cache bootstrap failure.');
-PHP_INVALID_CANDIDATE_CONFIG
-  if (cd "$recovery_target" && php artisan about --no-interaction >/dev/null 2>&1); then
-    echo "Disposable recovery fixture did not reproduce candidate-bootstrap failure." >&2; exit 1;
-  fi
-  (cd "$recovery_target" && php update/Recover.php --check) >"$tmp/recovery-broken-bootstrap-check.log" 2>&1 || {
-    cat "$tmp/recovery-broken-bootstrap-check.log" >&2
-    echo "Owner recovery incorrectly depended on the staged candidate bootstrap." >&2; exit 1;
-  }
-  grep -F 'PRE_MIGRATION_PROOF=PASS' "$tmp/recovery-broken-bootstrap-check.log" >/dev/null || {
-    echo "Broken-candidate bootstrap lacked verified independent recovery proof." >&2; exit 1;
-  }
-
-  cat > "$tmp/operator-recovery-router.php" <<'PHP_RECOVERY_ROUTER'
-<?php
-$public = $_SERVER['DOCUMENT_ROOT'];
-$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
-$physical = rtrim($public, '/').$path;
-if ($path !== '/' && (is_file($physical) || is_dir($physical))) return false;
-require $public.'/index.php';
-PHP_RECOVERY_ROUTER
-  php -S "127.0.0.1:$recovery_port" -t "$recovery_target/public" "$tmp/operator-recovery-router.php" >"$tmp/operator-recovery-server.log" 2>&1 &
-  recovery_server_pid=$!
-  for attempt in $(seq 1 30); do
-    curl -fsS "http://127.0.0.1:$recovery_port/up" >/dev/null 2>&1 && break
-    sleep 0.2
-  done
-  # A lost/unreachable HTTP result after a correct code restore must NOT
-  # be reported as recovered. The retained phase permits a safe repeat.
-  if (cd "$recovery_target" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:18753" php update/Recover.php --recover >"$tmp/recovery-http-failed.log" 2>&1); then
-    echo "Recovery incorrectly accepted unreachable HTTP readiness." >&2; exit 1
-  fi
-  grep -F 'RECOVERY_NOT_VERIFIED' "$tmp/recovery-http-failed.log" >/dev/null || { echo "Failed HTTP readiness lacked an explicit non-success status." >&2; exit 1; }
-  php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??"")!=="recovery-http-unverified" || ($s["migration_started"]??null)!==false) exit(1);' "$recovery_state" || { echo "Failed readiness did not retain safe pre-migration evidence." >&2; exit 1; }
-  [[ "$(tr -d '[:space:]' < "$recovery_target/VERSION")" == "2.1.2" ]] || { echo "Failed readiness changed the restored runtime." >&2; exit 1; }
-  (cd "$recovery_target" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:$recovery_port" php update/Recover.php --recover) > "$tmp/recovery-success.log" 2>&1 || {
-    cat "$tmp/recovery-success.log" >&2
-    if [[ -f "$recovery_target/storage/logs/laravel.log" ]]; then
-      grep -m 2 -E '^\[[^]]+\] .*\.ERROR:' "$recovery_target/storage/logs/laravel.log" >&2 || true
-    fi
-    echo "Owner-local pre-migration code recovery failed." >&2; exit 1;
-  }
-  grep -F 'RECOVERY_COMPLETE=PASS' "$tmp/recovery-success.log" >/dev/null || {
-    echo "Owner-local recovery did not pass HTTP readiness." >&2; exit 1;
-  }
-  [[ "$(tr -d '[:space:]' < "$recovery_target/VERSION")" == "2.1.2" ]] || {
-    echo "Operator recovery did not restore the original version." >&2; exit 1;
-  }
-  [[ "$(sha256sum "$recovery_target/artisan" | awk '{print $1}')" == "$recovery_artisan" ]] || {
-    echo "Operator recovery did not restore old managed source." >&2; exit 1;
-  }
-  [[ "$(sha256sum "$recovery_target/public/.user.ini" | awk '{print $1}')" == "$recovery_user_ini" ]] || {
-    echo "Operator recovery modified host-managed public/.user.ini." >&2; exit 1;
-  }
-  [[ "$(sha256sum "$recovery_target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')" == "$recovery_private" ]] || {
-    echo "Operator recovery modified protected private storage." >&2; exit 1;
-  }
-  [[ "$(sha256sum "$recovery_target/.env" | awk '{print $1}')" == "$recovery_env" ]] || {
-    echo "Operator recovery modified .env." >&2; exit 1;
-  }
-  (cd "$recovery_target" && sha256sum --check --strict "$tmp/recovery-private-keys.before.sha256" >/dev/null) || {
-    echo "Operator recovery modified OAuth/Bridge signing keys." >&2; exit 1;
-  }
-  [[ ! -f "$recovery_target/app/interrupted-recovery-test.txt" ]] || {
-    echo "Interrupted recovery left a stale managed file." >&2; exit 1;
-  }
-  [[ "$(cd "$recovery_target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')" == "$recovery_database" ]] || {
-    echo "Operator code-only recovery altered the migration ledger." >&2; exit 1;
-  }
-  php -r '
-    $s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);
-    if (($s["phase"]??"")!=="recovery-completed" || !is_dir($s["recovery_archive"]??"")
-      || !is_file($s["backup"]."/BACKUP_MANIFEST.sha256")) exit(1);
-  ' "$recovery_state" || { echo "Operator recovery evidence was not retained." >&2; exit 1; }
-  (cd "$recovery_target" && MCP_GATEWAY_RECOVERY_TEST_LOOPBACK="http://127.0.0.1:$recovery_port" php update/Recover.php --recover) > "$tmp/recovery-repeat.log" 2>&1 || {
-    cat "$tmp/recovery-repeat.log" >&2; echo "Repeated operator recovery was unsafe." >&2; exit 1;
-  }
-  echo "Operator-only stranded pre-migration recovery PASS: revoked migration path refused; corrupt backup refused; old code+DB/private/host-public retained; HTTP readiness PASS; repeated recovery safe."
-
-  kill "$recovery_server_pid" >/dev/null 2>&1 || true
-  wait "$recovery_server_pid" 2>/dev/null || true
-  recovery_server_pid=""
-  if [[ "$needs_sudo_cleanup" -eq 1 ]]; then
-    sudo -n rm -rf "$recovery_target"
-  else
-    rm -rf "$recovery_target"
-  fi
-fi
-
-protect_host_public_state "$target"
-user_ini_hash_before="$(sha256sum "$target/public/.user.ini" | awk '{print $1}')"
-user_ini_meta_before="$(stat -c '%u:%g:%a' "$target/public/.user.ini")"
-public_dir_meta_before="$(stat -c '%u:%g:%a' "$target/public")"
-host_file_hash_before="$(sha256sum "$target/public/css/host-managed.txt" | awk '{print $1}')"
-
-# The real operator staging step: upload the named ZIP into the existing
-# application root and extract it there. This must add only temporary updater
-# files and must not replace the live application before confirmation.
-canonical_zip="$target/mcp-gateway-update-v$new_version.zip"
-cp "$update_zip" "$canonical_zip"
-sha256sum "$canonical_zip" > "$canonical_zip.sha256"
-unzip -q "$canonical_zip" -d "$target"
-[[ -d "$target/update" && -f "$target/public/update/index.php" ]] || { echo "In-place extraction did not stage the browser updater." >&2; exit 1; }
-[[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" ]] || { echo "Extracting the update ZIP changed the live version before confirmation." >&2; exit 1; }
-[[ -f "$target/app/obsolete-update-test.txt" ]] || { echo "Extracting the update ZIP overwrote managed application files before confirmation." >&2; exit 1; }
-
-inspect_package() {
-  local base="$1"
-  local package="$2"
-  php -r '
-    [$base, $package, $autoload] = array_slice($argv, 1);
-    require $autoload;
-    require $package."/WebUpdater.php";
-    $updater = new McpGatewayUpdate\WebUpdater($base, $package);
-    try {
-      $updater->inspect();
-      exit(0);
-    } catch (Throwable $e) {
-      fwrite(STDERR, $e->getMessage()."\n");
-      exit(1);
-    }
-  ' "$base" "$package" "$target/vendor/autoload.php"
-}
-
-# Keep an unrelated bin/ script while rejecting unsafe/adopted paths
-# BEFORE staging or any mutation of the old release. The update owns only its
-# two scripts, not this directory or the operator's other contents.
-mkdir -p "$target/bin"
-printf 'preserve-operator-owned-bin-file\n' > "$target/bin/operator-owned.sh"
-operator_bin_hash="$(sha256sum "$target/bin/operator-owned.sh" | awk '{print $1}')"
-if [[ "$old_managed_bin_present" -eq 1 ]]; then
-  cp -a "$target/bin/managed-reverse-target.sh" "$tmp/old-managed-target-script.sh"
-fi
-
-printf 'untrusted-host-script\n' > "$target/bin/managed-reverse-target.sh"
-if inspect_package "$target" "$target/update" >"$tmp/bin-collision.out" 2>&1; then
-  echo "Updater adopted an unrelated preexisting privileged script." >&2; exit 1;
-fi
-grep -F 'not an approved prior or current release artifact' "$tmp/bin-collision.out" >/dev/null || {
-  cat "$tmp/bin-collision.out" >&2; echo "Unowned bin/ conflict was not diagnosed." >&2; exit 1;
-}
-rm -f "$target/bin/managed-reverse-target.sh"
-
-ln -s "$target/VERSION" "$target/bin/managed-reverse-target.sh"
-if inspect_package "$target" "$target/update" >"$tmp/bin-symlink.out" 2>&1; then
-  echo "Updater accepted a symlinked managed script." >&2; exit 1;
-fi
-grep -F 'unexpected symbolic link' "$tmp/bin-symlink.out" >/dev/null || {
-  cat "$tmp/bin-symlink.out" >&2; echo "Unsafe bin/ symlink was not rejected." >&2; exit 1;
-}
-rm -f "$target/bin/managed-reverse-target.sh"
-if [[ "$old_managed_bin_present" -eq 1 ]]; then
-  cp -a "$tmp/old-managed-target-script.sh" "$target/bin/managed-reverse-target.sh"
-fi
-
-mv "$target/bin" "$tmp/owned-bin"
-ln -s "$tmp/owned-bin" "$target/bin"
-if inspect_package "$target" "$target/update" >"$tmp/bin-parent-symlink.out" 2>&1; then
-  echo "Updater followed a symlinked bin/ parent." >&2; exit 1;
-fi
-grep -F 'unsafe parent type or symlink' "$tmp/bin-parent-symlink.out" >/dev/null || {
-  cat "$tmp/bin-parent-symlink.out" >&2; echo "Unsafe bin/ parent was not rejected." >&2; exit 1;
-}
-rm -f "$target/bin"
-mv "$tmp/owned-bin" "$target/bin"
-
-bin_original_mode="$(stat -c '%a' "$target/bin")"
-chmod 0777 "$target/bin"
-if inspect_package "$target" "$target/update" >"$tmp/bin-mode.out" 2>&1; then
-  echo "Updater accepted world-writable bin/ parent." >&2; exit 1;
-fi
-grep -F 'world-writable' "$tmp/bin-mode.out" >/dev/null || {
-  cat "$tmp/bin-mode.out" >&2; echo "Unsafe bin/ mode was not diagnosed." >&2; exit 1;
-}
-chmod "$bin_original_mode" "$target/bin"
-
-# A forged package whose ordinary manifest was recomputed must STILL fail
-# the independently pinned privileged-script SHA256 check before mutation.
-cp -a "$target/update" "$tmp/forged-installer-update"
-printf '\n# unapproved privileged script mutation\n' >> "$tmp/forged-installer-update/payload/bin/managed-reverse-target.sh"
-(
-  cd "$tmp/forged-installer-update"
-  sha256sum payload/bin/managed-reverse-target.sh > "$tmp/new-target-sha-entry"
-  python3 - "$tmp/new-target-sha-entry" <<'PY_FIX_MANIFEST'
-from pathlib import Path
-import sys
-p=Path("manifest.sha256")
-entries=p.read_text().splitlines()
-replacement=Path(sys.argv[1]).read_text().rstrip()
-matches=[i for i,e in enumerate(entries) if e.endswith("  payload/bin/managed-reverse-target.sh")]
-assert len(matches)==1
-entries[matches[0]]=replacement
-p.write_text("\n".join(entries)+"\n")
-PY_FIX_MANIFEST
-)
-if inspect_package "$target" "$tmp/forged-installer-update" >"$tmp/forged-installer.out" 2>&1; then
-  echo "Updater accepted a modified installer with a recomputed package manifest." >&2; exit 1;
-fi
-grep -F 'immutable release-pinned SHA256' "$tmp/forged-installer.out" >/dev/null || {
-  cat "$tmp/forged-installer.out" >&2; echo "Pinned privileged installer SHA was not enforced." >&2; exit 1;
-}
-
-# Browser preflight must reject same-version and downgrade targets before mutation.
-printf '%s\n' "$new_version" > "$target/VERSION"
-if inspect_package "$target" "$target/update" >"$tmp/same.out" 2>&1; then
-  echo "Same-version update unexpectedly passed preflight." >&2
-  exit 1
-fi
-grep -F "target version must be newer" "$tmp/same.out" >/dev/null || { cat "$tmp/same.out" >&2; echo "Same-version rejection was not actionable." >&2; exit 1; }
-printf '99.99.99\n' > "$target/VERSION"
-if inspect_package "$target" "$target/update" >"$tmp/downgrade.out" 2>&1; then
-  echo "Downgrade unexpectedly passed preflight." >&2
-  exit 1
-fi
-grep -F "target version must be newer" "$tmp/downgrade.out" >/dev/null || { cat "$tmp/downgrade.out" >&2; echo "Downgrade rejection was not actionable." >&2; exit 1; }
-printf '%s\n' "$old_version" > "$target/VERSION"
-
-# A directory with no owner-write permission must block browser staging
-# before code mutation and explain the PHP-worker ownership fix. Running this
-# as root cannot simulate the actual non-root PHP worker permissions.
-if [[ "$(id -u)" -ne 0 ]]; then
-  public_staging_mode="$(stat -c '%a' "$target/public/update")"
-  chmod 0555 "$target/public/update"
-  if inspect_package "$target" "$target/update" >"$tmp/public-staging-permission.out" 2>&1; then
-    echo "A non-writable temporary public update directory unexpectedly passed preflight." >&2
-    exit 1
-  fi
-  grep -F 'Temporary public/update/ is not writable by the PHP worker' "$tmp/public-staging-permission.out" >/dev/null || {
-    cat "$tmp/public-staging-permission.out" >&2
-    echo "Temporary public update permission error was not explained." >&2
-    exit 1
-  }
-  grep -F 'Do not use 0777 or change public/.user.ini' "$tmp/public-staging-permission.out" >/dev/null || {
-    cat "$tmp/public-staging-permission.out" >&2
-    echo "Temporary staging permission error lacked scoped safety guidance." >&2
-    exit 1
-  }
-  chmod "$public_staging_mode" "$target/public/update"
-  inspect_package "$target" "$target/update"
-fi
-
-# Tampering and symlinked package content must fail before target mutation.
-cp -a "$target/update" "$tmp/tampered-update"
-printf 'tampered\n' >> "$tmp/tampered-update/payload/VERSION"
-if inspect_package "$target" "$tmp/tampered-update" >"$tmp/tampered.out" 2>&1; then
-  echo "Tampered update unexpectedly passed preflight." >&2
-  exit 1
-fi
-grep -F "checksum validation failed" "$tmp/tampered.out" >/dev/null || { cat "$tmp/tampered.out" >&2; echo "Tampered-package rejection was not actionable." >&2; exit 1; }
-
-cp -a "$target/update" "$tmp/symlink-update"
-ln -s /etc/passwd "$tmp/symlink-update/payload/unsafe-link"
-if inspect_package "$target" "$tmp/symlink-update" >"$tmp/symlink.out" 2>&1; then
-  echo "Symlinked update unexpectedly passed preflight." >&2
-  exit 1
-fi
-grep -F "symbolic link" "$tmp/symlink.out" >/dev/null || { cat "$tmp/symlink.out" >&2; echo "Symlink-package rejection was not actionable." >&2; exit 1; }
-
-unsafe_target="$tmp/unsafe-target"
-mkdir -p "$unsafe_target"
-if inspect_package "$unsafe_target" "$target/update" >"$tmp/unsafe.out" 2>&1; then
-  echo "Unsafe target unexpectedly passed preflight." >&2
-  exit 1
-fi
-grep -F "does not look like an installed MCP Gateway deployment" "$tmp/unsafe.out" >/dev/null || { cat "$tmp/unsafe.out" >&2; echo "Unsafe-target rejection was not actionable." >&2; exit 1; }
-
-# A conflict on an explicitly Gateway-owned public path must fail preflight with
-# the exact path before maintenance mode or application mutation. Unknown public
-# files such as .user.ini are intentionally not part of this check.
-mv "$target/public/index.php" "$target/public/index.php.issue44-original"
-mkdir "$target/public/index.php"
-if inspect_package "$target" "$target/update" >"$tmp/public-conflict.out" 2>&1; then
-  echo "Managed public path conflict unexpectedly passed preflight." >&2
-  exit 1
-fi
-grep -F "conflicts with a directory: public/index.php" "$tmp/public-conflict.out" >/dev/null || { cat "$tmp/public-conflict.out" >&2; echo "Managed public path conflict was not path-specific." >&2; exit 1; }
-rmdir "$target/public/index.php"
-mv "$target/public/index.php.issue44-original" "$target/public/index.php"
-
-cat > "$tmp/router.php" <<'PHP_ROUTER'
-<?php
-$public = $_SERVER['DOCUMENT_ROOT'];
-$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
-$candidate = rtrim($public, '/').$path;
-if ($path !== '/' && (is_file($candidate) || is_dir($candidate))) {
-    return false;
-}
-require $public.'/index.php';
-PHP_ROUTER
-
-port="${UPDATE_TEST_HTTP_PORT:-18080}"
-php -S "127.0.0.1:$port" -t "$target/public" "$tmp/router.php" >"$tmp/server.log" 2>&1 &
-server_pid=$!
-base_url="http://127.0.0.1:$port"
-for attempt in $(seq 1 40); do
-  if curl -fsS "$base_url/up" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
-  if [[ "$attempt" -eq 40 ]]; then
-    cat "$tmp/server.log" >&2
-    echo "Update test web server did not become ready." >&2
-    exit 1
-  fi
-done
-
-https_header='X-Forwarded-Proto: https'
-jar="$tmp/admin.cookies"
-
-guest_code="$(curl -sS -c "$jar" -b "$jar" -o "$tmp/guest-update.html" -D "$tmp/guest-update.headers" -w '%{http_code}' -H "$https_header" "$base_url/update/")"
-[[ "$guest_code" == "302" ]] || { cat "$tmp/guest-update.headers" >&2; echo "Guest browser updater access was not redirected to admin login." >&2; exit 1; }
-grep -i '^Location: .*/admin/login' "$tmp/guest-update.headers" >/dev/null || { echo "Guest updater redirect did not target admin login." >&2; exit 1; }
-grep -i '^Set-Cookie:' "$tmp/guest-update.headers" >/dev/null || { echo "Guest updater redirect did not preserve the intended update session." >&2; exit 1; }
-
-# Current role-aware baseline exercises the actual temporary public entrypoint.
-# Older baselines retain their full successful-upgrade/recovery cases; repeating
-# this identical matrix on all of them adds no authorization coverage.
-if [[ "$old_version" == "2.4.1" ]]; then
-  authorization_started="$(date +%s)"
-  managed_user_before="$(sha256sum "$target/app/Models/User.php" | awk '{print $1}')"
-  fixture_update_cookie="$(php -r 'echo str_repeat("c", 64);')"
-
-  assert_update_not_started() {
-    [[ ! -e "$target/storage/app/private/update-state.json" \
-      && ! -e "$target/storage/framework/down" \
-      && ! -d "$target/storage/app/private/update-backups" ]] \
-      || { echo "Denied updater request created update/backup/maintenance state." >&2; exit 1; }
-    [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" \
-      && "$(sha256sum "$target/app/Models/User.php" | awk '{print $1}')" == "$managed_user_before" ]] \
-      || { echo "Denied updater request changed managed application files." >&2; exit 1; }
-  }
-
-  fixture_cookie_header() {
-    awk '
-      BEGIN { first=1 }
-      /^#/ && $0 !~ /^#HttpOnly_/ { next }
-      NF >= 7 {
-        if (!first) printf "; ";
-        printf "%s=%s", $6, $7;
-        first=0
-      }
-      END { printf "\n" }
-    ' "$1"
-  }
-
-  fixture_login() {
-    local email="$1" cookie_jar="$2" login_token
-    curl -fsS -c "$cookie_jar" -b "$cookie_jar" -H "$https_header" "$base_url/admin/login" > "$tmp/access-login.html"
-    login_token="$(grep -o 'name="_token" value="[^"]*"' "$tmp/access-login.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
-    [[ -n "$login_token" ]] || { echo "Access fixture login CSRF missing." >&2; exit 1; }
-    curl -sS -c "$cookie_jar" -b "$cookie_jar" -H "$https_header" \
-      --data-urlencode "_token=$login_token" --data-urlencode "email=$email" \
-      --data-urlencode 'password=CorrectHorse!234' "$base_url/admin/login" \
-      -o "$tmp/access-login-result.html" -D "$tmp/access-login-result.headers"
-    grep -E '^HTTP/[^ ]+ 302' "$tmp/access-login-result.headers" >/dev/null \
-      || { echo "Access fixture login did not return its normal redirect." >&2; exit 1; }
-  }
-
-  assert_no_update_cookie() {
-    if grep -i '^Set-Cookie: mcp_gateway_update_session=' "$1" >/dev/null; then
-      echo "Denied request issued an updater capability cookie." >&2
-      exit 1
-    fi
-  }
-
-  for role in administrator operator viewer; do
-    role_jar="$tmp/access-$role.cookies"
-    fixture_login "update-$role@example.test" "$role_jar"
-    dashboard_code="$(curl -sS -c "$role_jar" -b "$role_jar" -H "$https_header" \
-      -o "$tmp/access-dashboard.html" -w '%{http_code}' "$base_url/admin")"
-    [[ "$dashboard_code" == "200" ]] || { echo "$role fixture did not reproduce Dashboard access." >&2; exit 1; }
-    role_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/access-dashboard.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
-    [[ -n "$role_csrf" ]] || { echo "Access fixture session CSRF missing." >&2; exit 1; }
-    denied_code="$(curl -sS -c "$role_jar" -b "$role_jar" -H "$https_header" \
-      -D "$tmp/access-denied.headers" -o "$tmp/access-denied.html" -w '%{http_code}' "$base_url/update/")"
-    [[ "$denied_code" == "403" ]] || { echo "$role was allowed to inspect the updater." >&2; exit 1; }
-    assert_no_update_cookie "$tmp/access-denied.headers"
-    if grep -F 'Installed:</strong>' "$tmp/access-denied.html" >/dev/null; then
-      echo "Denied updater page exposed its preflight payload." >&2; exit 1
-    fi
-    role_cookies="$(fixture_cookie_header "$role_jar")"
-    denied_code="$(curl -sS -H "$https_header" -H "Cookie: $role_cookies; mcp_gateway_update_session=$fixture_update_cookie" \
-      --data-urlencode "_token=$role_csrf" --data-urlencode 'action=start' \
-      -D "$tmp/access-denied.headers" -o "$tmp/access-denied-start.html" -w '%{http_code}' "$base_url/update/")"
-    [[ "$denied_code" == "403" ]] || { echo "$role was allowed to start the updater." >&2; exit 1; }
-    assert_no_update_cookie "$tmp/access-denied.headers"
-    assert_update_not_started
-  done
-
-  fixture_login "update-disabled@example.test" "$tmp/access-disabled.cookies"
-  disabled_code="$(curl -sS -c "$tmp/access-disabled.cookies" -b "$tmp/access-disabled.cookies" -H "$https_header" \
-    -D "$tmp/access-denied.headers" -o "$tmp/access-disabled.html" -w '%{http_code}' "$base_url/update/")"
-  [[ "$disabled_code" == "302" ]] || { echo "Disabled Owner acquired updater access." >&2; exit 1; }
-  assert_no_update_cookie "$tmp/access-denied.headers"
-  assert_update_not_started
-
-  for change in demote disable; do
-    owner_jar="$tmp/access-owner-$change.cookies"
-    fixture_login "admin@example.test" "$owner_jar"
-    owner_code="$(curl -sS -c "$owner_jar" -b "$owner_jar" -H "$https_header" \
-      -o "$tmp/access-owner.html" -w '%{http_code}' "$base_url/update/")"
-    [[ "$owner_code" == "200" ]] || { echo "Enabled non-first Owner was denied updater preflight." >&2; exit 1; }
-    owner_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/access-owner.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
-    owner_cookies="$(fixture_cookie_header "$owner_jar")"
-    (
-      cd "$target"
-      UPDATE_ACCESS_CHANGE="$change" php -r '
-        require "vendor/autoload.php";
-        $app=require "bootstrap/app.php";
-        $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-        $owner=Illuminate\Support\Facades\DB::table("users")->where("email","admin@example.test");
-        if ((int) $owner->value("id") <= 1) { throw new RuntimeException("Owner fixture must not be first."); }
-        $owner->update(getenv("UPDATE_ACCESS_CHANGE")==="demote" ? ["role"=>"operator"] : ["access_enabled"=>false]);
-      '
-    )
-    stale_code="$(curl -sS -H "$https_header" -H "Cookie: $owner_cookies" \
-      --data-urlencode "_token=$owner_csrf" --data-urlencode 'action=start' \
-      -D "$tmp/access-denied.headers" -o "$tmp/access-stale.html" -w '%{http_code}' "$base_url/update/")"
-    expected_code=403
-    [[ "$change" != "disable" ]] || expected_code=302
-    [[ "$stale_code" == "$expected_code" ]] || { echo "Stale $change Owner could start an update." >&2; exit 1; }
-    assert_no_update_cookie "$tmp/access-denied.headers"
-    assert_update_not_started
-    (
-      cd "$target"
-      php -r '
-        require "vendor/autoload.php";
-        $app=require "bootstrap/app.php";
-        $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-        Illuminate\Support\Facades\DB::table("users")->where("email","admin@example.test")
-          ->update(["role"=>"owner","access_enabled"=>true]);
-      '
-    )
-  done
-
-  fixture_login "update-deleted@example.test" "$tmp/access-deleted.cookies"
-  (
-    cd "$target"
-    php -r '
-      require "vendor/autoload.php";
-      $app=require "bootstrap/app.php";
-      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-      App\Models\User::query()->where("email","update-deleted@example.test")->delete();
-    '
-  )
-  deleted_code="$(curl -sS -c "$tmp/access-deleted.cookies" -b "$tmp/access-deleted.cookies" -H "$https_header" \
-    -D "$tmp/access-denied.headers" -o "$tmp/access-deleted.html" -w '%{http_code}' "$base_url/update/")"
-  [[ "$deleted_code" == "302" ]] || { echo "Deleted identity acquired updater access." >&2; exit 1; }
-  assert_no_update_cookie "$tmp/access-denied.headers"
-  assert_update_not_started
-  authorization_elapsed="$(( $(date +%s) - authorization_started ))"
-  echo "Current-baseline updater Owner/role/stale-identity HTTP boundary: PASS ($authorization_elapsed s)."
-fi
-
-curl -fsS -c "$jar" -b "$jar" -H "$https_header" "$base_url/admin/login" > "$tmp/login.html"
-login_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/login.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
-[[ -n "$login_csrf" ]] || { echo "Could not extract admin login CSRF token." >&2; exit 1; }
-
-# Follow the normal login redirect. The preserved intended URL must return the
-# operator directly to /update/ rather than requiring the URL to be opened a
-# second time.
-curl -fsS -L -D "$tmp/login-flow.headers" -c "$jar" -b "$jar" -H "$https_header" \
-  --data-urlencode "_token=$login_csrf" \
-  --data-urlencode 'email=admin@example.test' \
-  --data-urlencode 'password=CorrectHorse!234' \
-  "$base_url/admin/login" > "$tmp/update.html"
-if [[ "$old_version" == "2.4.1" ]]; then
-  # The installed2.4.1 login selector predates the exact updater intention fix.
-  # Its known Dashboard fallback requires one explicit GET, never another POST.
-  grep -F "Gateway overview" "$tmp/update.html" >/dev/null || { echo "Expected known2.4.1 Dashboard login fallback." >&2; exit 1; }
-  curl -fsS -D "$tmp/reopen-update.headers" -c "$jar" -b "$jar" -H "$https_header" "$base_url/update/" > "$tmp/update.html"
-  cat "$tmp/reopen-update.headers" >> "$tmp/login-flow.headers"
-fi
-grep -F "Installed:</strong> $old_version" "$tmp/update.html" >/dev/null || { cat "$tmp/update.html" >&2; echo "Owner login did not reach the browser updater." >&2; exit 1; }
-grep -F "Target:</strong> $new_version" "$tmp/update.html" >/dev/null || { echo "Browser updater did not show the target version after login." >&2; exit 1; }
-
-# Browser consent is a fresh operator action tied to the exact uploaded
-# package, never simply .env flags or a generic update button.
-reset_post=()
-if [[ "$old_version" == "1.2.1" ]]; then
-  grep -F 'Breaking v2.0 Target/OAuth reset' "$tmp/update.html" >/dev/null || { echo "Destructive preflight warning is absent." >&2; exit 1; }
-  grep -F 'Gateway OAuth client grants (including ChatGPT tokens)' "$tmp/update.html" >/dev/null || { echo "OAuth reset affected-state summary is absent." >&2; exit 1; }
-  grep -F 'independent database backup REQUIRED' "$tmp/update.html" >/dev/null || { echo "Independent DB backup warning is absent." >&2; exit 1; }
-  package_hash="$(grep -o 'name="package_sha256" value="[a-f0-9]*"' "$tmp/update.html" | head -n 1 | sed 's/.*value="\([a-f0-9]*\)"/\1/')"
-  [[ "$package_hash" =~ ^[a-f0-9]{64}$ ]] || { echo "Package binding is absent from the consent form." >&2; exit 1; }
-  reset_post=(
-    --data-urlencode 'reset_acknowledged=RESET_TARGET_STATE'
-    --data-urlencode 'database_backup_verified=RESTORABLE_DATABASE_BACKUP_VERIFIED'
-    --data-urlencode "confirmed_target_version=$new_version"
-    --data-urlencode "package_sha256=$package_hash"
-  )
-fi
-
-update_csrf="$(grep -o 'name="_token" value="[^"]*"' "$tmp/update.html" | head -n 1 | sed 's/.*value="\([^"]*\)"/\1/')"
-update_cookie="$(grep -i '^Set-Cookie: mcp_gateway_update_session=' "$tmp/login-flow.headers" | tail -n 1 | sed -E 's/^[^=]+=([^;]+).*/\1/' | tr -d '\r')"
-[[ -n "$update_csrf" && "$update_cookie" =~ ^[a-f0-9]{64}$ ]] || { echo "Browser updater session/CSRF material was not issued." >&2; exit 1; }
-
-admin_cookie_header="$(awk '
-  BEGIN { first=1 }
-  /^#/ && $0 !~ /^#HttpOnly_/ { next }
-  NF >= 7 && $6 != "mcp_gateway_update_session" {
-    if (!first) printf "; ";
-    printf "%s=%s", $6, $7;
-    first=0;
-  }
-' "$jar")"
-if [[ -n "$admin_cookie_header" ]]; then
-  cookie_header="$admin_cookie_header; mcp_gateway_update_session=$update_cookie"
-else
-  cookie_header="mcp_gateway_update_session=$update_cookie"
-fi
-
-if [[ "$old_version" == "2.4.1" ]]; then
-  invalid_csrf_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
-    --data-urlencode '_token=invalid-owner-csrf' --data-urlencode 'action=start' \
-    -o "$tmp/invalid-owner-csrf.html" -w '%{http_code}' "$base_url/update/")"
-  [[ "$invalid_csrf_code" == "419" ]] || { echo "Owner Start accepted invalid CSRF." >&2; exit 1; }
-  assert_update_not_started
-fi
-
-if [[ "$old_version" == "1.2.1" ]]; then
-  # A legitimate authenticated user clicking Start without the fresh
-  # confirmations must not enter maintenance or mutate managed files.
-  denied_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
-    --data-urlencode "_token=$update_csrf" --data-urlencode 'action=start' \
-    -o "$tmp/reset-denied.html" -w '%{http_code}' "$base_url/update/")"
-  [[ "$denied_code" == "500" ]] || { echo "Unacknowledged destructive upgrade unexpectedly accepted (HTTP $denied_code)." >&2; exit 1; }
-  grep -F 'both explicit browser confirmations' "$tmp/reset-denied.html" >/dev/null || { echo "Missing consent did not return actionable error." >&2; exit 1; }
-  [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" ]] || { echo "Denied consent modified runtime VERSION." >&2; exit 1; }
-  [[ -f "$target/app/obsolete-update-test.txt" ]] || { echo "Denied consent removed managed files." >&2; exit 1; }
-  [[ ! -f "$target/storage/app/private/update-state.json" ]] || { echo "Denied consent wrote updater mutation state." >&2; exit 1; }
-  [[ ! -e "$target/storage/framework/down" ]] || { echo "Denied consent entered maintenance." >&2; exit 1; }
-
-  stale_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
-    --data-urlencode "_token=$update_csrf" --data-urlencode 'action=start' \
-    --data-urlencode 'reset_acknowledged=RESET_TARGET_STATE' \
-    --data-urlencode 'database_backup_verified=RESTORABLE_DATABASE_BACKUP_VERIFIED' \
-    --data-urlencode "confirmed_target_version=$new_version" \
-    --data-urlencode "package_sha256=$(printf '0%.0s' {1..64})" \
-    -o "$tmp/reset-wrong-package.html" -w '%{http_code}' "$base_url/update/")"
-  [[ "$stale_code" == "500" ]] || { echo "Incorrect update-package fingerprint bypassed the reset gate (HTTP $stale_code)." >&2; exit 1; }
-  [[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$old_version" && ! -f "$target/storage/app/private/update-state.json" ]] || { echo "Incorrect package acknowledgment mutated the installation." >&2; exit 1; }
-fi
-
-# Fail CLOSED before maintenance if the browser does not send back its
-# HttpOnly continuation cookie on the authenticated Stage request.
-missing_cookie_code="$(curl -sS -H "$https_header" -H "Cookie: $admin_cookie_header" \
-  --data-urlencode "_token=$update_csrf" --data-urlencode 'action=start' \
-  -o "$tmp/missing-cookie.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$missing_cookie_code" == "409" ]] || { echo "Start accepted a missing browser-bound cookie (HTTP $missing_cookie_code)." >&2; exit 1; }
-grep -F 'No files were changed' "$tmp/missing-cookie.html" >/dev/null || { echo "Missing-cookie refusal lacked an actionable explanation." >&2; exit 1; }
-[[ ! -f "$target/storage/app/private/update-state.json" ]] || { echo "Missing-cookie Stage changed private updater state." >&2; exit 1; }
-
-stage_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
-  --data-urlencode "_token=$update_csrf" \
-  --data-urlencode 'action=start' "${reset_post[@]}" \
-  -D "$tmp/stage.headers" -o "$tmp/stage-post.html" -w '%{http_code}' \
-  "$base_url/update/")"
-[[ "$stage_code" == "303" ]] || { echo "Stage did not return one-time POST/Redirect/GET handoff (HTTP $stage_code)." >&2; exit 1; }
-grep -i '^Location: /update/' "$tmp/stage.headers" >/dev/null || { echo "Stage redirect was not same-origin." >&2; exit 1; }
-# Real browsers commit Set-Cookie on 303 before issuing a new GET. Fetch the
-# response without executing JavaScript so the test can assert each phase.
-get_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/stage.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$get_code" == "200" ]] || { echo "Stage redirected GET was not browser-bound (HTTP $get_code)." >&2; exit 1; }
-continuation="$(grep -o 'name="continuation" value="[a-f0-9]*"' "$tmp/stage.html" | head -n 1 | sed 's/.*value="\([a-f0-9]*\)"/\1/')"
-[[ "$continuation" =~ ^[a-f0-9]{64}$ ]] || { cat "$tmp/stage.html" >&2; echo "Browser updater did not return a valid continuation token." >&2; exit 1; }
-# A previously valid but nearly expired preflight cookie must be renewed at
-# accepted Start, with its final expiry based on the end of a potentially long stage.
-php -r '
-  $lines = file($argv[1]);
-  $cookies = array_values(array_filter($lines, static fn ($line) =>
-    stripos($line, "Set-Cookie: mcp_gateway_update_session=") === 0));
-  if ($cookies === []) { fwrite(STDERR, "Start did not renew updater cookie.\n"); exit(1); }
-  $last = end($cookies);
-  if (!preg_match("/expires=([^;]+)/i", $last, $m)) { exit(2); }
-  $remaining = strtotime($m[1]) - time();
-  if ($remaining < 1740 || $remaining > 1805) {
-    fwrite(STDERR, "Updater cookie TTL was not fresh after stage: ".$remaining." sec.\n"); exit(3);
-  }
-' "$tmp/stage.headers"
-php -r '
-  $s = json_decode(file_get_contents($argv[1]), true, 512, JSON_THROW_ON_ERROR);
-  $remaining = $s["continuation_expires_at"] - time();
-  if ($s["phase"] !== "files-replaced" || $remaining < 1740 || $remaining > 1805) {
-    fwrite(STDERR, "Continuation was not renewed after file staging.\n"); exit(1);
-  }
-' "$target/storage/app/private/update-state.json"
-
-# The first phase is usable with JavaScript disabled, while modern browsers
-# should initiate exactly one asynchronous finish request with visible status.
-grep -F 'id="continue-update"' "$tmp/stage.html" >/dev/null || { echo "Missing final-step form." >&2; exit 1; }
-grep -F "fetch('/update/'" "$tmp/stage.html" >/dev/null || { echo "Automatic final-step handoff must use an explicit same-origin URL; form.action is shadowed by the hidden action input." >&2; exit 1; }
-if grep -F 'fetch(form.action' "$tmp/stage.html" >/dev/null; then
-  echo "Automatic handoff still uses a DOM-clobbered form.action (action input)." >&2; exit 1
-fi
-grep -F 'id="manual-continue"' "$tmp/stage.html" >/dev/null || { echo "Script-disabled continuation fallback is absent." >&2; exit 1; }
-grep -F 'If the Continue update button is still visible after this page loads' "$tmp/stage.html" >/dev/null || { echo "Finalizing page lacks actionable manual fallback instructions." >&2; exit 1; }
-grep -F 'Ready to begin the final database and health checks' "$tmp/stage.html" >/dev/null || { echo "Redirected resume page misleadingly claims checks have started before automatic continuation." >&2; exit 1; }
-grep -F 'Final database and health checks have been requested' "$tmp/stage.html" >/dev/null || { echo "Automatic continuation lacks a truthful submitted state." >&2; exit 1; }
-
-# The previous Stage POST cannot be replayed by refreshing an old tab.
-# Redirect-to-GET happens before Laravel /admin authentication or mutation.
-old_post_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" \
-  --data-urlencode "_token=$update_csrf" --data-urlencode 'action=start' \
-  -D "$tmp/replayed-stage.headers" -o /dev/null -w '%{http_code}' "$base_url/update/")"
-[[ "$old_post_code" == "303" ]] || { echo "Replayed Stage POST was not idempotently redirected (HTTP $old_post_code)." >&2; exit 1; }
-grep -i '^Location: /update/' "$tmp/replayed-stage.headers" >/dev/null || { echo "Replayed Stage sent the browser to an unexpected URL." >&2; exit 1; }
-unbound_get_code="$(curl -sS -H "$https_header" -o "$tmp/unbound.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$unbound_get_code" == "403" ]] || { echo "Unbound browser gained recovery state (HTTP $unbound_get_code)." >&2; exit 1; }
-grep -F 'No update-session cookie was received' "$tmp/unbound.html" >/dev/null || { echo "Unbound browser lacked the missing-cookie diagnosis." >&2; exit 1; }
-unbound_finish_code="$(curl -sS -H "$https_header" --data-urlencode 'action=finish' \
-  --data-urlencode "continuation=$continuation" -o "$tmp/unbound-finish.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$unbound_finish_code" == "403" ]] || { echo "Unbound Finish was not rejected without migration (HTTP $unbound_finish_code)." >&2; exit 1; }
-
-# Reload after stage must resume safely without asking Laravel to authenticate
-# an already maintenance-bound browser session.
-resume_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/resume.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$resume_code" == "200" ]] || { echo "Staged update cannot resume (HTTP $resume_code)." >&2; exit 1; }
-grep -F 'Resume MCP Gateway Update' "$tmp/resume.html" >/dev/null || { echo "Safe resume form missing." >&2; exit 1; }
-grep -F 'If the Continue update button is still visible after this page loads' "$tmp/resume.html" >/dev/null || { echo "Resume page lacks actionable manual fallback instructions." >&2; exit 1; }
-grep -F 'Ready to begin the final database and health checks' "$tmp/resume.html" >/dev/null || { echo "Resume page misleadingly claims checks have started before continuation." >&2; exit 1; }
-
-# Invalid continuation metadata must never change the real database ledger.
-browser_migrations_before="$(cd "$target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')"
-# Malformed or expired browser continuation metadata must NEVER authorize
-# Finish/DDL, even with the correct browser cookie and continuation token.
-state_file="$target/storage/app/private/update-state.json"
-for expiry_case in removed string float object null expired far-future; do
-  php -r '
-    $p=$argv[1]; $case=$argv[2];
-    $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR);
-    switch ($case) {
-      case "removed": unset($s["continuation_expires_at"]); break;
-      case "string": $s["continuation_expires_at"]=(string)(time()+120); break;
-      case "float": $s["continuation_expires_at"]=time()+120.75; break;
-      case "object": $s["continuation_expires_at"]=["unexpected"=>"object"]; break;
-      case "null": $s["continuation_expires_at"]=null; break;
-      case "expired": $s["continuation_expires_at"]=time()-1; break;
-      case "far-future": $s["continuation_expires_at"]=time()+36000; break;
-      default: exit(3);
-    }
-    file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR|JSON_PRESERVE_ZERO_FRACTION));
-  ' "$state_file" "$expiry_case"
-  invalid_get_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header"     -o "$tmp/invalid-$expiry_case-get.html" -w '%{http_code}' "$base_url/update/")"
-  [[ "$invalid_get_code" == "503" ]] || { echo "Invalid $expiry_case GET offered continuation (HTTP $invalid_get_code)." >&2; exit 1; }
-  grep -F 'continuation expired or its expiry could not be verified' "$tmp/invalid-$expiry_case-get.html" >/dev/null || {
-    echo "Invalid $expiry_case continuation lacked accurate recovery guidance." >&2; exit 1;
-  }
-  invalid_finish_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header"     --data-urlencode 'action=finish' --data-urlencode "continuation=$continuation"     -o "$tmp/invalid-$expiry_case-finish.html" -w '%{http_code}' "$base_url/update/")"
-  [[ "$invalid_finish_code" == "409" ]] || { echo "Invalid $expiry_case Finish crossed expiry gate (HTTP $invalid_finish_code)." >&2; exit 1; }
-  php -r '$s=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR); if (($s["phase"]??null)!=="files-replaced" || ($s["migration_started"]??null)!==false) exit(1);' "$state_file" || {
-    echo "Invalid $expiry_case changed migration boundary state." >&2; exit 1;
-  }
-done
-[[ "$(cd "$target" && php artisan migrate:status --no-ansi --no-interaction | sha256sum | awk '{print $1}')" == "$browser_migrations_before" ]] || {
-  echo "Invalid browser continuation altered migration ledger." >&2; exit 1;
-}
-php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p),true,512,JSON_THROW_ON_ERROR); $s["continuation_expires_at"]=time()+1800; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
-
-# An active finish request must not permit a second POST to enter migrations.
-lockfile="$target/storage/app/private/update-execution.lock"
-php -r '$h=fopen($argv[1],"c"); flock($h,LOCK_EX); file_put_contents($argv[2],"ready"); usleep(2500000);' "$lockfile" "$tmp/updater-locked" &
-holder_pid=$!
-for attempt in $(seq 1 30); do
-  [[ -f "$tmp/updater-locked" ]] && break
-  sleep 0.1
-done
-[[ -f "$tmp/updater-locked" ]] || { echo "Could not acquire test operation lock." >&2; exit 1; }
-busy_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/busy.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$busy_code" == "202" ]] || { echo "Concurrent update did not show safe progress (HTTP $busy_code)." >&2; exit 1; }
-grep -F '<noscript>' "$tmp/busy.html" >/dev/null || { echo "Running updater has no no-JS instructions." >&2; exit 1; }
-grep -F 'check update status in this same browser session' "$tmp/busy.html" >/dev/null || { echo "Running no-JS updater lacks a recovery action." >&2; exit 1; }
-duplicate_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" --data-urlencode 'action=finish' --data-urlencode "continuation=$continuation" -o "$tmp/duplicate.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$duplicate_code" == "202" ]] || { echo "Concurrent finish was not refused (HTTP $duplicate_code)." >&2; exit 1; }
-grep -F '<noscript>' "$tmp/duplicate.html" >/dev/null || { echo "Duplicate finish has no no-JS instructions." >&2; exit 1; }
-grep -F 'Do not submit Start or Continue again' "$tmp/duplicate.html" >/dev/null || { echo "Duplicate finish lacks a safe manual action." >&2; exit 1; }
-wait "$holder_pid"
-rm -f "$tmp/updater-locked"
-
-# Simulate a request killed after crossing the migration boundary: the next
-# GET must NOT emit a false 403 or permit a second migration.
-state_file="$target/storage/app/private/update-state.json"
-php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p), true, 512, JSON_THROW_ON_ERROR); $s["phase"]="migrate"; $s["migration_started"]=true; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
-stalled_code="$(curl -sS -H "$https_header" -H "Cookie: $cookie_header" -o "$tmp/stalled.html" -w '%{http_code}' "$base_url/update/")"
-[[ "$stalled_code" == "503" ]] || { echo "Interrupted migration did not stop safely (HTTP $stalled_code)." >&2; exit 1; }
-grep -F 'MCP Gateway Postflight Status Unverified' "$tmp/stalled.html" >/dev/null || { echo "Idle migration did not show indeterminate postflight status." >&2; exit 1; }
-grep -F 'The updater recorded the start of database migration, but no final outcome.' "$tmp/stalled.html" >/dev/null || { echo "Idle migration was incorrectly classified as an established failure." >&2; exit 1; }
-grep -F 'Do not repeat migrations' "$tmp/stalled.html" >/dev/null || { echo "Unverified postflight lacks safe operator recovery guidance." >&2; exit 1; }
-if grep -Fi 'database may be partially migrated' "$tmp/stalled.html" >/dev/null; then
-  echo "Stale migration was falsely presented as an established partial migration." >&2; exit 1
-fi
-if grep -F 'Administrator authentication could not be verified.' "$tmp/stalled.html" >/dev/null; then
-  echo "Maintenance reload emitted the misleading authentication failure." >&2; exit 1
-fi
-php -r '$p=$argv[1]; $s=json_decode(file_get_contents($p), true, 512, JSON_THROW_ON_ERROR); $s["phase"]="files-replaced"; $s["migration_started"]=false; file_put_contents($p,json_encode($s,JSON_THROW_ON_ERROR));' "$state_file"
-
-# Reproduce cleanup failure *after* successful migrate/check/up. The current
-# backup must remain among the newest three; only the synthetic oldest backup
-# is made non-removable to force pruneBackups() to throw.
-prune_fixture_root=""
-if [[ "$old_version" == "2.0.0" && "$EUID" -ne 0 ]]; then
-  prune_fixture_root="$target/storage/app/private/update-backups"
-  mkdir -p "$prune_fixture_root/0000-locked/blocked" "$prune_fixture_root/0001-fixture" "$prune_fixture_root/0002-fixture"
-  printf 'retained-backup-sentinel\n' > "$prune_fixture_root/0000-locked/blocked/sentinel"
-  chmod 0500 "$prune_fixture_root/0000-locked/blocked"
-fi
-
-curl -fsS -H "$https_header" -H "Cookie: $cookie_header" \
-  --data-urlencode 'action=finish' \
-  --data-urlencode "continuation=$continuation" \
-  "$base_url/update/" > "$tmp/finish.html"
-grep -F 'Update complete.' "$tmp/finish.html" >/dev/null || { cat "$tmp/finish.html" >&2; echo "Browser updater did not report successful completion." >&2; exit 1; }
-if [[ -n "$prune_fixture_root" ]]; then
-  grep -F 'Old code backups could not be pruned' "$tmp/finish.html" >/dev/null || { echo "Prune failure incorrectly looked like a migration failure." >&2; exit 1; }
-  [[ -f "$prune_fixture_root/0000-locked/blocked/sentinel" ]] || { echo "Protected old backup was unexpectedly removed." >&2; exit 1; }
-  [[ ! -e "$target/storage/app/private/update-state.json" ]] || { echo "Stale migrate phase survived successful postflight." >&2; exit 1; }
-  chmod 0700 "$prune_fixture_root/0000-locked/blocked"
-  rm -r "$prune_fixture_root/0000-locked" "$prune_fixture_root/0001-fixture" "$prune_fixture_root/0002-fixture"
-fi
-
-[[ "$(tr -d '[:space:]' < "$target/VERSION")" == "$new_version" ]] || { echo "Target VERSION was not updated." >&2; exit 1; }
-grep -F 'RewriteRule ^update/?$ - [G,L]' "$target/public/.htaccess" >/dev/null || {
-  echo "Installed package does not protect temporary /update URLs against OpenLiteSpeed slash redirect loops." >&2
-  exit 1
-}
-if [[ "$old_version" == "1.2.1" ]]; then
-  (
-    cd "$target"
-    php -r '
-      require "vendor/autoload.php";
-      $app = require "bootstrap/app.php";
-      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-      $db = Illuminate\Support\Facades\DB::class;
-      $schema = $db::getSchemaBuilder();
-      $owner = $db::table("users")->where("email", "admin@example.test")->first();
-      $operator = $db::table("users")->where("email", "operator@example.test")->first();
-      $checks = [
-        "owner_preserved" => $owner !== null && $owner->role === "owner",
-        "operator_preserved" => $operator !== null && $operator->role === "operator",
-        "selected_scope_preserved" => $operator !== null && $operator->target_scope_mode === "selected",
-        "old_target_assignments_reset" => $db::table("user_target_access")->count() === 0,
-        "old_targets_reset" => $db::table("targets")->count() === 0,
-        "global_denial_translated" => $operator !== null && $db::table("user_permission_denials")
-          ->where("user_id", $operator->id)->where("permission", "targets.view")->count() === 1,
-        "oauth_authorizations_reset" => $db::table("oauth_authorizations")->count() === 0,
-        "oauth_access_tokens_reset" => $db::table("oauth_access_tokens")->count() === 0,
-        "oauth_refresh_tokens_reset" => $db::table("oauth_refresh_tokens")->count() === 0,
-        "global_activity_preserved" => $db::table("activity_events")
-          ->where("operation", "keep-global-event")->count() === 1,
-        "site_activity_reset" => $db::table("activity_events")
-          ->where("operation", "discard-site-event")->count() === 0,
-        "legacy_site_schema_removed" => !$schema->hasTable("sites") && !$schema->hasTable("site_credentials"),
-      ];
-      $failed = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
-      if ($failed !== []) {
-          fwrite(STDERR, "Published v1.2.1 reset/preservation checks failed: ".implode(", ", $failed)."\n");
-          exit(1);
-      }
-      if (is_file("storage/app/private/v121-client-profiles-present")
-          && !$schema->hasTable("oauth_client_profiles")) {
-          fwrite(STDERR, "Pre-existing OAuth client profiles were not preserved.\n");
-          exit(1);
-      }
-    '
-  )
-  echo "Seeded v1.2.1 reset boundary: old WordPress/ChatGPT credentials removed; users/roles/global denies and unrelated Activity preserved."
-fi
-if [[ "$old_version" =~ ^2\.(0\.[0-3]|1\.[0-2])$ ]]; then
-  (
-    cd "$target"
-    OLD_RELEASE_VERSION="$old_version" php -r '
-      require "vendor/autoload.php";
-      $app = require "bootstrap/app.php";
-      $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-      $db = Illuminate\Support\Facades\DB::class;
-      $target = $db::table("targets")->where("target_id", "v200-wordpress")->first();
-      $user = $db::table("users")->where("email", "v200-operator@example.test")->first();
-      $group = $db::table("target_groups")->where("name", "Existing v2 group")->first();
-      $checks = [
-        "existing_target_preserved" => $target !== null && $target->connector_type === "wp_ai_bridge",
-        "existing_user_preserved" => $user !== null && $user->role === "operator" && $user->target_scope_mode === "selected",
-        "existing_group_preserved" => $group !== null,
-        "chatgpt_profile_preserved" => $db::table("oauth_client_profiles")->where("profile_key", "chatgpt")->count() === 1,
-        "chatgpt_authorization_preserved" => $db::table("oauth_authorizations")
-          ->where("client_profile_key", "chatgpt")->where("client_profile_generation", 1)->count() === 1,
-      ];
-      if ($target !== null && $user !== null && $group !== null) {
-        $checks += [
-          "target_membership_preserved" => $db::table("target_group_targets")->where("target_group_id", $group->id)->where("target_record_id", $target->id)->count() === 1,
-          "user_group_membership_preserved" => $db::table("target_group_users")->where("target_group_id", $group->id)->where("user_id", $user->id)->count() === 1,
-          "user_target_allow_preserved" => $db::table("user_target_access")->where("user_id", $user->id)->where("target_record_id", $target->id)->where("allowed", true)->count() === 1,
-          "target_denial_preserved" => $db::table("user_target_permission_denials")->where("user_id", $user->id)->where("target_record_id", $target->id)->where("permission", "wordpress.abilities.execute.mutating")->count() === 1,
-          "group_denial_preserved" => $db::table("target_group_permission_denials")->where("target_group_id", $group->id)->where("permission", "wordpress.abilities.execute.destructive")->count() === 1,
-          "global_denial_preserved" => $db::table("user_permission_denials")->where("user_id", $user->id)->where("permission", "ssh.command.run")->count() === 1,
-        ];
-        $encrypted = $db::table("target_credentials")->where("target_record_id", $target->id)->where("connector_type", "wp_ai_bridge")->where("purpose", "wordpress_oauth")->value("encrypted_payload");
-        $checks["encrypted_credential_preserved"] = is_string($encrypted)
-          && Illuminate\Support\Facades\Crypt::decryptString($encrypted) === "v200-test-credential";
-      }
-      if (getenv("OLD_RELEASE_VERSION") === "2.1.2") {
-        $config = $target !== null ? $db::table("wp_ai_bridge_target_configs")
-          ->where("target_record_id", $target->id)->first() : null;
-        $intent = $target !== null ? $db::table("wp_ai_bridge_revocation_intents")
-          ->where("target_record_id", $target->id)->first() : null;
-        $credential = $target !== null ? $db::table("target_credentials")
-          ->where("target_record_id", $target->id)->where("purpose", "wordpress_oauth")->first() : null;
-        $metadata = $credential !== null ? $db::table("wp_ai_bridge_credential_metadata")
-          ->where("credential_id", $credential->id)->first() : null;
-        $checks["v212_origin_preserved"] = $config !== null
-          && $config->base_url === "https://v212-recovery.example.test";
-        $checks["v212_new_metadata_evidence_unknown"] = $config !== null
-          && $config->metadata_checked_at === null && $config->metadata_reachable === null;
-        $checks["v212_credential_generation_preserved"] = $metadata !== null
-          && (int) $metadata->generation === 5 && $metadata->client_id === "pre-upgrade-client";
-        $checks["v212_existing_revocation_fenced"] = $intent !== null
-          && $intent->kind === "disconnect" && $intent->phase === "legacy_unknown"
-          && $intent->credential_id === null && $intent->generation === null
-          && $intent->token_total === null && (int) $intent->token_confirmed === 0;
-        $checks["v212_pending_revocation_blocks_rollback"] = false;
-        $migration = require "database/migrations/2026_10_13_000000_fence_wordpress_disconnect_recovery.php";
-        try {
-          $migration->down();
-        } catch (RuntimeException $e) {
-          $checks["v212_pending_revocation_blocks_rollback"] =
-            str_contains($e->getMessage(), "Cannot roll back WordPress disconnect fencing");
-        }
-      }
-      $failed = array_keys(array_filter($checks, static fn (bool $ok): bool => !$ok));
-      if ($failed !== []) {
-        fwrite(STDERR, "Target-era upgrade state preservation failed: ".implode(", ", $failed)."\n");
-        exit(1);
-      }
-    '
-  )
-  echo "Target-era $old_version upgrade preservation verified: Target, credential, user/groups, denial layers and ChatGPT grant intact; published 2.1.2 also proves legacy revocation fencing, metadata unknown and rollback guard."
-fi
-[[ ! -e "$target/app/obsolete-update-test.txt" ]] || { echo "Stale managed file survived update." >&2; exit 1; }
-# Verify the supported Browser Update, not just a full deployment archive,
-# installed both scripts without changing unrelated operator bin/ entries.
-for script in managed-reverse-target.sh managed-reverse-gateway.sh; do
-  [[ -f "$target/bin/$script" && ! -L "$target/bin/$script" ]] || { echo "Browser Update did not install bin/$script." >&2; exit 1; }
-  cmp "$candidate/update/payload/bin/$script" "$target/bin/$script" || { echo "Browser Update changed bin/$script bytes." >&2; exit 1; }
-done
-[[ "$(sha256sum "$target/bin/operator-owned.sh" | awk '{print $1}')" == "$operator_bin_hash" ]] || {
-  echo "Browser Update modified an unrelated bin/ operator script." >&2; exit 1;
-}
-(
-  cd "$target"
-  php -r '
-    require "vendor/autoload.php";
-    $app = require "bootstrap/app.php";
-    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-    $digest = app(App\Application\Targets\SshManagedReverseInstallCommand::class)->scriptDigest();
-    if (!hash_equals($digest, hash_file("sha256", "bin/managed-reverse-target.sh"))) {
-      throw new RuntimeException("Installed managed installer digest disagrees with its immutable configuration.");
-    }
-    echo "Installed Managed Reverse SSH scriptDigest PASS.\n";
+    $owner=App\Models\User::query()->create([
+      "name"=>"Gateway QA Owner","email"=>"gateway-qa-owner@example.test",
+      "password"=>"CorrectHorse!234","role"=>"owner","access_enabled"=>true
+    ]);
+    App\Models\User::query()->create([
+      "name"=>"Gateway QA Operator","email"=>"gateway-qa-operator@example.test",
+      "password"=>"CorrectHorse!234","role"=>"operator","access_enabled"=>true
+    ]);
+    App\Models\User::query()->create([
+      "name"=>"Gateway QA Disabled","email"=>"gateway-qa-disabled@example.test",
+      "password"=>"CorrectHorse!234","role"=>"owner","access_enabled"=>false
+    ]);
+    $t=App\Domain\Targets\Target::query()->create([
+      "target_id"=>"qa330-ssh","display_name"=>"v3 preserved SSH Target",
+      "connector_type"=>"ssh_direct"
+    ]);
+    $group=App\Domain\Targets\TargetGroup::query()->create(["name"=>"v3 preserved group"]);
+    $group->targets()->attach($t->getKey());
+    $group->users()->attach($owner->getKey());
+    App\Domain\Targets\TargetCredential::query()->create([
+      "target_record_id"=>$t->getKey(),"connector_type"=>"ssh_direct",
+      "purpose"=>"qa-fixture","encrypted_payload"=>Illuminate\Support\Facades\Crypt::encryptString("qa-stable-secret"),
+    ]);
+    $db=Illuminate\Support\Facades\DB::class;
+    $db::table("user_permission_denials")->insert([
+      "user_id"=>$owner->getKey(),"permission"=>"ssh.file.write","created_at"=>now(),"updated_at"=>now()
+    ]);
+    $resource="https://mcp.example.test/mcp";
+    $db::table("oauth_authorizations")->insert([
+      "id"=>(string)Illuminate\Support\Str::ulid(),
+      "user_id"=>$owner->getKey(),"client_id"=>"qa-client",
+      "resource"=>$resource,"resource_hash"=>hash("sha256",$resource),
+      "scopes"=>"[]","client_profile_key"=>"chatgpt",
+      "client_profile_generation"=>1,"created_at"=>now(),"updated_at"=>now()
+    ]);
   '
-)
-installer_code="$(curl -sS -H "$https_header" -o "$tmp/served-installer.sh" -w '%{http_code}' "$base_url/reverse-ssh/installer/v1")"
-[[ "$installer_code" == 200 ]] || { echo "Installed managed installer endpoint was unavailable (HTTP $installer_code)." >&2; exit 1; }
-cmp "$candidate/update/payload/bin/managed-reverse-target.sh" "$tmp/served-installer.sh" || {
-  echo "Installed managed installer endpoint returned incorrect bytes." >&2; exit 1;
-}
-echo "Browser Update managed script delivery, immutable SHA and live installer HTTP endpoint PASS."
-[[ "$(sha256sum "$target/.env" | awk '{print $1}')" == "$env_hash_before" ]] || { echo ".env changed during update." >&2; exit 1; }
-[[ "$(sha256sum "$target/storage/app/private/update-preserve-sentinel.txt" | awk '{print $1}')" == "$private_hash_before" ]] || { echo "Persistent private state changed during update." >&2; exit 1; }
-(cd "$target" && sha256sum --check --strict "$tmp/signing-keys.before.sha256" >/dev/null) || { echo "Gateway OAuth or Bridge signing key changed during update." >&2; exit 1; }
-[[ "$(sha256sum "$target/public/.user.ini" | awk '{print $1}')" == "$user_ini_hash_before" ]] || { echo "Successful update changed host-managed public/.user.ini." >&2; exit 1; }
-[[ "$(stat -c '%u:%g:%a' "$target/public/.user.ini")" == "$user_ini_meta_before" ]] || { echo "Successful update changed public/.user.ini ownership or mode." >&2; exit 1; }
-[[ "$(stat -c '%u:%g:%a' "$target/public")" == "$public_dir_meta_before" ]] || { echo "Successful update changed host-managed public directory ownership or mode." >&2; exit 1; }
-[[ "$(sha256sum "$target/public/css/host-managed.txt" | awk '{print $1}')" == "$host_file_hash_before" ]] || { echo "Successful update changed an unknown file inside a shared public directory." >&2; exit 1; }
-[[ -f "$target/storage/app/private/installed" ]] || { echo "Installed marker did not survive update." >&2; exit 1; }
-[[ ! -e "$target/update" ]] || { echo "Private update staging survived successful cleanup." >&2; exit 1; }
-[[ ! -e "$target/public/update" ]] || { echo "Temporary public updater survived successful cleanup." >&2; exit 1; }
-[[ ! -e "$canonical_zip" && ! -e "$canonical_zip.sha256" ]] || { echo "Canonical uploaded update archive survived successful cleanup." >&2; exit 1; }
-[[ ! -e "$target/storage/app/private/update-state.json" ]] || { echo "Updater state survived successful cleanup." >&2; exit 1; }
-[[ "$(find "$target/storage/app/private/update-backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]] || { echo "Expected exactly one updater code backup." >&2; exit 1; }
-backup_dir="$(find "$target/storage/app/private/update-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-[[ "$(tr -d '[:space:]' < "$backup_dir/FROM_VERSION")" == "$old_version" ]] || { echo "Code backup does not identify the previous version." >&2; exit 1; }
-[[ -f "$backup_dir/files/app/obsolete-update-test.txt" ]] || { echo "Code backup does not contain the previous managed tree." >&2; exit 1; }
-[[ -f "$backup_dir/MANAGED_PUBLIC_PATHS" ]] || { echo "Code backup is missing the managed-public ownership manifest." >&2; exit 1; }
-[[ ! -e "$backup_dir/files/public/.user.ini" ]] || { echo "Code backup incorrectly captured host-managed public/.user.ini." >&2; exit 1; }
-[[ ! -e "$backup_dir/files/public/css/host-managed.txt" ]] || { echo "Code backup incorrectly captured an unknown file inside a shared public directory." >&2; exit 1; }
-(
-  cd "$target"
-  php artisan migrate:status --no-interaction >/dev/null
   php artisan gateway:check --no-interaction >/dev/null
 )
 
-post_cleanup_code_without_slash="$(curl -sS -o /dev/null -w '%{http_code}' -H "$https_header" "$base_url/update")"
-[[ "$post_cleanup_code_without_slash" == "404" ]] || { echo "Temporary /update endpoint remained reachable (HTTP $post_cleanup_code_without_slash)." >&2; exit 1; }
-post_cleanup_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "$https_header" "$base_url/update/")"
-[[ "$post_cleanup_code" == "404" ]] || { echo "Temporary /update/ endpoint remained reachable after successful cleanup (HTTP $post_cleanup_code)." >&2; exit 1; }
+# Snapshot real app data, encryption recovery, migration ledger and host-owned files.
+cat > "$tmp/snapshot.php" <<'PHP'
+<?php
+chdir($argv[1]);
+require 'vendor/autoload.php';
+$app = require 'bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+$db = Illuminate\Support\Facades\DB::class;
+$target = App\Domain\Targets\Target::query()->where('target_id', 'qa330-ssh')->firstOrFail();
+$group = App\Domain\Targets\TargetGroup::query()->where('name', 'v3 preserved group')->firstOrFail();
+$cred = App\Domain\Targets\TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+$owner = $db::table('users')->where('email', 'gateway-qa-owner@example.test')->first();
+if ($owner === null) { throw new RuntimeException('Owner was lost'); }
+$data = [
+ 'owner' => [$owner->name, $owner->role, $owner->access_enabled],
+ 'operator' => $db::table('users')->where('email', 'gateway-qa-operator@example.test')->value('role'),
+ 'target' => [$target->target_id, $target->connector_type, $target->display_name],
+ 'group' => [$group->name, $group->targets()->count(), $group->users()->count()],
+ 'credential' => Illuminate\Support\Facades\Crypt::decryptString($cred->encrypted_payload),
+ 'deny' => $db::table('user_permission_denials')->where('user_id', $owner->id)
+   ->where('permission', 'ssh.file.write')->count(),
+ 'oauth_authorization' => $db::table('oauth_authorizations')->where('client_id', 'qa-client')
+   ->where('user_id', $owner->id)->count(),
+ 'oauth_profile' => $db::table('oauth_client_profiles')->where('profile_key', 'chatgpt')->value('generation'),
+ 'migration_ledger' => $db::table('migrations')->orderBy('migration')->pluck('migration')->all(),
+];
+if ($data['credential'] !== 'qa-stable-secret' || $data['deny'] !== 1 ||
+    $data['oauth_authorization'] !== 1 || $data['group'][1] !== 1 ||
+    $data['group'][2] !== 1 || $data['oauth_profile'] !== 1 ||
+    count($data['migration_ledger']) !== 2) {
+ throw new RuntimeException('Incomplete baseline fixture: '.json_encode($data));
+}
+echo hash('sha256', json_encode($data, JSON_THROW_ON_ERROR));
+PHP
+before_data="$(php "$tmp/snapshot.php" "$site")"
+[[ -n "$before_data" ]] || exit 1
+printf 'HOST-OWNED-USER-INI\n' > "$site/public/.user.ini"
+mkdir -p "$site/bin"
+printf 'OPERATOR-OWNED-CONTENT\n' > "$site/bin/qa-operator-script.sh"
+(
+ cd "$site"
+ sha256sum .env public/.user.ini bin/qa-operator-script.sh    storage/app/private/qa-update-sentinel.txt    storage/app/private/oauth/private.key    storage/app/private/bridge-client/private.key > "$tmp/preserve.sha256"
+)
+old_artisan="$(sha256sum "$site/artisan" | awk '{print $1}')"
+cp "$update_zip" "$site/$(basename "$update_zip")"
+unzip -q "$update_zip" -d "$site"
+to="$(tr -d '[:space:]' < "$site/update/UPDATE_VERSION")"
+[[ "$to" == 3.* && "$to" != "$from" ]] || { echo "Invalid v3 update target." >&2; exit 1; }
+[[ "$(tr -d '[:space:]' < "$site/VERSION")" == "$from" ]] || { echo "ZIP extraction replaced running code before approval." >&2; exit 1; }
+[[ "$(sha256sum "$site/artisan" | awk '{print $1}')" == "$old_artisan" ]] || { echo "Extraction mutated live source." >&2; exit 1; }
+( cd "$site" && sha256sum --check --strict "$tmp/preserve.sha256" >/dev/null )
+[[ "$(php "$tmp/snapshot.php" "$site")" == "$before_data" ]] || { echo "Staging mutated persistent records." >&2; exit 1; }
 
-printf 'Browser update integration verified: %s -> %s\n' "$old_version" "$new_version"
-printf '.env/private state and host-managed public files preserved; stale managed files removed; authenticated web flow and one-time cleanup verified.\n'
-if [[ "$protected_public_enforced" -eq 1 ]]; then
-  printf 'protected public/.user.ini update + pre-migration restore regression verified.\n'
-else
-  printf 'host-managed public preservation + pre-migration restore logic verified locally; protected deletion resistance is required in CI.\n'
-fi
-printf 'same/downgrade/tampered/symlink/unsafe preflight cases rejected.\n'
+# Exercise the real authenticated v3 browser entrypoint on the actual released
+# installation, including Stage and Finish over HTTP, not direct CLI calls.
+bash "$(dirname "$0")/test-v3-updater-http.sh" "$site" "$tmp" "$from" "$to"
+
+[[ "$(tr -d '[:space:]' < "$site/VERSION")" == "$to" ]] || { echo "Update did not finish." >&2; exit 1; }
+[[ ! -e "$site/storage/framework/down" ]] || { echo "Maintenance remained active." >&2; exit 1; }
+[[ "$(php "$tmp/snapshot.php" "$site")" == "$before_data" ]] || { echo "Update altered existing authorization or credentials." >&2; exit 1; }
+( cd "$site" && sha256sum --check --strict "$tmp/preserve.sha256" >/dev/null )
+( cd "$site" && php artisan gateway:check --no-interaction >/dev/null )
+[[ -d "$site/storage/app/private/update-backups" ]] || { echo "Code backup not retained." >&2; exit 1; }
+printf 'PASS: verified released v%s -> v%s v3 browser updater stage+finish; persistent data, keys, grants, public host state, and health intact.\n' "$from" "$to"

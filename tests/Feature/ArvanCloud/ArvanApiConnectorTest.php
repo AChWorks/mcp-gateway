@@ -42,6 +42,24 @@ final class ArvanApiConnectorTest extends TestCase
         Http::preventStrayRequests();
     }
 
+    public function test_missing_optional_arvan_catalog_spec_retains_actionable_diagnostics_without_outbound_request(): void
+    {
+        [$target, $owner] = $this->fixture();
+        ArvanApiTargetConfig::query()->sole()->forceFill(['spec_url' => null])->save();
+
+        $result = app(ArvanApiOperations::class)->catalog($owner, $target->target_id);
+        self::assertFalse($result['ok']);
+        self::assertSame('catalog_unavailable', $result['error']['code']);
+        self::assertStringContainsString('optional OpenAPI description URL', $result['error']['next_step']);
+        $event = DB::table('activity_events')->where('operation', 'arvan-api-catalog')->sole();
+        $details = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('openapi_spec_url_missing', $details['source_error_code']);
+        self::assertSame('Target has no Owner-configured OpenAPI description URL.', $details['source_error_message']);
+        self::assertSame('admission', $details['failure_stage']);
+        self::assertTrue($details['request_not_sent']);
+        Http::assertNothingSent();
+    }
+
     public function test_registered_target_key_is_bound_encrypted_and_admin_never_replays_the_secret(): void
     {
         $owner = $this->user('owner');

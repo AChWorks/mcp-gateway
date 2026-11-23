@@ -4,7 +4,7 @@
 
 Each Target uses its own downstream identity and permissions. A visible Tool or registered Target is **not** proof of authorization or remote connectivity.
 
-> **Version boundary:** Install only a verified, officially [published Release](https://github.com/AChWorks/mcp-gateway/releases). Version and release status are separate: check [VERSION](VERSION) for **source identity** and the official Releases page for **published packages**. A v3 source candidate or merge is not itself a published deployment. v3 requires a **new, empty database** and does **not** support upgrading a v2 installation in place. Do not run a v3 ZIP or migration against an installed v2 database. Source, CI, Release and installed-host status are distinct. See [v3 scope and remaining acceptance](https://github.com/AChWorks/mcp-gateway/issues/330) and [deployment safety](docs/DEPLOYMENT.md#v3-clean-install-development-boundary).
+> **v3 is the initial supported product line.** Install only an officially [published Release](https://github.com/AChWorks/mcp-gateway/releases), not a GitHub source archive. New installations use an empty database and the deployment ZIP; existing v3 installations use the separate, SHA-256-verified Update ZIP from a subsequent published Release. [VERSION](VERSION), GitHub Release, and the actually installed host can differ. See [acceptance Issue #330](https://github.com/AChWorks/mcp-gateway/issues/330) and [deployment/upgrade guidance](docs/DEPLOYMENT.md).
 
 **Find what you need:** [Install](#install-a-published-release) · [Connect Targets](#connect-a-target) · [Connect ChatGPT](#connect-an-mcp-client) · [Tool inventory](#mcp-tools) · [Operations and recovery](#updates-and-recovery) · [Documentation map](docs/PROJECT-MAP.md).
 
@@ -13,7 +13,7 @@ Each Target uses its own downstream identity and permissions. A visible Tool or 
 | Target | Operations | Detailed guide |
 | --- | --- | --- |
 | **WordPress / WP AI Bridge** | Discover and execute WordPress Abilities; separately gated, single-site publish operation | [WordPress and client setup](#wordpress) · [Integration guide](docs/CONNECTOR-INTEGRATION-GUIDE.md) |
-| **Direct / Reverse SSH** | Verified SSH commands, bounded SFTP, retained Jobs and optional binary transfer; the v3 **source** adds diagnostics and durable Batch | [SSH](#ssh) · [SSH/Jobs](docs/DIRECT-SSH-CONNECTOR.md) |
+| **Direct / Reverse SSH** | Verified SSH commands, bounded SFTP, retained Jobs and optional binary transfer; includes diagnostics and durable Batch | [SSH](#ssh) · [SSH/Jobs](docs/DIRECT-SSH-CONNECTOR.md) |
 | **ArvanCloud API** | Registered, fixed-origin REST calls with an encrypted Machine User key; optional OpenAPI catalog | [ArvanCloud](#arvancloud-api) · [Connector contract](docs/ARVANCLOUD-API-CONNECTOR.md) |
 
 The ArvanCloud REST connector does not implement S3 signing or general large-object streaming. WordPress Abilities are discovered dynamically, not registered as a new public Gateway Tool for every Ability name.
@@ -77,30 +77,28 @@ See [ArvanCloud API details](docs/ARVANCLOUD-API-CONNECTOR.md) for supported con
 
 ## MCP tools
 
-The historical **v2.7.3** release has **18 standard Tools**; **v3.0.0 source** registers **30** (the same 18 plus 12 below). Check the selected official Release, actual installed version and authenticated `tools/list` before relying on any Tool. Tool discovery does not grant execution permission.
+Gateway v3.0.0 registered **30 standard MCP Tools**, grouped below by purpose. Query the authenticated `tools/list` for the currently installed release; tool discovery is not authorization.
 
-| Available in v2.7.3 (18) | Purpose |
-| --- | --- |
-| `targets-list`, `target-context`, `operation-diagnostics-read` | Authorized discovery and diagnostics |
-| `wordpress-abilities-read`, `wordpress-ability-execute`, `wordpress-content-publish-create` | WordPress discovery, scoped execution and separately authorized publication |
-| `arvan-api-catalog`, `arvan-api-request` | ArvanCloud catalog and fixed-origin REST |
-| `ssh-command-run`, `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write` | SSH command and bounded SFTP |
-| `ssh-job-start`, `ssh-jobs-list`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Retained SSH Job lifecycle |
+| Area | Tools | Purpose |
+| --- | --- | --- |
+| General (3) | `targets-list`, `target-context`, `operation-diagnostics-read` | Authorized discovery and diagnostics |
+| WordPress (3) | `wordpress-abilities-read`, `wordpress-ability-execute`, `wordpress-content-publish-create` | Dynamic Abilities and separately gated publishing |
+| WordPress Batch (2) | `wordpress-bridge-batch-preview`, `wordpress-bridge-batch-read` | Fixed read-only information Batch |
+| ArvanCloud (2) | `arvan-api-catalog`, `arvan-api-request` | Optional OpenAPI catalog and authenticated fixed-origin REST |
+| SSH commands (1) | `ssh-command-run` | Approved remote command |
+| SFTP and file changes (6) | `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write`, `ssh-file-patch`, `ssh-change-verify` | Bounded, verifiable remote file operations |
+| SSH Jobs (5) | `ssh-job-start`, `ssh-jobs-list`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Durable remote job lifecycle |
+| SSH diagnostics (3) | `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-logs-query` | Typed observations and diagnostics |
+| SSH Batch (2) | `ssh-batch-preview`, `ssh-batch-run` | Preview and queue durable SSH command Batch |
+| Shared Batch (3) | `target-batch-status`, `target-batches-list`, `target-batch-cancel` | Child outcomes, recovery and cancellation |
 
-| Added in v3.0.0 (12) | Purpose |
-| --- | --- |
-| `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-logs-query`, `ssh-file-patch`, `ssh-change-verify` | Typed SSH observations, conditional changes and independent verification; see [SSH operator contracts](docs/SSH-OPERATOR-CAPABILITIES.md) |
-| `ssh-batch-preview`, `ssh-batch-run` | Preview and queue durable SSH command Batch |
-| `wordpress-bridge-batch-preview`, `wordpress-bridge-batch-read` | Fixed **read-only** WordPress Bridge information Batch, **not** generic publishing |
-| `target-batch-status`, `target-batches-list`, `target-batch-cancel` | Child results, recovery and cancellation; an in-flight remote effect may remain uncertain |
-
-No general `execute-anything` Tool, automatic WordPress bulk publishing or arbitrary ArvanCloud Batch provider is claimed.
+No general `execute-anything` Tool, automatic WordPress bulk publishing, or arbitrary ArvanCloud Batch provider is claimed.
 
 ## Updates and recovery
 
-**For published v2 releases only:** use the exact Release's `mcp-gateway-update-vX.Y.Z.zip` and checksum with its **Owner-authenticated** `/update/` browser flow. Direct updates are supported only from the three most recent preceding published stable releases for the selected destination. **Never** use a fresh-install ZIP as an update, or point v3 at a v2 database. [Full update and rollback runbook](docs/DEPLOYMENT.md#11-upgrade-and-rollback-outline).
+**Existing v3 installation:** Download the exact published Release's `mcp-gateway-update-vX.Y.Z.zip` and its checksum. Upload and extract the package at the installed application root, then open `/update/`, sign in as an **enabled Owner**, review preflight and perform the two-phase browser update. The first installation release, v3.0.0, had no Update ZIP; each subsequent update-capable v3 Release has a separate update artifact. Never extract a fresh-install deployment ZIP over a running installation. The supported direct-update window covers up to three previously published v3 stable releases, backed by independent package tests. [Upgrade and rollback runbook](docs/DEPLOYMENT.md#11-upgrade-and-rollback-outline).
 
-Before a change, preserve a **verified-restorable database backup, app files, private `.env`, `APP_KEY`, OAuth/Bridge signing keys and relevant remote Job state**. A code rollback does not undo database schema changes or remote actions.
+Before changing a running host, preserve a **verified-restorable database backup, current code, private `.env`/`APP_KEY`, OAuth/Bridge signing keys and relevant remote Job state**. The browser updater retains a bounded private code backup; that is **not** a database backup. A code rollback cannot undo database schema changes or remote actions.
 
 ## Administration and safety
 
@@ -116,4 +114,4 @@ The [documentation map](docs/PROJECT-MAP.md) identifies **one maintained referen
 
 ## License
 
-See the [LICENSE](LICENSE) that belongs to the selected source revision or release. Earlier published releases retain the terms provided with their original artifacts.
+See [LICENSE](LICENSE) and [NOTICE](NOTICE) for the current project terms and required source/attribution notices.
