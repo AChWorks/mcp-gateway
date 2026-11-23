@@ -6,7 +6,7 @@
 @section('content')
 <div class="page-heading">
     <div>
-        <div class="eyebrow">{{ __('System') }}</div>
+        <div class="eyebrow">{{ __('Connectivity') }}</div>
         <h1>{{ __('Connection Relays') }}</h1>
         <p class="muted reading-width">{{ __('Use a reachable SSH server as a shared connection hop for SSH, SFTP or WordPress Targets. Each Target keeps its selected route until you change it.') }}</p>
     </div>

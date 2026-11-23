@@ -37,6 +37,23 @@ final class AdminShellPresentationTest extends TestCase
         self::assertStringContainsString('Operational settings', $html);
     }
 
+    public function test_connectivity_page_headings_match_their_sidebar_section(): void
+    {
+        $this->actingAs($this->user(GatewayRole::Owner));
+
+        foreach (['/admin/settings/reverse-ssh', '/admin/settings/connection-relays'] as $url) {
+            $html = $this->get($url)->assertOk()->getContent();
+            $xpath = $this->xpath($html);
+
+            self::assertSame('Connectivity', trim((string) $xpath->evaluate(
+                'string(//main//div[@class="page-heading"]/div[1]/div[@class="eyebrow"])',
+            )), $url);
+            self::assertSame(1, (int) $xpath->evaluate(
+                'count(//section[@aria-labelledby="nav-connectivity-title"]//a[@aria-current="page"])',
+            ), $url);
+        }
+    }
+
     public function test_restricted_sidebar_hides_unavailable_groups_and_owner_only_settings(): void
     {
         $viewer = $this->user(GatewayRole::Viewer);
