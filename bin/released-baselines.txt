@@ -1,4 +1,5 @@
-# Verified prior same-major stable releases for the current destination.
-# Up to three are supported, oldest to newest; the first v3 update has
-# exactly one prior v3 stable. Never include a v2 release in this v3 window.
+# Verified prior same-major stable releases for v3.0.2, oldest to newest.
+# The supported rolling direct-update window includes up to three prior v3
+# stable releases; none of the v2 releases belong in this manifest.
 3.0.0
+3.0.1

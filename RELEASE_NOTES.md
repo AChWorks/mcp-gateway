@@ -1,3 +1,14 @@
+# MCP Gateway v3.0.2
+
+**Stable v3.0.2 — Admin Connectivity presentation correction.**
+
+### Changes
+
+- **Admin UI:** Reverse SSH and Connection Relays page headings now say **Connectivity**, matching their existing AdminNavigation section. The pages, routes, permission checks, and underlying SSH/Relay behavior are unchanged.
+- **Regression coverage:** Authenticated Owner feature tests assert page heading and active sidebar-section alignment; exact change passed independent review and CI in [PR #342](https://github.com/AChWorks/mcp-gateway/pull/342).
+- **Deployment:** Publishes separate, SHA-256-verified fresh-install and browser Update ZIPs. Direct v3 updates are tested from published v3.0.0 and v3.0.1 baselines; no new database migrations or configuration changes were introduced by this release.
+- **Acceptance boundaries:** Broader installed-host/UI and v3 acceptance remain open under Issues #325 and #330. Publishing a GitHub Release does not change the installed Gateway.
+
 # MCP Gateway v3.0.1
 
 **Stable v3.0.1 — maintenance and first v3 browser-update release.**
