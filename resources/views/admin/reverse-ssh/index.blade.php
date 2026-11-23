@@ -8,7 +8,7 @@
 @php($editing = ! $gateway || request()->boolean('edit'))
 <div class="page-heading">
     <div>
-        <div class="eyebrow">{{ __('System') }}</div>
+        <div class="eyebrow">{{ __('Connectivity') }}</div>
         <h1>{{ __('Managed Reverse SSH') }}</h1>
         <p class="muted">{{ __('Optional outbound-only onboarding for SSH Targets that cannot accept inbound connections from Gateway.') }}</p>
     </div>
