@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace McpGatewayUpdate;
 
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Throwable;
 

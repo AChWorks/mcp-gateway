@@ -52,6 +52,15 @@ class BaselineTest(unittest.TestCase):
     def test_actual_repository_is_valid(self):
         GUARD.main()
 
+    def test_active_deployment_instructions_are_v3_only(self):
+        guide = (Path(__file__).resolve().parent.parent / "docs/DEPLOYMENT.md").read_text()
+        self.assertIn("RELEASE_TAG=v3.0.0", guide)
+        self.assertNotIn("RELEASE_TAG=v2.", guide)
+        self.assertNotIn("\n-ZIP installations", guide)
+        self.assertNotIn("Supported pre-role releases", guide)
+        self.assertIn("### Browser update for installed v3 ZIPs", guide)
+
+
     def test_first_v3_update_has_one_real_prior_stable(self):
         self.assertEqual(("3.0.0",), GUARD.previous_stables(
             notes("3.0.1", "3.0.0"), "3.0.1",

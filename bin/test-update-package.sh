@@ -85,6 +85,10 @@ EOF_ENV
       "name"=>"Gateway QA Operator","email"=>"gateway-qa-operator@example.test",
       "password"=>"CorrectHorse!234","role"=>"operator","access_enabled"=>true
     ]);
+    App\Models\User::query()->create([
+      "name"=>"Gateway QA Disabled","email"=>"gateway-qa-disabled@example.test",
+      "password"=>"CorrectHorse!234","role"=>"owner","access_enabled"=>false
+    ]);
     $t=App\Domain\Targets\Target::query()->create([
       "target_id"=>"qa330-ssh","display_name"=>"v3 preserved SSH Target",
       "connector_type"=>"ssh_direct"
@@ -165,38 +169,9 @@ to="$(tr -d '[:space:]' < "$site/update/UPDATE_VERSION")"
 ( cd "$site" && sha256sum --check --strict "$tmp/preserve.sha256" >/dev/null )
 [[ "$(php "$tmp/snapshot.php" "$site")" == "$before_data" ]] || { echo "Staging mutated persistent records." >&2; exit 1; }
 
-# Simulate an authenticated Owner's two-phase updater protocol, with the
-# exact PHP runtime packaged in the separately verified candidate archive.
-token="$(php -r 'echo bin2hex(random_bytes(32));')"
-continuation="$(php -r '
-  [$base,$token]=array_slice($argv,1); chdir($base);
-  require "vendor/autoload.php";
-  $app=require "bootstrap/app.php";
-  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-  require "update/WebUpdater.php";
-  $u=new McpGatewayUpdate\WebUpdater($base,$base."/update");
-  $info=$u->inspect();
-  $result=$u->stage($token);
-  if($result["from"]!==$info["installed"]||$result["to"]!==$info["target"])throw new RuntimeException("Stage binding mismatch");
-  echo $result["continuation"];
-' "$site" "$token")"
-[[ "$continuation" =~ ^[a-f0-9]{64}$ ]] || { echo "No valid stage continuation." >&2; exit 1; }
-[[ "$(tr -d '[:space:]' < "$site/VERSION")" == "$to" ]] || { echo "Staged code not installed." >&2; exit 1; }
-[[ "$(php "$tmp/snapshot.php" "$site")" == "$before_data" ]] || { echo "Stage mutated user/target/OAuth state." >&2; exit 1; }
-( cd "$site" && sha256sum --check --strict "$tmp/preserve.sha256" >/dev/null )
-[[ -f "$site/storage/app/private/update-state.json" ]] || { echo "Update continuation state missing." >&2; exit 1; }
-
-php -r '
- [$base,$token,$continuation]=array_slice($argv,1);
- chdir($base);
- require "vendor/autoload.php";
- $app=require "bootstrap/app.php";
- $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
- require "update/WebUpdater.php";
- $u=new McpGatewayUpdate\WebUpdater($base,$base."/update");
- $result=$u->finish($token,$continuation);
- if($result["from"]===null||$result["to"]===null)throw new RuntimeException("Invalid finish result");
-' "$site" "$token" "$continuation"
+# Exercise the real authenticated v3 browser entrypoint on the actual released
+# installation, including Stage and Finish over HTTP, not direct CLI calls.
+bash "$(dirname "$0")/test-v3-updater-http.sh" "$site" "$tmp" "$from" "$to"
 
 [[ "$(tr -d '[:space:]' < "$site/VERSION")" == "$to" ]] || { echo "Update did not finish." >&2; exit 1; }
 [[ ! -e "$site/storage/framework/down" ]] || { echo "Maintenance remained active." >&2; exit 1; }
