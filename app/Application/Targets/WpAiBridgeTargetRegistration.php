@@ -22,7 +22,7 @@ final readonly class WpAiBridgeTargetRegistration
     public function __construct(
         private WpAiBridgeDiscovery $discovery,
         private ConnectionRelayRoutes $relays,
-        private ConnectionRelayTargetBinding $bindings,
+        private TargetTransportBinding $bindings,
     ) {}
 
     public function register(string $targetId, string $displayName, string $baseUrl, ?string $aiGuidance = null, ?string $relayId = null, ?User $creator = null): Target

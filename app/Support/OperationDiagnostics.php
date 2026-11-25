@@ -176,35 +176,6 @@ final class OperationDiagnostics
             }
         }
 
-        // Durable, non-secret evidence when a route change abandons local
-        // WordPress authorization, including an unresolved remote operation.
-        $retirement = $details['oauth_local_invalidation'] ?? null;
-        if (is_array($retirement)) {
-            $evidence = [];
-            foreach (['credential_record_id', 'flow_id', 'refresh_intent_id', 'revocation_intent_id'] as $key) {
-                $value = $retirement[$key] ?? null;
-                if (is_string($value) && Str::isUlid($value)) {
-                    $evidence[$key] = $value;
-                }
-            }
-            foreach (['route_epoch', 'refresh_generation', 'revocation_confirmed', 'revocation_total'] as $key) {
-                $value = $retirement[$key] ?? null;
-                if (is_int($value) && $value >= 0) {
-                    $evidence[$key] = $value;
-                }
-            }
-            if (is_bool($retirement['callback_claimed'] ?? null)) {
-                $evidence['callback_claimed'] = $retirement['callback_claimed'];
-            }
-            $phase = $retirement['revocation_phase'] ?? null;
-            if (is_string($phase) && preg_match('/^[a-z_]{1,32}$/D', $phase) === 1) {
-                $evidence['revocation_phase'] = $phase;
-            }
-            if ($evidence !== []) {
-                $safe['oauth_local_invalidation'] = $evidence;
-            }
-        }
-
         // Trusted deferred Batch identity and provider cause-chain. Preserve
         // bounded references, but never inputs, secrets or command output.
         foreach (['batch_id', 'batch_child_id'] as $key) {
@@ -368,7 +339,6 @@ final class OperationDiagnostics
             'incompatible_metadata' => isset(self::safeContext($details)['outbound_rejection_reason'])
                 ? __('The WordPress OAuth/MCP metadata violates the Target outbound policy: :reason', ['reason' => self::outboundSummary($details)])
                 : __('The WordPress OAuth or MCP metadata is incompatible or returned an unexpected response.'),
-            'remote_revocation_not_performed' => __('The route change retired local WordPress authorization. No remote revocation was performed or confirmed.'),
             'revocation_pending', 'disconnect_pending' => __('WordPress credential revocation has not been confirmed. The existing credential remains blocked, not forgotten.'),
             'revocation_failed' => __('WordPress did not confirm the OAuth credential revocation.'),
             'revocation_conflict' => __('The credential or revocation state changed while the operation was running.'),
@@ -402,7 +372,7 @@ final class OperationDiagnostics
             'reverse_listener_conflict' => __('The approved reverse listener is already owned by another registered SSH Target.'),
             'reverse_listener_unavailable' => __('The approved NL loopback listener was not reachable; no direct fallback or SSH authentication was attempted.'),
             'relay_unavailable' => __('The selected Connection Relay could not establish the approved SOCKS5 route. The Gateway did not fall back to Direct.'),
-            'relay_disabled' => __('The Owner disabled the selected Connection Relay. The Target requires a new route authorization and independent connection verification.'),
+            'relay_disabled' => __('The selected Connection Relay is disabled. Stored Target authorization is not revoked.'),
             'relay_reverse_conflict' => __('Shared Connection Relay and Reverse SSH cannot be selected for the same SSH Target.'),
             'invalid_input' => __('Some input fields or tool arguments are invalid.'),
             'forbidden', 'target_not_found' => __('This operation or Target is not available to the current user.'),
@@ -428,7 +398,6 @@ final class OperationDiagnostics
             'incompatible_metadata' => isset(self::safeContext($details)['outbound_rejection_reason'])
                 ? self::outboundNextStep($details)
                 : __('Compare the WordPress Bridge version, advertised OAuth endpoints and exact issuer/resource metadata.'),
-            'remote_revocation_not_performed' => __('Connect the Target through its new route. If old remote consent also needs revocation, manage it independently in WordPress; the retained intent evidence is not proof of remote revocation.'),
             'revocation_pending', 'disconnect_pending', 'revocation_failed', 'revocation_uncertain' => __('Open Target Details → Connection and recovery. Resume only a step explicitly marked proven-not-sent. For unknown results, the Owner must remove the Gateway client approval in WordPress and complete attested reconciliation. A green Metadata check does not change this.'),
             'cancel_not_safe', 'cancel_verification_failed', 'cancel_verification_unavailable' => __('Do not assume Cancel succeeded. The Owner can finish a proven-not-sent revoke or independently reconcile the authorization at WordPress.'),
             'operation_unconfirmed' => (self::safeContext($details)['operation_kind'] ?? null) === 'ssh_verify'

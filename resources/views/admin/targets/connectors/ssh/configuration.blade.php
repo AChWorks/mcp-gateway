@@ -28,26 +28,26 @@
     </div>
     <div class="target-subsection">
         <h3>{{ __('SSH connection route') }}</h3>
-        <p class="field-help">{{ __('Changing the route clears old login verification and rebinds encrypted credentials. Reverse SSH requires a separately provisioned, restricted OpenSSH forward from the remote Target to an Gateway host loopback listener, plus an exact Gateway operator approval. An old retained Job cannot be moved to the new route.') }}</p>
+        <p class="field-help">{{ __('Changing only the route preserves the stored login and clears network-path verification. Reverse SSH requires a separately provisioned, restricted OpenSSH forward from the remote Target to an Gateway host loopback listener, plus an exact Gateway operator approval. An old retained Job cannot be moved to the new route.') }}</p>
         <div class="field">
             <label for="ssh_edit_route_mode">{{ __('Connection route') }}</label>
             <select id="ssh_edit_route_mode" name="ssh_route_mode">
-                <option value="direct" @selected(old('ssh_route_mode', $sshConfig->route_mode ?? 'direct') === 'direct')>{{ __('Direct SSH (default)') }}</option>
-                <option value="reverse" @selected(old('ssh_route_mode', $sshConfig->route_mode ?? 'direct') === 'reverse')>{{ __('Owner-approved Reverse SSH') }}</option>
+                <option value="direct" @selected(old('ssh_route_mode', $target->usesReverseRoute() ? 'reverse' : 'direct') === 'direct')>{{ __('Direct SSH (default)') }}</option>
+                <option value="reverse" @selected(old('ssh_route_mode', $target->usesReverseRoute() ? 'reverse' : 'direct') === 'reverse')>{{ __('Owner-approved Reverse SSH') }}</option>
             </select>
             @error('ssh_route_mode')<p class="form-error" role="alert">{{ $message }}</p>@enderror
         </div>
-        <div class="target-field-grid" data-ssh-reverse-route @if(old('ssh_route_mode', $sshConfig->route_mode ?? 'direct') !== 'reverse') hidden @endif>
+        <div class="target-field-grid" data-ssh-reverse-route @if(old('ssh_route_mode', $target->usesReverseRoute() ? 'reverse' : 'direct') !== 'reverse') hidden @endif>
             <div class="field">
                 <label for="ssh_edit_reverse_port">{{ __('Approved Gateway host loopback listener port') }}</label>
                 <input id="ssh_edit_reverse_port" name="ssh_reverse_port" type="number" min="1024" max="65535"
-                    value="{{ old('ssh_reverse_port', $sshConfig->reverse_listener_port) }}">
+                    value="{{ old('ssh_reverse_port', $target->reverse_listener_port) }}">
                 @error('ssh_reverse_port')<p class="form-error" role="alert">{{ $message }}</p>@enderror
             </div>
             <div class="field">
                 <label for="ssh_edit_tunnel_identity">{{ __('Gateway-approved tunnel identity') }}</label>
                 <input id="ssh_edit_tunnel_identity" name="ssh_tunnel_identity" type="text" maxlength="80"
-                    autocomplete="off" spellcheck="false" value="{{ old('ssh_tunnel_identity', $sshConfig->reverse_tunnel_identity) }}">
+                    autocomplete="off" spellcheck="false" value="{{ old('ssh_tunnel_identity', $target->reverse_tunnel_identity) }}">
                 @error('ssh_tunnel_identity')<p class="form-error" role="alert">{{ $message }}</p>@enderror
             </div>
         </div>

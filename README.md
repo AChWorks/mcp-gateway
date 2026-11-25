@@ -55,7 +55,7 @@ A saved or previously Connected Target does not prove its stored remote credenti
 3. Use `ssh-file-read/write/list` for bounded SFTP, `ssh-job-start/status/output/cancel` for retained remote Jobs and `ssh-jobs-list` to recover the right Job after changing chats. Do not retry an uncertain remote effect with a new request ID.
 4. Enable separate whole-file browser/HTTPS binary exchange only when the **installed** Gateway configuration and hosting resource limits allow it. Remote OS account privileges still apply.
 
-For an inbound-blocked host, use the [Managed Reverse SSH guide](docs/REVERSE-SSH-MANAGED.md) or [manual route](docs/REVERSE-SSH-OPERATOR.md); privileged host installation requires explicit host approval. For intermediary routing, use [Connection Relays](docs/CONNECTION-RELAYS.md). Route registration or tunnel readiness is not proof of the final Target login. Changing a WordPress Target route retires its local OAuth authorization and requires fresh authorization, without claiming remote revocation or requiring the old route to be reachable.
+For an inbound-blocked host, use the [Managed Reverse SSH guide](docs/REVERSE-SSH-MANAGED.md) or [manual route](docs/REVERSE-SSH-OPERATOR.md); privileged host installation requires explicit host approval. For intermediary routing, use [Connection Relays](docs/CONNECTION-RELAYS.md). Route registration or tunnel readiness is not proof of the final Target login. Changing a Target network path (Direct, Relay, or an approved Reverse listener) preserves its existing credentials, authorization, and pending protocol recovery evidence. It clears only current path verification and fences undispatched work admitted on the previous route.
 
 ### ArvanCloud API
 

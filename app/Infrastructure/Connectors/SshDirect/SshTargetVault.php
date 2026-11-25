@@ -80,22 +80,9 @@ final class SshTargetVault
             (string) $target->getKey(), $target->target_id, $config->host,
             (string) $config->port, $config->username, $config->auth_method, $pin->canonicalLine(),
         ];
-        $epoch = (int) ($config->binding_revision ?? 0);
-        if ($epoch > 0 || ($config->route_mode ?? 'direct') !== 'direct') {
-            $parts = [
-                ...$parts, (string) ($config->route_mode ?? 'direct'),
-                (string) $config->reverse_listener_port,
-                (string) $config->reverse_tunnel_identity,
-                (string) $epoch,
-            ];
-        }
 
-        $relayEpoch = (int) ($target->getAttribute('relay_binding_revision') ?? 0);
-        $relayId = $target->getAttribute('relay_record_id');
-        if ($relayEpoch > 0 || $relayId !== null) {
-            $parts = [...$parts, 'connection_relay', (string) $relayId, (string) $relayEpoch];
-        }
-
+        // Login ownership is bound to the actual endpoint, account and
+        // verified host key, never to a Gateway transport or a job epoch.
         return hash('sha256', implode("\0", $parts));
     }
 

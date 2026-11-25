@@ -16,16 +16,16 @@ final class SshTargetBinding
             (string) $config->pinned_host_key,
         ];
         $epoch = (int) ($config->binding_revision ?? 0);
-        if ($epoch > 0 || ($config->route_mode ?? 'direct') !== 'direct') {
+        if ($epoch > 0 || $target->usesReverseRoute()) {
             $parts = [
-                ...$parts, (string) ($config->route_mode ?? 'direct'),
-                (string) $config->reverse_listener_port,
-                (string) $config->reverse_tunnel_identity,
+                ...$parts, $target->usesReverseRoute() ? 'reverse' : 'direct',
+                (string) $target->reverse_listener_port,
+                (string) $target->reverse_tunnel_identity,
                 (string) $epoch,
             ];
         }
 
-        $relayEpoch = (int) ($target->getAttribute('relay_binding_revision') ?? 0);
+        $relayEpoch = (int) ($target->getAttribute('transport_revision') ?? 0);
         $relayId = $target->getAttribute('relay_record_id');
         if ($relayEpoch > 0 || $relayId !== null) {
             $parts = [...$parts, 'connection_relay', (string) $relayId, (string) $relayEpoch];

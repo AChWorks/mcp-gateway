@@ -51,16 +51,14 @@
 @if($routeRevision !== null)
 <section class="panel panel-wide target-enrollment" aria-labelledby="target-route-heading">
     <h2 id="target-route-heading">{{ __('Network routing') }}</h2>
-    <p class="field-help">{{ __('All network requests to this Target use the selected route. Changing it resets connection verification and fences retained work.') }}</p>
-    @if($connectorUi?->routeChangeHelp !== null)
-        <p class="field-help">{{ $connectorUi->routeChangeHelp }}</p>
-    @endif
+    <p class="field-help">{{ __('The selected route is only a network path. Changing it preserves Target credentials and authorization, clears current route verification, and fences previously admitted network work.') }}</p>
     <form class="form-stack" method="post" action="{{ route('admin.targets.relay-route.update', ['target' => $target->target_id]) }}">
         @csrf
         @method('PUT')
         <input type="hidden" name="route_revision" value="{{ $routeRevision }}">
         @include('admin.targets.partials.connection-relay-selector', [
             'selectId' => 'target-edit-connection-relay',
+            'reverseSelected' => $target->usesReverseRoute(),
             'initialRelayId' => old('connection_relay_id', $selectedRelay?->relay_id),
             'blockedRelay' => $selectedRelay !== null && ! $connectionRelays->contains(
                 fn($relay) => $relay->getKey() === $selectedRelay->getKey(),
@@ -72,7 +70,7 @@
             <input id="target-edit-route-password" type="password" name="current_password" maxlength="255"
                 data-admin-requires-intent autocomplete="current-password" required>
         </div>
-        <button class="button button-primary" type="submit">{{ __('Save connection route and require re-verification') }}</button>
+        <button class="button button-primary" type="submit">{{ __('Save connection route') }}</button>
     </form>
 </section>
 @endif

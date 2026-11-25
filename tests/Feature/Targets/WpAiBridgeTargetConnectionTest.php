@@ -4,7 +4,7 @@ namespace Tests\Feature\Targets;
 
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\ConnectionRelayAdministration;
-use App\Application\Targets\ConnectionRelayTargetBinding;
+use App\Application\Targets\TargetTransportBinding;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
@@ -2814,63 +2814,58 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         DB::unprepared('DROP TRIGGER fail_intent');
     }
 
-    public function test_wordpress_route_changes_retire_only_local_authorization_and_allow_fresh_consent(): void
+    public function test_route_changes_and_disable_preserve_wordpress_authorization_and_use_new_route(): void
     {
         $target = $this->target('alpha');
         $other = $this->target('beta');
         $this->pair($target);
         $this->pair($other);
+        $cipher = $this->credential($target)->encrypted_payload;
+        $credentialId = $this->credential($target)->getKey();
         $otherId = $this->credential($other)->getKey();
         $first = $this->relay('first', 46081);
         $second = $this->relay('second', 46082);
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         $service = app(WpAiBridgeTargetConnectionService::class);
 
         foreach ([$first->relay_id, $second->relay_id, null] as $route) {
             $target->refresh();
             if ($route === null) {
-                $priorId = $this->credential($target)->getKey();
                 self::assertTrue(app(ConnectionRelayAdministration::class)->disable($second->fresh(), 1));
                 $target->refresh();
-                self::assertSame($priorId, $this->credential($target)->getKey());
-                self::assertSame('relay_disabled', $target->last_error_code);
+                self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+                self::assertSame($cipher, $this->credential($target)->encrypted_payload);
+                try {
+                    $service->routingContext($target);
+                    self::fail('A disabled route unexpectedly dispatched or fell back.');
+                } catch (OutboundRequestException $exception) {
+                    self::assertTrue($exception->preDispatch);
+                }
             }
             $old = clone $target;
-            $credentialId = $this->credential($target)->getKey();
-            $this->seedPendingRefresh($target);
             $count = Http::recorded()->count();
             self::assertTrue($bindings->change($target, $bindings->revision($target), $route));
-            self::assertSame($count, Http::recorded()->count(), 'Rebind must not contact the old route.');
+            self::assertSame($count, Http::recorded()->count());
             $target->refresh();
-            self::assertSame($old->relay_binding_revision + 1, $target->relay_binding_revision);
-            self::assertSame(TargetConnectionState::Disconnected, $target->connection_state);
-            $this->assertDatabaseMissing('target_credentials', ['id' => $credentialId]);
-            $this->assertDatabaseMissing('wp_ai_bridge_credential_metadata', ['credential_id' => $credentialId]);
-            $this->assertDatabaseMissing('wp_ai_bridge_refresh_intents', ['target_record_id' => $target->getKey()]);
-            $this->assertDatabaseHas('activity_events', [
-                'target_id' => 'alpha',
-                'operation' => 'wordpress-route-local-invalidate',
-                'error_code' => 'remote_revocation_not_performed',
-            ]);
-            self::assertSame('alpha-access', $this->pair($target));
-            self::assertNotSame($credentialId, $this->credential($target)->getKey());
+            self::assertSame($old->transport_revision + 1, $target->transport_revision);
+            self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+            self::assertSame($credentialId, $this->credential($target)->getKey());
+            self::assertSame($cipher, $this->credential($target)->encrypted_payload);
+            self::assertSame('alpha-access', $service->accessToken($target));
             try {
-                $service->accessToken($old);
-                self::fail('A stale route snapshot acquired fresh credentials.');
+                $service->routingContext($old);
+                self::fail('A stale operation snapshot was admitted.');
             } catch (WpAiBridgeTargetConnectionException $exception) {
                 self::assertSame('target_changed', $exception->reason);
             }
         }
 
-        $target->refresh();
-        $credentialId = $this->credential($target)->getKey();
         self::assertFalse($bindings->change($target, $bindings->revision($target), null));
-        self::assertSame($credentialId, $this->credential($target)->getKey());
         self::assertSame($otherId, $this->credential($other)->getKey());
         self::assertSame([], $this->revocationTokenAttempts);
     }
 
-    public function test_rebind_fences_pending_handoff_and_callback_even_before_first_token_exchange(): void
+    public function test_pending_callback_and_handoff_survive_a_route_change(): void
     {
         $target = $this->target('alpha');
         $relay = $this->relay('new-route', 46081);
@@ -2879,79 +2874,105 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $service = app(WpAiBridgeTargetConnectionService::class);
         $url = $service->begin($target->fresh());
         parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         $target->refresh();
-        $count = Http::recorded()->count();
+        $flowId = DB::table('wp_ai_bridge_oauth_flows')->value('id');
         self::assertTrue($bindings->change($target, $bindings->revision($target), $relay->relay_id));
-        $this->get($handoff)->assertAdminRedirect('/admin/targets/alpha')->assertSessionHasErrors('target');
-        try {
-            $service->completeCallback($args['state'], 'old-code', 'https://alpha.example.test', null);
-            self::fail('Superseded callback was accepted.');
-        } catch (WpAiBridgeTargetConnectionException $exception) {
-            self::assertSame('invalid_state', $exception->reason);
-        }
-        self::assertSame($count, Http::recorded()->count());
-        self::assertSame('alpha-access', $this->pair($target->fresh()));
+        $this->get($handoff)->assertOk();
+        self::assertSame($flowId, DB::table('wp_ai_bridge_oauth_flows')->value('id'));
+        self::assertSame(TargetConnectionState::Pending, $target->fresh()->connection_state);
+        $service->completeCallback($args['state'], 'code', 'https://alpha.example.test', null);
+        self::assertSame('alpha-access', $service->accessToken($target->fresh()));
     }
 
-    public function test_rebind_during_callback_refresh_or_revocation_cannot_resurrect_old_authorization(): void
+    public function test_callback_can_retry_proven_not_sent_after_disabled_route_is_replaced(): void
+    {
+        $target = $this->target('alpha');
+        $relay = $this->relay('new-route', 46081);
+        $bindings = app(TargetTransportBinding::class);
+        self::assertTrue($bindings->change($target, $bindings->revision($target), $relay->relay_id));
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $url = $service->begin($target->fresh());
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
+        $flowId = DB::table('wp_ai_bridge_oauth_flows')->value('id');
+        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($relay->fresh(), 1));
+        try {
+            $service->completeCallback($args['state'], 'code', 'https://alpha.example.test', null);
+            self::fail('Token exchange succeeded with an unavailable route.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+        }
+        self::assertSame($flowId, DB::table('wp_ai_bridge_oauth_flows')->value('id'));
+        self::assertNull(DB::table('wp_ai_bridge_oauth_flows')->value('consumed_at'));
+        self::assertSame(TargetConnectionState::Pending, $target->fresh()->connection_state);
+        $target->refresh();
+        self::assertTrue($bindings->change($target, $bindings->revision($target), null));
+        $service->completeCallback($args['state'], 'code', 'https://alpha.example.test', null);
+        self::assertSame('alpha-access', $service->accessToken($target->fresh()));
+    }
+
+    public function test_already_dispatched_oauth_effects_commit_to_same_identity_after_route_change(): void
     {
         $relay = $this->relay('new-route', 46081);
         $service = app(WpAiBridgeTargetConnectionService::class);
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
 
-        foreach (['callback' => 'callback_conflict', 'refresh' => 'refresh_conflict', 'disconnect' => 'revocation_conflict'] as $operation => $expected) {
+        foreach (['callback', 'refresh', 'disconnect'] as $operation) {
             $target = $this->target($operation);
             $args = [];
+            $credentialId = null;
             if ($operation === 'callback') {
                 $url = $service->begin($target);
                 parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
             } else {
                 $this->pair($target);
+                $credentialId = $this->credential($target)->getKey();
                 if ($operation === 'refresh') {
                     $this->expire($target);
                 }
             }
             $target->refresh();
-            $newCredentialId = null;
-            $this->duringBridgeRequest = function () use ($target, $bindings, $relay, &$newCredentialId): void {
+            $this->duringBridgeRequest = function () use ($target, $bindings, $relay): void {
                 $current = $target->fresh();
                 self::assertTrue($bindings->change($current, $bindings->revision($current), $relay->relay_id));
-                $this->pair($target->fresh());
-                $newCredentialId = $this->credential($target)->getKey();
             };
-            try {
-                match ($operation) {
-                    'callback' => $service->completeCallback($args['state'], 'old-code', 'https://callback.example.test', null),
-                    'refresh' => $service->accessToken($target),
-                    'disconnect' => $service->disconnect($target),
-                };
-                self::fail('An obsolete operation committed after the route change.');
-            } catch (WpAiBridgeTargetConnectionException $exception) {
-                self::assertSame($expected, $exception->reason);
+            if ($operation === 'callback') {
+                $service->completeCallback($args['state'], 'code', 'https://callback.example.test', null);
+                self::assertSame('callback-access', $service->accessToken($target->fresh()));
+            } elseif ($operation === 'refresh') {
+                try {
+                    $service->accessToken($target);
+                    self::fail('The old route snapshot should not admit new MCP traffic.');
+                } catch (OutboundRequestException $exception) {
+                    self::assertTrue($exception->preDispatch);
+                }
+                self::assertSame($credentialId, $this->credential($target)->getKey());
+                self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credentialId)->value('generation'));
+                self::assertSame('refresh-rotated-access', $service->accessToken($target->fresh()));
+            } else {
+                self::assertTrue($service->disconnect($target));
+                $this->assertDatabaseMissing('target_credentials', ['target_record_id' => $target->getKey()]);
+                self::assertSame(TargetConnectionState::Disconnected, $target->fresh()->connection_state);
             }
-            self::assertNotNull($newCredentialId);
-            self::assertSame($newCredentialId, $this->credential($target)->getKey());
-            self::assertSame(TargetConnectionState::Connected, $target->fresh()->connection_state);
-            self::assertSame($operation.'-access', $service->accessToken($target->fresh()));
             $this->assertDatabaseMissing('wp_ai_bridge_refresh_intents', ['target_record_id' => $target->getKey()]);
             $this->assertDatabaseMissing('wp_ai_bridge_revocation_intents', ['target_record_id' => $target->getKey()]);
             $this->assertDatabaseMissing('wp_ai_bridge_oauth_flows', ['target_record_id' => $target->getKey()]);
         }
-        self::assertCount(1, $this->revocationTokenAttempts, 'Do not send a second revoke after local invalidation.');
+        self::assertCount(2, $this->revocationTokenAttempts);
     }
 
-    public function test_rebind_does_not_require_a_reachable_old_relay_or_a_resolved_revocation_intent(): void
+    public function test_route_change_preserves_unresolved_revocation_and_can_finish_via_new_route(): void
     {
         $target = $this->target('alpha');
         $relay = $this->relay('unreachable', 46081);
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         self::assertTrue($bindings->change($target, $bindings->revision($target), $relay->relay_id));
         $target->refresh();
         $this->pair($target);
         $this->revokeFailureMode = 'second_pre_dispatch';
+        $service = app(WpAiBridgeTargetConnectionService::class);
         try {
-            app(WpAiBridgeTargetConnectionService::class)->disconnect($target->fresh());
+            $service->disconnect($target->fresh());
             self::fail('Expected a partially acknowledged revocation.');
         } catch (WpAiBridgeTargetConnectionException $exception) {
             self::assertSame('network_failure', $exception->reason);
@@ -2962,13 +2983,11 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $count = Http::recorded()->count();
         self::assertTrue($bindings->change($target, $bindings->revision($target), null));
         self::assertSame($count, Http::recorded()->count());
+        $this->assertDatabaseHas('wp_ai_bridge_revocation_intents', ['id' => $intent->id, 'token_confirmed' => 1]);
+        $this->revokeFailureMode = null;
+        self::assertTrue($service->disconnect($target->fresh(), (string) $intent->id));
         $this->assertDatabaseMissing('wp_ai_bridge_revocation_intents', ['id' => $intent->id]);
-        $audit = DB::table('activity_events')->where('operation', 'wordpress-route-local-invalidate')->latest('created_at')->first();
-        self::assertNotNull($audit);
-        $evidence = json_decode($audit->diagnostic_context, true, flags: JSON_THROW_ON_ERROR)['oauth_local_invalidation'];
-        self::assertSame($intent->id, $evidence['revocation_intent_id']);
-        self::assertSame(1, $evidence['revocation_confirmed']);
-        self::assertSame('alpha-access', $this->pair($target->fresh()));
+        $this->assertDatabaseMissing('target_credentials', ['target_record_id' => $target->getKey()]);
     }
 
     public function test_rebind_rollback_preserves_credential_and_pending_work_if_audit_fails(): void
@@ -2982,7 +3001,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $target->refresh();
         $credentialId = $this->credential($target)->getKey();
         $relay = $this->relay('new-route', 46081);
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         DB::unprepared('CREATE TRIGGER fail_route_audit BEFORE INSERT ON activity_events '.
             "WHEN NEW.operation = 'target-relay-reconfigure' ".
             "BEGIN SELECT RAISE(ABORT, 'test route audit unavailable'); END");
@@ -2996,42 +3015,35 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         }
         self::assertSame($credentialId, $this->credential($target)->getKey());
         self::assertNull($target->fresh()->relay_record_id);
-        self::assertSame(0, $target->fresh()->relay_binding_revision);
+        self::assertSame(0, $target->fresh()->transport_revision);
         $this->assertDatabaseHas('wp_ai_bridge_refresh_intents', ['credential_id' => $credentialId]);
-        $this->assertDatabaseMissing('activity_events', ['operation' => 'wordpress-route-local-invalidate']);
         self::assertSame([], $this->revocationTokenAttempts);
     }
 
-    public function test_rebind_rejects_stale_form_and_reauthorizes_after_new_route_token_failure(): void
+    public function test_route_form_is_independent_of_credential_refresh_but_rejects_stale_route(): void
     {
         $target = $this->target('alpha');
         $this->pair($target);
         $target->refresh();
         $relay = $this->relay('new-route', 46081);
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         $revision = $bindings->revision($target);
+        $this->expire($target);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        self::assertSame('alpha-rotated-access', $service->accessToken($target->fresh()));
+        self::assertSame($revision, $bindings->revision($target->fresh()));
+        $ciphertext = $this->credential($target)->encrypted_payload;
         $this->actingAs($this->user('administrator', 'all'));
         $form = ['route_revision' => $revision, 'connection_relay_id' => $relay->relay_id];
-        $credentialId = $this->credential($target)->getKey();
         $this->put('/admin/targets/alpha/relay-route', [...$form, 'current_password' => 'wrong'])
             ->assertSessionHasErrors('current_password');
-        self::assertSame($credentialId, $this->credential($target)->getKey());
         $this->put('/admin/targets/alpha/relay-route', [...$form, 'current_password' => 'CorrectHorse!234'])
             ->assertAdminRedirect('/admin/targets/alpha/edit')->assertSessionHasNoErrors();
-        self::assertSame(1, $target->fresh()->relay_binding_revision);
+        self::assertSame(1, $target->fresh()->transport_revision);
+        self::assertSame($ciphertext, $this->credential($target)->encrypted_payload);
         $this->put('/admin/targets/alpha/relay-route', [...$form, 'connection_relay_id' => '', 'current_password' => 'CorrectHorse!234'])
             ->assertSessionHasErrors('route_revision');
-        $target->refresh();
-        $this->failTokenExchange = true;
-        try {
-            $this->pair($target);
-            self::fail('A failed fresh authorization stored a credential.');
-        } catch (WpAiBridgeTargetConnectionException $exception) {
-            self::assertSame('token_exchange_failed', $exception->reason);
-        }
-        $this->assertDatabaseMissing('target_credentials', ['target_record_id' => $target->getKey()]);
-        $this->failTokenExchange = false;
-        self::assertSame('alpha-access', $this->pair($target->fresh()));
+        self::assertSame('alpha-rotated-access', $service->accessToken($target->fresh()));
     }
 
     private function relay(string $id, int $port): ConnectionRelay

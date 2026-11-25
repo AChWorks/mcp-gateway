@@ -104,7 +104,7 @@ try {
     $vault = app(SshTargetVault::class);
     $material = $vault->open($target, $config, $credential);
     $policy = app(SshReverseRoutePolicy::class);
-    $route = $policy->forTarget($target, $config);
+    $route = $policy->forTarget($target);
     if (! $route) {
         throw new RuntimeException('Expected approved, Target-bound reverse route.');
     }
@@ -243,7 +243,7 @@ try {
             SshManagedReverseEnrollment::query()->where('target_id', $targetId)->sole(),
         );
         try {
-            $policy->forTarget($target, $config);
+            $policy->forTarget($target);
             throw new RuntimeException('Revoked route was still approved.');
         } catch (SshTargetConnectionException $e) {
             if ($e->reason !== 'reverse_route_not_approved') {

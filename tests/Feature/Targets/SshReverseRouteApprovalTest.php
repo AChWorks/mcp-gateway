@@ -87,9 +87,9 @@ final class SshReverseRouteApprovalTest extends TestCase
         $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/reverse-target');
         $target = Target::query()->sole();
         $config = SshTargetConfig::query()->sole();
-        self::assertSame('reverse', $config->route_mode);
-        self::assertSame(self::PORT, $config->reverse_listener_port);
-        self::assertSame('fixture-reverse-one', $config->reverse_tunnel_identity);
+        self::assertSame('reverse', $target->transportKind());
+        self::assertSame(self::PORT, $target->reverse_listener_port);
+        self::assertSame('fixture-reverse-one', $target->reverse_tunnel_identity);
         self::assertSame('2606:4700:4700::1111', $config->host);
         self::assertNull($config->observed_peer_ip);
         self::assertSame('disconnected', $target->connection_state->value);
@@ -159,7 +159,7 @@ final class SshReverseRouteApprovalTest extends TestCase
         self::assertNull($config->observed_at);
     }
 
-    public function test_owner_route_rotation_fences_credentials_verified_state_and_retained_job_binding(): void
+    public function test_owner_route_rotation_preserves_login_and_fences_retained_job_binding(): void
     {
         $this->actingAs($this->user('owner'));
         $target = app(SshTargetRegistration::class)->register(
@@ -178,11 +178,12 @@ final class SshReverseRouteApprovalTest extends TestCase
 
         $target->refresh();
         $config = SshTargetConfig::query()->sole();
-        self::assertSame('reverse', $config->route_mode);
-        self::assertSame('disconnected', $target->connection_state->value);
+        self::assertSame('reverse', $target->transportKind());
+        self::assertSame('connected', $target->connection_state->value);
         self::assertNull($config->observed_peer_ip);
-        self::assertNotSame($originalCipher, TargetCredential::query()->sole()->encrypted_payload);
-        self::assertSame(1, $config->binding_revision);
+        self::assertSame($originalCipher, TargetCredential::query()->sole()->encrypted_payload);
+        self::assertSame(0, $config->binding_revision);
+        self::assertSame(1, $target->transport_revision);
         self::assertNotSame($originalJobBinding, SshTargetBinding::hash($target, $config));
         self::assertSame('password-secret-fixture', app(SshTargetVault::class)
             ->open($target, $config, TargetCredential::query()->sole())['secret']);
@@ -196,10 +197,12 @@ final class SshReverseRouteApprovalTest extends TestCase
         $back['ssh_tunnel_identity'] = null;
         $this->put('/admin/targets/reverse-target/configuration', $back)
             ->assertAdminRedirect('/admin/targets/reverse-target')->assertSessionHasNoErrors();
+        $target->refresh();
         $direct = SshTargetConfig::query()->sole();
-        self::assertSame('direct', $direct->route_mode);
-        self::assertNull($direct->reverse_listener_port);
-        self::assertSame(2, $direct->binding_revision);
+        self::assertSame('direct', $target->transportKind());
+        self::assertNull($target->reverse_listener_port);
+        self::assertSame(0, $direct->binding_revision);
+        self::assertSame(2, $target->transport_revision);
         self::assertNotSame($originalJobBinding, SshTargetBinding::hash($target, $direct),
             'A Direct->Reverse->Direct round trip must never reactivate old retained Jobs.');
         self::assertSame('password-secret-fixture', app(SshTargetVault::class)

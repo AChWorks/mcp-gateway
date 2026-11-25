@@ -26,6 +26,9 @@
         <span class="badge badge-{{ $recovery['tone'] === 'caution' ? 'warning' : 'neutral' }}">{{ $recovery['tone'] === 'caution' ? __('Action required') : __('Status') }}</span>
     </div>
     <p class="target-recovery-intro" role="status">{{ $recovery['description'] }}</p>
+    @if ($relayUnavailable ?? false)
+        <p class="field-help" role="status">{{ __('The selected Relay is disabled or unavailable. Target authorization remains unchanged. Restore the route or select another one.') }}</p>
+    @endif
     <dl class="target-recovery-grid">
         <div><dt>{{ __('Reachability evidence') }}</dt><dd>{{ $recovery['reachability'] }}</dd></div>
         <div><dt>{{ __('Authorization') }}</dt><dd>{{ $recovery['authorization'] }}</dd></div>

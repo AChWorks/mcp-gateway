@@ -121,14 +121,10 @@ point-in-time proof, not a heartbeat.
   authorized a control key. Neither claim nor file publication is a
   verified Target login or a Connected state.
 - The existing Target detail screen offers **Reissue one-use install
-  command** for unverified `Pending Setup` enrollments, guarded by
+  command** for a selected, non-revoked managed path, guarded by
   current actor password and an exact Target-ID confirmation. This preserves the
   Target's original identity, independently pinned real SSH host key,
-  login identity and approved private key. The encrypted Target login
-  credential is opened under the original trusted binding and re-sealed
-  atomically under the new route revision/port/identity, without changing
-  the approved secret. This preserves real post-reissue Verify while
-  fencing older retained Jobs. The new enrollment rotates
+  login identity and approved private key. The existing encrypted Target login credential is left unchanged, as is its authorization. The shared transport revision advances and fences older retained Jobs. After the initial login provisioning has been verified or explicitly retired, reissue is transport-only: the installer does not write the old login public key or require a login account name. The new enrollment rotates
   its **enrollment ULID** (the Target-side state directory, Unix control
   identity and systemd unit namespace), short-lived token, unique loopback
   port, control binding and Job binding revision. An existing Target-side
@@ -148,9 +144,7 @@ point-in-time proof, not a heartbeat.
   pending receipt and blocks the managed route until Owner
   reconciliation. The Owner can safely retry **Reconcile restricted
   public keys**. Activation is never inferred solely from a written file.
-- Owner revocation atomically commits `revoked`, credential deletion,
-  a monotonic binding revision for retained Job fencing and the
-  Disconnected Target state **before** external key-file publication.
+- Scoped route revocation atomically commits `revoked` and advances the shared transport revision for retained Job fencing **before** external key-file publication. Existing Target login credentials and authorization remain unchanged. An explicit Target Disconnect is a separate operation.
   The host key-removal stage has a separate durable pending receipt;
   failures leave a visible/retriable Owner action. Do not describe
   revocation as fully completed while host policy is still pending.
@@ -170,22 +164,12 @@ point-in-time proof, not a heartbeat.
 - Removing a public control key prevents **new** control authentication
   but does **not** forcibly terminate already established SSH sessions or
   retroactively stop detached commands. Stop the exact Target
-  systemd unit and remove its login public key separately with explicit
-  Target authorization.
+  systemd unit separately with explicit Target authorization. Remove any actual remote login authorization only when separately intended.
 - Disable the feature in Owner Admin first, then use the verified host
   bootstrap `--disable` with the exact originally approved arguments
   to stop only the owned control SSHD service. This preserves other SSHD
   services, host firewall rules and system accounts.
-- Database migration rollback is deliberately fail-closed: all enrollments
-  must be revoked without pending publication, Gateway routing disabled
-  without pending configuration publication, and the restricted SSHD
-  `authorized_keys` reader independently verified empty and reconciled
-  with the approved host identity. An unavailable reader is not proof of
-  revocation. Superseded Target services and retired listener history also
-  require explicit reconciliation; rollback must not silently erase a port
-  quarantine while an old reverse forward may survive. A fresh unconfigured
-  installation may roll back normally. Reconcile interrupted revocation
-  before local Target deletion or schema rollback.
+- Use the verified pre-update database and matching application key for v3 rollback. Never erase a port quarantine while an older reverse forward may survive. An unavailable reader is not proof of revocation. Reconcile interrupted control-key publication before deleting a Target or changing away from its managed path.
 
 ## Acceptance gates
 

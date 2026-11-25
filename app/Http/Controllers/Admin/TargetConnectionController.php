@@ -15,7 +15,6 @@ use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetAdapter;
-use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetAdapter;
 use App\Support\CorrelationId;
@@ -65,12 +64,6 @@ final class TargetConnectionController extends Controller
     public function disconnect(Target $target, TargetConnectorRegistry $connectors): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsDisconnect->value, $target);
-        if (SshManagedReverseEnrollment::query()
-            ->where('target_record_id', $target->getKey())->where('state', '!=', 'revoked')->exists()) {
-            return redirect()->route('admin.targets.show', ['target' => $target->target_id])
-                ->withErrors(['target' => __('Revoke the managed Reverse SSH route before disconnecting its local SSH credential.')]);
-        }
-
         try {
             return $this->result($target, $connectors->forTarget($target)->disconnect($target), 'disconnect');
         } catch (TargetConnectorFailure $exception) {
@@ -274,7 +267,6 @@ final class TargetConnectionController extends Controller
             || ! Cache::add('admin:external-authorization:claimed:'.hash('sha256', $handoff), true, self::HANDOFF_TTL_SECONDS)
             || ($entry['target_id'] ?? null) !== $target->target_id
             || ($entry['target_record_id'] ?? null) !== (string) $target->getKey()
-            || ($entry['route_epoch'] ?? null) !== (int) $target->relay_binding_revision
             || ($entry['user_id'] ?? null) !== (string) $request->user()?->getAuthIdentifier()
             || ! is_int($entry['expires_at'] ?? null)
             || $entry['expires_at'] <= now()->getTimestamp()
@@ -329,7 +321,6 @@ final class TargetConnectionController extends Controller
             $pending[$handoff] = [
                 'target_id' => $target->target_id,
                 'target_record_id' => (string) $target->getKey(),
-                'route_epoch' => (int) $target->relay_binding_revision,
                 'user_id' => (string) $request->user()?->getAuthIdentifier(),
                 'operation' => $operation,
                 'expires_at' => now()->getTimestamp() + self::HANDOFF_TTL_SECONDS,

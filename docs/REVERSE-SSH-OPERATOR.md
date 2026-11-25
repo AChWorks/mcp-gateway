@@ -171,25 +171,15 @@ back to Direct via the password/revision-gated form, remove the independent
 NL allowlist mapping, stop the approved Target tunnel service, revoke its
 dedicated key/account and listener using the agreed host change plan, and
 verify no unexpected listener remains. **Application route rollback and
-schema downgrade are different operations.** A Direct Target whose endpoint,
-trust, authentication or route has ever been changed after this schema was
-introduced has a positive `binding_revision`, even after a
-Direct → Reverse → Direct round trip. Its encrypted SSH credential is sealed
-to that revision, so dropping the column would permanently lose the binding
-identity needed by an older Gateway release to open the credential.
+schema downgrade are different operations.** Target transport changes advance the shared transport revision independently
+of the SSH login binding revision. A Direct → Reverse → Direct round trip
+cannot reactivate an earlier retained Job. Encrypted login credentials remain
+bound to the actual endpoint/account/host key, not to the transport revision.
 
-The **schema rollback refuses before dropping columns** if any Reverse route,
-any positive SSH binding revision (including Direct-mode Targets), or any
-retained SSH Job exists. Removing the Reverse route and pruning Jobs is **not
-sufficient** to downgrade when any revision is positive. Do not manually reset
-revisions, remove encrypted credentials or reuse prior Job bindings to bypass
-this fence. A legacy untouched Direct Target at revision zero, with no Reverse
-routes or Jobs, can use the guarded schema rollback. For a Gateway that has
-revision-bound credentials, **keep the newer schema/application**; an older
-release requires a separately designed, backed-up, independently verified
-credential rebinding/downgrade procedure, or explicit Owner-authorized
-re-enrollment with a recoverable fallback. A successful schema rollback alone
-does not constitute an installed-release rollback or prove credential health.
+For the v3 application, database rollback is a verified pre-update database
+and matching application-key restore, not an in-place schema downgrade.
+Do not manually reset revisions, remove encrypted credentials or reuse prior
+Job bindings. A path change is not a credential disconnect.
 
 No tunnel/account/systemd/SSHd/firewall modifications are performed by the
 Gateway code or by this development PR.

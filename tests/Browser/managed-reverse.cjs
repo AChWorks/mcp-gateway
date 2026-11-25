@@ -61,7 +61,7 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
                 assert.equal(await page.locator('input[name="current_password"]').count(), 1);
                 assert.equal(await page.locator('form[action$="/settings/reverse-ssh/repair"]').count(), 0);
                 await page.goto(base + '/__browser__/managed-reverse-pending');
-                await page.getByRole('heading', { name: 'Retry pending Managed Reverse setup (advanced)' }).waitFor();
+                await page.getByRole('heading', { name: 'Reissue Managed Reverse route (advanced)' }).waitFor();
                 const reissue = page.locator('form[action$="/reverse-ssh/reissue"]');
                 const recovery = page.locator('details.target-help-details').filter({has: reissue});
                 assert.equal(await recovery.evaluate(el => el.open), false,

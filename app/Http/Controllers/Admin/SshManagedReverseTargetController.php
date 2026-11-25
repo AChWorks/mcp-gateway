@@ -7,7 +7,6 @@ use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Application\Targets\SshManagedReverseInstallCommand;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetConnectionState;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Support\TargetFormInput;
@@ -130,15 +129,15 @@ final class SshManagedReverseTargetController extends Controller
         ]);
         if (! hash_equals($target->target_id, $fields['confirm_target_id'])) {
             throw ValidationException::withMessages([
-                'confirm_target_id' => __('Type the exact Target ID to rotate an unverified enrollment.'),
+                'confirm_target_id' => __('Type the exact Target ID to rotate the managed network route.'),
             ]);
         }
         $password->confirm($request);
         $managed = SshManagedReverseEnrollment::query()
             ->where('target_record_id', $target->getKey())->firstOrFail();
-        if ($managed->state === 'revoked' || $target->getRawOriginal('connection_state') !== TargetConnectionState::Pending->value) {
+        if ($managed->state === 'revoked' || ! $target->usesReverseRoute()) {
             throw ValidationException::withMessages([
-                'target' => __('Only an unverified Pending Setup can be reissued. Revoke or inspect this Target first.'),
+                'target' => __('Only a selected, non-revoked managed Reverse route can be reissued.'),
             ]);
         }
         $installer->scriptDigest();

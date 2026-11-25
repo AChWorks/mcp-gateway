@@ -57,7 +57,7 @@ final readonly class SshFileRuntime
         $this->validatePath($path);
 
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config) use ($path): array {
+            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $_assertWriteAuthority, string $routeMode) use ($path): array {
                 $sftp->disableStatCache();
                 try {
                     $attributes = $sftp->lstat($path);
@@ -72,7 +72,7 @@ final readonly class SshFileRuntime
                 }
 
                 return [
-                    ...$this->context($ip, $config, $path),
+                    ...$this->context($ip, $config, $path, $routeMode),
                     'status' => 'completed',
                     'file' => $this->safeAttributes($attributes),
                 ];
@@ -112,7 +112,7 @@ final readonly class SshFileRuntime
         $nameLimit = $this->settings->sshFileLimits()['list_name_bytes'];
 
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config) use ($user, $target, $binding, $path, $limit, $nameLimit, $offset): array {
+            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $_assertWriteAuthority, string $routeMode) use ($user, $target, $binding, $path, $limit, $nameLimit, $offset): array {
                 $sftp->disableStatCache();
                 try {
                     $attributes = $sftp->stat($path);
@@ -135,7 +135,7 @@ final readonly class SshFileRuntime
                 $hasMore = $page['has_more'];
 
                 return [
-                    ...$this->context($ip, $config, $path),
+                    ...$this->context($ip, $config, $path, $routeMode),
                     'status' => 'completed',
                     'items' => $entries,
                     'count' => count($entries),
@@ -181,7 +181,7 @@ final readonly class SshFileRuntime
         $this->validatePrecondition($expectedSize, $expectedMtime);
 
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
+            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $_assertWriteAuthority, string $routeMode) use (
                 $path, $offset, $length, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
@@ -204,7 +204,7 @@ final readonly class SshFileRuntime
                 }
 
                 return [
-                    ...$this->context($ip, $config, $path),
+                    ...$this->context($ip, $config, $path, $routeMode),
                     'status' => 'completed',
                     'offset' => $offset,
                     'length' => strlen($bytes),
@@ -306,7 +306,7 @@ final readonly class SshFileRuntime
         }
 
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $assertWriteAuthority) use (
+            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $assertWriteAuthority, string $routeMode) use (
                 $path, $data, $overwrite, $expectedSize, $expectedMtime, $preserveOriginalOwner,
             ): array {
                 $sftp->disableStatCache();
@@ -538,7 +538,7 @@ final readonly class SshFileRuntime
                     }
 
                     return [
-                        ...$this->context($ip, $config, $path),
+                        ...$this->context($ip, $config, $path, $routeMode),
                         'status' => 'outcome_unknown',
                         'complete' => false,
                         'possible_remote_effect' => $preserveOriginalOwner ? $publicationAttempted : true,
@@ -556,7 +556,7 @@ final readonly class SshFileRuntime
                 }
 
                 return [
-                    ...$this->context($ip, $config, $path),
+                    ...$this->context($ip, $config, $path, $routeMode),
                     'status' => 'completed',
                     'complete' => true,
                     'bytes_written' => strlen($data),
@@ -570,7 +570,7 @@ final readonly class SshFileRuntime
             }, expectedTargetBinding: $expectedTargetBinding);
     }
 
-    /** @param Closure(SFTP,string,SshTargetConfig,Closure():void):array<string,mixed> $operation
+    /** @param Closure(SFTP,string,SshTargetConfig,Closure():void,string):array<string,mixed> $operation
      * @return array<string,mixed>
      */
     private function operate(
@@ -633,7 +633,7 @@ final readonly class SshFileRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
-            $route = $this->reverseRoutes->forTarget($fresh, $config);
+            $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $this->ensureFileDeadline($deadlineNs);
 
@@ -642,7 +642,7 @@ final readonly class SshFileRuntime
                 $material['secret'], $material['passphrase'],
                 function (SFTP $sftp, string $ip) use (
                     $user, $target, $permission, $config, $operation, $deadlineNs,
-                    $binding, $configId, $credentialId, $credentialDigest,
+                    $binding, $configId, $credentialId, $credentialDigest, $fresh,
                 ): array {
                     $currentTarget = Target::query()->whereKey($target->getKey())->first();
                     if ($currentTarget instanceof Target && $currentTarget->operations_paused) {
@@ -677,7 +677,7 @@ final readonly class SshFileRuntime
                     };
 
                     return $sftp->withTransferDeadline(
-                        $deadlineNs, fn (): array => $operation($sftp, $ip, $config, $assertWriteAuthority),
+                        $deadlineNs, fn (): array => $operation($sftp, $ip, $config, $assertWriteAuthority, $fresh->transportKind()),
                     );
                 },
                 $deadlineNs,
@@ -742,7 +742,7 @@ final readonly class SshFileRuntime
         if ($stillBound) {
             // Re-approve at each post-login and staged-write authority fence,
             // not only before opening the socket. No extra DB reads required.
-            $this->reverseRoutes->forTarget($target, $config);
+            $this->reverseRoutes->forTarget($target);
             $this->relayRoutes->sshRouteForTarget($target);
         }
 
@@ -953,11 +953,11 @@ final readonly class SshFileRuntime
     }
 
     /** @return array<string,mixed> */
-    private function context(string $ip, SshTargetConfig $config, string $path): array
+    private function context(string $ip, SshTargetConfig $config, string $path, string $routeMode): array
     {
         return [
-            'connected_ip' => ($config->route_mode ?? 'direct') === 'reverse' ? null : $ip,
-            'route_mode' => $config->route_mode ?? 'direct',
+            'connected_ip' => $routeMode !== 'direct' ? null : $ip,
+            'route_mode' => $routeMode,
             'registered_host' => $config->host,
             'port' => $config->port,
             'username' => $config->username,

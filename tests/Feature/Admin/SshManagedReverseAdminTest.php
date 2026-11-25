@@ -6,10 +6,10 @@ use App\Application\Access\UserAccessManager;
 use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Application\Targets\SshManagedReverseHostReadiness;
+use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
-use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -326,7 +326,7 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertSame('pending', SshManagedReverseEnrollment::query()->sole()->state);
         self::assertSame('pending', SshManagedReverseEnrollment::query()->sole()->target->connection_state->value);
         self::assertSame($administrator->id, SshManagedReverseEnrollment::query()->sole()->target->created_by_user_id);
-        self::assertSame('reverse', SshTargetConfig::query()->sole()->route_mode);
+        self::assertSame('reverse', Target::query()->sole()->transportKind());
         self::assertStringNotContainsString('BEGIN OPENSSH PRIVATE KEY', $reply->getContent());
         $this->get('/admin/targets/create/managed-reverse')
             ->assertRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed');
@@ -363,7 +363,7 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertSame('active', $enrollment->fresh()->state);
     }
 
-    public function test_owner_revocation_fences_keys_and_credential_and_blocks_bypass_by_disconnect(): void
+    public function test_owner_revocation_fences_control_key_but_preserves_login_credential(): void
     {
         $this->actingAs($this->user('owner'));
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
@@ -376,8 +376,7 @@ final class SshManagedReverseAdminTest extends TestCase
             $row->id, $started['token'], $this->publicKey(61),
         );
         $target = $row->target;
-        $this->post('/admin/targets/'.$target->target_id.'/disconnect')
-            ->assertSessionHasErrors('target');
+        $ciphertext = TargetCredential::query()->where('target_record_id', $target->id)->sole()->encrypted_payload;
         self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
         $url = '/admin/targets/'.$target->target_id.'/reverse-ssh/revoke';
         $this->post($url, [
@@ -391,9 +390,9 @@ final class SshManagedReverseAdminTest extends TestCase
         ])->assertAdminRedirect('/admin/targets/'.$target->target_id);
         self::assertSame('revoked', $row->fresh()->state);
         self::assertSame('', file_get_contents($this->keyFile));
-        self::assertSame('disconnected', $target->fresh()->connection_state->value);
-        self::assertSame(0, TargetCredential::query()->where('target_record_id', $target->id)->count());
-        self::assertSame(1, SshTargetConfig::query()->sole()->binding_revision);
+        self::assertSame('pending', $target->fresh()->connection_state->value);
+        self::assertSame($ciphertext, TargetCredential::query()->where('target_record_id', $target->id)->sole()->encrypted_payload);
+        self::assertSame(2, Target::query()->sole()->transport_revision);
         $this->post('/admin/targets/'.$target->target_id.'/disconnect')->assertRedirect();
     }
 
@@ -428,7 +427,7 @@ final class SshManagedReverseAdminTest extends TestCase
         $oldEnrollmentId = $row->id;
         $url = '/admin/targets/retry-target/reverse-ssh/reissue';
         $this->get('/admin/targets/retry-target')->assertOk()
-            ->assertSee('Retry pending Managed Reverse setup (advanced)')
+            ->assertSee('Reissue Managed Reverse route (advanced)')
             ->assertSee('Reissue one-use install command');
         $this->post($url, [
             'confirm_target_id' => 'wrong',
@@ -446,7 +445,7 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertStringContainsString($newEnrollment->id, $reply->getContent());
         self::assertNotSame($oldPort, $newEnrollment->listener_port);
         self::assertNull($row->fresh(), 'Old Target-side installation namespace must be retired.');
-        self::assertSame(1, $row->target->sshConfig->fresh()->binding_revision);
+        self::assertSame(2, $row->target->fresh()->transport_revision);
         self::assertSame(1, DB::table('ssh_reverse_managed_retired_ports')
             ->where('listener_port', $oldPort)->count());
         self::assertSame('pending', $newEnrollment->state);
@@ -482,7 +481,7 @@ final class SshManagedReverseAdminTest extends TestCase
         $this->post($url, $payload)->assertSessionHasErrors('target');
         self::assertSame('revoked', $started['enrollment']->fresh()->state);
         self::assertTrue($started['enrollment']->fresh()->publication_pending);
-        self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame(1, TargetCredential::query()->count());
         $this->get('/admin/targets/partial-revoke')->assertOk()
             ->assertSee('Retry host key revocation')
             ->assertSee('publication of the updated control key reader is still pending');
@@ -496,7 +495,7 @@ final class SshManagedReverseAdminTest extends TestCase
         $this->post($url, $payload)->assertRedirect();
         self::assertFalse($started['enrollment']->fresh()->publication_pending);
         self::assertSame('', file_get_contents($this->keyFile));
-        self::assertSame(1, $started['enrollment']->target->sshConfig->fresh()->binding_revision);
+        self::assertSame(2, $started['enrollment']->target->fresh()->transport_revision);
     }
 
     #[RunInSeparateProcess]

@@ -63,7 +63,7 @@ final readonly class SshVerificationState
             $currentConfig->forceFill([
                 'verification_attempt_id' => null,
                 // A local reverse listener is not the remote host IP.
-                'observed_peer_ip' => ($currentConfig->route_mode ?? 'direct') === 'reverse'
+                'observed_peer_ip' => $locked->usesReverseRoute()
                     || $locked->getAttribute('relay_record_id') !== null ? null : $peerIp,
                 'observed_at' => $now,
             ])->save();
@@ -74,6 +74,11 @@ final readonly class SshVerificationState
                 'connected_at' => $now,
                 'last_success_at' => $now,
             ])->save();
+            // Initial managed enrollment can provision a login key until
+            // its first successful authentication. Later tunnel reissues
+            // must not re-provision that key.
+            SshManagedReverseEnrollment::query()->where('target_record_id', $locked->getKey())
+                ->where('login_public_key', '!=', '')->update(['login_public_key' => '']);
             $this->activity->recordRequired(CorrelationId::current(), 'ssh-login-verify', 'success', $locked);
         });
     }
@@ -94,21 +99,29 @@ final readonly class SshVerificationState
                 return;
             }
 
-            $currentConfig->forceFill(['verification_attempt_id' => null])->save();
+            $currentConfig->forceFill([
+                'verification_attempt_id' => null,
+                ...($locked->last_tested_at === null ? ['observed_peer_ip' => null, 'observed_at' => null] : []),
+            ])->save();
             $now = now();
             // A newly enrolled managed Target is still Pending Setup when its
             // first handshake fails (e.g. the outbound tunnel is not up).
-            // Preserve the actionable diagnostic, but do not claim the
-            // onboarding was completed. Previously connected Targets retain
-            // the existing Error health semantics on later failures.
+            // Preserve the actionable diagnostic, but do not claim initial
+            // onboarding was completed. A transport-only failure does not
+            // invalidate an already verified login.
             $pendingSetup = $locked->getAttribute('connection_state') === TargetConnectionState::Pending
                 && SshManagedReverseEnrollment::query()
                     ->where('target_record_id', $locked->getKey())
                     ->where('state', '!=', 'revoked')
                     ->exists();
+            $transportFailure = in_array($reason, [
+                'relay_unavailable', 'reverse_route_not_approved', 'reverse_listener_unavailable',
+                'tcp_unreachable', 'egress_denied', 'ssh_handshake_failed',
+            ], true);
             $locked->forceFill([
-                'connection_state' => $pendingSetup
-                    ? TargetConnectionState::Pending : TargetConnectionState::Error,
+                'connection_state' => $pendingSetup ? TargetConnectionState::Pending
+                    : ($transportFailure && $locked->connection_state === TargetConnectionState::Connected
+                        ? TargetConnectionState::Connected : TargetConnectionState::Error),
                 'last_error_code' => $reason,
                 'last_tested_at' => $now,
                 'last_failure_at' => $now,

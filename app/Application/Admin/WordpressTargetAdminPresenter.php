@@ -21,7 +21,6 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
             detailActionsView: 'admin.targets.connectors.wordpress.detail-actions',
             recoveryActionsView: 'admin.targets.connectors.wordpress.recovery-actions',
             operationsView: 'admin.targets.connectors.wordpress.operations',
-            routeChangeHelp: __('Changing the route clears this Target’s local WordPress OAuth authorization and pending OAuth work. It does not revoke remote consent. Connect again through the new route. If remote revocation is also needed, manage the old authorization in WordPress separately.'),
         );
     }
 
@@ -85,6 +84,10 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
                 1 => __('Public metadata verified at :time. Not a live heartbeat or OAuth authentication.', ['time' => date(DATE_ATOM, $timestamp)]),
                 default => __('Public metadata check failed at :time. Check host and DNS compatibility.', ['time' => date(DATE_ATOM, $timestamp)]),
             };
+
+        if ((int) $target->transport_revision > 0 && $target->last_tested_at === null) {
+            $reachability = __('The current network route has not been checked. Earlier metadata observations are historical; authorization is unchanged.');
+        }
 
         $historic = $target->last_error_code !== null && $target->last_failure_at !== null
             && $timestamp !== null && $timestamp !== false

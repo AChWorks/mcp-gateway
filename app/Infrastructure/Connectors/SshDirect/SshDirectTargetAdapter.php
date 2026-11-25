@@ -14,26 +14,20 @@ use App\Application\Targets\TargetConnectorResult;
 use App\Application\Targets\TargetEndpointPreflight;
 use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetPreflightResult;
-use App\Application\Targets\TargetRelayBindingContributor;
 use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
-use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Models\User;
-use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
 use Illuminate\Contracts\Container\Container;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
-use JsonException;
 use RuntimeException;
 
 /** SSH-specific enrollment, trust and verification never become generic OAuth behavior. */
-final readonly class SshDirectTargetAdapter implements TargetBatchBindingContributor, TargetConnectorAdapter, TargetEnrollmentPreflight, TargetRelayBindingContributor
+final readonly class SshDirectTargetAdapter implements TargetBatchBindingContributor, TargetConnectorAdapter, TargetEnrollmentPreflight
 {
     public function __construct(private Container $container) {}
 
@@ -377,45 +371,6 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         return ['ssh' => SshTargetIdentity::safeMetadata($target)];
     }
 
-    public function prepareRelayBindingChange(Target $current, Target $next, bool $disabling): void
-    {
-        if (! $disabling && $current->getAttribute('connection_state') === TargetConnectionState::Pending) {
-            throw new TargetConnectorFailure(__('Settle the existing SSH connection transition before changing its route.'), 'connection_relay_id');
-        }
-        $config = SshTargetConfig::query()->where('target_record_id', $current->getKey())
-            ->lockForUpdate()->first();
-        if (! $disabling && (! $config instanceof SshTargetConfig || ($config->route_mode ?? 'direct') !== 'direct')) {
-            throw new TargetConnectorFailure(__('Revoke and switch the existing Reverse route to Direct before selecting a Relay.'), 'connection_relay_id');
-        }
-        $credential = TargetCredential::query()->where('target_record_id', $current->getKey())
-            ->where('connector_type', $this->type())->where('purpose', SshTargetVault::PURPOSE)
-            ->lockForUpdate()->first();
-        if ($config instanceof SshTargetConfig && $credential instanceof TargetCredential) {
-            $vault = $this->container->make(SshTargetVault::class);
-            $encrypted = null;
-            try {
-                $material = $vault->open($current, $config, $credential);
-                $encrypted = $vault->seal($next, $config, $material['secret'], $material['passphrase']);
-            } catch (RuntimeException|InvalidArgumentException|JsonException) {
-                if (! $disabling) {
-                    throw new TargetConnectorFailure(__('Stored SSH credentials cannot be safely rebound. Restore the original encryption key.'), 'connection_relay_id');
-                }
-                // Damaged credentials cannot prevent disabling a route. The
-                // old envelope is not valid for the new epoch.
-                $this->container->make(ActivityRecorder::class)->recordRequired(
-                    CorrelationId::current(), 'ssh-relay-credential-rebind', 'failure', $current, 'credential_invalid',
-                );
-            }
-            // Database persistence errors are not credential-format failures;
-            // let the enclosing transaction handle them.
-            if ($encrypted !== null) {
-                $credential->forceFill(['encrypted_payload' => $encrypted])->save();
-            }
-        }
-        DB::table('ssh_direct_target_configs')->where('target_record_id', $current->getKey())
-            ->update(['verification_attempt_id' => null, 'observed_peer_ip' => null, 'observed_at' => null]);
-    }
-
     public function hasPendingDeletion(Target $target): bool
     {
         // SSH has no OAuth callbacks/intents. Shared credential/state checks still apply.
@@ -424,9 +379,7 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
 
     private function verifiedConnectionMessage(Target $target, bool $initial): string
     {
-        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
-        $tunneled = $target->getAttribute('relay_record_id') !== null
-            || ($config instanceof SshTargetConfig && $config->route_mode === 'reverse');
+        $tunneled = $target->transportKind() !== 'direct';
 
         return $tunneled
             ? __('SSH end-host pinned key and login verified through the selected tunnel. The observed TCP peer is local; the remote Target IP was not independently observed. No command was run.')

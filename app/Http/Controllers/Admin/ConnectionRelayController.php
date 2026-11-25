@@ -94,7 +94,7 @@ final class ConnectionRelayController extends Controller
             }
 
             return back()->with('status', $changed
-                ? __('Relay disabled. Assigned Targets remain assigned; reconnect after re-enabling.')
+                ? __('Relay disabled. Assigned Targets and their authorization are preserved; re-enable the Relay or change the route to restore network access.')
                 : __('Relay was already disabled.'));
         }
 
@@ -110,7 +110,7 @@ final class ConnectionRelayController extends Controller
                 throw ValidationException::withMessages(['relay_revision' => __('Relay revision is exhausted.')]);
             }
             if (DB::table('targets')->where('relay_record_id', $current->getKey())
-                ->where('relay_binding_revision', '>=', 4294967295)->exists()) {
+                ->where('transport_revision', '>=', 4294967295)->exists()) {
                 throw ValidationException::withMessages([
                     'relay' => __('Cannot enable this Relay while an assigned Target binding revision is exhausted.'),
                 ]);

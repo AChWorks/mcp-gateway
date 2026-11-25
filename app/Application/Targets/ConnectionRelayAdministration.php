@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\DB;
 final readonly class ConnectionRelayAdministration
 {
     public function __construct(
-        private ConnectionRelayTargetBinding $bindings,
+        private TargetTransportBinding $bindings,
         private ActivityRecorder $activity,
     ) {}
 

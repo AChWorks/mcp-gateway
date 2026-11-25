@@ -13,33 +13,27 @@ use App\Domain\Targets\Target;
  */
 final class SshReverseRoutePolicy
 {
-    public function forTarget(Target $target, SshTargetConfig $config): ?SshReverseRoute
+    public function forTarget(Target $target): ?SshReverseRoute
     {
-        if ($target->connector_type !== 'ssh_direct'
-            || (string) $config->target_record_id !== (string) $target->getKey()) {
-            throw new SshTargetConnectionException('target_changed');
-        }
-
         $managed = SshManagedReverseEnrollment::query()->where('target_id', $target->target_id)->first();
         if ($managed && ((string) $managed->target_record_id !== (string) $target->getKey()
-            || ($managed->state !== 'revoked' && ($config->route_mode ?? 'direct') !== 'reverse'))) {
+            || ($managed->state !== 'revoked' && ! $target->usesReverseRoute()))) {
             // No silent Direct fallback from a live or pending managed
             // tunnel, even if an internal caller bypassed the Admin form.
             throw new SshTargetConnectionException('reverse_route_not_approved');
         }
 
         return $this->approve(
-            (string) $target->target_id, (string) ($config->route_mode ?? 'direct'),
-            $config->reverse_listener_port, $config->reverse_tunnel_identity,
+            (string) $target->target_id, $target->usesReverseRoute() ? 'reverse' : 'direct',
+            $target->reverse_listener_port, $target->reverse_tunnel_identity,
         );
     }
 
     public function assertPortAvailable(SshReverseRoute $route, ?string $existingTargetRecordId = null): void
     {
-        $query = SshTargetConfig::query()->where('route_mode', 'reverse')
-            ->where('reverse_listener_port', $route->listenerPort);
+        $query = Target::query()->where('reverse_listener_port', $route->listenerPort);
         if ($existingTargetRecordId !== null) {
-            $query->where('target_record_id', '!=', $existingTargetRecordId);
+            $query->where('id', '!=', $existingTargetRecordId);
         }
         if ($query->exists()) {
             throw new SshTargetConnectionException('reverse_listener_conflict');

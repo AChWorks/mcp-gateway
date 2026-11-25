@@ -2,7 +2,6 @@
 
 namespace App\Infrastructure\Connectors\ArvanCloud;
 
-use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\TargetConfigurationRevision;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
@@ -11,6 +10,7 @@ use App\Application\Targets\TargetEndpointPreflight;
 use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetOperationGate;
 use App\Application\Targets\TargetPreflightResult;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -40,7 +40,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         private ApiHttpTransport $transport,
         private ActivityRecorder $activity,
         private TargetEndpointPreflight $preflight,
-        private ConnectionRelayTargetBinding $bindings,
+        private TargetTransportBinding $bindings,
         private ConnectionRelayRoutes $relays,
     ) {}
 
@@ -303,7 +303,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     private function assertReachabilityStillCurrent(Target $target, string $base): void
     {
         if (TargetOperationGate::isPaused($target)
-            || (int) Target::query()->whereKey($target->getKey())->value('relay_binding_revision') !== (int) $target->relay_binding_revision
+            || (int) Target::query()->whereKey($target->getKey())->value('transport_revision') !== (int) $target->transport_revision
             || ! hash_equals($base, $this->config($target)->base_url)) {
             throw new TargetConnectorFailure(
                 __('The API endpoint or route changed, or the Target was paused during the reachability check. Reload and check the current Target.'),
@@ -359,7 +359,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 }
                 $currentConfig = $this->config($locked);
                 $currentCredential = $this->credential($locked);
-                if ((int) $locked->relay_binding_revision !== (int) $target->relay_binding_revision
+                if ((int) $locked->transport_revision !== (int) $target->transport_revision
                     || ! hash_equals($config->base_url, $currentConfig->base_url)
                     || $config->probe_path !== $currentConfig->probe_path
                     || $config->spec_url !== $currentConfig->spec_url

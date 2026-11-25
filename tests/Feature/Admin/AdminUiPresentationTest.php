@@ -99,7 +99,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringNotContainsString('Registered SSH/connector details and diagnostic history', $targetSource);
         self::assertStringContainsString('<summary><h2 id="target-remove-title" class="admin-disclosure-heading">', $targetSource);
         self::assertStringContainsString('<summary><h3 class="admin-disclosure-heading">', $sshSource);
-        self::assertStringContainsString('Retry pending Managed Reverse setup (advanced)', $sshSource);
+        self::assertStringContainsString('Reissue Managed Reverse route (advanced)', $sshSource);
         self::assertStringContainsString('Revoke managed Reverse SSH (destructive)', $sshSource);
         self::assertStringContainsString("old('managed_reverse_action') === 'reissue'", $sshSource);
         self::assertStringContainsString("old('managed_reverse_action') === 'revoke'", $sshSource);

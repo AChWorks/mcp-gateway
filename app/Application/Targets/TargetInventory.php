@@ -33,9 +33,9 @@ final class TargetInventory
         'sshc.username as ssh_cfg_username',
         'sshc.observed_peer_ip as ssh_cfg_peer',
         'sshc.observed_at as ssh_cfg_observed',
-        'sshc.route_mode as ssh_cfg_route_mode',
-        'sshc.reverse_listener_port as ssh_cfg_reverse_port',
-        'sshc.reverse_tunnel_identity as ssh_cfg_tunnel_identity',
+        'targets.relay_record_id',
+        'targets.reverse_listener_port',
+        'targets.reverse_tunnel_identity',
     ];
 
     /**
@@ -91,6 +91,7 @@ final class TargetInventory
                     'targets.connector_type',
                     'targets.connection_state',
                     'targets.operations_paused',
+                    'targets.transport_revision',
                     'targets.last_error_code',
                     'targets.last_tested_at',
                     'targets.connected_at',
@@ -155,6 +156,9 @@ final class TargetInventory
                     'targets.connector_type',
                     'targets.connection_state',
                     'targets.operations_paused',
+                    'targets.transport_revision',
+                    'targets.last_tested_at',
+                    'targets.last_error_code',
                     ...self::SSH_COLUMNS,
                 ]),
             $user,
@@ -270,14 +274,10 @@ final class TargetInventory
                     'username' => $target->getAttribute('ssh_cfg_username'),
                     'observed_peer_ip' => $target->getAttribute('ssh_cfg_peer'),
                     'observed_at' => $target->getAttribute('ssh_cfg_observed'),
-                    'route_mode' => $target->getAttribute('ssh_cfg_route_mode') ?? 'direct',
-                    'reverse_listener_port' => $target->getAttribute('ssh_cfg_reverse_port'),
-                    'reverse_tunnel_identity' => $target->getAttribute('ssh_cfg_tunnel_identity'),
                 ]);
             }
             $target->setRelation('sshConfig', $config);
-            foreach (['ssh_cfg_host', 'ssh_cfg_port', 'ssh_cfg_username', 'ssh_cfg_peer', 'ssh_cfg_observed',
-                'ssh_cfg_route_mode', 'ssh_cfg_reverse_port', 'ssh_cfg_tunnel_identity'] as $column) {
+            foreach (['ssh_cfg_host', 'ssh_cfg_port', 'ssh_cfg_username', 'ssh_cfg_peer', 'ssh_cfg_observed'] as $column) {
                 $target->offsetUnset($column);
             }
         }

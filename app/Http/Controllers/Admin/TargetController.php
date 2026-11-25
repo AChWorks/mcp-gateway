@@ -5,13 +5,13 @@ namespace App\Http\Controllers\Admin;
 use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Admin\TargetConnectorAdmin;
-use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetInventory;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -328,6 +328,8 @@ final class TargetController extends Controller
 
         $canRemoveSafely = ! TargetCredential::query()->where('target_record_id', $id)->exists()
             && ! $connectors->hasPendingDeletion($target)
+            && ! SshManagedReverseEnrollment::query()->where('target_record_id', $id)
+                ->where(static fn ($query) => $query->where('state', '!=', 'revoked')->orWhere('publication_pending', true))->exists()
             && ! in_array($target->getAttribute('connection_state'), [
                 TargetConnectionState::Connected,
                 TargetConnectionState::Pending,
@@ -339,6 +341,7 @@ final class TargetController extends Controller
 
         return view('admin.targets.show', [
             'target' => $target,
+            'relayUnavailable' => $target->relay_record_id !== null && ! ConnectionRelay::query()->whereKey($target->relay_record_id)->where('enabled', true)->exists(),
             'connectorUi' => $presenter?->definition(),
             'canRemoveSafely' => $canRemoveSafely,
             ...$details,
@@ -348,7 +351,7 @@ final class TargetController extends Controller
 
     public function edit(
         Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin,
-        ConnectionRelayRoutes $relays, ConnectionRelayTargetBinding $relayBindings,
+        ConnectionRelayRoutes $relays, TargetTransportBinding $relayBindings,
     ): View {
         $canEdit = Gate::allows(GatewayPermission::TargetsUpdate->value, $target);
         $canConfigure = Gate::allows(GatewayPermission::TargetsConfigure->value, $target);
@@ -368,7 +371,7 @@ final class TargetController extends Controller
             'selectedRelay' => ! $canConfigure || $target->getAttribute('relay_record_id') === null ? null
                 : ConnectionRelay::query()
                     ->find($target->getAttribute('relay_record_id')),
-            'routeRevision' => $adapter !== null ? $relayBindings->revision($target) : null,
+            'routeRevision' => $canConfigure ? $relayBindings->revision($target) : null,
             ...$details,
         ]);
     }

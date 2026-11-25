@@ -63,7 +63,7 @@ final readonly class WpAiBridgeMcpClient
      * MCP catalog without invoking credential refresh or generation rotation.
      * Metadata reachability alone is never accepted as authorization proof.
      *
-     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int}  $routing
+     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int}  $routing
      */
     public function verifyExistingAuthorization(array $routing, string $correlationId): void
     {
@@ -165,7 +165,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /**
-     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int}  $routing
+     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int}  $routing
      * @param  array<string,string>|null  $sessionHeaders
      * @param  array<mixed,mixed>|null  $contract
      *
@@ -250,7 +250,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /**
-     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int}  $routing
+     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int}  $routing
      * @param  array<string, mixed>  $input
      */
     private function callAbilityOnRouting(
@@ -283,7 +283,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /**
-     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int}  $routing
+     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int}  $routing
      * @param  callable(string,array<string,string>):mixed  $operation
      */
     private function withLegacySession(array $routing, string $correlationId, callable $operation, ?OperationTiming $timing = null): mixed
@@ -322,12 +322,12 @@ final readonly class WpAiBridgeMcpClient
         }
     }
 
-    /** @param array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int} $routing */
+    /** @param array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int} $routing */
     private function assertCurrentRouting(array $routing): void
     {
         try {
             $this->relayRoutes->httpRouteAtEpoch(
-                $routing['target_record_id'], $routing['relay_binding_revision'],
+                $routing['target_record_id'], $routing['transport_revision'],
                 $routing['relay'], true,
             );
         } catch (OutboundRequestException $exception) {
@@ -338,7 +338,7 @@ final readonly class WpAiBridgeMcpClient
         }
     }
 
-    /** @return array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int} */
+    /** @return array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int} */
     private function routingContext(Target $target, ?OperationTiming $timing = null): array
     {
         if ($target->connector_type !== 'wp_ai_bridge') {

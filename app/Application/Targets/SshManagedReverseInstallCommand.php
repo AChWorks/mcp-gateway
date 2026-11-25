@@ -41,7 +41,7 @@ final class SshManagedReverseInstallCommand
             '--token', $token,
             '--host-key-b64', base64_encode((string) $config->pinned_host_key),
             '--target-port', (string) $config->port,
-            '--target-user', (string) $config->username,
+            ...($enrollment->login_public_key !== '' ? ['--target-user', (string) $config->username] : []),
         ];
         $quoted = implode(' ', array_map('escapeshellarg', $args));
         $url = escapeshellarg($gateway.'/reverse-ssh/installer/v1');

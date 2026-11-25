@@ -22,16 +22,17 @@ final class SshTargetIdentity
             return null;
         }
         $endpoint = $config->endpoint();
-        $observed = $config->observed_peer_ip;
+        $currentRoute = (int) $target->transport_revision === 0 || $target->last_tested_at !== null;
+        $observed = $currentRoute ? $config->observed_peer_ip : null;
         $state = $target->getAttribute('connection_state');
-        $seenAt = $config->getAttribute('observed_at');
+        $seenAt = $currentRoute ? $config->getAttribute('observed_at') : null;
         $literal = $endpoint->configuredIp();
         $ip = $observed ?? $literal;
-        $reverse = ($config->route_mode ?? 'direct') === 'reverse';
+        $reverse = $target->usesReverseRoute();
         $ipStatus = $reverse && $seenAt !== null
             ? ($state === TargetConnectionState::Connected ? 'reverse_route_verified' : 'reverse_route_stale')
             : ($observed !== null
-                ? ($state === TargetConnectionState::Connected ? 'last_verified' : 'stale')
+                ? ($state === TargetConnectionState::Connected && $target->last_error_code === null ? 'last_verified' : 'stale')
                 : ($literal !== null ? 'registered_unverified' : 'not_yet_verified'));
 
         $host = $ip ?? $endpoint->host;
@@ -45,9 +46,9 @@ final class SshTargetIdentity
             'ip_status' => $ipStatus,
             'observed_at' => $seenAt instanceof DateTimeInterface ? $seenAt->format(DATE_ATOM) : null,
             'destination_label' => $endpoint->username.'@'.$displayHost.':'.$endpoint->port,
-            'route_mode' => $reverse ? 'reverse' : 'direct',
-            'reverse_listener_port' => $reverse ? $config->reverse_listener_port : null,
-            'reverse_tunnel_identity' => $reverse ? $config->reverse_tunnel_identity : null,
+            'route_mode' => $target->transportKind(),
+            'reverse_listener_port' => $reverse ? $target->reverse_listener_port : null,
+            'reverse_tunnel_identity' => $reverse ? $target->reverse_tunnel_identity : null,
         ];
     }
 }

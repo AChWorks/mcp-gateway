@@ -25,6 +25,7 @@ final readonly class SshTargetReconfiguration
         private SshTargetVault $vault,
         private ActivityRecorder $activity,
         private SshReverseRoutePolicy $reverseRoutes,
+        private TargetTransportBinding $transportBindings,
     ) {}
 
     public function revision(Target $target): string
@@ -46,16 +47,14 @@ final readonly class SshTargetReconfiguration
             throw new TargetConnectorFailure(__('Check the SSH host, port, user and independently verified server public host key.'), 'ssh_host');
         }
 
-        try {
-            $route = $this->reverseRoutes->approve(
-                (string) $target->target_id, (string) ($input['ssh_route_mode'] ?? 'direct'),
-                $input['ssh_reverse_port'] ?? null, $input['ssh_tunnel_identity'] ?? null,
-            );
-        } catch (SshTargetConnectionException) {
-            throw new TargetConnectorFailure(
-                __('The selected reverse route is not in the NL operator approval list for this exact Target, port and tunnel identity.'),
-                'ssh_reverse_port', 'reverse_route_not_approved',
-            );
+        $routeMode = (string) ($input['ssh_route_mode'] ?? 'direct');
+        $reversePort = isset($input['ssh_reverse_port']) && $input['ssh_reverse_port'] !== ''
+            ? (int) $input['ssh_reverse_port'] : null;
+        $tunnelIdentity = $input['ssh_tunnel_identity'] ?? null;
+        $tunnelIdentity = $tunnelIdentity === '' ? null : $tunnelIdentity;
+        if (! in_array($routeMode, ['direct', 'reverse'], true)
+            || ($routeMode === 'direct' && ($reversePort !== null || $tunnelIdentity !== null))) {
+            throw new TargetConnectorFailure(__('Select a valid SSH network route.'), 'ssh_route_mode');
         }
 
         $method = (string) $input['ssh_auth_method'];
@@ -75,37 +74,37 @@ final readonly class SshTargetReconfiguration
 
         return DB::transaction(function () use (
             $target, $input, $endpoint, $pin, $method, $password, $key, $passphrase,
-            $route,
+            $routeMode, $reversePort, $tunnelIdentity,
         ): bool {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
             $config = SshTargetConfig::query()->where('target_record_id', $locked->getKey())->lockForUpdate()->firstOrFail();
-            // Managed route authorization is an independent security binding,
-            // not merely editable form fields. Switching it to Direct or
-            // swapping Target login credentials while the control key is live
-            // would orphan the authorized SSHD listener/key or silently
-            // invalidate a managed install. Require explicit route revocation
-            // before using the existing audited credential rotation path.
-            if (SshManagedReverseEnrollment::query()
-                ->where('target_record_id', $locked->getKey())
-                ->where('state', '!=', 'revoked')->exists()) {
+            $routeChanged = $routeMode !== ($locked->usesReverseRoute() ? 'reverse' : 'direct')
+                || $reversePort !== $locked->reverse_listener_port
+                || $tunnelIdentity !== $locked->reverse_tunnel_identity;
+            $managed = SshManagedReverseEnrollment::query()
+                ->where('target_record_id', $locked->getKey())->first();
+            // A managed listener forwards to the originally registered SSH
+            // port. Revoke the actual old tunnel before changing that path
+            // or port; ordinary credential changes do not affect it.
+            if ($managed !== null && ($managed->state !== 'revoked' || $managed->publication_pending)
+                && ($routeChanged || $endpoint->port !== $config->port)) {
                 throw new TargetConnectorFailure(
-                    __('Revoke the managed Reverse SSH enrollment before editing the SSH endpoint, trust, route or login credentials.'),
+                    __('Reconcile and revoke the old managed Reverse route before changing its network path or forwarded port. Stored SSH login credentials are independent.'),
                     'configuration', 'managed_reverse_reconfiguration_requires_revocation',
                 );
             }
-            if ($route !== null && $locked->getAttribute('relay_record_id') !== null) {
-                throw new TargetConnectorFailure(
-                    __('A shared Connection Relay and an existing Reverse SSH route cannot be active together. Unbind the Relay first.'),
-                    'ssh_route_mode', 'relay_reverse_conflict',
-                );
-            }
-            if ($route !== null) {
+            if ($routeChanged && $routeMode === 'reverse') {
                 try {
-                    $this->reverseRoutes->assertPortAvailable($route, (string) $locked->getKey());
-                } catch (SshTargetConnectionException) {
+                    $route = $this->reverseRoutes->approve(
+                        (string) $locked->target_id, $routeMode, $reversePort, $tunnelIdentity,
+                    );
+                    if ($route !== null) {
+                        $this->reverseRoutes->assertPortAvailable($route, (string) $locked->getKey());
+                    }
+                } catch (SshTargetConnectionException $exception) {
                     throw new TargetConnectorFailure(
-                        __('The approved NL reverse listener is already enrolled for another Target. Assign a distinct loopback port and operator identity.'),
-                        'ssh_reverse_port', 'reverse_listener_conflict',
+                        __('The selected Reverse listener or tunnel identity is not independently approved or is already assigned.'),
+                        'ssh_reverse_port', $exception->reason,
                     );
                 }
             }
@@ -118,93 +117,99 @@ final readonly class SshTargetReconfiguration
                 throw new TargetConnectorFailure(__('The SSH Target changed since this form was opened. Reload and review the current settings.'), 'configuration_revision');
             }
 
-            $bindingChanged = $endpoint->host !== $config->host
+            $identityChanged = $endpoint->host !== $config->host
                 || $endpoint->port !== $config->port
                 || $endpoint->username !== $config->username
                 || $pin->canonicalLine() !== $config->pinned_host_key
-                || $method !== $config->auth_method
-                || ($route === null ? 'direct' : 'reverse') !== ($config->route_mode ?? 'direct')
-                || $route?->listenerPort !== $config->reverse_listener_port
-                || $route?->tunnelIdentity !== $config->reverse_tunnel_identity;
+                || $method !== $config->auth_method;
+            $replacement = $method === 'password' ? $password : $key;
+            $loginChanged = $identityChanged || $replacement !== null;
+            $bindingChanged = $loginChanged || $routeChanged;
             $currentBindingRevision = (int) ($config->binding_revision ?? 0);
-            if ($bindingChanged && $currentBindingRevision >= 4294967295) {
+            if ($loginChanged && $currentBindingRevision >= 4294967295) {
                 throw new TargetConnectorFailure(
                     __('The SSH binding revision is exhausted; do not reuse an older route or historical Job identity.'),
                     'configuration_revision',
                 );
             }
-            $nextBindingRevision = $currentBindingRevision + ($bindingChanged ? 1 : 0);
+            $nextBindingRevision = $currentBindingRevision + ($loginChanged ? 1 : 0);
 
-            $replacement = $method === 'password' ? $password : $key;
-            if (! $bindingChanged && $replacement === null && $credential instanceof TargetCredential) {
+            if (! $bindingChanged) {
                 return false;
             }
-            if ($method !== $config->auth_method && $replacement === null) {
-                throw new TargetConnectorFailure(__('Changing the login method requires the new password or private key.'), 'ssh_auth_method');
-            }
-            // A delegated editor must not redirect a stored password to a new
-            // server identity or login account. Port/route/hostname changes
-            // that retain the exact verified key and username may retain it.
-            if ($replacement === null && ($pin->canonicalLine() !== $config->pinned_host_key
-                || $endpoint->username !== $config->username)) {
-                throw new TargetConnectorFailure(__('Changing the verified server key or SSH username requires a new login credential.'), 'ssh_auth_method');
-            }
-            if (! $credential instanceof TargetCredential && $replacement === null) {
-                throw new TargetConnectorFailure(__('This Target has no SSH credential. Enter a new password or private key.'), 'ssh_auth_method');
-            }
-
-            $material = null;
-            if ($credential instanceof TargetCredential) {
-                try {
-                    $material = $this->vault->open($locked, $config, $credential);
-                } catch (Throwable) {
-                    // Never overwrite an unreadable record-bound encrypted secret
-                    // and pretend that an unknown encryption-key incident is benign.
-                    throw new TargetConnectorFailure(__('Existing SSH encrypted credentials cannot be verified. Restore the matching Gateway encryption key before updating.'), 'ssh_auth_method');
+            if ($loginChanged) {
+                if ($method !== $config->auth_method && $replacement === null) {
+                    throw new TargetConnectorFailure(__('Changing the login method requires the new password or private key.'), 'ssh_auth_method');
                 }
-            }
-            $secret = $replacement ?? $material['secret'];
-            $newPassphrase = $method === 'private_key'
-                ? ($replacement !== null ? $passphrase : ($material['passphrase'] ?? null))
-                : null;
-
-            if ($method === 'private_key' && $replacement !== null) {
-                try {
-                    PublicKeyLoader::loadPrivateKey($secret, $newPassphrase);
-                } catch (Throwable) {
-                    throw new TargetConnectorFailure(__('The new SSH private key or passphrase is invalid.'), 'ssh_private_key');
+                // A delegated editor must not redirect a stored password to a new
+                // server identity or login account. Port/route/hostname changes
+                // that retain the exact verified key and username may retain it.
+                if ($replacement === null && ($pin->canonicalLine() !== $config->pinned_host_key
+                    || $endpoint->username !== $config->username)) {
+                    throw new TargetConnectorFailure(__('Changing the verified server key or SSH username requires a new login credential.'), 'ssh_auth_method');
                 }
-            }
+                if (! $credential instanceof TargetCredential && $replacement === null) {
+                    throw new TargetConnectorFailure(__('This Target has no SSH credential. Enter a new password or private key.'), 'ssh_auth_method');
+                }
 
-            // The vault seals against the NEW exact endpoint/auth/host-pin
-            // binding. Do not reuse ciphertext from the old endpoint.
-            $next = new SshTargetConfig([
-                'target_record_id' => $locked->getKey(),
-                'host' => $endpoint->host,
-                'port' => $endpoint->port,
-                'username' => $endpoint->username,
-                'auth_method' => $method,
-                'pinned_host_key' => $pin->canonicalLine(),
-                'route_mode' => $route === null ? 'direct' : 'reverse',
-                'reverse_listener_port' => $route?->listenerPort,
-                'reverse_tunnel_identity' => $route?->tunnelIdentity,
-                'binding_revision' => $nextBindingRevision,
-            ]);
-            try {
-                $encrypted = $this->vault->seal($locked, $next, $secret, $newPassphrase);
-            } catch (RuntimeException) {
-                throw new TargetConnectorFailure(__('The new SSH credential is invalid.'), 'ssh_private_key');
-            }
+                $material = null;
+                if ($credential instanceof TargetCredential) {
+                    try {
+                        $material = $this->vault->open($locked, $config, $credential);
+                    } catch (Throwable) {
+                        // Never overwrite an unreadable record-bound encrypted secret
+                        // and pretend that an unknown encryption-key incident is benign.
+                        throw new TargetConnectorFailure(__('Existing SSH encrypted credentials cannot be verified. Restore the matching Gateway encryption key before updating.'), 'ssh_auth_method');
+                    }
+                }
+                $secret = $replacement ?? $material['secret'];
+                $newPassphrase = $method === 'private_key'
+                    ? ($replacement !== null ? $passphrase : ($material['passphrase'] ?? null))
+                    : null;
 
-            if ($credential instanceof TargetCredential) {
-                $credential->forceFill(['encrypted_payload' => $encrypted])->save();
-            } else {
-                TargetCredential::query()->create([
+                if ($method === 'private_key' && $replacement !== null) {
+                    try {
+                        PublicKeyLoader::loadPrivateKey($secret, $newPassphrase);
+                    } catch (Throwable) {
+                        throw new TargetConnectorFailure(__('The new SSH private key or passphrase is invalid.'), 'ssh_private_key');
+                    }
+                }
+
+                // The vault seals against the NEW exact endpoint/auth/host-pin
+                // binding. Do not reuse ciphertext from the old endpoint.
+                $next = new SshTargetConfig([
                     'target_record_id' => $locked->getKey(),
-                    'connector_type' => 'ssh_direct',
-                    'purpose' => SshTargetVault::PURPOSE,
-                    'encrypted_payload' => $encrypted,
+                    'host' => $endpoint->host,
+                    'port' => $endpoint->port,
+                    'username' => $endpoint->username,
+                    'auth_method' => $method,
+                    'pinned_host_key' => $pin->canonicalLine(),
+                    'binding_revision' => $nextBindingRevision,
                 ]);
+                try {
+                    $encrypted = $this->vault->seal($locked, $next, $secret, $newPassphrase);
+                } catch (RuntimeException) {
+                    throw new TargetConnectorFailure(__('The new SSH credential is invalid.'), 'ssh_private_key');
+                }
+
+                if ($credential instanceof TargetCredential) {
+                    $credential->forceFill(['encrypted_payload' => $encrypted])->save();
+                } else {
+                    TargetCredential::query()->create([
+                        'target_record_id' => $locked->getKey(),
+                        'connector_type' => 'ssh_direct',
+                        'purpose' => SshTargetVault::PURPOSE,
+                        'encrypted_payload' => $encrypted,
+                    ]);
+                }
+
+                SshManagedReverseEnrollment::query()->where('target_record_id', $locked->getKey())
+                    ->where('login_public_key', '!=', '')->update(['login_public_key' => '']);
+
+            }
+
+            if ($routeChanged) {
+                $this->transportBindings->changeReverseLocked($locked, $reversePort, $tunnelIdentity);
             }
 
             // Config immutability is intentional outside this single audited,
@@ -216,16 +221,13 @@ final readonly class SshTargetReconfiguration
                 'username' => $endpoint->username,
                 'auth_method' => $method,
                 'pinned_host_key' => $pin->canonicalLine(),
-                'route_mode' => $route === null ? 'direct' : 'reverse',
-                'reverse_listener_port' => $route?->listenerPort,
-                'reverse_tunnel_identity' => $route?->tunnelIdentity,
                 'binding_revision' => $nextBindingRevision,
                 'verification_attempt_id' => null,
                 'observed_peer_ip' => null,
                 'observed_at' => null,
                 'updated_at' => now(),
             ]);
-            $locked->forceFill([
+            $locked->forceFill($loginChanged ? [
                 'connection_state' => TargetConnectionState::Disconnected,
                 'last_error_code' => null,
                 'last_tested_at' => null,
@@ -233,9 +235,9 @@ final readonly class SshTargetReconfiguration
                 'last_success_at' => null,
                 'last_failure_at' => null,
                 'last_failure_code' => null,
-            ])->save();
+            ] : ['last_tested_at' => null])->save();
             $this->activity->recordRequired(
-                CorrelationId::current(), 'ssh-target-reconfigure', 'success', $locked,
+                CorrelationId::current(), $loginChanged ? 'ssh-target-reconfigure' : 'ssh-target-route-reconfigure', 'success', $locked,
             );
 
             return true;

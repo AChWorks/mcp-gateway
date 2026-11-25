@@ -9,7 +9,7 @@ use App\Application\Mcp\TargetFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
-use App\Application\Targets\ConnectionRelayTargetBinding;
+use App\Application\Targets\TargetTransportBinding;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
@@ -240,8 +240,9 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
                 array_column($this->sessionTraffic, 'method'));
             self::assertSame($phase === 'initialize' ? [] : ['wp-ai-bridge/abilities-read'],
                 array_column($this->downstream, 'ability'));
-            self::assertSame(1, $target->fresh()->relay_binding_revision);
-            $this->assertDatabaseMissing('target_credentials', ['target_record_id' => $target->getKey()]);
+            self::assertSame(1, $target->fresh()->transport_revision);
+            $this->assertDatabaseHas('target_credentials', ['target_record_id' => $target->getKey()]);
+            self::assertTrue(app(WordpressTargetMcpToolHandlers::class)->execute($owner, $phase, 'demo/read', [])['ok']);
         }
     }
 
@@ -252,7 +253,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         }
         $this->rebindDuring = null;
         $target = Target::query()->where('target_id', explode('.', $host)[0])->firstOrFail();
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         self::assertTrue($bindings->change($target, $bindings->revision($target), 'fixture-route'));
     }
 

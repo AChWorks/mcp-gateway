@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
-use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\TargetConnectorFailure;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
@@ -19,7 +19,7 @@ final class TargetConnectionRelayController extends Controller
 {
     public function update(
         Request $request, Target $target, AdministratorPasswordConfirmation $password,
-        ConnectionRelayTargetBinding $bindings,
+        TargetTransportBinding $bindings,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::TargetsConfigure->value, $target);
 
@@ -44,7 +44,7 @@ final class TargetConnectionRelayController extends Controller
 
         return redirect()->route('admin.targets.edit', ['target' => $target->target_id])
             ->with('status', $changed
-                ? __('Target connection route changed. The old route is fenced; reconnect and independently verify the remote Target before running operations.')
+                ? __('Target connection route changed. Stored authorization is preserved; new operations use the selected route.')
                 : __('No Target connection route change was necessary.'));
     }
 }

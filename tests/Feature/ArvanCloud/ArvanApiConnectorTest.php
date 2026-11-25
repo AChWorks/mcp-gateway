@@ -5,8 +5,8 @@ namespace Tests\Feature\ArvanCloud;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Targets\ArvanApiOperations;
 use App\Application\Targets\ConnectionRelayAdministration;
-use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\TargetConnectorFailure;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -580,7 +580,7 @@ final class ArvanApiConnectorTest extends TestCase
             'connection_relay_id' => 'fixture-relay',
         ], $owner);
         self::assertSame($relay->id, $target->relay_record_id);
-        self::assertSame(1, $target->relay_binding_revision);
+        self::assertSame(1, $target->transport_revision);
         $this->get('/admin/targets/arvan-relayed/edit')
             ->assertOk()->assertSee('Network routing')->assertSee('value="fixture-relay" selected', false);
 
@@ -621,12 +621,12 @@ final class ArvanApiConnectorTest extends TestCase
         ]])['ok']);
         self::assertSame(array_fill(0, 9, 'socks5://127.0.0.1:46081'), $proxies);
 
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         $target->refresh();
         $ciphertext = TargetCredential::query()->sole()->encrypted_payload;
         self::assertTrue($bindings->change($target, $bindings->revision($target), null));
         $target->refresh();
-        self::assertSame(TargetConnectionState::Disconnected, $target->connection_state);
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
         self::assertSame($ciphertext, TargetCredential::query()->sole()->encrypted_payload);
         self::assertTrue($api->execute($owner, $target->target_id, 'GET', '/domains')['ok']);
         self::assertSame('', end($proxies));
@@ -640,8 +640,8 @@ final class ArvanApiConnectorTest extends TestCase
         } catch (TargetConnectorFailure $exception) {
             self::assertSame('probe_stale', $exception->reason);
         }
-        self::assertSame(TargetConnectionState::Error, $target->fresh()->connection_state);
-        self::assertSame('relay_disabled', $target->fresh()->last_error_code);
+        self::assertSame(TargetConnectionState::Connected, $target->fresh()->connection_state);
+        self::assertNull($target->fresh()->last_error_code);
         $count = count($proxies);
         self::assertFalse($api->catalog($owner, $target->target_id)['ok']);
         self::assertFalse($api->execute($owner, $target->target_id, 'GET', '/domains')['ok']);

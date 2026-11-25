@@ -206,13 +206,13 @@ Route::middleware(['web', 'auth'])->get('/__browser__/relay-unavailable-target',
             'connection_state' => TargetConnectionState::Disconnected,
         ]);
         DB::table('targets')->where('id', $target->getKey())->update([
-            'relay_record_id' => $relay->getKey(), 'relay_binding_revision' => 1,
+            'relay_record_id' => $relay->getKey(), 'transport_revision' => 1,
         ]);
         SshTargetConfig::query()->create([
             'target_record_id' => $target->getKey(),
             'host' => '203.0.113.5', 'port' => 22, 'username' => 'fixture',
             'auth_method' => 'password', 'pinned_host_key' => $relay->control_host_key,
-            'route_mode' => 'direct', 'binding_revision' => 0,
+            'binding_revision' => 0,
         ]);
     }
 
@@ -321,12 +321,13 @@ Route::middleware(['web', 'auth'])->get('/__browser__/managed-reverse-pending', 
         $pin = implode(' ', array_slice(
             preg_split('/\s+/', trim(EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH'))), 0, 2,
         ));
+        DB::table('targets')->where('id', $target->getKey())->update([
+            'reverse_listener_port' => 43123, 'reverse_tunnel_identity' => 'managed-ui-only', 'transport_revision' => 1,
+        ]);
         SshTargetConfig::query()->create([
             'target_record_id' => $target->getKey(),
             'host' => '8.8.8.8', 'port' => 2222, 'username' => 'deploy.prod',
             'auth_method' => 'private_key', 'pinned_host_key' => $pin,
-            'route_mode' => 'reverse', 'reverse_listener_port' => 43123,
-            'reverse_tunnel_identity' => 'managed-ui-only',
             'binding_revision' => 0,
         ]);
         SshManagedReverseEnrollment::query()->create([

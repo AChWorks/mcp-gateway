@@ -43,10 +43,10 @@
             </div>
         @endif
         @can('targets.configure', $target)
-        @if ($managedReverse->state !== 'revoked' && $target->connection_state === \App\Domain\Targets\TargetConnectionState::Pending)
+        @if ($managedReverse->state !== 'revoked' && $target->usesReverseRoute())
             <details class="target-help-details" @if ($errors->any() && old('managed_reverse_action') === 'reissue') open @endif >
-                <summary><h3 class="admin-disclosure-heading">{{ __('Retry pending Managed Reverse setup (advanced)') }}</h3></summary>
-            <p class="field-help">{{ __('An expired, rejected or ambiguous one-use claim can be reissued with the same Target ID. The old token and control key are fenced, and the old listener port is quarantined. Any old Target service must be stopped separately. The new install command is shown once.') }}</p>
+                <summary><h3 class="admin-disclosure-heading">{{ __('Reissue Managed Reverse route (advanced)') }}</h3></summary>
+            <p class="field-help">{{ __('The managed transport can be reissued with the same Target ID and unchanged login credential. The old token and control key are fenced, and the old listener port is quarantined. Any old Target service must be stopped separately. The new install command is shown once.') }}</p>
             <form class="form-stack" method="post" action="{{ route('admin.reverse-ssh.targets.reissue', ['target' => $target->target_id]) }}">
                 @csrf
                 <input type="hidden" name="managed_reverse_action" value="reissue">
@@ -64,15 +64,15 @@
         @endif
         @endcan
         @if ($managedReverse->state === 'revoked' && $managedReverse->publication_pending)
-            <div class="alert alert-error" role="status">{{ __('Gateway credential and route were revoked; publication of the updated control key reader is still pending. Retry reconciliation below. Do not forget this Target until the reader is reconciled.') }}</div>
+            <div class="alert alert-error" role="status">{{ __('Gateway route was revoked; publication of the updated control key reader is still pending. Retry reconciliation below. Do not forget this Target until the reader is reconciled.') }}</div>
         @elseif ($managedReverse->state === 'revoked')
-            <p class="field-help">{{ __('Managed Reverse SSH authorization was revoked and the host key policy reconciled. No further enrollment is permitted for this Target record.') }}</p>
+            <p class="field-help">{{ __('Managed Reverse SSH authorization was revoked and the host key policy reconciled. The old managed enrollment is retired; select a different network route without replacing stored login credentials.') }}</p>
         @endif
-        @can('targets.disconnect', $target)
+        @can('targets.configure', $target)
         @if ($managedReverse->state !== 'revoked' || $managedReverse->publication_pending)
         <details class="target-help-details" @if ($errors->any() && old('managed_reverse_action') === 'revoke') open @endif >
             <summary><h3 class="admin-disclosure-heading">{{ $managedReverse->state === 'revoked' ? __('Reconcile revoked host key (advanced)') : __('Revoke managed Reverse SSH (destructive)') }}</h3></summary>
-        <p class="field-help">{{ __('Stops future Gateway operations, removes restricted control key authorization and local login credentials. Existing remote control sessions and the Target-side systemd service are NOT stopped by this request. Perform Target-side cleanup separately.') }}</p>
+        <p class="field-help">{{ __('Revokes this network route and its restricted control key authorization. Target login credentials are preserved. Existing remote control sessions and the Target-side systemd service are NOT stopped by this request. Perform Target-side cleanup separately.') }}</p>
         <form class="form-stack" method="post" action="{{ route('admin.reverse-ssh.targets.revoke', ['target' => $target->target_id]) }}">
             @csrf
             <input type="hidden" name="managed_reverse_action" value="revoke">
